@@ -6139,25 +6139,37 @@ export function createMessageSender(appContext) {
    *
    * 说明：
    * - 这是模型“看到”的工具面；
-   * - 代码真正执行时运行在“当前侧栏绑定网页标签页”的浏览器页面上下文中；
    * - 模型在代码体里可以直接 `await` / `return`；
-   * - 执行环境基于 chrome.userScripts 的 USER_SCRIPT world，只提供页面可访问的 DOM / Web API，
-   *   不额外注入宿主扩展对象，也不要假设能直接拿到页面 MAIN world 里的自定义 JS 对象/闭包；
+   * - 不额外注入扩展对象；
    * - 返回值会被序列化为文本片段回传给模型：对象/数组默认 JSON 化，超长输出会自动截断。
    *
+   * @param {ReturnType<typeof resolvePageToolEnvironment>} pageToolEnvironment
    * @returns {Object}
    */
-  function buildResponsesJsRuntimeFunctionToolDefinition() {
+  function buildResponsesJsRuntimeFunctionToolDefinition(pageToolEnvironment = resolveResponsesPageToolEnvironment()) {
+    const runtimeEnvironment = pageToolEnvironment?.jsRuntimeEnvironment;
+    const isIsolatedSandbox = runtimeEnvironment === JS_RUNTIME_ENV_ISOLATED_SANDBOX;
+    const descriptionLines = isIsolatedSandbox
+      ? [
+        '在一个隔离的浏览器脚本环境中执行一次性 JavaScript。',
+        'code 字段会作为 async 函数体运行，可直接使用 await 和 return。',
+        '可访问该环境自身的 DOM / Web API；通常只有一个顶层 frame，frame_ids 一般可留空。',
+        '返回值会以文本片段形式回传：对象/数组默认 JSON 序列化，过长输出会自动截断。请尽量返回紧凑、可序列化的小结果。'
+      ]
+      : [
+        '在当前请求关联的网页脚本环境中执行一次性 JavaScript。',
+        'code 字段会作为 async 函数体运行，可直接使用 await 和 return。',
+        '执行环境是基于浏览器脚本沙箱的独立 JS 世界，可访问 DOM / Web API，不要假设能直接访问页面主世界里的自定义 JS 对象。',
+        '若当前请求附带 page_runtime_context，可从中读取可用页面/iframe 环境与 frame_id。',
+        '返回值会以文本片段形式回传：对象/数组默认 JSON 序列化，过长输出会自动截断。请尽量返回紧凑、可序列化的小结果。'
+      ];
+    const frameDescription = isIsolatedSandbox
+      ? '可选的 frame ID 数组。当前环境通常只有一个顶层 frame，省略、传空数组或 null 即可。'
+      : '可选的 frame ID 数组。省略或传空数组时，默认在顶层 frame 执行。若当前请求附带 page_runtime_context，可从其中读取可用 frame_id。';
     return {
       type: 'function',
       name: RESPONSES_JS_RUNTIME_TOOL_NAME,
-      description: [
-        '在当前请求可用的浏览器脚本环境中执行一次性 JavaScript。',
-        'code 字段会作为 async 函数体运行，可直接使用 await 和 return。',
-        '执行环境是一个基于浏览器脚本沙箱的独立 JS 世界，可访问 DOM / Web API，不额外注入宿主扩展对象，也不要假设能直接访问页面主世界里的自定义 JS 对象。',
-        '若当前请求携带 page_runtime_context，则其中会给出可用页面/iframe 环境与 frame_id。',
-        '返回值会以文本片段形式回传：对象/数组默认 JSON 序列化，过长输出会自动截断。请尽量返回紧凑、可序列化的小结果。'
-      ].join(' '),
+      description: descriptionLines.join(' '),
       strict: true,
       parameters: {
         type: 'object',
@@ -6169,7 +6181,7 @@ export function createMessageSender(appContext) {
           },
           frame_ids: {
             type: ['array', 'null'],
-            description: '可选的 frame ID 数组。省略或传空数组时，默认在顶层 frame 执行。若当前请求附带 page_runtime_context，可从其中读取可用 frame_id；若当前环境只有单一顶层 frame，则传空数组或 null 即可。',
+            description: frameDescription,
             items: {
               type: 'integer'
             }
@@ -6241,7 +6253,7 @@ export function createMessageSender(appContext) {
       tools.push(buildResponsesPageContentFunctionToolDefinition());
     }
     if (typeof utils?.executeJsRuntime === 'function') {
-      tools.unshift(buildResponsesJsRuntimeFunctionToolDefinition());
+      tools.unshift(buildResponsesJsRuntimeFunctionToolDefinition(pageToolEnvironment));
     }
     return tools;
   }
