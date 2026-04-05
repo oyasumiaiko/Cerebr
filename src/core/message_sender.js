@@ -34,6 +34,11 @@ import {
   stringifyResponsesToolOutputValue
 } from '../utils/responses_tool_output.js';
 import { buildPageContentReadResult } from '../utils/page_content_read_tool.js';
+import {
+  JS_RUNTIME_ENV_BOUND_HOST_PAGE,
+  JS_RUNTIME_ENV_ISOLATED_SANDBOX,
+  resolvePageToolEnvironment
+} from '../utils/page_tool_environment.js';
 
 const RESPONSES_JS_RUNTIME_TOOL_NAME = 'js_runtime_execute';
 const RESPONSES_PAGE_CONTENT_TOOL_NAME = 'page_content_read';
@@ -4885,7 +4890,7 @@ export function createMessageSender(appContext) {
       name: 'temp',
       aliases: ['tmp'],
       usage: '/temp [on|off|toggle]',
-      description: '切换/设置纯对话模式',
+      description: '切换/设置纯对话模式（关闭宿主页工具，JS 改用隔离沙箱）',
       handler: async ({ args }) => {
         const mode = (args[0] || '').toLowerCase();
         if (!mode || mode === 'toggle') {
@@ -4915,7 +4920,11 @@ export function createMessageSender(appContext) {
           .map(item => ({
             value: item,
             label: item,
-            description: item === 'toggle' ? '切换模式' : (item === 'on' ? '进入纯对话模式' : '退出纯对话模式')
+            description: item === 'toggle'
+              ? '切换模式'
+              : (item === 'on'
+                ? '进入纯对话模式（关闭宿主页工具）'
+                : '退出纯对话模式（恢复宿主页工具）')
           }));
       }
     },
@@ -5798,10 +5807,10 @@ export function createMessageSender(appContext) {
    *
    * @returns {Promise<Array<{frameId:number, documentId:string|null, url:string, title:string, isTop:boolean}>|null>}
    */
-  async function getJsRuntimeFrameSnapshot() {
+  async function getJsRuntimeFrameSnapshot(runtimeEnvironment = JS_RUNTIME_ENV_BOUND_HOST_PAGE) {
     if (typeof utils?.getJsRuntimeFrames !== 'function') return null;
     try {
-      const response = await utils.getJsRuntimeFrames();
+      const response = await utils.getJsRuntimeFrames({ runtimeEnvironment });
       if (response?.success !== true || !Array.isArray(response?.frames)) {
         return null;
       }
@@ -6013,7 +6022,34 @@ export function createMessageSender(appContext) {
   }
 
   /**
-   * 进入临时模式，不获取网页内容
+   * 解析“当前这轮请求”的页面工具暴露状态。
+   *
+   * 这里专门把模式判断收口成一个 helper，避免：
+   * - 某些地方只看 `isStandalone`；
+   * - 某些地方只看 `isTemporaryMode`；
+   * - 最终导致工具描述、工具暴露、真实执行环境三者不一致。
+   *
+   * @param {Object|null} [attemptState]
+   * @returns {ReturnType<typeof resolvePageToolEnvironment>}
+   */
+  function resolveResponsesPageToolEnvironment(attemptState = null) {
+    if (attemptState?.pageToolEnvironment && typeof attemptState.pageToolEnvironment === 'object') {
+      return attemptState.pageToolEnvironment;
+    }
+    return resolvePageToolEnvironment({
+      isStandalone: state?.isStandalone === true,
+      isTemporaryMode
+    });
+  }
+
+  /**
+   * 进入纯对话模式。
+   *
+   * 语义说明：
+   * - 不再向模型暴露宿主页增强工具；
+   * - `page_content_read` 对新请求隐藏；
+   * - `js_runtime_execute` 对新请求切换到侧栏内部隔离沙箱；
+   * - 不影响当前已经发出的请求契约，当前 request/turn 仍按开始时快照执行。
    * @public
    */
   function enterTemporaryMode() {
@@ -6027,7 +6063,7 @@ export function createMessageSender(appContext) {
   }
 
   /**
-   * 退出临时模式
+   * 退出纯对话模式，恢复宿主页增强工具暴露。
    * @public
    */
   function exitTemporaryMode() {
@@ -6054,16 +6090,25 @@ export function createMessageSender(appContext) {
    *
    * @returns {Object}
    */
-  function buildResponsesJsRuntimeFunctionToolDefinition() {
-    return {
-      type: 'function',
-      name: RESPONSES_JS_RUNTIME_TOOL_NAME,
-      description: [
+  function buildResponsesJsRuntimeFunctionToolDefinition(pageToolEnvironment = resolveResponsesPageToolEnvironment()) {
+    const isHostPageRuntime = pageToolEnvironment?.jsRuntimeEnvironment === JS_RUNTIME_ENV_BOUND_HOST_PAGE;
+    const descriptionLines = isHostPageRuntime
+      ? [
         '在当前侧栏绑定网页标签页中执行一次性 JavaScript。',
         'code 字段会作为 async 函数体运行，可直接使用 await 和 return。',
         '执行环境运行在 chrome.userScripts 的 USER_SCRIPT world，可访问 DOM / Web API，但不要假设能直接访问页面主世界里的自定义 JS 对象。',
         '返回值会以文本片段形式回传：对象/数组默认 JSON 序列化，过长输出会自动截断。请尽量返回紧凑、可序列化的小结果。'
-      ].join(' '),
+      ]
+      : [
+        '在侧栏内部的隔离 sandbox iframe 中执行一次性 JavaScript。',
+        'code 字段会作为 async 函数体运行，可直接使用 await 和 return。',
+        '该环境提供独立的 window / document / DOM / Web API，但不会访问宿主标签页或其页面 DOM；更适合纯 JS 计算、临时 DOM 构造与文本处理。',
+        '返回值会以文本片段形式回传：对象/数组默认 JSON 序列化，过长输出会自动截断。请尽量返回紧凑、可序列化的小结果。'
+      ];
+    return {
+      type: 'function',
+      name: RESPONSES_JS_RUNTIME_TOOL_NAME,
+      description: descriptionLines.join(' '),
       strict: true,
       parameters: {
         type: 'object',
@@ -6075,7 +6120,9 @@ export function createMessageSender(appContext) {
           },
           frame_ids: {
             type: ['array', 'null'],
-            description: '可选的 frame ID 数组。省略或传空数组时，默认在顶层 frame 执行；若要进入 iframe，请使用请求 instructions 中给出的 frame 快照里的 frame_id。',
+            description: isHostPageRuntime
+              ? '可选的 frame ID 数组。省略或传空数组时，默认在顶层 frame 执行；若要进入 iframe，请使用请求 instructions 中给出的 frame 快照里的 frame_id。'
+              : '当前隔离沙箱只有一个顶层 frame，frame_ids 参数会被忽略；请传空数组或 null。',
             items: {
               type: 'integer'
             }
@@ -6129,19 +6176,25 @@ export function createMessageSender(appContext) {
   /**
    * 返回当前这次发送应该暴露给 Responses API 的自定义函数工具列表。
    *
-   * 当前开放两个侧栏绑定网页工具：
+   * 当前工具暴露规则：
    * - 仅在 Responses API 场景下注入；
-   * - 独立页模式下不开放，因为没有稳定的目标网页标签页。
+   * - `page_content_read` 只在“宿主页增强模式”下注入；
+   * - `js_runtime_execute` 始终可以注入，但会根据当前模式切换到：
+   *   1. 宿主页 JS 环境；
+   *   2. 或侧栏内部隔离 sandbox。
    *
    * @param {Object|null|undefined} usedApiConfig
+   * @param {ReturnType<typeof resolvePageToolEnvironment>} pageToolEnvironment
    * @returns {Array<Object>}
    */
-  function getResponsesCustomFunctionTools(usedApiConfig) {
+  function getResponsesCustomFunctionTools(usedApiConfig, pageToolEnvironment = resolveResponsesPageToolEnvironment()) {
     if (!isOpenAIResponsesApiConfig(usedApiConfig)) return [];
-    if (state?.isStandalone) return [];
-    const tools = [buildResponsesPageContentFunctionToolDefinition()];
+    const tools = [];
+    if (pageToolEnvironment?.exposePageContentTool) {
+      tools.push(buildResponsesPageContentFunctionToolDefinition());
+    }
     if (typeof utils?.executeJsRuntime === 'function') {
-      tools.unshift(buildResponsesJsRuntimeFunctionToolDefinition());
+      tools.unshift(buildResponsesJsRuntimeFunctionToolDefinition(pageToolEnvironment));
     }
     return tools;
   }
@@ -6198,9 +6251,13 @@ export function createMessageSender(appContext) {
    * @param {Object|null|undefined} usedApiConfig
    * @returns {Object}
    */
-  function prepareResponsesRequestBodyForCustomTools(requestBody, usedApiConfig) {
+  function prepareResponsesRequestBodyForCustomTools(
+    requestBody,
+    usedApiConfig,
+    pageToolEnvironment = resolveResponsesPageToolEnvironment()
+  ) {
     if (!isOpenAIResponsesApiConfig(usedApiConfig)) return requestBody;
-    const customTools = getResponsesCustomFunctionTools(usedApiConfig);
+    const customTools = getResponsesCustomFunctionTools(usedApiConfig, pageToolEnvironment);
     if (!Array.isArray(customTools) || customTools.length <= 0) return requestBody;
 
     const nextBody = cloneDataSafely(requestBody) || {};
@@ -6438,7 +6495,7 @@ export function createMessageSender(appContext) {
    * @param {any} rawArgs
    * @returns {Promise<Object>}
    */
-  async function executeResponsesJsRuntimeFunction(rawArgs) {
+  async function executeResponsesJsRuntimeFunction(rawArgs, options = {}) {
     if (typeof utils?.executeJsRuntime !== 'function') {
       return {
         ok: false,
@@ -6454,8 +6511,12 @@ export function createMessageSender(appContext) {
 
     try {
       const normalizedArgs = normalizeResponsesJsRuntimeToolArguments(rawArgs);
+      const runtimeEnvironment = (typeof options?.runtimeEnvironment === 'string' && options.runtimeEnvironment)
+        ? options.runtimeEnvironment
+        : resolveResponsesPageToolEnvironment(options?.attemptState).jsRuntimeEnvironment;
       const result = await utils.executeJsRuntime(normalizedArgs.code, {
-        frameIds: normalizedArgs.frameIds
+        frameIds: normalizedArgs.frameIds,
+        runtimeEnvironment
       });
 
       if (!result || result.success !== true) {
@@ -6524,7 +6585,7 @@ export function createMessageSender(appContext) {
    * @param {Object} toolCallRecord
    * @returns {Promise<{type:'function_call_output', call_id:string, output:Array<{type:'input_text', text:string}>}>}
    */
-  async function executeResponsesCustomFunctionToolCall(toolCallRecord) {
+  async function executeResponsesCustomFunctionToolCall(toolCallRecord, options = {}) {
     const callId = (typeof toolCallRecord?.call_id === 'string' && toolCallRecord.call_id.trim())
       ? toolCallRecord.call_id.trim()
       : ((typeof toolCallRecord?.id === 'string') ? toolCallRecord.id.trim() : '');
@@ -6556,7 +6617,7 @@ export function createMessageSender(appContext) {
 
     let outputPayload = null;
     if (functionName === RESPONSES_JS_RUNTIME_TOOL_NAME) {
-      outputPayload = await executeResponsesJsRuntimeFunction(parsedArgs);
+      outputPayload = await executeResponsesJsRuntimeFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_PAGE_CONTENT_TOOL_NAME) {
       outputPayload = await executeResponsesPageContentFunction(parsedArgs);
     } else {
@@ -6896,7 +6957,9 @@ export function createMessageSender(appContext) {
         if (signal?.aborted) {
           throw new DOMException('The operation was aborted.', 'AbortError');
         }
-        functionCallOutputs.push(await executeResponsesCustomFunctionToolCall(toolCall));
+        functionCallOutputs.push(await executeResponsesCustomFunctionToolCall(toolCall, {
+          attemptState
+        }));
       }
 
       /**
@@ -7207,6 +7270,7 @@ export function createMessageSender(appContext) {
     const beginAttempt = () => {
       // 为当前请求创建独立的取消控制器与状态对象
       const startedAt = Date.now();
+      const pageToolEnvironment = resolveResponsesPageToolEnvironment();
       const attemptState = {
         id: `attempt_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
         controller: new AbortController(),
@@ -7238,6 +7302,7 @@ export function createMessageSender(appContext) {
         supportsStandardSteer: false,
         conversationJobId: normalizedConversationJobId || null,
         conversationJobKind: normalizedConversationJobKind,
+        pageToolEnvironment,
         conversationRevisionAtStart: normalizedConversationRevisionAtStart,
         historyConversationRevision: conversationRevisionSnapshot != null
           ? normalizeConversationHistoryRevision(conversationRevisionSnapshot)
@@ -7695,17 +7760,20 @@ export function createMessageSender(appContext) {
       if (attempt) {
         attempt.supportsStandardSteer = isOpenAIResponsesApiConfig(config);
       }
+      const responsesPageToolEnvironment = resolveResponsesPageToolEnvironment(attempt);
       let ephemeralResponsesInstructions = '';
 
       const shouldInjectJsRuntimeFrameContext = (
         typeof utils?.executeJsRuntime === 'function'
         && typeof utils?.getJsRuntimeFrames === 'function'
-        && !state?.isStandalone
+        && responsesPageToolEnvironment?.shouldInjectJsRuntimeFrameContext === true
         && isOpenAIResponsesApiConfig(effectiveApiConfig)
       );
       if (shouldInjectJsRuntimeFrameContext) {
         updateLoadingStatus(loadingMessage, '正在获取 JS Runtime frame 上下文...', { stage: 'get_js_runtime_frames' });
-        const jsRuntimeFrames = await getJsRuntimeFrameSnapshot();
+        const jsRuntimeFrames = await getJsRuntimeFrameSnapshot(
+          responsesPageToolEnvironment.jsRuntimeEnvironment
+        );
         const jsRuntimeFrameContext = buildJsRuntimeFrameContextInstructions(jsRuntimeFrames);
         if (jsRuntimeFrameContext) {
           ephemeralResponsesInstructions = jsRuntimeFrameContext;
@@ -7776,7 +7844,11 @@ export function createMessageSender(appContext) {
           requestBody.prompt_cache_key = autoPromptCacheKey;
         }
       }
-      const preparedRequestBody = prepareResponsesRequestBodyForCustomTools(requestBody, effectiveApiConfig);
+      const preparedRequestBody = prepareResponsesRequestBodyForCustomTools(
+        requestBody,
+        effectiveApiConfig,
+        responsesPageToolEnvironment
+      );
 
       await executeApiRequestLifecycle({
         initialRequestBody: preparedRequestBody,

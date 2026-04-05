@@ -3,6 +3,11 @@
  * 将原本集中在 sidebar.js 中的初始化逻辑拆分出来，
  * 便于后续进一步分离服务初始化与事件绑定责任。
  */
+import { createSidebarJsSandboxRuntime } from './js_sandbox_runtime.js';
+import {
+  JS_RUNTIME_ENV_BOUND_HOST_PAGE,
+  resolvePageToolEnvironment
+} from '../../utils/page_tool_environment.js';
 
 /**
  * 创建侧边栏 appContext 基础结构。
@@ -133,6 +138,23 @@ export function createSidebarAppContext(isStandalone) {
  * @param {ReturnType<typeof createSidebarAppContext>} appContext - 已初始化的上下文。
  */
 export function registerSidebarUtilities(appContext) {
+  const jsSandboxRuntime = createSidebarJsSandboxRuntime({
+    ownerWindow: window,
+    ownerDocument: document
+  });
+
+  function resolveCurrentPageToolEnvironment(options = {}) {
+    const explicitTemporaryMode = (typeof options?.isTemporaryMode === 'boolean')
+      ? options.isTemporaryMode
+      : appContext.services.messageSender?.getTemporaryModeState?.() === true;
+    return resolvePageToolEnvironment({
+      isStandalone: appContext.state.isStandalone,
+      isTemporaryMode: explicitTemporaryMode
+    });
+  }
+
+  appContext.utils.resolveCurrentPageToolEnvironment = resolveCurrentPageToolEnvironment;
+
   async function resolveBoundSidebarTargetTabId() {
     if (appContext.state.isStandalone) return null;
 
@@ -648,6 +670,14 @@ export function registerSidebarUtilities(appContext) {
    * 供后续工具层与调试入口统一复用。
    */
   appContext.utils.getJsRuntimeStatus = async () => {
+    const pageToolEnvironment = resolveCurrentPageToolEnvironment();
+    if (pageToolEnvironment.jsRuntimeEnvironment !== JS_RUNTIME_ENV_BOUND_HOST_PAGE) {
+      const status = await jsSandboxRuntime.getAvailability();
+      return {
+        success: true,
+        status
+      };
+    }
     if (!chrome?.runtime?.sendMessage) {
       return {
         success: false,
@@ -668,12 +698,23 @@ export function registerSidebarUtilities(appContext) {
    * 获取当前侧栏所绑定网页标签页的 frame 快照。
    * 主要用于在发起 Responses 请求前，把 frameId/url/title 注入模型上下文。
    */
-  appContext.utils.getJsRuntimeFrames = async () => {
-    if (appContext.state.isStandalone) {
-      return {
-        success: false,
-        error: '独立聊天页面当前没有稳定的目标网页标签页，暂不支持读取 JS Runtime frame 快照。'
-      };
+  appContext.utils.getJsRuntimeFrames = async (options = {}) => {
+    const runtimeEnvironment = (typeof options?.runtimeEnvironment === 'string' && options.runtimeEnvironment)
+      ? options.runtimeEnvironment
+      : resolveCurrentPageToolEnvironment().jsRuntimeEnvironment;
+    if (runtimeEnvironment !== JS_RUNTIME_ENV_BOUND_HOST_PAGE) {
+      try {
+        const result = await jsSandboxRuntime.listFrames();
+        return {
+          success: true,
+          ...result
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: error?.message || '获取隔离 JS Sandbox frame 快照失败'
+        };
+      }
     }
     if (!chrome?.runtime?.sendMessage) {
       return {
@@ -707,11 +748,25 @@ export function registerSidebarUtilities(appContext) {
    * @returns {Promise<Object>}
    */
   appContext.utils.executeJsRuntime = async (code, options = {}) => {
-    if (appContext.state.isStandalone) {
-      return {
-        success: false,
-        error: '独立聊天页面当前没有稳定的目标网页标签页，暂不支持直接执行 JS Runtime。'
-      };
+    const runtimeEnvironment = (typeof options?.runtimeEnvironment === 'string' && options.runtimeEnvironment)
+      ? options.runtimeEnvironment
+      : resolveCurrentPageToolEnvironment().jsRuntimeEnvironment;
+    if (runtimeEnvironment !== JS_RUNTIME_ENV_BOUND_HOST_PAGE) {
+      try {
+        const result = await jsSandboxRuntime.execute({
+          code: (typeof code === 'string') ? code : ''
+        });
+        return {
+          success: true,
+          tabId: null,
+          ...result
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: error?.message || '执行隔离 JS Sandbox 失败'
+        };
+      }
     }
     if (!chrome?.runtime?.sendMessage) {
       return {

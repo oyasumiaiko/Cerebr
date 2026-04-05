@@ -267,6 +267,9 @@ class CerebrSidebar {
     this.lastUrl = window.location.href;
     this.isFullscreen = false;
     // 临时模式状态由父页面内存维护，用于 iframe 右键重载恢复，F5 刷新时自动重置。
+    // 它现在不再控制“是否自动注入网页内容”，而是控制：
+    // 1. 是否暴露宿主页增强工具；
+    // 2. JS 工具默认连接宿主页，还是退回侧栏内部隔离沙箱。
     this.isTemporaryMode = false;
     this.isDocked = false;
     this.sidebarPosition = 'right'; // 默认侧边栏位置为右侧

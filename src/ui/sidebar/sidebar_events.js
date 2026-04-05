@@ -2,6 +2,10 @@ import { initTreeDebugger } from '../../debug/tree_debugger.js';
 import { findMostRecentConversationMetadataByUrlCandidates } from '../../storage/indexeddb_helper.js';
 import { packRemoteRepoViaApiExtension } from '../../utils/repomix.js';
 import { generateCandidateUrls } from '../../utils/url_candidates.js';
+import {
+  buildPageToolModeStatusTitle,
+  resolvePageToolEnvironment
+} from '../../utils/page_tool_environment.js';
 
 // 全屏状态不再写入 sessionStorage，改由父页面在内存里同步，避免 F5 刷新仍保留旧布局。
 
@@ -70,7 +74,7 @@ function setupOpenStandaloneHandler(appContext) {
 }
 
 /**
- * 管理左上角状态点（网页内容模式/临时模式）的展示与交互。
+ * 管理左上角状态点（宿主页增强模式 / 纯对话隔离模式）的展示与交互。
  * @param {ReturnType<import('./sidebar_app_context.js').createSidebarAppContext>} appContext
  */
 function setupStatusDot(appContext) {
@@ -84,13 +88,16 @@ function setupStatusDot(appContext) {
   const sender = appContext.services.messageSender;
   const refresh = () => {
     const isTemp = sender.getTemporaryModeState?.() === true;
-    if (isTemp) {
-      dot.classList.remove('on');
-      dot.title = '未获取网页内容（纯对话）';
-    } else {
+    const pageToolEnvironment = resolvePageToolEnvironment({
+      isStandalone: appContext.state.isStandalone,
+      isTemporaryMode: isTemp
+    });
+    if (pageToolEnvironment.exposeHostPageTools) {
       dot.classList.add('on');
-      dot.title = '获取网页内容';
+    } else {
+      dot.classList.remove('on');
     }
+    dot.title = buildPageToolModeStatusTitle(pageToolEnvironment);
   };
 
   dot.addEventListener('click', () => {
