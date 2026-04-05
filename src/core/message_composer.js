@@ -16,6 +16,8 @@
  * @property {Array<any>|null} [tool_calls] OpenAI 兼容：assistant.tool_calls（可能包含 thoughtSignature，可选）
  * @property {Array<any>|null} [response_input_items] Responses API：后续 turn 可直接重放的 input item 历史（可选）
  * @property {string|Array<any>|null} [outboundContent] 当历史节点曾以“不同于显示内容”的正文发送时，这里保存稳定发送快照（可选）
+ * @property {Array<any>|null} [contextual_input_items_before] 仅供模型可见、位于该消息前面的隐藏 contextual input items（可选）
+ * @property {string|null} [pageRuntimeContextSignature] 页面运行环境隐藏上下文的稳定签名（可选）
  */
 
 /**
@@ -127,6 +129,16 @@ export function composeMessages(args) {
       // Responses API：这里不做结构改写，只把“可再次放进 input 的 item”挂到消息对象上，
       // 交给下游 buildRequest 在 Responses 模式下直接展开。
       msg.response_input_items = node.response_input_items;
+    }
+
+    if (Array.isArray(node?.contextual_input_items_before) && node.contextual_input_items_before.length > 0) {
+      // 与 `response_input_items` 不同，这些 item 不是“assistant 历史重放”，
+      // 而是放在该条消息之前的隐藏上下文（例如页面运行环境）。
+      msg.contextual_input_items_before = node.contextual_input_items_before;
+    }
+
+    if (typeof node?.pageRuntimeContextSignature === 'string' && node.pageRuntimeContextSignature) {
+      msg.pageRuntimeContextSignature = node.pageRuntimeContextSignature;
     }
 
     return msg;

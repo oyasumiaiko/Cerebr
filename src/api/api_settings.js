@@ -4732,6 +4732,13 @@ export function createApiManager(appContext) {
       const role = (typeof msg.role === 'string') ? msg.role.trim() : '';
       if (!role) continue;
 
+      if (Array.isArray(msg.contextual_input_items_before) && msg.contextual_input_items_before.length > 0) {
+        const contextualItems = cloneResponsesInputItems(msg.contextual_input_items_before);
+        if (contextualItems.length > 0) {
+          result.push(...contextualItems);
+        }
+      }
+
       if (Array.isArray(msg.response_input_items) && msg.response_input_items.length > 0) {
         const replayItems = cloneResponsesInputItems(msg.response_input_items);
         if (replayItems.length > 0) {

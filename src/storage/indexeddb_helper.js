@@ -815,11 +815,13 @@ export async function getDatabaseStats() {
       preprocessOriginalText: 0,
       preprocessRenderedText: 0,
       threadSelectionText: 0,
+      pageRuntimeContextSignature: 0,
       tool_calls: 0,
       response_tool_calls: 0,
       groundingMetadata: 0,
       promptMeta: 0,
-      pageMeta: 0
+      pageMeta: 0,
+      contextual_input_items_before: 0
     };
     const addMetaSize = (key, bytes) => {
       const size = Number(bytes) || 0;
@@ -880,6 +882,11 @@ export async function getDatabaseStats() {
         size += bytes;
         addMetaSize('threadSelectionText', bytes);
       }
+      if (typeof msg.pageRuntimeContextSignature === 'string' && msg.pageRuntimeContextSignature) {
+        const bytes = encoder.encode(msg.pageRuntimeContextSignature).length;
+        size += bytes;
+        addMetaSize('pageRuntimeContextSignature', bytes);
+      }
       if (msg.tool_calls) {
         const bytes = calcJsonBytes(msg.tool_calls);
         size += bytes;
@@ -904,6 +911,11 @@ export async function getDatabaseStats() {
         const bytes = calcJsonBytes(msg.pageMeta);
         size += bytes;
         addMetaSize('pageMeta', bytes);
+      }
+      if (msg.contextual_input_items_before) {
+        const bytes = calcJsonBytes(msg.contextual_input_items_before);
+        size += bytes;
+        addMetaSize('contextual_input_items_before', bytes);
       }
       return size;
     };

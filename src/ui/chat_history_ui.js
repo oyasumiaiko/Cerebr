@@ -11851,14 +11851,16 @@ export function createChatHistoryUI(appContext) {
     'response_reasoning_summary',
     'preprocessOriginalText',
     'preprocessRenderedText',
-    'threadSelectionText'
+    'threadSelectionText',
+    'pageRuntimeContextSignature'
   ];
   const META_JSON_FIELDS = [
     'response_activity_timeline',
     'tool_calls',
     'response_tool_calls',
     'promptMeta',
-    'pageMeta'
+    'pageMeta',
+    'contextual_input_items_before'
   ];
   const TREND_METRIC_OPTIONS = [
     { value: 'totalBytes', label: '总数据量', type: 'bytes' },

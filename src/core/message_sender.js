@@ -39,6 +39,10 @@ import {
   JS_RUNTIME_ENV_ISOLATED_SANDBOX,
   resolvePageToolEnvironment
 } from '../utils/page_tool_environment.js';
+import {
+  buildPageRuntimeContextPayload,
+  resolvePageRuntimeContextAttachment
+} from '../utils/page_runtime_context.js';
 
 const RESPONSES_JS_RUNTIME_TOOL_NAME = 'js_runtime_execute';
 const RESPONSES_PAGE_CONTENT_TOOL_NAME = 'page_content_read';
@@ -4305,6 +4309,8 @@ export function createMessageSender(appContext) {
       preprocessOriginalText: null,
       preprocessRenderedText: null,
       outboundContent: null,
+      contextual_input_items_before: null,
+      pageRuntimeContextSignature: null,
       pageMeta: null
     };
 
@@ -4367,6 +4373,8 @@ export function createMessageSender(appContext) {
       promptMeta: null,
       preprocessOriginalText: null,
       preprocessRenderedText: null,
+      contextual_input_items_before: null,
+      pageRuntimeContextSignature: null,
       pageMeta: null
     };
 
@@ -5834,53 +5842,90 @@ export function createMessageSender(appContext) {
     }
   }
 
-  /**
-   * 把 frame 快照格式化为一次性 Responses instructions 片段，帮助模型在一次 js_runtime_execute 调用里直接选择目标 frame_ids。
-   *
-   * 注意：
-   * - 某些 OpenAI 兼容 Responses 端点会拒绝 input 里的 system message；
-   * - 因此这里不用隐藏 system 消息，而是拼到顶层 instructions。
-   *
-   * @param {Array<{frameId:number, documentId:string|null, url:string, title:string, isTop:boolean}>|null} frames
-   * @returns {string}
-   */
-  function buildJsRuntimeFrameContextInstructions(frames) {
-    const normalizedFrames = Array.isArray(frames) ? frames : [];
-    if (normalizedFrames.length <= 0) return '';
-    const payload = normalizedFrames.map((item) => ({
-      frame_id: item.frameId,
-      is_top: item.isTop === true,
-      url: item.url || '',
-      title: item.title || '',
-      document_id: item.documentId || null
-    }));
-    return [
-      '以下是当前侧栏绑定网页标签页可执行的 frame 快照，仅供 js_runtime_execute 选择 frame_ids：',
-      '- 若 frame_ids 省略或为空数组，则默认在顶层 frame 执行。',
-      '- 若需要进入 iframe 内部，请从下面的 frame_id 中选择。',
-      JSON.stringify(payload, null, 2)
-    ].join('\n');
-  }
-
-  /**
-   * 将一次性附加 instructions 合并到现有 Responses requestBody.instructions。
-   *
-   * @param {string|undefined|null} baseInstructions
-   * @param {string} content
-   * @returns {string|undefined}
-   */
-  function appendEphemeralResponsesInstructions(baseInstructions, content) {
-    const text = (typeof content === 'string') ? content.trim() : '';
-    if (!text) return (typeof baseInstructions === 'string' && baseInstructions.trim()) ? baseInstructions : undefined;
-    const base = (typeof baseInstructions === 'string') ? baseInstructions.trim() : '';
-    return base ? `${base}\n\n${text}` : text;
-  }
-
   function buildCurrentPageMetaSnapshot() {
     const url = typeof state?.pageInfo?.url === 'string' ? state.pageInfo.url.trim() : '';
     const title = typeof state?.pageInfo?.title === 'string' ? state.pageInfo.title.trim() : '';
     if (!url && !title) return null;
     return { url, title };
+  }
+
+  /**
+   * 从当前会话链里找到“本轮真实参与请求的最后一条 user 节点”。
+   *
+   * 说明：
+   * - 普通发送：它就是刚刚新增的用户消息；
+   * - regenerate：它是被重新回答的那条 assistant 之前的最后一条 user；
+   * - 标准 steer / tool follow-up 不会走这里，因为它们不生成新的顶层 request user turn。
+   *
+   * @param {Array<any>} conversationChain
+   * @returns {any|null}
+   */
+  function findLatestUserNodeInConversationChain(conversationChain) {
+    const chain = Array.isArray(conversationChain) ? conversationChain : [];
+    for (let i = chain.length - 1; i >= 0; i -= 1) {
+      const node = chain[i];
+      if (String(node?.role || '').trim().toLowerCase() !== 'user') continue;
+      return node;
+    }
+    return null;
+  }
+
+  /**
+   * 将“页面运行环境隐藏上下文”写到目标 user 节点上。
+   *
+   * 它不会污染用户正文，而是挂到独立字段：
+   * - `contextual_input_items_before`
+   * - `pageRuntimeContextSignature`
+   *
+   * 同时采用“只有变化时才追加”的策略：
+   * - 若与更早一次已生效的签名一致，则当前节点保持为空；
+   * - 这样后续请求既能让模型看到最新环境，又不会每轮重复插入相同前缀。
+   *
+   * @param {{
+   *   conversationChain?: Array<any>,
+   *   targetUserNode?: any,
+   *   pageRuntimeContextPayload?: Object|null
+   * }} options
+   * @returns {boolean}
+   */
+  function syncUserPageRuntimeContextForConversationTurn(options = {}) {
+    const chain = Array.isArray(options?.conversationChain) ? options.conversationChain : [];
+    const targetUserNode = options?.targetUserNode || null;
+    if (!targetUserNode || String(targetUserNode?.role || '').trim().toLowerCase() !== 'user') {
+      return false;
+    }
+
+    const payload = (options?.pageRuntimeContextPayload && typeof options.pageRuntimeContextPayload === 'object')
+      ? options.pageRuntimeContextPayload
+      : null;
+
+    const targetIndex = chain.findIndex((node) => node && node.id === targetUserNode.id);
+    let previousEffectiveSignature = '';
+    for (let index = targetIndex - 1; index >= 0; index -= 1) {
+      const node = chain[index];
+      if (String(node?.role || '').trim().toLowerCase() !== 'user') continue;
+      const signature = (typeof node?.pageRuntimeContextSignature === 'string')
+        ? node.pageRuntimeContextSignature
+        : '';
+      if (!signature) continue;
+      previousEffectiveSignature = signature;
+      break;
+    }
+
+    const attachment = resolvePageRuntimeContextAttachment({
+      payload,
+      previousEffectiveSignature
+    });
+
+    if (!attachment.signature || !Array.isArray(attachment.inputItems) || attachment.inputItems.length <= 0) {
+      targetUserNode.contextual_input_items_before = null;
+      targetUserNode.pageRuntimeContextSignature = null;
+      return true;
+    }
+
+    targetUserNode.contextual_input_items_before = cloneResponsesInputItems(attachment.inputItems);
+    targetUserNode.pageRuntimeContextSignature = attachment.signature;
+    return true;
   }
 
   /**
@@ -6121,7 +6166,7 @@ export function createMessageSender(appContext) {
           frame_ids: {
             type: ['array', 'null'],
             description: isHostPageRuntime
-              ? '可选的 frame ID 数组。省略或传空数组时，默认在顶层 frame 执行；若要进入 iframe，请使用请求 instructions 中给出的 frame 快照里的 frame_id。'
+              ? '可选的 frame ID 数组。省略或传空数组时，默认在顶层 frame 执行；若要进入 iframe，请使用同轮隐藏运行环境上下文里给出的 frame_id。'
               : '当前隔离沙箱只有一个顶层 frame，frame_ids 参数会被忽略；请传空数组或 null。',
             items: {
               type: 'integer'
@@ -7690,6 +7735,50 @@ export function createMessageSender(appContext) {
       }
 
       const filteredConversationChain = conversationChain;
+      // 获取 API 配置：仅使用外部提供（resolvedApiConfig / api 解析）或当前选中。
+      // 这里提前解析，是因为页面运行环境隐藏上下文需要在 composeMessages 之前写回历史节点，
+      // 这样本轮请求就能直接使用独立 contextual item，而不是再通过 instructions 临时拼接。
+      let config;
+      if (resolvedApiConfig) {
+        config = resolvedApiConfig;
+      } else if (preferredApiConfig) {
+        config = preferredApiConfig;
+      } else if (lockConfig) {
+        config = lockConfig;
+      } else {
+        config = apiManager.getSelectedConfig();
+      }
+      effectiveApiConfig = config;
+      if (attempt) {
+        attempt.supportsStandardSteer = isOpenAIResponsesApiConfig(config);
+      }
+      const responsesPageToolEnvironment = resolveResponsesPageToolEnvironment(attempt);
+      const shouldPreparePageRuntimeContext = (
+        isOpenAIResponsesApiConfig(effectiveApiConfig)
+        && typeof utils?.executeJsRuntime === 'function'
+      );
+      if (shouldPreparePageRuntimeContext) {
+        let jsRuntimeFrames = null;
+        if (
+          typeof utils?.getJsRuntimeFrames === 'function'
+          && responsesPageToolEnvironment?.shouldInjectJsRuntimeFrameContext === true
+        ) {
+          updateLoadingStatus(loadingMessage, '正在获取页面运行环境上下文...', { stage: 'get_js_runtime_frames' });
+          jsRuntimeFrames = await getJsRuntimeFrameSnapshot(
+            responsesPageToolEnvironment.jsRuntimeEnvironment
+          );
+        }
+        const pageRuntimeContextPayload = buildPageRuntimeContextPayload({
+          pageToolEnvironment: responsesPageToolEnvironment,
+          pageMeta: buildCurrentPageMetaSnapshot(),
+          frames: jsRuntimeFrames
+        });
+        syncUserPageRuntimeContextForConversationTurn({
+          conversationChain: filteredConversationChain,
+          targetUserNode: findLatestUserNodeInConversationChain(filteredConversationChain),
+          pageRuntimeContextPayload
+        });
+      }
 
       const messages = composeMessages({
         prompts: promptsConfig,
@@ -7745,41 +7834,6 @@ export function createMessageSender(appContext) {
         });
       }
 
-      // 获取API配置：仅使用外部提供（resolvedApiConfig / api 解析）或当前选中。不再做任何内部推断
-      let config;
-      if (resolvedApiConfig) {
-        config = resolvedApiConfig;
-      } else if (preferredApiConfig) {
-        config = preferredApiConfig;
-      } else if (lockConfig) {
-        config = lockConfig;
-      } else {
-        config = apiManager.getSelectedConfig();
-      }
-      effectiveApiConfig = config;
-      if (attempt) {
-        attempt.supportsStandardSteer = isOpenAIResponsesApiConfig(config);
-      }
-      const responsesPageToolEnvironment = resolveResponsesPageToolEnvironment(attempt);
-      let ephemeralResponsesInstructions = '';
-
-      const shouldInjectJsRuntimeFrameContext = (
-        typeof utils?.executeJsRuntime === 'function'
-        && typeof utils?.getJsRuntimeFrames === 'function'
-        && responsesPageToolEnvironment?.shouldInjectJsRuntimeFrameContext === true
-        && isOpenAIResponsesApiConfig(effectiveApiConfig)
-      );
-      if (shouldInjectJsRuntimeFrameContext) {
-        updateLoadingStatus(loadingMessage, '正在获取 JS Runtime frame 上下文...', { stage: 'get_js_runtime_frames' });
-        const jsRuntimeFrames = await getJsRuntimeFrameSnapshot(
-          responsesPageToolEnvironment.jsRuntimeEnvironment
-        );
-        const jsRuntimeFrameContext = buildJsRuntimeFrameContextInstructions(jsRuntimeFrames);
-        if (jsRuntimeFrameContext) {
-          ephemeralResponsesInstructions = jsRuntimeFrameContext;
-        }
-      }
-
       // 添加字数统计元素
       if (!regenerateMode) {
         addContentLengthFooter(userMessageDiv, config);
@@ -7825,12 +7879,6 @@ export function createMessageSender(appContext) {
         config: config,
         overrides: requestOverrides
       });
-      if (ephemeralResponsesInstructions && isOpenAIResponsesApiConfig(effectiveApiConfig)) {
-        requestBody.instructions = appendEphemeralResponsesInstructions(
-          requestBody.instructions,
-          ephemeralResponsesInstructions
-        );
-      }
       if (isOpenAIResponsesApiConfig(effectiveApiConfig)
         && !normalizeResponsesPromptCacheKey(requestBody?.prompt_cache_key)) {
         const autoPromptCacheKey = resolveAutoResponsesPromptCacheKey({
