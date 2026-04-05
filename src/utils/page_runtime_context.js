@@ -96,33 +96,43 @@ export function buildPageRuntimeContextSignature(payload) {
   }
 }
 
+function escapeXmlText(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+}
+
 function buildHostPageRuntimeContextText(payload) {
   const lines = [
-    '[Page Runtime Context]',
-    '以下是当前请求对应的宿主页工具运行环境隐藏上下文，不是用户输入正文。',
-    `page_content_read: ${payload.page_content_tool === 'available' ? 'available' : 'unavailable'}`,
-    'js_runtime_execute: 当前侧栏绑定网页标签页'
+    `<page_runtime_context mode="${escapeXmlText(payload.mode)}">`,
+    `  <page_content_tool>${escapeXmlText(payload.page_content_tool)}</page_content_tool>`,
+    `  <js_runtime_environment>${escapeXmlText(payload.js_runtime_environment)}</js_runtime_environment>`
   ];
-  if (payload.url) lines.push(`Page URL: ${payload.url}`);
-  if (payload.title) lines.push(`Page Title: ${payload.title}`);
+  if (payload.url) lines.push(`  <url>${escapeXmlText(payload.url)}</url>`);
+  if (payload.title) lines.push(`  <title>${escapeXmlText(payload.title)}</title>`);
   if (Array.isArray(payload.frames) && payload.frames.length > 0) {
-    lines.push('Frames:');
+    lines.push('  <frames>');
     payload.frames.forEach((item) => {
-      lines.push(
-        `- frame_id=${item.frame_id}; is_top=${item.is_top ? 'true' : 'false'}; url=${item.url || ''}; title=${item.title || ''}`
-      );
+      lines.push(`    <frame id="${escapeXmlText(item.frame_id)}" top="${item.is_top ? 'true' : 'false'}">`);
+      if (item.url) lines.push(`      <url>${escapeXmlText(item.url)}</url>`);
+      if (item.title) lines.push(`      <title>${escapeXmlText(item.title)}</title>`);
+      lines.push('    </frame>');
     });
+    lines.push('  </frames>');
   }
+  lines.push('</page_runtime_context>');
   return lines.join('\n');
 }
 
 function buildIsolatedSandboxRuntimeContextText(payload) {
   return [
-    '[Page Runtime Context]',
-    '以下是当前请求对应的运行环境隐藏上下文，不是用户输入正文。',
-    `page_content_read: ${payload.page_content_tool === 'available' ? 'available' : 'unavailable'}`,
-    'js_runtime_execute: 侧栏内部隔离 sandbox iframe',
-    '当前请求不访问宿主标签页，因此没有宿主页 URL / Title / Frame 列表。'
+    `<page_runtime_context mode="${escapeXmlText(payload.mode)}">`,
+    `  <page_content_tool>${escapeXmlText(payload.page_content_tool)}</page_content_tool>`,
+    `  <js_runtime_environment>${escapeXmlText(payload.js_runtime_environment)}</js_runtime_environment>`,
+    '</page_runtime_context>'
   ].join('\n');
 }
 
@@ -168,6 +178,13 @@ export function resolvePageRuntimeContextAttachment(options = {}) {
   const inputItems = buildPageRuntimeContextInputItems(payload);
 
   if (!signature || inputItems.length <= 0) {
+    return {
+      signature: null,
+      inputItems: null
+    };
+  }
+
+  if (payload?.mode === 'isolated_sandbox' && !previousEffectiveSignature) {
     return {
       signature: null,
       inputItems: null

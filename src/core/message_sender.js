@@ -6147,25 +6147,17 @@ export function createMessageSender(appContext) {
    *
    * @returns {Object}
    */
-  function buildResponsesJsRuntimeFunctionToolDefinition(pageToolEnvironment = resolveResponsesPageToolEnvironment()) {
-    const isHostPageRuntime = pageToolEnvironment?.jsRuntimeEnvironment === JS_RUNTIME_ENV_BOUND_HOST_PAGE;
-    const descriptionLines = isHostPageRuntime
-      ? [
-        '在当前侧栏绑定网页标签页中执行一次性 JavaScript。',
-        'code 字段会作为 async 函数体运行，可直接使用 await 和 return。',
-        '执行环境运行在 chrome.userScripts 的 USER_SCRIPT world，可访问 DOM / Web API，但不要假设能直接访问页面主世界里的自定义 JS 对象。',
-        '返回值会以文本片段形式回传：对象/数组默认 JSON 序列化，过长输出会自动截断。请尽量返回紧凑、可序列化的小结果。'
-      ]
-      : [
-        '在侧栏内部的隔离 sandbox iframe 中执行一次性 JavaScript。',
-        'code 字段会作为 async 函数体运行，可直接使用 await 和 return。',
-        '该环境提供独立的 window / document / DOM / Web API，但不会访问宿主标签页或其页面 DOM；更适合纯 JS 计算、临时 DOM 构造与文本处理。',
-        '返回值会以文本片段形式回传：对象/数组默认 JSON 序列化，过长输出会自动截断。请尽量返回紧凑、可序列化的小结果。'
-      ];
+  function buildResponsesJsRuntimeFunctionToolDefinition() {
     return {
       type: 'function',
       name: RESPONSES_JS_RUNTIME_TOOL_NAME,
-      description: descriptionLines.join(' '),
+      description: [
+        '在当前请求可用的浏览器脚本环境中执行一次性 JavaScript。',
+        'code 字段会作为 async 函数体运行，可直接使用 await 和 return。',
+        '执行环境是一个基于浏览器脚本沙箱的独立 JS 世界，可访问 DOM / Web API，不额外注入宿主扩展对象，也不要假设能直接访问页面主世界里的自定义 JS 对象。',
+        '若当前请求携带 page_runtime_context，则其中会给出可用页面/iframe 环境与 frame_id。',
+        '返回值会以文本片段形式回传：对象/数组默认 JSON 序列化，过长输出会自动截断。请尽量返回紧凑、可序列化的小结果。'
+      ].join(' '),
       strict: true,
       parameters: {
         type: 'object',
@@ -6177,9 +6169,7 @@ export function createMessageSender(appContext) {
           },
           frame_ids: {
             type: ['array', 'null'],
-            description: isHostPageRuntime
-              ? '可选的 frame ID 数组。省略或传空数组时，默认在顶层 frame 执行；若要进入 iframe，请使用同轮隐藏运行环境上下文里给出的 frame_id。'
-              : '当前隔离沙箱只有一个顶层 frame，frame_ids 参数会被忽略；请传空数组或 null。',
+            description: '可选的 frame ID 数组。省略或传空数组时，默认在顶层 frame 执行。若当前请求附带 page_runtime_context，可从其中读取可用 frame_id；若当前环境只有单一顶层 frame，则传空数组或 null 即可。',
             items: {
               type: 'integer'
             }
@@ -6251,7 +6241,7 @@ export function createMessageSender(appContext) {
       tools.push(buildResponsesPageContentFunctionToolDefinition());
     }
     if (typeof utils?.executeJsRuntime === 'function') {
-      tools.unshift(buildResponsesJsRuntimeFunctionToolDefinition(pageToolEnvironment));
+      tools.unshift(buildResponsesJsRuntimeFunctionToolDefinition());
     }
     return tools;
   }

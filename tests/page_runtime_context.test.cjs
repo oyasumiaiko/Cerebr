@@ -45,11 +45,12 @@ test('host page runtime context 会包含 URL、Title 与 frame 列表', async (
   const items = buildPageRuntimeContextInputItems(payload);
   assert.equal(items.length, 1);
   const text = items[0].content[0].text;
-  assert.match(text, /Page URL: https:\/\/example\.com\/page/);
-  assert.match(text, /frame_id=2/);
+  assert.match(text, /<page_runtime_context mode="host_page">/);
+  assert.match(text, /<url>https:\/\/example\.com\/page<\/url>/);
+  assert.match(text, /<frame id="2" top="false">/);
 });
 
-test('isolated sandbox runtime context 会明确说明不访问宿主标签页', async () => {
+test('isolated sandbox runtime context 使用紧凑 XML 结构', async () => {
   const {
     buildPageRuntimeContextPayload,
     buildPageRuntimeContextInputItems
@@ -67,8 +68,8 @@ test('isolated sandbox runtime context 会明确说明不访问宿主标签页',
   assert.equal(payload.mode, 'isolated_sandbox');
   const items = buildPageRuntimeContextInputItems(payload);
   const text = items[0].content[0].text;
-  assert.match(text, /隔离 sandbox iframe/);
-  assert.match(text, /不访问宿主标签页/);
+  assert.match(text, /<page_runtime_context mode="isolated_sandbox">/);
+  assert.match(text, /<js_runtime_environment>isolated_sandbox_iframe<\/js_runtime_environment>/);
 });
 
 test('resolvePageRuntimeContextAttachment 在签名未变化时不重复追加上下文', async () => {
@@ -104,4 +105,46 @@ test('resolvePageRuntimeContextAttachment 在签名未变化时不重复追加�
   });
   assert.equal(typeof changed.signature, 'string');
   assert.ok(Array.isArray(changed.inputItems));
+});
+
+test('resolvePageRuntimeContextAttachment 在纯对话模式且此前没有上下文时不主动插入说明', async () => {
+  const {
+    buildPageRuntimeContextPayload,
+    resolvePageRuntimeContextAttachment,
+    buildPageRuntimeContextSignature
+  } = await loadPageRuntimeContextModule();
+
+  const isolatedPayload = buildPageRuntimeContextPayload({
+    pageToolEnvironment: {
+      exposePageContentTool: false,
+      jsRuntimeEnvironment: 'isolated_sandbox_iframe'
+    },
+    pageMeta: null,
+    frames: null
+  });
+
+  const firstPureTurn = resolvePageRuntimeContextAttachment({
+    payload: isolatedPayload,
+    previousEffectiveSignature: ''
+  });
+  assert.equal(firstPureTurn.signature, null);
+  assert.equal(firstPureTurn.inputItems, null);
+
+  const priorHostPayload = buildPageRuntimeContextPayload({
+    pageToolEnvironment: {
+      exposePageContentTool: true,
+      jsRuntimeEnvironment: 'bound_host_page'
+    },
+    pageMeta: {
+      url: 'https://example.com/page',
+      title: 'Example Page'
+    },
+    frames: [{ frameId: 0, isTop: true, url: 'https://example.com/page', title: 'Example Page' }]
+  });
+  const switchedFromHost = resolvePageRuntimeContextAttachment({
+    payload: isolatedPayload,
+    previousEffectiveSignature: buildPageRuntimeContextSignature(priorHostPayload)
+  });
+  assert.equal(typeof switchedFromHost.signature, 'string');
+  assert.ok(Array.isArray(switchedFromHost.inputItems));
 });
