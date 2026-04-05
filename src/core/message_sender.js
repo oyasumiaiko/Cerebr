@@ -39,6 +39,7 @@ import {
   JS_RUNTIME_ENV_ISOLATED_SANDBOX,
   resolvePageToolEnvironment
 } from '../utils/page_tool_environment.js';
+import { deriveResponsesSseLoadingStatus } from '../utils/responses_stream_status.js';
 import {
   buildPageRuntimeContextPayload,
   resolvePageRuntimeContextAttachment
@@ -4607,6 +4608,17 @@ export function createMessageSender(appContext) {
           });
           break;
         }
+        case 'http_response_headers_received': {
+          const httpStatus = Number(evt.status);
+          updateLoadingStatus(loadingMessage, '已收到响应头，服务器正在开始处理...', {
+            stage,
+            apiBase: evt.apiBase || '',
+            modelName: evt.modelName || '',
+            httpStatus: Number.isFinite(httpStatus) ? httpStatus : undefined,
+            note: '对于 SSE，这通常意味着后续会陆续收到 response.created / reasoning / tool 调用等事件。'
+          });
+          break;
+        }
         case 'http_429_rate_limited': {
           const willRetry = !!evt.willRetry;
           updateLoadingStatus(
@@ -8808,7 +8820,7 @@ export function createMessageSender(appContext) {
    */
   async function handleStreamResponse(response, loadingMessage, usedApiConfig, attemptState) {
     captureAttemptConversationContext(attemptState);
-    const canUpdateLoadingStatus = !!(
+    const canStillUpdateLoadingStatus = () => !!(
       loadingMessage
       && loadingMessage.parentNode
       && !attemptState?.aiMessageId
@@ -8816,7 +8828,7 @@ export function createMessageSender(appContext) {
     );
     // 流式场景：此时已拿到响应头，但正文 token 尚未到达。
     // 在首个 token 到达前维持占位消息，并展示“等待首 token”的细粒度状态。
-    if (canUpdateLoadingStatus) {
+    if (canStillUpdateLoadingStatus()) {
       updateLoadingStatus(
         loadingMessage,
         '已建立流式连接，等待首个 token...',
@@ -8950,7 +8962,7 @@ export function createMessageSender(appContext) {
 
 	    // 自适应 UI 更新节流器：将多个 token 的高频更新合并为较低频的 DOM 刷新，缓解长消息渲染导致的卡顿。
 	    // 说明：这里不改 messageProcessor.updateAIMessage 的“全量重渲染”策略，而是通过“掉帧合并”降低调用频率。
-	    const uiUpdateThrottler = createAdaptiveUpdateThrottler({
+    const uiUpdateThrottler = createAdaptiveUpdateThrottler({
 	      run: (payload) => {
 	        if (!payload || !payload.messageId) return;
           const boundNode = resolveAttemptAiNode(attemptState, payload.messageId);
@@ -9009,6 +9021,21 @@ export function createMessageSender(appContext) {
 	    if (attemptState) {
 	      attemptState.uiUpdateThrottler = uiUpdateThrottler;
 	    }
+
+    function updateLoadingStatusFromResponsesSseEvent(eventType, data) {
+      if (!isOpenAIResponsesStream || !canStillUpdateLoadingStatus()) return;
+      const nextStatus = deriveResponsesSseLoadingStatus(eventType, data);
+      if (!nextStatus) return;
+      updateLoadingStatus(
+        loadingMessage,
+        nextStatus.text,
+        {
+          ...nextStatus.meta,
+          apiBase: usedApiConfig?.baseUrl || '',
+          modelName: usedApiConfig?.modelName || ''
+        }
+      );
+    }
 
     /**
      * 首帧落地副作用：
@@ -9671,6 +9698,7 @@ export function createMessageSender(appContext) {
 
       // Responses API SSE 事件分支
       if (isOpenAIResponsesStream) {
+        updateLoadingStatusFromResponsesSseEvent(eventType, data);
         if (eventType === 'response.error' || eventType === 'error' || eventType === 'response.failed') {
           const payloadError = data?.error || data?.response?.error || data;
           const msg = buildStreamApiErrorMessage(payloadError, 'Unknown OpenAI Responses error');
