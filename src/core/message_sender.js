@@ -6259,6 +6259,16 @@ export function createMessageSender(appContext) {
    * @returns {Object}
    */
   function buildResponsesPageContentFunctionToolDefinition() {
+    const properties = {
+      skip_chars: {
+        type: ['integer', 'null'],
+        description: '可选。要跳过的字符数，用于读取指定偏移后的连续片段。省略时默认从头开始。'
+      },
+      max_chars: {
+        type: ['integer', 'null'],
+        description: '可选。读取的连续字符长度。若与 skip_chars 一起提供，则返回从 skip_chars 开始的连续片段；若两者都省略，则返回默认中间截断预览。'
+      }
+    };
     return {
       type: 'function',
       name: RESPONSES_PAGE_CONTENT_TOOL_NAME,
@@ -6272,17 +6282,8 @@ export function createMessageSender(appContext) {
       parameters: {
         type: 'object',
         additionalProperties: false,
-        properties: {
-          skip_chars: {
-            type: ['integer', 'null'],
-            description: '可选。要跳过的字符数，用于读取指定偏移后的连续片段。省略时默认从头开始。'
-          },
-          max_chars: {
-            type: ['integer', 'null'],
-            description: '可选。读取的连续字符长度。若与 skip_chars 一起提供，则返回从 skip_chars 开始的连续片段；若两者都省略，则返回默认中间截断预览。'
-          }
-        },
-        required: ['skip_chars', 'max_chars']
+        properties,
+        required: Object.keys(properties)
       }
     };
   }
@@ -6299,6 +6300,54 @@ export function createMessageSender(appContext) {
    * @returns {Object}
    */
   function buildResponsesHistorySearchFunctionToolDefinition() {
+    const properties = {
+      text_all: {
+        type: ['array', 'null'],
+        description: '可选。正文里必须同时出现的词或短语列表（AND 关系）。每一项都按完整字符串匹配，可直接填写短语。',
+        items: { type: 'string' }
+      },
+      text_not: {
+        type: ['array', 'null'],
+        description: '可选。正文里不得出现的词或短语列表。',
+        items: { type: 'string' }
+      },
+      url_contains: {
+        type: ['string', 'null'],
+        description: '可选。只返回 URL 中包含该子串的会话。'
+      },
+      min_message_count: {
+        type: ['integer', 'null'],
+        description: '可选。只返回消息条数不少于该值的会话。'
+      },
+      max_message_count: {
+        type: ['integer', 'null'],
+        description: '可选。只返回消息条数不多于该值的会话。'
+      },
+      date_from: {
+        type: ['string', 'null'],
+        description: '可选。只返回结束时间不早于该时间点的会话。支持 YYYY-MM-DD、YYYYMMDD、10位秒时间戳、13位毫秒时间戳。'
+      },
+      date_to: {
+        type: ['string', 'null'],
+        description: '可选。只返回开始时间不晚于该时间点的会话。支持 YYYY-MM-DD、YYYYMMDD、10位秒时间戳、13位毫秒时间戳。'
+      },
+      recent_within: {
+        type: ['string', 'null'],
+        description: '可选。只返回最近一段时间内有活动的会话，例如 5d、1w、1m、1y。'
+      },
+      scope: {
+        type: ['string', 'null'],
+        description: '可选。message 表示每个正向词必须在同一条消息内同时命中；session 表示同一会话内不同消息共同满足也算命中。'
+      },
+      result_mode: {
+        type: ['string', 'null'],
+        description: '可选。matches 返回元数据 + 命中摘要；metadata_only 只返回会话元数据列表，适合结合 recent_within 之类条件做最近对话清单。'
+      },
+      max_results: {
+        type: ['integer', 'null'],
+        description: '可选。最多返回多少条命中会话，默认 20。'
+      }
+    };
     return {
       type: 'function',
       name: RESPONSES_HISTORY_SEARCH_TOOL_NAME,
@@ -6314,55 +6363,8 @@ export function createMessageSender(appContext) {
       parameters: {
         type: 'object',
         additionalProperties: false,
-        properties: {
-          text_all: {
-            type: ['array', 'null'],
-            description: '可选。正文里必须同时出现的词或短语列表（AND 关系）。每一项都按完整字符串匹配，可直接填写短语。',
-            items: { type: 'string' }
-          },
-          text_not: {
-            type: ['array', 'null'],
-            description: '可选。正文里不得出现的词或短语列表。',
-            items: { type: 'string' }
-          },
-          url_contains: {
-            type: ['string', 'null'],
-            description: '可选。只返回 URL 中包含该子串的会话。'
-          },
-          min_message_count: {
-            type: ['integer', 'null'],
-            description: '可选。只返回消息条数不少于该值的会话。'
-          },
-          max_message_count: {
-            type: ['integer', 'null'],
-            description: '可选。只返回消息条数不多于该值的会话。'
-          },
-          date_from: {
-            type: ['string', 'null'],
-            description: '可选。只返回结束时间不早于该时间点的会话。支持 YYYY-MM-DD、YYYYMMDD、10位秒时间戳、13位毫秒时间戳。'
-          },
-          date_to: {
-            type: ['string', 'null'],
-            description: '可选。只返回开始时间不晚于该时间点的会话。支持 YYYY-MM-DD、YYYYMMDD、10位秒时间戳、13位毫秒时间戳。'
-          },
-          recent_within: {
-            type: ['string', 'null'],
-            description: '可选。只返回最近一段时间内有活动的会话，例如 5d、1w、1m、1y。'
-          },
-          scope: {
-            type: ['string', 'null'],
-            description: '可选。message 表示每个正向词必须在同一条消息内同时命中；session 表示同一会话内不同消息共同满足也算命中。'
-          },
-          result_mode: {
-            type: ['string', 'null'],
-            description: '可选。matches 返回元数据 + 命中摘要；metadata_only 只返回会话元数据列表，适合结合 recent_within 之类条件做最近对话清单。'
-          },
-          max_results: {
-            type: ['integer', 'null'],
-            description: '可选。最多返回多少条命中会话，默认 20。'
-          }
-        },
-        required: []
+        properties,
+        required: Object.keys(properties)
       }
     };
   }
@@ -6378,6 +6380,24 @@ export function createMessageSender(appContext) {
    * @returns {Object}
    */
   function buildResponsesHistoryReadFunctionToolDefinition() {
+    const properties = {
+      conv_ref: {
+        type: 'integer',
+        description: '必填。会话外部编号，1-based，最新会话编号最大。建议先通过 history_search 获取。'
+      },
+      start: {
+        type: 'integer',
+        description: '必填。读取窗口起点，1-based，闭区间。'
+      },
+      end: {
+        type: 'integer',
+        description: '必填。读取窗口终点，1-based，闭区间。'
+      },
+      thread_ref: {
+        type: ['integer', 'null'],
+        description: '可选。若提供，则读取该线程内的 thread_msg_index 窗口；不传则读取主线消息窗口。'
+      }
+    };
     return {
       type: 'function',
       name: RESPONSES_HISTORY_READ_TOOL_NAME,
@@ -6391,25 +6411,8 @@ export function createMessageSender(appContext) {
       parameters: {
         type: 'object',
         additionalProperties: false,
-        properties: {
-          conv_ref: {
-            type: 'integer',
-            description: '必填。会话外部编号，1-based，最新会话编号最大。建议先通过 history_search 获取。'
-          },
-          start: {
-            type: 'integer',
-            description: '必填。读取窗口起点，1-based，闭区间。'
-          },
-          end: {
-            type: 'integer',
-            description: '必填。读取窗口终点，1-based，闭区间。'
-          },
-          thread_ref: {
-            type: ['integer', 'null'],
-            description: '可选。若提供，则读取该线程内的 thread_msg_index 窗口；不传则读取主线消息窗口。'
-          }
-        },
-        required: ['conv_ref', 'start', 'end', 'thread_ref']
+        properties,
+        required: Object.keys(properties)
       }
     };
   }
