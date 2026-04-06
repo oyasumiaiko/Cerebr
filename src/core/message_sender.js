@@ -6210,14 +6210,18 @@ export function createMessageSender(appContext) {
         '在一个隔离的浏览器脚本环境中执行一次性 JavaScript。',
         'code 字段会作为 async 函数体运行，可直接使用 await 和 return。',
         '可访问该环境自身的 DOM / Web API；通常只有一个顶层 frame，frame_ids 一般可留空。',
-        '返回值会以文本片段形式回传：对象/数组默认 JSON 序列化，过长输出会自动截断。请尽量返回紧凑、可序列化的小结果。'
+        'console.log/info/warn/error/debug 的输出会被捕获并一并回传，可用于调试或分步观察。',
+        '工具返回结果采用 XML 分块文本：通常包含 <metadata>、<return_value>、<console_logs>、<error>；多 frame 时还可能包含 <frame_results>。',
+        '其中 metadata 是小型 JSON，其余正文块是纯文本；过长块会自动截断。请尽量返回紧凑、可序列化的小结果。'
       ]
       : [
         '在当前请求关联的网页脚本环境中执行一次性 JavaScript。',
         'code 字段会作为 async 函数体运行，可直接使用 await 和 return。',
         '执行环境是基于浏览器脚本沙箱的独立 JS 世界，可访问 DOM / Web API，不要假设能直接访问页面主世界里的自定义 JS 对象。',
         '若当前请求附带 page_runtime_context，可从中读取可用页面/iframe 环境与 frame_id。',
-        '返回值会以文本片段形式回传：对象/数组默认 JSON 序列化，过长输出会自动截断。请尽量返回紧凑、可序列化的小结果。'
+        'console.log/info/warn/error/debug 的输出会被捕获并一并回传，可用于调试或分步观察。',
+        '工具返回结果采用 XML 分块文本：通常包含 <metadata>、<return_value>、<console_logs>、<error>；多 frame 时还可能包含 <frame_results>。',
+        '其中 metadata 是小型 JSON，其余正文块是纯文本；过长块会自动截断。请尽量返回紧凑、可序列化的小结果。'
       ];
     const frameDescription = isIsolatedSandbox
       ? '可选的 frame ID 数组。当前环境通常只有一个顶层 frame，省略、传空数组或 null 即可。'
@@ -6233,7 +6237,7 @@ export function createMessageSender(appContext) {
         properties: {
           code: {
             type: 'string',
-            description: '要执行的 JavaScript 代码片段。它会作为 async 函数体执行，可直接使用 await 和 return。请优先返回紧凑、可 JSON 序列化的结果，避免返回 DOM 节点、函数或超大对象。'
+            description: '要执行的 JavaScript 代码片段。它会作为 async 函数体执行，可直接使用 await、return 和 console.log/info/warn/error/debug。请优先返回紧凑、可 JSON 序列化的结果，避免返回 DOM 节点、函数或超大对象。'
           },
           frame_ids: {
             type: ['array', 'null'],
