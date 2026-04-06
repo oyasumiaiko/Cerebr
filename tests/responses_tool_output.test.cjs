@@ -26,6 +26,17 @@ test('stringifyResponsesToolOutputValue 能处理循环引用与 bigint', async 
   assert.match(text, /\[Circular\]/);
 });
 
+test('stringifyResponsesToolOutputValue 对超过 1000 字符的 JSON 使用紧凑格式', async () => {
+  const { stringifyResponsesToolOutputValue } = await loadResponsesToolOutputModule();
+  const value = {
+    long: 'x'.repeat(1200),
+    nested: { ok: true }
+  };
+  const text = stringifyResponsesToolOutputValue(value);
+  assert.doesNotMatch(text, /\n  "nested"/);
+  assert.match(text, /^\{"long":"x+/);
+});
+
 test('truncateResponsesToolOutputText 使用统一的字符截断提示', async () => {
   const { truncateResponsesToolOutputText } = await loadResponsesToolOutputModule();
   const source = `${'A'.repeat(6000)}${'B'.repeat(6000)}`;

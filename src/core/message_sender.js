@@ -6212,7 +6212,7 @@ export function createMessageSender(appContext) {
         'code 字段会作为 async 函数体运行，可直接使用 await 和 return。',
         '可访问该环境自身的 DOM / Web API；通常只有一个顶层 frame，frame_ids 一般可留空。',
         'console.log/info/warn/error/debug 的输出会被捕获并一并回传，可用于调试或分步观察。',
-        '若需要回传人类可读的字符串或多行文本，优先使用 console.log；return 更适合返回简洁结果值。不要把长字符串包进对象里再 return。',
+        '若需要回传大量长字符串或多行文本，优先使用 console.log 输出；为避免长字符串作为 return 值时变成 JSON 字符串表现，return 更适合简洁结果值。',
         '工具返回结果采用 XML 分块文本：通常包含 <metadata>、<return_value>、<console_logs>、<error>；多 frame 时还可能包含 <frame_results>。',
         '其中 metadata 是小型 JSON，其余正文块是纯文本；过长块会自动截断。请尽量返回紧凑、可序列化的小结果。'
       ]
@@ -6222,7 +6222,7 @@ export function createMessageSender(appContext) {
         '执行环境是基于浏览器脚本沙箱的独立 JS 世界，可访问 DOM / Web API，不要假设能直接访问页面主世界里的自定义 JS 对象。',
         '若当前请求附带 page_runtime_context，可从中读取可用页面/iframe 环境与 frame_id。',
         'console.log/info/warn/error/debug 的输出会被捕获并一并回传，可用于调试或分步观察。',
-        '若需要回传人类可读的字符串或多行文本，优先使用 console.log；return 更适合返回简洁结果值。不要把长字符串包进对象里再 return。',
+        '若需要回传大量长字符串或多行文本，优先使用 console.log 输出；为避免长字符串作为 return 值时变成 JSON 字符串表现，return 更适合简洁结果值。',
         '工具返回结果采用 XML 分块文本：通常包含 <metadata>、<return_value>、<console_logs>、<error>；多 frame 时还可能包含 <frame_results>。',
         '其中 metadata 是小型 JSON，其余正文块是纯文本；过长块会自动截断。请尽量返回紧凑、可序列化的小结果。'
       ];
@@ -6240,7 +6240,7 @@ export function createMessageSender(appContext) {
         properties: {
           code: {
             type: 'string',
-            description: '要执行的 JavaScript 代码片段。它会作为 async 函数体执行，可直接使用 await、return 和 console.log/info/warn/error/debug。若需要回传可读字符串或多行文本，优先使用 console；请避免把长字符串包进对象里再 return。'
+            description: '要执行的 JavaScript 代码片段。它会作为 async 函数体执行，可直接使用 await、return 和 console.log/info/warn/error/debug。若需要回传大量长字符串或多行文本，优先使用 console.log 输出；return 更适合简洁结果值。'
           },
           frame_ids: {
             type: ['array', 'null'],

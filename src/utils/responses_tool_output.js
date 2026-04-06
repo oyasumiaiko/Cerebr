@@ -8,6 +8,7 @@
  */
 export const RESPONSES_TOOL_OUTPUT_MAX_CHARS = 5_000;
 export const RESPONSES_TOOL_OUTPUT_CHUNK_CHARS = 3_000;
+export const RESPONSES_TOOL_OUTPUT_PRETTY_JSON_MAX_CHARS = 1_000;
 
 function trimTrailingWhitespace(text) {
   return String(text ?? '').replace(/[ \t]+\n/g, '\n').trim();
@@ -65,8 +66,16 @@ export function stringifyResponsesToolOutputValue(value) {
   if (value == null) return 'null';
 
   try {
-    const serialized = JSON.stringify(value, buildSafeStringifyReplacer(), 2);
-    if (typeof serialized === 'string') return serialized;
+    const replacer = buildSafeStringifyReplacer();
+    const pretty = JSON.stringify(value, replacer, 2);
+    if (typeof pretty === 'string') {
+      if (pretty.length <= RESPONSES_TOOL_OUTPUT_PRETTY_JSON_MAX_CHARS) {
+        return pretty;
+      }
+      const compact = JSON.stringify(value, buildSafeStringifyReplacer());
+      if (typeof compact === 'string') return compact;
+      return pretty;
+    }
   } catch (_) {}
 
   try {
@@ -297,7 +306,7 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
 
   const blocks = [];
   const metadataText = truncateResponsesToolOutputText(
-    trimTrailingWhitespace(JSON.stringify(metadata, null, 2)),
+    trimJsonMetadataValue(metadata),
     RESPONSES_TOOL_OUTPUT_MAX_CHARS
   );
   blocks.push(buildXmlBlock('metadata', metadataText));
@@ -622,7 +631,7 @@ export function formatResponsesToolOutputForDisplay(body) {
     const text = body.trim();
     if (!text) return '';
     try {
-      return JSON.stringify(JSON.parse(text), null, 2);
+      return stringifyResponsesToolOutputValue(JSON.parse(text));
     } catch (_) {
       return text;
     }
@@ -641,7 +650,7 @@ export function formatResponsesToolOutputForDisplay(body) {
     if (textChunks.length === body.length && textChunks.length > 0) {
       const joined = textChunks.join('');
       try {
-        return JSON.stringify(JSON.parse(joined), null, 2);
+        return stringifyResponsesToolOutputValue(JSON.parse(joined));
       } catch (_) {
         return joined;
       }
