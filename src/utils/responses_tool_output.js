@@ -14,6 +14,15 @@ const APPROX_BYTES_PER_TOKEN = 4;
 export const RESPONSES_TOOL_OUTPUT_MAX_TOKENS = 2_500;
 export const RESPONSES_TOOL_OUTPUT_MAX_BYTES = RESPONSES_TOOL_OUTPUT_MAX_TOKENS * APPROX_BYTES_PER_TOKEN;
 export const RESPONSES_TOOL_OUTPUT_CHUNK_CHARS = 3_000;
+const RESPONSES_JS_RUNTIME_RETURN_VALUE_MAX_TOKENS = 1_000;
+const RESPONSES_JS_RUNTIME_CONSOLE_LOGS_MAX_TOKENS = 800;
+const RESPONSES_JS_RUNTIME_FRAME_RESULTS_MAX_TOKENS = 500;
+const RESPONSES_JS_RUNTIME_ERROR_MAX_TOKENS = 400;
+const RESPONSES_JS_RUNTIME_METADATA_MAX_CHARS = 1_200;
+
+function trimTrailingWhitespace(text) {
+  return String(text ?? '').replace(/[ \t]+\n/g, '\n').trim();
+}
 
 function approxTokensFromByteCount(bytes) {
   const numeric = Number(bytes);
@@ -190,6 +199,257 @@ export function buildResponsesToolOutputContentItems(value, options = {}) {
   return chunks.map((text) => ({
     type: 'input_text',
     text
+  }));
+}
+
+function xmlAttributeEscape(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function buildXmlBlock(tagName, body) {
+  const text = trimTrailingWhitespace(body);
+  if (!text) return '';
+  return `<${tagName}>\n${text}\n</${tagName}>`;
+}
+
+function formatResponsesJsRuntimeSpecialValue(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  switch (value.type) {
+    case 'truncated_string':
+      return `${typeof value.preview === 'string' ? value.preview : ''}\n… string truncated from ${Number.isFinite(Number(value.length)) ? Number(value.length) : '?'} chars …`.trim();
+    case 'data_url':
+      return [
+        'data URL omitted',
+        `mime_type: ${typeof value.mime_type === 'string' ? value.mime_type : ''}`,
+        `length: ${Number.isFinite(Number(value.length)) ? Number(value.length) : '?'}`
+      ].join('\n');
+    case 'dom_node':
+      return [
+        `DOM node: ${typeof value.nodeName === 'string' ? value.nodeName : ''}`,
+        value.id ? `id: ${value.id}` : '',
+        value.className ? `class: ${value.className}` : '',
+        typeof value.textContent === 'string' && value.textContent ? `text: ${value.textContent}` : '',
+        typeof value.outerHTML === 'string' && value.outerHTML ? `outer_html: ${value.outerHTML}` : ''
+      ].filter(Boolean).join('\n');
+    case 'bigint':
+      return `${typeof value.value === 'string' ? value.value : ''}n`;
+    case 'function':
+      return `[Function${value.name ? `: ${value.name}` : ''}]`;
+    case 'circular_ref':
+      return '[Circular]';
+    case 'truncated_array':
+      return '[array truncated]';
+    case 'truncated_object':
+      return '[object truncated]';
+    case 'truncated_structure':
+      return `[structure truncated: ${typeof value.value_type === 'string' ? value.value_type : 'unknown'}]`;
+    case 'truncated_items':
+      return `[… ${Number.isFinite(Number(value.omitted_count)) ? Number(value.omitted_count) : '?'} items omitted …]`;
+    case 'normalization_error':
+      return stringifyResponsesToolOutputValue(value.error || value);
+    default:
+      return null;
+  }
+}
+
+function formatResponsesJsRuntimeValueText(value) {
+  const special = formatResponsesJsRuntimeSpecialValue(value);
+  if (typeof special === 'string') return special;
+  if (typeof value === 'string') return value;
+  if (value == null || typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  return stringifyResponsesToolOutputValue(value);
+}
+
+function formatResponsesJsRuntimeErrorText(error) {
+  if (!error) return '';
+  if (typeof error === 'string') return error;
+  const special = formatResponsesJsRuntimeSpecialValue(error);
+  if (typeof special === 'string') return special;
+  if (typeof error === 'object') {
+    const lines = [];
+    if (typeof error.name === 'string' && error.name.trim()) {
+      lines.push(`name: ${error.name.trim()}`);
+    }
+    if (typeof error.message === 'string' && error.message.trim()) {
+      lines.push(`message: ${error.message.trim()}`);
+    }
+    if (typeof error.stack === 'string' && error.stack.trim()) {
+      lines.push(`stack:\n${error.stack.trim()}`);
+    }
+    if (lines.length > 0) return lines.join('\n');
+  }
+  return stringifyResponsesToolOutputValue(error);
+}
+
+function formatResponsesJsRuntimeLogText(log, fallbackFrameId = null) {
+  if (!log) return '';
+  const level = (typeof log.level === 'string' && log.level.trim()) ? log.level.trim().toLowerCase() : 'log';
+  const frameId = Number.isFinite(Number(log.frameId)) ? Number(log.frameId) : fallbackFrameId;
+  const prefix = [
+    frameId === null ? '' : `[frame ${frameId}]`,
+    `[${level}]`
+  ].filter(Boolean).join('');
+  const text = formatResponsesJsRuntimeValueText(log.text ?? '');
+  return `${prefix} ${text}`.trim();
+}
+
+function trimJsonText(jsonText, maxChars = RESPONSES_JS_RUNTIME_METADATA_MAX_CHARS) {
+  if (typeof jsonText !== 'string') return '';
+  if (jsonText.length <= maxChars) return jsonText;
+  return `${jsonText.slice(0, maxChars)}\n… metadata truncated …`;
+}
+
+export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
+  const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
+  const items = Array.isArray(normalized.items) ? normalized.items : [];
+  const topLevelLogs = Array.isArray(normalized.logs) ? normalized.logs : [];
+  const successFrameCount = items.filter((item) => !item?.error).length;
+  const errorFrameCount = items.filter((item) => item?.error).length;
+  const metadata = {
+    ok: normalized.ok === true,
+    tab_id: Number.isFinite(Number(normalized.tabId)) ? Number(normalized.tabId) : null,
+    frame_count: items.length,
+    success_frame_count: successFrameCount,
+    error_frame_count: errorFrameCount,
+    console_log_count: topLevelLogs.length > 0
+      ? topLevelLogs.length
+      : items.reduce((sum, item) => sum + (Array.isArray(item?.logs) ? item.logs.length : 0), 0)
+  };
+
+  const blocks = [];
+  const metadataText = trimJsonText(JSON.stringify(metadata, null, 2));
+  blocks.push(buildXmlBlock('metadata', metadataText));
+
+  const returnValueText = trimTrailingWhitespace(
+    truncateResponsesToolOutputText(
+      formatResponsesJsRuntimeValueText(normalized.value),
+      Number.isFinite(Number(options?.returnValueMaxTokens))
+        ? Number(options.returnValueMaxTokens)
+        : RESPONSES_JS_RUNTIME_RETURN_VALUE_MAX_TOKENS
+    )
+  );
+  if (returnValueText && returnValueText !== 'null') {
+    blocks.push(buildXmlBlock('return_value', returnValueText));
+  }
+
+  if (topLevelLogs.length > 0 && items.length <= 1) {
+    const consoleLogsText = trimTrailingWhitespace(
+      truncateResponsesToolOutputText(
+        topLevelLogs.map((log) => formatResponsesJsRuntimeLogText(log)).filter(Boolean).join('\n'),
+        Number.isFinite(Number(options?.consoleLogsMaxTokens))
+          ? Number(options.consoleLogsMaxTokens)
+          : RESPONSES_JS_RUNTIME_CONSOLE_LOGS_MAX_TOKENS
+      )
+    );
+    if (consoleLogsText) {
+      blocks.push(buildXmlBlock('console_logs', consoleLogsText));
+    }
+  }
+
+  const topLevelErrorText = trimTrailingWhitespace(
+    truncateResponsesToolOutputText(
+      formatResponsesJsRuntimeErrorText(normalized.error),
+      Number.isFinite(Number(options?.errorMaxTokens))
+        ? Number(options.errorMaxTokens)
+        : RESPONSES_JS_RUNTIME_ERROR_MAX_TOKENS
+    )
+  );
+  if (topLevelErrorText) {
+    blocks.push(buildXmlBlock('error', topLevelErrorText));
+  }
+
+  const shouldRenderFrameResults = items.length > 1 || items.some((item) => item?.error);
+  if (shouldRenderFrameResults) {
+    const frameBlocks = items.map((item) => {
+      if (!item || typeof item !== 'object') return '';
+      const attrs = [
+        Number.isFinite(Number(item.frameId)) ? `frame_id="${xmlAttributeEscape(item.frameId)}"` : '',
+        typeof item.documentId === 'string' && item.documentId ? `document_id="${xmlAttributeEscape(item.documentId)}"` : '',
+        item.error ? 'status="error"' : 'status="ok"'
+      ].filter(Boolean).join(' ');
+      const innerBlocks = [];
+
+      if (item.error) {
+        const frameErrorText = trimTrailingWhitespace(
+          truncateResponsesToolOutputText(
+            formatResponsesJsRuntimeErrorText(item.error),
+            Number.isFinite(Number(options?.errorMaxTokens))
+              ? Number(options.errorMaxTokens)
+              : RESPONSES_JS_RUNTIME_ERROR_MAX_TOKENS
+          )
+        );
+        if (frameErrorText) innerBlocks.push(buildXmlBlock('error', frameErrorText));
+      } else {
+        const itemResultSerialized = stringifyResponsesToolOutputValue(item.result);
+        const topValueSerialized = stringifyResponsesToolOutputValue(normalized.value);
+        if (itemResultSerialized && topValueSerialized && itemResultSerialized === topValueSerialized && items.length === 1) {
+          innerBlocks.push(buildXmlBlock('result_ref', 'return_value'));
+        } else {
+          const frameReturnValueText = trimTrailingWhitespace(
+            truncateResponsesToolOutputText(
+              formatResponsesJsRuntimeValueText(item.result),
+              Number.isFinite(Number(options?.returnValueMaxTokens))
+                ? Number(options.returnValueMaxTokens)
+                : RESPONSES_JS_RUNTIME_RETURN_VALUE_MAX_TOKENS
+            )
+          );
+          if (frameReturnValueText && frameReturnValueText !== 'null') {
+            innerBlocks.push(buildXmlBlock('return_value', frameReturnValueText));
+          }
+        }
+      }
+
+      if (Array.isArray(item.logs) && item.logs.length > 0) {
+        const frameLogsText = trimTrailingWhitespace(
+          truncateResponsesToolOutputText(
+            item.logs.map((log) => formatResponsesJsRuntimeLogText(log, Number.isFinite(Number(item.frameId)) ? Number(item.frameId) : null)).filter(Boolean).join('\n'),
+            Number.isFinite(Number(options?.consoleLogsMaxTokens))
+              ? Number(options.consoleLogsMaxTokens)
+              : RESPONSES_JS_RUNTIME_CONSOLE_LOGS_MAX_TOKENS
+          )
+        );
+        if (frameLogsText) innerBlocks.push(buildXmlBlock('console_logs', frameLogsText));
+      }
+
+      const innerText = innerBlocks.filter(Boolean).join('\n\n');
+      if (!innerText) return '';
+      return `<frame_result${attrs ? ` ${attrs}` : ''}>\n${innerText}\n</frame_result>`;
+    }).filter(Boolean).join('\n\n');
+
+    const frameResultsText = trimTrailingWhitespace(
+      truncateResponsesToolOutputText(
+        frameBlocks,
+        Number.isFinite(Number(options?.frameResultsMaxTokens))
+          ? Number(options.frameResultsMaxTokens)
+          : RESPONSES_JS_RUNTIME_FRAME_RESULTS_MAX_TOKENS
+      )
+    );
+    if (frameResultsText) {
+      blocks.push(buildXmlBlock('frame_results', frameResultsText));
+    }
+  }
+
+  const body = blocks.filter(Boolean).join('\n\n');
+  return `<js_runtime_result>\n${body}\n</js_runtime_result>`;
+}
+
+export function buildResponsesJsRuntimeToolOutputContentItems(result, options = {}) {
+  const text = buildResponsesJsRuntimeToolOutputText(result, options);
+  const chunks = chunkTextByChars(
+    text,
+    Number.isFinite(Number(options?.chunkChars))
+      ? Number(options.chunkChars)
+      : RESPONSES_TOOL_OUTPUT_CHUNK_CHARS
+  );
+  return chunks.map((chunk) => ({
+    type: 'input_text',
+    text: chunk
   }));
 }
 

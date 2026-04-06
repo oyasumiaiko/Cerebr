@@ -13,6 +13,8 @@ const JS_SANDBOX_MAX_ARRAY_ITEMS = 80;
 const JS_SANDBOX_MAX_OBJECT_KEYS = 80;
 const JS_SANDBOX_DOM_TEXT_PREVIEW = 400;
 const JS_SANDBOX_HTML_PREVIEW = 1200;
+const JS_SANDBOX_MAX_LOGS = 50;
+const JS_SANDBOX_MAX_LOG_TEXT = 4000;
 
 /**
  * 构造隔离沙箱的伪 frame 快照。
@@ -173,21 +175,57 @@ export function normalizeJsSandboxTransferValue(value, depth = 0, seen = new Wea
   }
 }
 
+function normalizeJsSandboxConsoleLogEntry(entry, fallbackFrameId = 0) {
+  const log = (entry && typeof entry === 'object' && !Array.isArray(entry)) ? entry : {};
+  const level = (typeof log.level === 'string' && log.level.trim()) ? log.level.trim().toLowerCase() : 'log';
+  const frameId = Number.isFinite(Number(log.frameId)) ? Number(log.frameId) : fallbackFrameId;
+  const text = typeof log.text === 'string'
+    ? log.text
+    : String(log.text ?? '');
+  const boundedText = text.length <= JS_SANDBOX_MAX_LOG_TEXT
+    ? text
+    : `${text.slice(0, JS_SANDBOX_MAX_LOG_TEXT)}…`;
+  return {
+    frameId,
+    level,
+    text: boundedText
+  };
+}
+
+export function normalizeJsSandboxConsoleLogs(logs, fallbackFrameId = 0) {
+  if (!Array.isArray(logs) || logs.length <= 0) return [];
+  const normalized = logs
+    .slice(0, JS_SANDBOX_MAX_LOGS)
+    .map((entry) => normalizeJsSandboxConsoleLogEntry(entry, fallbackFrameId));
+  if (logs.length > JS_SANDBOX_MAX_LOGS) {
+    normalized.push({
+      frameId: fallbackFrameId,
+      level: 'info',
+      text: `[… ${logs.length - JS_SANDBOX_MAX_LOGS} console entries omitted …]`
+    });
+  }
+  return normalized;
+}
+
 /**
  * 构造 sandbox JS 成功执行时的稳定返回包。
  *
  * @param {any} value
+ * @param {Array<Object>} [logs]
  * @returns {{ok:boolean, value:any, items:Array<Object>, error:null}}
  */
-export function buildJsSandboxSuccessEnvelope(value) {
+export function buildJsSandboxSuccessEnvelope(value, logs = []) {
   const normalizedValue = normalizeJsSandboxTransferValue(value);
+  const normalizedLogs = normalizeJsSandboxConsoleLogs(logs, 0);
   return {
     ok: true,
     value: normalizedValue,
+    logs: normalizedLogs,
     items: [{
       frameId: 0,
       documentId: JS_SANDBOX_DOCUMENT_ID,
       result: normalizedValue,
+      logs: normalizedLogs,
       error: null
     }],
     error: null
@@ -198,17 +236,21 @@ export function buildJsSandboxSuccessEnvelope(value) {
  * 构造 sandbox JS 执行失败时的稳定返回包。
  *
  * @param {any} error
+ * @param {Array<Object>} [logs]
  * @returns {{ok:boolean, value:null, items:Array<Object>, error:Object}}
  */
-export function buildJsSandboxErrorEnvelope(error) {
+export function buildJsSandboxErrorEnvelope(error, logs = []) {
   const normalizedError = normalizeErrorLikeValue(error);
+  const normalizedLogs = normalizeJsSandboxConsoleLogs(logs, 0);
   return {
     ok: false,
     value: null,
+    logs: normalizedLogs,
     items: [{
       frameId: 0,
       documentId: JS_SANDBOX_DOCUMENT_ID,
       result: null,
+      logs: normalizedLogs,
       error: normalizedError
     }],
     error: normalizedError

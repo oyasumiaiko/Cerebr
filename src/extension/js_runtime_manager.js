@@ -24,17 +24,42 @@ function normalizeJsRuntimeError(error) {
   };
 }
 
+function normalizeJsRuntimeLogEntry(entry, fallbackFrameId = null) {
+  const log = (entry && typeof entry === 'object' && !Array.isArray(entry)) ? entry : {};
+  return {
+    frameId: Number.isFinite(Number(log?.frameId)) ? Number(log.frameId) : fallbackFrameId,
+    level: (typeof log?.level === 'string' && log.level.trim()) ? log.level.trim().toLowerCase() : 'log',
+    text: (typeof log?.text === 'string') ? log.text : String(log?.text ?? '')
+  };
+}
+
+function isJsRuntimeEnvelope(value) {
+  return !!(
+    value
+    && typeof value === 'object'
+    && !Array.isArray(value)
+    && value.__cerebrJsRuntimeEnvelope === true
+  );
+}
+
 /**
  * 用于把 execute() 返回值压成稳定结构，便于后续 UI / 工具层复用。
  * @param {any} item
- * @returns {{frameId:number|null, documentId:string|null, result:any, error:any}}
+ * @returns {{frameId:number|null, documentId:string|null, result:any, logs:Array<any>, error:any}}
  */
 function normalizeExecuteResultItem(item) {
+  const frameId = Number.isFinite(Number(item?.frameId)) ? Number(item.frameId) : null;
+  const documentId = (typeof item?.documentId === 'string' && item.documentId) ? item.documentId : null;
+  const rawEnvelope = isJsRuntimeEnvelope(item?.result) ? item.result : null;
+  const envelopeError = rawEnvelope?.error ? normalizeJsRuntimeError(rawEnvelope.error) : null;
   return {
-    frameId: Number.isFinite(Number(item?.frameId)) ? Number(item.frameId) : null,
-    documentId: (typeof item?.documentId === 'string' && item.documentId) ? item.documentId : null,
-    result: item?.result,
-    error: item?.error ? normalizeJsRuntimeError(item.error) : null
+    frameId,
+    documentId,
+    result: rawEnvelope ? rawEnvelope.value : item?.result,
+    logs: Array.isArray(rawEnvelope?.logs)
+      ? rawEnvelope.logs.map((entry) => normalizeJsRuntimeLogEntry(entry, frameId))
+      : [],
+    error: item?.error ? normalizeJsRuntimeError(item.error) : envelopeError
   };
 }
 
@@ -74,7 +99,118 @@ function buildUserScriptSource(userCode) {
   const body = (typeof userCode === 'string') ? userCode : '';
   return `
   (async () => {
+    const __cerebrMaxLogs = 50;
+    const __cerebrMaxLogChars = 4000;
+    const __cerebrBuildReplacer = () => {
+      const seen = new WeakSet();
+      return (_key, value) => {
+        if (typeof value === 'bigint') return \`\${value.toString()}n\`;
+        if (typeof value === 'function') return \`[Function\${value.name ? \`: \${value.name}\` : ''}]\`;
+        if (value instanceof Error) {
+          return {
+            name: value.name || 'Error',
+            message: value.message || '',
+            stack: typeof value.stack === 'string' ? value.stack : ''
+          };
+        }
+        if (
+          value
+          && typeof value === 'object'
+          && Number.isFinite(Number(value.nodeType))
+          && typeof value.nodeName === 'string'
+        ) {
+          const id = typeof value.id === 'string' && value.id ? \`#\${value.id}\` : '';
+          const className = typeof value.className === 'string' && value.className.trim()
+            ? \`.\${value.className.trim().split(/\\s+/).join('.')}\`
+            : '';
+          return \`[DOM \${String(value.nodeName).toLowerCase()}\${id}\${className}]\`;
+        }
+        if (value && typeof value === 'object') {
+          if (seen.has(value)) return '[Circular]';
+          seen.add(value);
+        }
+        return value;
+      };
+    };
+    const __cerebrNormalizeError = (error) => ({
+      message: (typeof error?.message === 'string' && error.message.trim())
+        ? error.message.trim()
+        : String(error || '未知错误'),
+      name: (typeof error?.name === 'string' && error.name.trim()) ? error.name.trim() : 'Error',
+      stack: (typeof error?.stack === 'string') ? error.stack : ''
+    });
+    const __cerebrFormatLogArg = (value) => {
+      if (typeof value === 'string') return value;
+      if (value == null || typeof value === 'number' || typeof value === 'boolean') return String(value);
+      if (typeof value === 'bigint') return \`\${value.toString()}n\`;
+      if (typeof value === 'function') return \`[Function\${value.name ? \`: \${value.name}\` : ''}]\`;
+      if (value instanceof Error) {
+        return \`\${value.name || 'Error'}: \${value.message || ''}\`.trim();
+      }
+      try {
+        return JSON.stringify(value, __cerebrBuildReplacer(), 2);
+      } catch (_) {
+        try {
+          return String(value);
+        } catch (_) {
+          return '[unserializable]';
+        }
+      }
+    };
+    const __cerebrLogs = [];
+    let __cerebrOmittedLogs = 0;
+    const __cerebrPushLog = (level, args) => {
+      if (__cerebrLogs.length >= __cerebrMaxLogs) {
+        __cerebrOmittedLogs += 1;
+        return;
+      }
+      const text = args.map((arg) => __cerebrFormatLogArg(arg)).join(' ');
+      __cerebrLogs.push({
+        level,
+        text: text.length <= __cerebrMaxLogChars ? text : \`\${text.slice(0, __cerebrMaxLogChars)}…\`
+      });
+    };
+    const __cerebrOriginalConsole = globalThis.console;
+    const __cerebrConsole = Object.create(__cerebrOriginalConsole || {});
+    ['log', 'info', 'warn', 'error', 'debug'].forEach((level) => {
+      __cerebrConsole[level] = (...args) => __cerebrPushLog(level, args);
+    });
+    const console = __cerebrConsole;
+    try {
+      globalThis.console = __cerebrConsole;
+      const __cerebrValue = await (async () => {
 ${body}
+      })();
+      if (__cerebrOmittedLogs > 0) {
+        __cerebrLogs.push({
+          level: 'info',
+          text: \`[… \${__cerebrOmittedLogs} console entries omitted …]\`
+        });
+      }
+      return {
+        __cerebrJsRuntimeEnvelope: true,
+        ok: true,
+        value: __cerebrValue,
+        logs: __cerebrLogs,
+        error: null
+      };
+    } catch (error) {
+      if (__cerebrOmittedLogs > 0) {
+        __cerebrLogs.push({
+          level: 'info',
+          text: \`[… \${__cerebrOmittedLogs} console entries omitted …]\`
+        });
+      }
+      return {
+        __cerebrJsRuntimeEnvelope: true,
+        ok: false,
+        value: null,
+        logs: __cerebrLogs,
+        error: __cerebrNormalizeError(error)
+      };
+    } finally {
+      globalThis.console = __cerebrOriginalConsole;
+    }
   })();
 `.trim();
 }
@@ -140,7 +276,7 @@ export function createJsRuntimeManager() {
    * @param {number[]|null} [request.frameIds]
    * @param {boolean} [request.allFrames]
    * @param {boolean} [request.injectImmediately]
-   * @returns {Promise<{ok:boolean, items:Array<Object>, value:any}>}
+   * @returns {Promise<{ok:boolean, items:Array<Object>, value:any, logs:Array<Object>}>}
    */
   async function execute(request = {}) {
     const tabId = Number(request?.tabId);
@@ -181,10 +317,15 @@ export function createJsRuntimeManager() {
       ? rawItems.map(normalizeExecuteResultItem)
       : [];
     const successfulItems = items.filter(item => !item.error);
+    const logs = items.flatMap((item) => {
+      if (!Array.isArray(item?.logs)) return [];
+      return item.logs.map((log) => normalizeJsRuntimeLogEntry(log, item.frameId));
+    });
 
     return {
       ok: items.every(item => !item.error),
       items,
+      logs,
       value: successfulItems.length === 1
         ? successfulItems[0].result
         : successfulItems.map(item => item.result)

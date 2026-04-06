@@ -30,6 +30,7 @@ import {
 } from '../utils/responses_prompt_cache.js';
 import {
   buildResponsesToolOutputContentItems,
+  buildResponsesJsRuntimeToolOutputContentItems,
   RESPONSES_TOOL_OUTPUT_MAX_BYTES,
   stringifyResponsesToolOutputValue
 } from '../utils/responses_tool_output.js';
@@ -6582,6 +6583,19 @@ export function createMessageSender(appContext) {
     }
   }
 
+  function serializeResponsesJsRuntimeFunctionToolOutput(value) {
+    try {
+      return buildResponsesJsRuntimeToolOutputContentItems(value);
+    } catch (error) {
+      return buildResponsesToolOutputContentItems({
+        ok: false,
+        value: null,
+        items: [],
+        error: normalizeResponsesCustomToolError(error)
+      });
+    }
+  }
+
   const RESPONSES_JS_RUNTIME_MAX_TEXT_PREVIEW_CHARS = 4000;
   const RESPONSES_JS_RUNTIME_MAX_ARRAY_ITEMS = 12;
   const RESPONSES_JS_RUNTIME_MAX_OBJECT_KEYS = 24;
@@ -6658,13 +6672,43 @@ export function createMessageSender(appContext) {
   function compactResponsesJsRuntimeResult(rawResult) {
     const normalized = (rawResult && typeof rawResult === 'object' && !Array.isArray(rawResult))
       ? cloneDataSafely(rawResult)
-      : { ok: false, value: null, items: [], error: null };
+      : { ok: false, value: null, logs: [], items: [], error: null };
     const compacted = {
       ok: normalized?.ok === true,
       tabId: Number.isFinite(Number(normalized?.tabId)) ? Number(normalized.tabId) : null,
       value: summarizeResponsesJsRuntimeValue(normalized?.value ?? null, 0),
+      logs: Array.isArray(normalized?.logs)
+        ? normalized.logs
+          .slice(0, RESPONSES_JS_RUNTIME_MAX_ARRAY_ITEMS)
+          .map((log) => ({
+            frameId: Number.isFinite(Number(log?.frameId)) ? Number(log.frameId) : null,
+            level: (typeof log?.level === 'string' && log.level) ? log.level : 'log',
+            text: summarizeResponsesJsRuntimeValue(
+              typeof log?.text === 'string' ? log.text : String(log?.text ?? ''),
+              1
+            )
+          }))
+        : [],
       items: Array.isArray(normalized?.items)
-        ? normalized.items.map(item => summarizeResponsesJsRuntimeValue(item, 0))
+        ? normalized.items.map((item) => {
+          const summarized = summarizeResponsesJsRuntimeValue(item, 0);
+          if (!summarized || typeof summarized !== 'object' || Array.isArray(summarized)) {
+            return summarized;
+          }
+          if (Array.isArray(item?.logs)) {
+            summarized.logs = item.logs
+              .slice(0, RESPONSES_JS_RUNTIME_MAX_ARRAY_ITEMS)
+              .map((log) => ({
+                frameId: Number.isFinite(Number(log?.frameId)) ? Number(log.frameId) : null,
+                level: (typeof log?.level === 'string' && log.level) ? log.level : 'log',
+                text: summarizeResponsesJsRuntimeValue(
+                  typeof log?.text === 'string' ? log.text : String(log?.text ?? ''),
+                  1
+                )
+              }));
+          }
+          return summarized;
+        })
         : [],
       error: normalized?.error ? summarizeResponsesJsRuntimeValue(normalized.error, 0) : null
     };
@@ -6699,6 +6743,9 @@ export function createMessageSender(appContext) {
       ok: compacted.ok,
       tabId: compacted.tabId,
       value: summarizeResponsesJsRuntimeValue(compacted.value, 2),
+      logs: Array.isArray(compacted.logs)
+        ? compacted.logs.slice(0, 12).map(log => summarizeResponsesJsRuntimeValue(log, 2))
+        : [],
       items: Array.isArray(compacted.items)
         ? compacted.items.slice(0, 4).map(item => summarizeResponsesJsRuntimeValue(item, 2))
         : [],
@@ -6940,7 +6987,9 @@ export function createMessageSender(appContext) {
     return {
       type: 'function_call_output',
       call_id: callId,
-      output: serializeResponsesFunctionToolOutput(outputPayload)
+      output: functionName === RESPONSES_JS_RUNTIME_TOOL_NAME
+        ? serializeResponsesJsRuntimeFunctionToolOutput(outputPayload)
+        : serializeResponsesFunctionToolOutput(outputPayload)
     };
   }
 
