@@ -26,21 +26,22 @@ test('stringifyResponsesToolOutputValue 能处理循环引用与 bigint', async 
   assert.match(text, /\[Circular\]/);
 });
 
-test('truncateResponsesToolOutputText 使用 Codex 风格的中间截断标记', async () => {
+test('truncateResponsesToolOutputText 使用统一的字符截断提示', async () => {
   const { truncateResponsesToolOutputText } = await loadResponsesToolOutputModule();
   const source = `${'A'.repeat(6000)}${'B'.repeat(6000)}`;
-  const truncated = truncateResponsesToolOutputText(source, 250);
+  const truncated = truncateResponsesToolOutputText(source, 5000);
   assert.notEqual(truncated, source);
-  assert.match(truncated, /tokens truncated/);
+  assert.match(truncated, /truncated \d+ chars out of 12000 total chars/);
+  assert.match(truncated, /omitted range \[\d+, \d+\)/);
   assert.match(truncated, /^A+/);
   assert.match(truncated, /B+$/);
 });
 
 test('buildResponsesToolOutputContentItems 会把长文本切成多个 input_text item', async () => {
   const { buildResponsesToolOutputContentItems } = await loadResponsesToolOutputModule();
-  const items = buildResponsesToolOutputContentItems('x'.repeat(7000), { maxTokens: 5000, chunkChars: 2000 });
+  const items = buildResponsesToolOutputContentItems('x'.repeat(7000), { maxChars: 5000, chunkChars: 2000 });
   assert.equal(Array.isArray(items), true);
-  assert.equal(items.length, 4);
+  assert.equal(items.length, 3);
   assert.deepEqual(items[0], {
     type: 'input_text',
     text: 'x'.repeat(2000)
@@ -108,7 +109,6 @@ test('buildResponsesPageContentToolOutputContentItems 使用 metadata + content 
     title: 'Example',
     url: 'https://example.com',
     total_chars: 100,
-    approx_total_tokens: 25,
     content: 'Alpha <b>Beta</b>\nGamma'
   });
   const text = formatResponsesToolOutputForDisplay(items);

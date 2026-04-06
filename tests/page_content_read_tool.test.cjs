@@ -27,7 +27,7 @@ test('buildPageContentReadResult 默认返回中间截断预览并包含省略�
   assert.equal(result.ok, true);
   assert.equal(result.mode, 'preview');
   assert.equal(result.truncated, true);
-  assert.match(result.content, /省略约/);
+  assert.match(result.content, /truncated \d+ chars out of 12000 total chars/);
   assert.ok(result.omitted_pct > 0);
 });
 

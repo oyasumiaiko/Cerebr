@@ -8,21 +8,14 @@
  * - 它不做 DOM 级结构化定位，因此不替代 js_runtime_execute。
  */
 
-const APPROX_BYTES_PER_TOKEN = 4;
-export const PAGE_CONTENT_READ_DEFAULT_PREVIEW_CHARS = 8000;
-export const PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS = 4000;
-export const PAGE_CONTENT_READ_MAX_CHARS = 20000;
+export const PAGE_CONTENT_READ_DEFAULT_PREVIEW_CHARS = 5000;
+export const PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS = 5000;
+export const PAGE_CONTENT_READ_MAX_CHARS = 5000;
 
 function clampNonNegativeInt(value, fallback) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(0, Math.trunc(numeric));
-}
-
-function approxTokensFromChars(chars) {
-  const numeric = Number(chars);
-  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
-  return Math.ceil(numeric / APPROX_BYTES_PER_TOKEN);
 }
 
 function formatPercent(numerator, denominator) {
@@ -60,15 +53,15 @@ function buildMiddlePreview(text, maxChars) {
       content,
       truncated: false,
       omittedChars: 0,
-      omittedPct: 0,
-      approxOmittedTokens: 0
+      omittedPct: 0
     };
   }
 
   const omittedChars = content.length - safeMaxChars;
   const omittedPct = formatPercent(omittedChars, content.length);
-  const approxOmittedTokens = approxTokensFromChars(omittedChars);
-  const marker = ` …省略约 ${approxOmittedTokens} tokens（${omittedPct}%）… `;
+  const omittedStart = Math.ceil(safeMaxChars / 2);
+  const omittedEnd = content.length - (safeMaxChars - omittedStart);
+  const marker = `\n[... truncated ${omittedChars} chars out of ${content.length} total chars (${omittedPct}%); omitted range [${omittedStart}, ${omittedEnd}) ...]\n`;
   const available = Math.max(0, safeMaxChars - marker.length);
   const prefixLen = Math.floor(available / 2);
   const suffixLen = available - prefixLen;
@@ -77,8 +70,7 @@ function buildMiddlePreview(text, maxChars) {
     content: `${content.slice(0, prefixLen)}${marker}${content.slice(content.length - suffixLen)}`,
     truncated: true,
     omittedChars,
-    omittedPct,
-    approxOmittedTokens
+    omittedPct
   };
 }
 
@@ -102,7 +94,7 @@ function normalizePageContentReadArgs(rawArgs) {
  * 规则：
  * - 默认（未显式指定 skip/max）走中间截断预览；
  * - 一旦显式指定 skip 或 max_chars，则按连续区间读取；
- * - 返回值带上总长度、跳过量、近似 token、截断比例，方便模型决定是否继续读取下一段。
+ * - 返回值带上总长度、跳过量与截断比例，方便模型决定是否继续读取下一段。
  *
  * @param {{title?:string, url?:string, content?:string}|null|undefined} pageContent
  * @param {any} rawArgs
@@ -113,7 +105,6 @@ export function buildPageContentReadResult(pageContent, rawArgs) {
   const url = typeof pageContent?.url === 'string' ? pageContent.url.trim() : '';
   const normalizedText = normalizePageContentReadText(pageContent?.content || '');
   const totalChars = normalizedText.length;
-  const totalApproxTokens = approxTokensFromChars(totalChars);
   const { skipChars, maxChars } = normalizePageContentReadArgs(rawArgs);
   const hasExplicitRange = skipChars > 0 || maxChars !== null;
 
@@ -123,7 +114,6 @@ export function buildPageContentReadResult(pageContent, rawArgs) {
       title,
       url,
       total_chars: 0,
-      approx_total_tokens: 0,
       error: {
         message: '当前页面未提取到可读文本。',
         name: 'EmptyPageContentError'
@@ -141,12 +131,9 @@ export function buildPageContentReadResult(pageContent, rawArgs) {
       normalized_whitespace: true,
       extraction_scope: 'page_plus_accessible_iframe_text',
       total_chars: totalChars,
-      approx_total_tokens: totalApproxTokens,
       returned_chars: preview.content.length,
-      approx_returned_tokens: approxTokensFromChars(preview.content.length),
       omitted_chars: preview.omittedChars,
       omitted_pct: preview.omittedPct,
-      approx_omitted_tokens: preview.approxOmittedTokens,
       truncated: preview.truncated,
       content: preview.content
     };
@@ -166,14 +153,11 @@ export function buildPageContentReadResult(pageContent, rawArgs) {
     normalized_whitespace: true,
     extraction_scope: 'page_plus_accessible_iframe_text',
     total_chars: totalChars,
-    approx_total_tokens: totalApproxTokens,
     skip_chars: start,
     max_chars: effectiveMaxChars,
     returned_chars: content.length,
-    approx_returned_tokens: approxTokensFromChars(content.length),
     omitted_chars: omittedChars,
     omitted_pct: formatPercent(omittedChars, totalChars),
-    approx_omitted_tokens: approxTokensFromChars(omittedChars),
     truncated: omittedChars > 0,
     has_more_after_range: end < totalChars,
     content

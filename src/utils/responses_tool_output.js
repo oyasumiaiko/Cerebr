@@ -3,31 +3,14 @@
  *
  * 这里统一解决三件事：
  * 1. JS 工具返回对象 / 数组时，默认转成稳定、可读的 JSON 文本；
- * 2. 过长输出按接近 Codex 的思路做中间截断，避免上下文被意外撑爆；
+ * 2. 过长输出统一按字符数做中间截断，避免上下文被意外撑爆；
  * 3. 需要时把长文本切成多个 input_text content item，避免“大块 JSON 字符串二次转义”。
  */
-
-const APPROX_BYTES_PER_TOKEN = 4;
-
-// 参考 Codex 在历史/工具输出路径里常见的 2_500 token 级别预算，
-// 这里为浏览器 JS 工具也采用同量级上限，既能保留足够上下文，又不容易把后续 hop 撑爆。
-export const RESPONSES_TOOL_OUTPUT_MAX_TOKENS = 2_500;
-export const RESPONSES_TOOL_OUTPUT_MAX_BYTES = RESPONSES_TOOL_OUTPUT_MAX_TOKENS * APPROX_BYTES_PER_TOKEN;
+export const RESPONSES_TOOL_OUTPUT_MAX_CHARS = 5_000;
 export const RESPONSES_TOOL_OUTPUT_CHUNK_CHARS = 3_000;
-const RESPONSES_JS_RUNTIME_RETURN_VALUE_MAX_TOKENS = 1_000;
-const RESPONSES_JS_RUNTIME_CONSOLE_LOGS_MAX_TOKENS = 800;
-const RESPONSES_JS_RUNTIME_FRAME_RESULTS_MAX_TOKENS = 500;
-const RESPONSES_JS_RUNTIME_ERROR_MAX_TOKENS = 400;
-const RESPONSES_JS_RUNTIME_METADATA_MAX_CHARS = 1_200;
 
 function trimTrailingWhitespace(text) {
   return String(text ?? '').replace(/[ \t]+\n/g, '\n').trim();
-}
-
-function approxTokensFromByteCount(bytes) {
-  const numeric = Number(bytes);
-  if (!Number.isFinite(numeric) || numeric <= 0) return 0;
-  return Math.ceil(numeric / APPROX_BYTES_PER_TOKEN);
 }
 
 function describeDomLikeValue(value) {
@@ -93,69 +76,61 @@ export function stringifyResponsesToolOutputValue(value) {
   }
 }
 
-function splitBudget(maxBytes) {
-  const left = Math.floor(maxBytes / 2);
-  return [left, maxBytes - left];
+function formatTruncationPercent(omittedChars, totalChars) {
+  if (!Number.isFinite(omittedChars) || !Number.isFinite(totalChars) || totalChars <= 0) return '0.00';
+  return ((omittedChars / totalChars) * 100).toFixed(2);
 }
 
-function splitStringByByteBudget(text, prefixBudget, suffixBudget) {
-  if (!text) return { prefix: '', suffix: '', removedChars: 0 };
-  const len = text.length;
-  const suffixStartTarget = Math.max(0, len - suffixBudget);
-  let prefixEnd = 0;
-  let suffixStart = len;
-  let removedChars = 0;
-  let suffixStarted = false;
+export function buildResponsesToolOutputTruncationInfo(text, maxChars = RESPONSES_TOOL_OUTPUT_MAX_CHARS) {
+  const content = typeof text === 'string' ? text : String(text ?? '');
+  const chars = Array.from(content);
+  const totalChars = chars.length;
+  const safeMaxChars = Math.max(0, Math.trunc(Number(maxChars) || RESPONSES_TOOL_OUTPUT_MAX_CHARS));
 
-  let index = 0;
-  for (const ch of text) {
-    const charEnd = index + ch.length;
-    if (charEnd <= prefixBudget) {
-      prefixEnd = charEnd;
-    } else if (index >= suffixStartTarget) {
-      if (!suffixStarted) {
-        suffixStart = index;
-        suffixStarted = true;
-      }
-    } else {
-      removedChars += 1;
-    }
-    index = charEnd;
+  if (totalChars <= safeMaxChars) {
+    return {
+      text: content,
+      truncated: false,
+      totalChars,
+      omittedChars: 0,
+      omittedPct: '0.00',
+      omittedStart: totalChars,
+      omittedEnd: totalChars
+    };
   }
 
-  if (suffixStart < prefixEnd) suffixStart = prefixEnd;
+  let prefixChars = Math.ceil(safeMaxChars / 2);
+  let suffixChars = safeMaxChars - prefixChars;
+  let omittedStart = prefixChars;
+  let omittedEnd = Math.max(omittedStart, totalChars - suffixChars);
+  let omittedChars = Math.max(0, omittedEnd - omittedStart);
+  let omittedPct = formatTruncationPercent(omittedChars, totalChars);
+  let notice = `[... truncated ${omittedChars} chars out of ${totalChars} total chars (${omittedPct}%); omitted range [${omittedStart}, ${omittedEnd}) ...]`;
+
+  const availableChars = Math.max(0, safeMaxChars - Array.from(notice).length);
+  prefixChars = Math.ceil(availableChars / 2);
+  suffixChars = availableChars - prefixChars;
+  omittedStart = prefixChars;
+  omittedEnd = Math.max(omittedStart, totalChars - suffixChars);
+  omittedChars = Math.max(0, omittedEnd - omittedStart);
+  omittedPct = formatTruncationPercent(omittedChars, totalChars);
+  notice = `[... truncated ${omittedChars} chars out of ${totalChars} total chars (${omittedPct}%); omitted range [${omittedStart}, ${omittedEnd}) ...]`;
+  const prefix = chars.slice(0, omittedStart).join('');
+  const suffix = chars.slice(omittedEnd).join('');
+
   return {
-    prefix: text.slice(0, prefixEnd),
-    suffix: text.slice(suffixStart),
-    removedChars
+    text: [prefix, notice, suffix].filter(Boolean).join('\n'),
+    truncated: true,
+    totalChars,
+    omittedChars,
+    omittedPct,
+    omittedStart,
+    omittedEnd
   };
 }
 
-/**
- * 参考 Codex 的截断风格：保留头尾，中间插入 “... N tokens truncated ...” 标记。
- *
- * @param {string} text
- * @param {number} [maxTokens]
- * @returns {string}
- */
-export function truncateResponsesToolOutputText(text, maxTokens = RESPONSES_TOOL_OUTPUT_MAX_TOKENS) {
-  const content = typeof text === 'string' ? text : String(text ?? '');
-  if (!content) return '';
-
-  const byteBudget = Math.max(0, Math.trunc(Number(maxTokens) || RESPONSES_TOOL_OUTPUT_MAX_TOKENS)) * APPROX_BYTES_PER_TOKEN;
-  if (byteBudget <= 0) {
-    return `…${approxTokensFromByteCount(content.length)} tokens truncated…`;
-  }
-  if (content.length <= byteBudget) {
-    return content;
-  }
-
-  const removedBytes = content.length - byteBudget;
-  const removedTokens = approxTokensFromByteCount(removedBytes);
-  const marker = `…${removedTokens} tokens truncated…`;
-  const [prefixBudget, suffixBudget] = splitBudget(byteBudget);
-  const { prefix, suffix } = splitStringByByteBudget(content, prefixBudget, suffixBudget);
-  return `${prefix}${marker}${suffix}`;
+export function truncateResponsesToolOutputText(text, maxChars = RESPONSES_TOOL_OUTPUT_MAX_CHARS) {
+  return buildResponsesToolOutputTruncationInfo(text, maxChars).text;
 }
 
 function chunkTextByChars(text, chunkChars = RESPONSES_TOOL_OUTPUT_CHUNK_CHARS) {
@@ -179,16 +154,16 @@ function chunkTextByChars(text, chunkChars = RESPONSES_TOOL_OUTPUT_CHUNK_CHARS) 
  * - 模型看到的是多段 input_text 文本，UI 也可以直接拼回自然文本展示。
  *
  * @param {any} value
- * @param {{maxTokens?:number, chunkChars?:number}} [options]
+ * @param {{maxChars?:number, chunkChars?:number}} [options]
  * @returns {Array<{type:'input_text', text:string}>}
  */
 export function buildResponsesToolOutputContentItems(value, options = {}) {
   const serialized = stringifyResponsesToolOutputValue(value);
   const truncated = truncateResponsesToolOutputText(
     serialized,
-    Number.isFinite(Number(options?.maxTokens))
-      ? Number(options.maxTokens)
-      : RESPONSES_TOOL_OUTPUT_MAX_TOKENS
+    Number.isFinite(Number(options?.maxChars))
+      ? Number(options.maxChars)
+      : RESPONSES_TOOL_OUTPUT_MAX_CHARS
   );
   const chunks = chunkTextByChars(
     truncated,
@@ -217,8 +192,7 @@ function buildXmlBlock(tagName, body) {
 }
 
 function trimJsonMetadataValue(value) {
-  const text = stringifyResponsesToolOutputValue(value);
-  return trimJsonText(text);
+  return trimTrailingWhitespace(stringifyResponsesToolOutputValue(value));
 }
 
 function formatResponsesJsRuntimeSpecialValue(value) {
@@ -304,12 +278,6 @@ function formatResponsesJsRuntimeLogText(log, fallbackFrameId = null) {
   return `${prefix} ${text}`.trim();
 }
 
-function trimJsonText(jsonText, maxChars = RESPONSES_JS_RUNTIME_METADATA_MAX_CHARS) {
-  if (typeof jsonText !== 'string') return '';
-  if (jsonText.length <= maxChars) return jsonText;
-  return `${jsonText.slice(0, maxChars)}\n… metadata truncated …`;
-}
-
 export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
   const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
   const items = Array.isArray(normalized.items) ? normalized.items : [];
@@ -328,42 +296,33 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
   };
 
   const blocks = [];
-  const metadataText = trimJsonText(JSON.stringify(metadata, null, 2));
+  const metadataText = truncateResponsesToolOutputText(
+    trimTrailingWhitespace(JSON.stringify(metadata, null, 2)),
+    RESPONSES_TOOL_OUTPUT_MAX_CHARS
+  );
   blocks.push(buildXmlBlock('metadata', metadataText));
 
-  const returnValueText = trimTrailingWhitespace(
-    truncateResponsesToolOutputText(
-      formatResponsesJsRuntimeValueText(normalized.value),
-      Number.isFinite(Number(options?.returnValueMaxTokens))
-        ? Number(options.returnValueMaxTokens)
-        : RESPONSES_JS_RUNTIME_RETURN_VALUE_MAX_TOKENS
-    )
+  const returnValueText = truncateResponsesToolOutputText(
+    trimTrailingWhitespace(formatResponsesJsRuntimeValueText(normalized.value)),
+    RESPONSES_TOOL_OUTPUT_MAX_CHARS
   );
   if (returnValueText && returnValueText !== 'null') {
     blocks.push(buildXmlBlock('return_value', returnValueText));
   }
 
   if (topLevelLogs.length > 0 && items.length <= 1) {
-    const consoleLogsText = trimTrailingWhitespace(
-      truncateResponsesToolOutputText(
-        topLevelLogs.map((log) => formatResponsesJsRuntimeLogText(log)).filter(Boolean).join('\n'),
-        Number.isFinite(Number(options?.consoleLogsMaxTokens))
-          ? Number(options.consoleLogsMaxTokens)
-          : RESPONSES_JS_RUNTIME_CONSOLE_LOGS_MAX_TOKENS
-      )
+    const consoleLogsText = truncateResponsesToolOutputText(
+      trimTrailingWhitespace(topLevelLogs.map((log) => formatResponsesJsRuntimeLogText(log)).filter(Boolean).join('\n')),
+      RESPONSES_TOOL_OUTPUT_MAX_CHARS
     );
     if (consoleLogsText) {
       blocks.push(buildXmlBlock('console_logs', consoleLogsText));
     }
   }
 
-  const topLevelErrorText = trimTrailingWhitespace(
-    truncateResponsesToolOutputText(
-      formatResponsesJsRuntimeErrorText(normalized.error),
-      Number.isFinite(Number(options?.errorMaxTokens))
-        ? Number(options.errorMaxTokens)
-        : RESPONSES_JS_RUNTIME_ERROR_MAX_TOKENS
-    )
+  const topLevelErrorText = truncateResponsesToolOutputText(
+    trimTrailingWhitespace(formatResponsesJsRuntimeErrorText(normalized.error)),
+    RESPONSES_TOOL_OUTPUT_MAX_CHARS
   );
   if (topLevelErrorText) {
     blocks.push(buildXmlBlock('error', topLevelErrorText));
@@ -381,13 +340,9 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
       const innerBlocks = [];
 
       if (item.error) {
-        const frameErrorText = trimTrailingWhitespace(
-          truncateResponsesToolOutputText(
-            formatResponsesJsRuntimeErrorText(item.error),
-            Number.isFinite(Number(options?.errorMaxTokens))
-              ? Number(options.errorMaxTokens)
-              : RESPONSES_JS_RUNTIME_ERROR_MAX_TOKENS
-          )
+        const frameErrorText = truncateResponsesToolOutputText(
+          trimTrailingWhitespace(formatResponsesJsRuntimeErrorText(item.error)),
+          RESPONSES_TOOL_OUTPUT_MAX_CHARS
         );
         if (frameErrorText) innerBlocks.push(buildXmlBlock('error', frameErrorText));
       } else {
@@ -396,13 +351,9 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
         if (itemResultSerialized && topValueSerialized && itemResultSerialized === topValueSerialized && items.length === 1) {
           innerBlocks.push(buildXmlBlock('result_ref', 'return_value'));
         } else {
-          const frameReturnValueText = trimTrailingWhitespace(
-            truncateResponsesToolOutputText(
-              formatResponsesJsRuntimeValueText(item.result),
-              Number.isFinite(Number(options?.returnValueMaxTokens))
-                ? Number(options.returnValueMaxTokens)
-                : RESPONSES_JS_RUNTIME_RETURN_VALUE_MAX_TOKENS
-            )
+          const frameReturnValueText = truncateResponsesToolOutputText(
+            trimTrailingWhitespace(formatResponsesJsRuntimeValueText(item.result)),
+            RESPONSES_TOOL_OUTPUT_MAX_CHARS
           );
           if (frameReturnValueText && frameReturnValueText !== 'null') {
             innerBlocks.push(buildXmlBlock('return_value', frameReturnValueText));
@@ -411,13 +362,9 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
       }
 
       if (Array.isArray(item.logs) && item.logs.length > 0) {
-        const frameLogsText = trimTrailingWhitespace(
-          truncateResponsesToolOutputText(
-            item.logs.map((log) => formatResponsesJsRuntimeLogText(log, Number.isFinite(Number(item.frameId)) ? Number(item.frameId) : null)).filter(Boolean).join('\n'),
-            Number.isFinite(Number(options?.consoleLogsMaxTokens))
-              ? Number(options.consoleLogsMaxTokens)
-              : RESPONSES_JS_RUNTIME_CONSOLE_LOGS_MAX_TOKENS
-          )
+        const frameLogsText = truncateResponsesToolOutputText(
+          trimTrailingWhitespace(item.logs.map((log) => formatResponsesJsRuntimeLogText(log, Number.isFinite(Number(item.frameId)) ? Number(item.frameId) : null)).filter(Boolean).join('\n')),
+          RESPONSES_TOOL_OUTPUT_MAX_CHARS
         );
         if (frameLogsText) innerBlocks.push(buildXmlBlock('console_logs', frameLogsText));
       }
@@ -427,13 +374,9 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
       return `<frame_result${attrs ? ` ${attrs}` : ''}>\n${innerText}\n</frame_result>`;
     }).filter(Boolean).join('\n\n');
 
-    const frameResultsText = trimTrailingWhitespace(
-      truncateResponsesToolOutputText(
-        frameBlocks,
-        Number.isFinite(Number(options?.frameResultsMaxTokens))
-          ? Number(options.frameResultsMaxTokens)
-          : RESPONSES_JS_RUNTIME_FRAME_RESULTS_MAX_TOKENS
-      )
+    const frameResultsText = truncateResponsesToolOutputText(
+      trimTrailingWhitespace(frameBlocks),
+      RESPONSES_TOOL_OUTPUT_MAX_CHARS
     );
     if (frameResultsText) {
       blocks.push(buildXmlBlock('frame_results', frameResultsText));
@@ -461,7 +404,10 @@ export function buildResponsesJsRuntimeToolOutputContentItems(result, options = 
 function buildXmlToolResultText(rootTag, metadata, blocks = [], options = {}) {
   const sections = [];
   if (metadata && typeof metadata === 'object') {
-    const metadataText = trimJsonMetadataValue(metadata);
+    const metadataText = truncateResponsesToolOutputText(
+      trimJsonMetadataValue(metadata),
+      RESPONSES_TOOL_OUTPUT_MAX_CHARS
+    );
     if (metadataText) sections.push(buildXmlBlock('metadata', metadataText));
   }
 
@@ -471,16 +417,7 @@ function buildXmlToolResultText(rootTag, metadata, blocks = [], options = {}) {
     if (!tag) continue;
     const rawText = trimTrailingWhitespace(block.text);
     if (!rawText) continue;
-    const text = truncateResponsesToolOutputText(
-      rawText,
-      Number.isFinite(Number(block.maxTokens))
-        ? Number(block.maxTokens)
-        : (
-          Number.isFinite(Number(options?.defaultBlockMaxTokens))
-            ? Number(options.defaultBlockMaxTokens)
-            : RESPONSES_TOOL_OUTPUT_MAX_TOKENS
-        )
-    );
+    const text = truncateResponsesToolOutputText(rawText, RESPONSES_TOOL_OUTPUT_MAX_CHARS);
     sections.push(buildXmlBlock(tag, text));
   }
 
@@ -511,14 +448,11 @@ function buildResponsesPageContentToolOutputText(result) {
     normalized_whitespace: normalized.normalized_whitespace === true,
     extraction_scope: typeof normalized.extraction_scope === 'string' ? normalized.extraction_scope : '',
     total_chars: Number.isFinite(Number(normalized.total_chars)) ? Number(normalized.total_chars) : null,
-    approx_total_tokens: Number.isFinite(Number(normalized.approx_total_tokens)) ? Number(normalized.approx_total_tokens) : null,
     skip_chars: Number.isFinite(Number(normalized.skip_chars)) ? Number(normalized.skip_chars) : null,
     max_chars: Number.isFinite(Number(normalized.max_chars)) ? Number(normalized.max_chars) : null,
     returned_chars: Number.isFinite(Number(normalized.returned_chars)) ? Number(normalized.returned_chars) : null,
-    approx_returned_tokens: Number.isFinite(Number(normalized.approx_returned_tokens)) ? Number(normalized.approx_returned_tokens) : null,
     omitted_chars: Number.isFinite(Number(normalized.omitted_chars)) ? Number(normalized.omitted_chars) : null,
     omitted_pct: Number.isFinite(Number(normalized.omitted_pct)) ? Number(normalized.omitted_pct) : null,
-    approx_omitted_tokens: Number.isFinite(Number(normalized.approx_omitted_tokens)) ? Number(normalized.approx_omitted_tokens) : null,
     truncated: normalized.truncated === true,
     has_more_after_range: normalized.has_more_after_range === true
   };
@@ -526,15 +460,13 @@ function buildResponsesPageContentToolOutputText(result) {
   if (typeof normalized.content === 'string' && normalized.content.trim()) {
     blocks.push({
       tag: 'content',
-      text: normalized.content,
-      maxTokens: 2_000
+      text: normalized.content
     });
   }
   if (normalized.error) {
     blocks.push({
       tag: 'error',
-      text: formatResponsesJsRuntimeErrorText(normalized.error),
-      maxTokens: RESPONSES_JS_RUNTIME_ERROR_MAX_TOKENS
+      text: formatResponsesJsRuntimeErrorText(normalized.error)
     });
   }
   return buildXmlToolResultText('page_content_read_result', metadata, blocks);
@@ -583,15 +515,13 @@ function buildResponsesHistorySearchToolOutputText(result) {
     }).join('\n\n');
     blocks.push({
       tag: 'results',
-      text: resultsText,
-      maxTokens: 2_000
+      text: resultsText
     });
   }
   if (normalized.error) {
     blocks.push({
       tag: 'error',
-      text: formatResponsesJsRuntimeErrorText(normalized.error),
-      maxTokens: RESPONSES_JS_RUNTIME_ERROR_MAX_TOKENS
+      text: formatResponsesJsRuntimeErrorText(normalized.error)
     });
   }
   return buildXmlToolResultText('history_search_result', metadata, blocks);
@@ -619,15 +549,13 @@ function buildResponsesHistoryReadToolOutputText(result) {
     }).join('\n\n');
     blocks.push({
       tag: 'messages',
-      text: messageText,
-      maxTokens: 2_000
+      text: messageText
     });
   }
   if (normalized.error) {
     blocks.push({
       tag: 'error',
-      text: formatResponsesJsRuntimeErrorText(normalized.error),
-      maxTokens: RESPONSES_JS_RUNTIME_ERROR_MAX_TOKENS
+      text: formatResponsesJsRuntimeErrorText(normalized.error)
     });
   }
   return buildXmlToolResultText('history_read_result', metadata, blocks);
@@ -663,15 +591,13 @@ export function buildResponsesGenericXmlToolOutputContentItems(rootTag, result, 
   if ('value' in normalized) {
     blocks.push({
       tag: 'result',
-      text: stringifyResponsesToolOutputValue(normalized.value),
-      maxTokens: 2_000
+      text: stringifyResponsesToolOutputValue(normalized.value)
     });
   }
   if (normalized.error) {
     blocks.push({
       tag: 'error',
-      text: formatResponsesJsRuntimeErrorText(normalized.error),
-      maxTokens: RESPONSES_JS_RUNTIME_ERROR_MAX_TOKENS
+      text: formatResponsesJsRuntimeErrorText(normalized.error)
     });
   }
   const text = buildXmlToolResultText(rootTag, metadata, blocks, options);

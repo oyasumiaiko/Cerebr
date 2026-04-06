@@ -29,14 +29,11 @@ import {
   buildDefaultResponsesPromptCacheKey
 } from '../utils/responses_prompt_cache.js';
 import {
-  buildResponsesToolOutputContentItems,
   buildResponsesJsRuntimeToolOutputContentItems,
   buildResponsesPageContentToolOutputContentItems,
   buildResponsesHistorySearchToolOutputContentItems,
   buildResponsesHistoryReadToolOutputContentItems,
-  buildResponsesGenericXmlToolOutputContentItems,
-  RESPONSES_TOOL_OUTPUT_MAX_BYTES,
-  stringifyResponsesToolOutputValue
+  buildResponsesGenericXmlToolOutputContentItems
 } from '../utils/responses_tool_output.js';
 import { buildPageContentReadResult } from '../utils/page_content_read_tool.js';
 import {
@@ -6215,6 +6212,7 @@ export function createMessageSender(appContext) {
         'code 字段会作为 async 函数体运行，可直接使用 await 和 return。',
         '可访问该环境自身的 DOM / Web API；通常只有一个顶层 frame，frame_ids 一般可留空。',
         'console.log/info/warn/error/debug 的输出会被捕获并一并回传，可用于调试或分步观察。',
+        '若需要回传人类可读的字符串或多行文本，优先使用 console.log；return 更适合返回简洁结果值。不要把长字符串包进对象里再 return。',
         '工具返回结果采用 XML 分块文本：通常包含 <metadata>、<return_value>、<console_logs>、<error>；多 frame 时还可能包含 <frame_results>。',
         '其中 metadata 是小型 JSON，其余正文块是纯文本；过长块会自动截断。请尽量返回紧凑、可序列化的小结果。'
       ]
@@ -6224,6 +6222,7 @@ export function createMessageSender(appContext) {
         '执行环境是基于浏览器脚本沙箱的独立 JS 世界，可访问 DOM / Web API，不要假设能直接访问页面主世界里的自定义 JS 对象。',
         '若当前请求附带 page_runtime_context，可从中读取可用页面/iframe 环境与 frame_id。',
         'console.log/info/warn/error/debug 的输出会被捕获并一并回传，可用于调试或分步观察。',
+        '若需要回传人类可读的字符串或多行文本，优先使用 console.log；return 更适合返回简洁结果值。不要把长字符串包进对象里再 return。',
         '工具返回结果采用 XML 分块文本：通常包含 <metadata>、<return_value>、<console_logs>、<error>；多 frame 时还可能包含 <frame_results>。',
         '其中 metadata 是小型 JSON，其余正文块是纯文本；过长块会自动截断。请尽量返回紧凑、可序列化的小结果。'
       ];
@@ -6241,7 +6240,7 @@ export function createMessageSender(appContext) {
         properties: {
           code: {
             type: 'string',
-            description: '要执行的 JavaScript 代码片段。它会作为 async 函数体执行，可直接使用 await、return 和 console.log/info/warn/error/debug。请优先返回紧凑、可 JSON 序列化的结果，避免返回 DOM 节点、函数或超大对象。'
+            description: '要执行的 JavaScript 代码片段。它会作为 async 函数体执行，可直接使用 await、return 和 console.log/info/warn/error/debug。若需要回传可读字符串或多行文本，优先使用 console；请避免把长字符串包进对象里再 return。'
           },
           frame_ids: {
             type: ['array', 'null'],
@@ -6549,7 +6548,7 @@ export function createMessageSender(appContext) {
   }
 
   /**
-   * 将本地工具执行异常压成稳定 JSON 结构，便于作为 function_call_output 返回给模型。
+   * 将本地工具执行异常压成稳定结构，便于作为 function_call_output 返回给模型。
    *
    * @param {any} error
    * @returns {{message:string, name:string, stack:string}}
@@ -6567,25 +6566,22 @@ export function createMessageSender(appContext) {
   }
 
   /**
-   * 序列化 function_call_output 的 output 字段。
+   * 序列化普通 function_call_output 的 output 字段。
    *
-   * Responses API 的 function_call_output 支持文本或 content items；
-   * 对 JS 工具这里统一返回 input_text content items：
-   * - 对象/数组默认 JSON 化，避免“对象返回后 UI 一片空白”；
-   * - 长输出按接近 Codex 的 token 预算中间截断；
-   * - 再切成多段 text item，避免一个巨大的 JSON 字符串被二次转义。
+   * 统一走 XML 分块文本：
+   * - metadata 用小 JSON；
+   * - 其它正文块用纯文本；
+   * - 超过统一上限时按字符数做中间截断。
    *
    * @param {any} value
    * @returns {Array<{type:'input_text', text:string}>}
    */
   function serializeResponsesFunctionToolOutput(value) {
     try {
-      return buildResponsesToolOutputContentItems(value);
+      return buildResponsesGenericXmlToolOutputContentItems('tool_result', value);
     } catch (error) {
-      return buildResponsesToolOutputContentItems({
+      return buildResponsesGenericXmlToolOutputContentItems('tool_result', {
         ok: false,
-        value: null,
-        items: [],
         error: normalizeResponsesCustomToolError(error)
       });
     }
@@ -6595,10 +6591,8 @@ export function createMessageSender(appContext) {
     try {
       return buildResponsesJsRuntimeToolOutputContentItems(value);
     } catch (error) {
-      return buildResponsesToolOutputContentItems({
+      return buildResponsesGenericXmlToolOutputContentItems('js_runtime_result', {
         ok: false,
-        value: null,
-        items: [],
         error: normalizeResponsesCustomToolError(error)
       });
     }
@@ -6637,162 +6631,21 @@ export function createMessageSender(appContext) {
     }
   }
 
-  const RESPONSES_JS_RUNTIME_MAX_TEXT_PREVIEW_CHARS = 4000;
-  const RESPONSES_JS_RUNTIME_MAX_ARRAY_ITEMS = 12;
-  const RESPONSES_JS_RUNTIME_MAX_OBJECT_KEYS = 24;
-  const RESPONSES_JS_RUNTIME_MAX_SERIALIZED_CHARS = RESPONSES_TOOL_OUTPUT_MAX_BYTES;
-
-  function summarizeResponsesJsRuntimeString(value) {
-    if (typeof value !== 'string') return value;
-    if (!value) return value;
-
-    const dataUrlMatch = value.match(/^data:([^;,]+)?(;base64)?,/i);
-    if (dataUrlMatch) {
-      return {
-        type: 'data_url',
-        mime_type: dataUrlMatch[1] || '',
-        length: value.length,
-        preview: value.slice(0, 96)
-      };
-    }
-
-    if (value.length <= RESPONSES_JS_RUNTIME_MAX_TEXT_PREVIEW_CHARS) {
-      return value;
-    }
-
-    return {
-      type: 'truncated_string',
-      length: value.length,
-      preview: value.slice(0, RESPONSES_JS_RUNTIME_MAX_TEXT_PREVIEW_CHARS)
-    };
-  }
-
-  function summarizeResponsesJsRuntimeValue(value, depth = 0) {
-    if (value == null) return value;
-    if (typeof value === 'string') return summarizeResponsesJsRuntimeString(value);
-    if (typeof value === 'number' || typeof value === 'boolean') return value;
-    if (depth >= 5) {
-      return {
-        type: 'truncated_structure',
-        value_type: Array.isArray(value) ? 'array' : typeof value
-      };
-    }
-
-    if (Array.isArray(value)) {
-      const items = value
-        .slice(0, RESPONSES_JS_RUNTIME_MAX_ARRAY_ITEMS)
-        .map(item => summarizeResponsesJsRuntimeValue(item, depth + 1));
-      if (value.length > RESPONSES_JS_RUNTIME_MAX_ARRAY_ITEMS) {
-        items.push({
-          type: 'truncated_items',
-          omitted_count: value.length - RESPONSES_JS_RUNTIME_MAX_ARRAY_ITEMS
-        });
-      }
-      return items;
-    }
-
-    if (typeof value === 'object') {
-      const entries = Object.entries(value);
-      const result = {};
-      entries.slice(0, RESPONSES_JS_RUNTIME_MAX_OBJECT_KEYS).forEach(([key, child]) => {
-        result[key] = summarizeResponsesJsRuntimeValue(child, depth + 1);
-      });
-      if (entries.length > RESPONSES_JS_RUNTIME_MAX_OBJECT_KEYS) {
-        result.__truncated_keys__ = entries.length - RESPONSES_JS_RUNTIME_MAX_OBJECT_KEYS;
-      }
-      return result;
-    }
-
-    try {
-      return String(value);
-    } catch (_) {
-      return '[unserializable]';
-    }
-  }
-
   function compactResponsesJsRuntimeResult(rawResult) {
     const normalized = (rawResult && typeof rawResult === 'object' && !Array.isArray(rawResult))
       ? cloneDataSafely(rawResult)
       : { ok: false, value: null, logs: [], items: [], error: null };
-    const compacted = {
+    return {
       ok: normalized?.ok === true,
       tabId: Number.isFinite(Number(normalized?.tabId)) ? Number(normalized.tabId) : null,
-      value: summarizeResponsesJsRuntimeValue(normalized?.value ?? null, 0),
+      value: cloneDataSafely(normalized?.value ?? null),
       logs: Array.isArray(normalized?.logs)
-        ? normalized.logs
-          .slice(0, RESPONSES_JS_RUNTIME_MAX_ARRAY_ITEMS)
-          .map((log) => ({
-            frameId: Number.isFinite(Number(log?.frameId)) ? Number(log.frameId) : null,
-            level: (typeof log?.level === 'string' && log.level) ? log.level : 'log',
-            text: summarizeResponsesJsRuntimeValue(
-              typeof log?.text === 'string' ? log.text : String(log?.text ?? ''),
-              1
-            )
-          }))
+        ? cloneDataSafely(normalized.logs)
         : [],
       items: Array.isArray(normalized?.items)
-        ? normalized.items.map((item) => {
-          const summarized = summarizeResponsesJsRuntimeValue(item, 0);
-          if (!summarized || typeof summarized !== 'object' || Array.isArray(summarized)) {
-            return summarized;
-          }
-          if (Array.isArray(item?.logs)) {
-            summarized.logs = item.logs
-              .slice(0, RESPONSES_JS_RUNTIME_MAX_ARRAY_ITEMS)
-              .map((log) => ({
-                frameId: Number.isFinite(Number(log?.frameId)) ? Number(log.frameId) : null,
-                level: (typeof log?.level === 'string' && log.level) ? log.level : 'log',
-                text: summarizeResponsesJsRuntimeValue(
-                  typeof log?.text === 'string' ? log.text : String(log?.text ?? ''),
-                  1
-                )
-              }));
-          }
-          return summarized;
-        })
+        ? cloneDataSafely(normalized.items)
         : [],
-      error: normalized?.error ? summarizeResponsesJsRuntimeValue(normalized.error, 0) : null
-    };
-
-    // 单 frame 成功时，`items[0].result` 往往和顶层 `value` 完全重复；对模型没有额外价值，只会把 payload 翻倍。
-    if (
-      Array.isArray(compacted.items)
-      && compacted.items.length === 1
-      && compacted.items[0]
-      && typeof compacted.items[0] === 'object'
-      && !Array.isArray(compacted.items[0])
-      && !compacted.items[0].error
-    ) {
-      const topValueSerialized = JSON.stringify(compacted.value);
-      const itemResultSerialized = JSON.stringify(compacted.items[0].result);
-      if (topValueSerialized && itemResultSerialized && topValueSerialized === itemResultSerialized) {
-        compacted.items = [{
-          frameId: compacted.items[0].frameId ?? null,
-          documentId: compacted.items[0].documentId ?? null,
-          result_ref: 'value',
-          error: null
-        }];
-      }
-    }
-
-    const serialized = stringifyResponsesToolOutputValue(compacted);
-    if (serialized.length <= RESPONSES_JS_RUNTIME_MAX_SERIALIZED_CHARS) {
-      return compacted;
-    }
-
-    return {
-      ok: compacted.ok,
-      tabId: compacted.tabId,
-      value: summarizeResponsesJsRuntimeValue(compacted.value, 2),
-      logs: Array.isArray(compacted.logs)
-        ? compacted.logs.slice(0, 12).map(log => summarizeResponsesJsRuntimeValue(log, 2))
-        : [],
-      items: Array.isArray(compacted.items)
-        ? compacted.items.slice(0, 4).map(item => summarizeResponsesJsRuntimeValue(item, 2))
-        : [],
-      error: compacted.error,
-      truncated: true,
-      note: 'js_runtime_execute 输出过大，已为模型截断'
+      error: normalized?.error ? cloneDataSafely(normalized.error) : null
     };
   }
 
