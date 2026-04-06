@@ -1228,6 +1228,80 @@ export function createMessageProcessor(appContext) {
     }
   }
 
+  /**
+   * 渲染“非 JS 自定义/内置工具”的详情体。
+   *
+   * 说明：
+   * - 之前这里主要展示参数与 sources；
+   * - 但现在像 `history_search` / `history_read` 这类函数工具，真正重要的是返回值；
+   * - 因此把通用 output 也纳入详情区，避免工具已成功执行但 UI 看不到结果。
+   *
+   * @param {HTMLElement} toolBodyInner
+   * @param {Object} entry
+   */
+  function renderResponseActivityGenericToolBody(toolBodyInner, entry) {
+    if (!toolBodyInner || !entry) return;
+
+    getResponseActivityToolSecondaryLines(entry).forEach((line) => {
+      const secondary = document.createElement('div');
+      secondary.className = 'response-activity-tool-secondary';
+      secondary.textContent = line;
+      toolBodyInner.appendChild(secondary);
+    });
+
+    if (typeof entry.arguments === 'string' && entry.arguments.trim()) {
+      const pre = document.createElement('pre');
+      pre.className = 'response-activity-tool-arguments';
+      pre.textContent = formatResponseToolCallArguments(entry.arguments);
+      toolBodyInner.appendChild(pre);
+    }
+
+    const formattedOutput = formatResponseToolCallOutput(entry.output);
+    if (formattedOutput) {
+      const outputTitle = document.createElement('div');
+      outputTitle.className = 'response-activity-tool-block-title';
+      outputTitle.textContent = '返回值';
+      toolBodyInner.appendChild(outputTitle);
+
+      const outputBlock = document.createElement('pre');
+      outputBlock.className = 'response-activity-tool-output';
+      outputBlock.textContent = formattedOutput;
+      toolBodyInner.appendChild(outputBlock);
+    }
+
+    if (Array.isArray(entry.sources) && entry.sources.length > 0) {
+      const sources = document.createElement('details');
+      sources.className = 'response-activity-tool-sources';
+
+      const sourceSummary = document.createElement('summary');
+      sourceSummary.className = 'response-activity-tool-source-title';
+      sourceSummary.textContent = `来源 ${entry.sources.length}`;
+      sources.appendChild(sourceSummary);
+
+      const sourceList = document.createElement('div');
+      sourceList.className = 'response-activity-tool-source-list';
+      entry.sources.forEach((source) => {
+        const label = source.title || source.domain || source.url || '未命名来源';
+        if (source.url) {
+          const link = document.createElement('a');
+          link.className = 'response-activity-tool-source-link';
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.href = source.url;
+          link.textContent = label;
+          sourceList.appendChild(link);
+        } else {
+          const text = document.createElement('span');
+          text.className = 'response-activity-tool-source-link';
+          text.textContent = label;
+          sourceList.appendChild(text);
+        }
+      });
+      sources.appendChild(sourceList);
+      toolBodyInner.appendChild(sources);
+    }
+  }
+
   function getResponseToolCallTypeLabel(record) {
     const type = String(record?.type || '').toLowerCase();
     if (type === 'web_search_call') return '搜索';
@@ -1599,6 +1673,7 @@ export function createMessageProcessor(appContext) {
     }
     if (getResponseActivityToolSecondaryLines(entry).length > 0) return true;
     if (typeof entry.arguments === 'string' && entry.arguments.trim()) return true;
+    if (hasResponsesToolOutputBody(entry.output)) return true;
     if (Array.isArray(entry.sources) && entry.sources.length > 0) return true;
     return false;
   }
@@ -1903,51 +1978,7 @@ export function createMessageProcessor(appContext) {
         if (isResponseActivityJsRuntimeEntry(entry)) {
           renderResponseActivityJsRuntimeBody(toolBodyInner, entry);
         } else {
-          getResponseActivityToolSecondaryLines(entry).forEach((line) => {
-            const secondary = document.createElement('div');
-            secondary.className = 'response-activity-tool-secondary';
-            secondary.textContent = line;
-            toolBodyInner.appendChild(secondary);
-          });
-
-          if (typeof entry.arguments === 'string' && entry.arguments.trim()) {
-            const pre = document.createElement('pre');
-            pre.className = 'response-activity-tool-arguments';
-            pre.textContent = formatResponseToolCallArguments(entry.arguments);
-            toolBodyInner.appendChild(pre);
-          }
-
-          if (Array.isArray(entry.sources) && entry.sources.length > 0) {
-            const sources = document.createElement('details');
-            sources.className = 'response-activity-tool-sources';
-
-            const sourceSummary = document.createElement('summary');
-            sourceSummary.className = 'response-activity-tool-source-title';
-            sourceSummary.textContent = `来源 ${entry.sources.length}`;
-            sources.appendChild(sourceSummary);
-
-            const sourceList = document.createElement('div');
-            sourceList.className = 'response-activity-tool-source-list';
-            entry.sources.forEach((source) => {
-              const label = source.title || source.domain || source.url || '未命名来源';
-              if (source.url) {
-                const link = document.createElement('a');
-                link.className = 'response-activity-tool-source-link';
-                link.target = '_blank';
-                link.rel = 'noopener noreferrer';
-                link.href = source.url;
-                link.textContent = label;
-                sourceList.appendChild(link);
-              } else {
-                const text = document.createElement('span');
-                text.className = 'response-activity-tool-source-link';
-                text.textContent = label;
-                sourceList.appendChild(text);
-              }
-            });
-            sources.appendChild(sourceList);
-            toolBodyInner.appendChild(sources);
-          }
+          renderResponseActivityGenericToolBody(toolBodyInner, entry);
         }
 
         toolBody.appendChild(toolBodyInner);
