@@ -35,6 +35,11 @@ import {
 } from '../utils/responses_tool_output.js';
 import { buildPageContentReadResult } from '../utils/page_content_read_tool.js';
 import {
+  buildConversationReferenceSnapshot,
+  executeHistoryReadTool,
+  executeHistorySearchTool
+} from '../utils/chat_history_tool.js';
+import {
   JS_RUNTIME_ENV_BOUND_HOST_PAGE,
   JS_RUNTIME_ENV_ISOLATED_SANDBOX,
   resolvePageToolEnvironment
@@ -44,9 +49,16 @@ import {
   buildPageRuntimeContextPayload,
   resolvePageRuntimeContextAttachment
 } from '../utils/page_runtime_context.js';
+import {
+  getAllConversationMetadata,
+  getConversationById,
+  getConversationsByIds
+} from '../storage/indexeddb_helper.js';
 
 const RESPONSES_JS_RUNTIME_TOOL_NAME = 'js_runtime_execute';
 const RESPONSES_PAGE_CONTENT_TOOL_NAME = 'page_content_read';
+const RESPONSES_HISTORY_SEARCH_TOOL_NAME = 'history_search';
+const RESPONSES_HISTORY_READ_TOOL_NAME = 'history_read';
 
 /**
  * 创建消息发送器
@@ -5862,6 +5874,49 @@ export function createMessageSender(appContext) {
   }
 
   /**
+   * 获取“当前这轮工具链”使用的聊天记录绝对编号快照。
+   *
+   * 为什么这里要做快照缓存：
+   * - `history_search` 返回的是外部数字编号，不暴露内部 conversationId/messageId；
+   * - 若同一轮里先 search 再 read，而我们每次都重新按全库生成编号，
+   *   则在会话新增/删除/时间更新后可能造成 conv_ref 漂移；
+   * - 因此这里把“本轮工具链看到的聊天记录编号”冻结在第一次调用时，
+   *   保证同一 assistant turn 内 search/read 引用稳定。
+   *
+   * @param {Object|null} attemptState
+   * @returns {Promise<ReturnType<typeof buildConversationReferenceSnapshot>>}
+   */
+  async function getHistoryToolSnapshot(attemptState = null) {
+    if (attemptState?.historyToolSnapshot) {
+      return attemptState.historyToolSnapshot;
+    }
+    if (attemptState?.historyToolSnapshotPromise) {
+      return attemptState.historyToolSnapshotPromise;
+    }
+
+    const loadPromise = (async () => {
+      const metas = await getAllConversationMetadata();
+      const snapshot = buildConversationReferenceSnapshot(metas);
+      if (attemptState && typeof attemptState === 'object') {
+        attemptState.historyToolSnapshot = snapshot;
+      }
+      return snapshot;
+    })();
+
+    if (attemptState && typeof attemptState === 'object') {
+      attemptState.historyToolSnapshotPromise = loadPromise;
+    }
+
+    try {
+      return await loadPromise;
+    } finally {
+      if (attemptState && typeof attemptState === 'object') {
+        delete attemptState.historyToolSnapshotPromise;
+      }
+    }
+  }
+
+  /**
    * 从当前会话链里找到“本轮真实参与请求的最后一条 user 节点”。
    *
    * 说明：
@@ -6233,6 +6288,93 @@ export function createMessageSender(appContext) {
   }
 
   /**
+   * 构造给 Responses API 使用的 history_search 自定义函数工具定义。
+   *
+   * 设计说明：
+   * - 它面向“已保存聊天记录”的全文检索；
+   * - 复用当前 UI 的 query 语法，避免模型侧和 UI 侧出现两套搜索规则；
+   * - 返回的是会话级结果 + 命中位置索引，不直接倾倒整段聊天正文；
+   * - 若模型需要继续看全文，应再调用 history_read。
+   *
+   * @returns {Object}
+   */
+  function buildResponsesHistorySearchFunctionToolDefinition() {
+    return {
+      type: 'function',
+      name: RESPONSES_HISTORY_SEARCH_TOOL_NAME,
+      description: [
+        '搜索本地已保存的聊天记录。',
+        'query 直接复用聊天记录面板现有语法：空格=AND，!否定，url:xxx，count:>10，date:<5d，scope:message，scope:session。',
+        '返回的是会话级结果，不会暴露内部 conversationId/messageId；而是返回外部数字引用 conv_ref，以及命中位置索引 msg_index 或 thread_ref + thread_msg_index。',
+        '这些编号基于当前聊天记录快照动态计算：1-based，最新会话编号最大；若历史新增或删除，编号可能变化，因此建议先 search 再 read。'
+      ].join(' '),
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          query: {
+            type: 'string',
+            description: '搜索 query，直接复用聊天记录 UI 语法，例如：websocket !失败 url:example.com date:<7d scope:message。'
+          },
+          max_results: {
+            type: ['integer', 'null'],
+            description: '可选。最多返回多少条命中会话，默认 20。'
+          }
+        },
+        required: ['query', 'max_results']
+      }
+    };
+  }
+
+  /**
+   * 构造给 Responses API 使用的 history_read 自定义函数工具定义。
+   *
+   * 设计说明：
+   * - 它只负责“按窗口读取聊天正文”，不负责搜索；
+   * - 主线与线程分开编号，不做拍平；
+   * - 读取范围使用 1-based 闭区间 start/end，与搜索结果返回的索引一致。
+   *
+   * @returns {Object}
+   */
+  function buildResponsesHistoryReadFunctionToolDefinition() {
+    return {
+      type: 'function',
+      name: RESPONSES_HISTORY_READ_TOOL_NAME,
+      description: [
+        '按窗口读取单个已保存会话的聊天正文。',
+        '传入 conv_ref 与 1-based 闭区间 start/end；默认读取主线消息 msg_index。',
+        '若要读取线程消息，则额外传入 thread_ref，此时读取该线程内的 thread_msg_index 窗口。',
+        '它只返回用户可见聊天正文，不返回内部 tool output、hidden contextual items 或 replay items。'
+      ].join(' '),
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          conv_ref: {
+            type: 'integer',
+            description: '必填。会话外部编号，1-based，最新会话编号最大。建议先通过 history_search 获取。'
+          },
+          start: {
+            type: 'integer',
+            description: '必填。读取窗口起点，1-based，闭区间。'
+          },
+          end: {
+            type: 'integer',
+            description: '必填。读取窗口终点，1-based，闭区间。'
+          },
+          thread_ref: {
+            type: ['integer', 'null'],
+            description: '可选。若提供，则读取该线程内的 thread_msg_index 窗口；不传则读取主线消息窗口。'
+          }
+        },
+        required: ['conv_ref', 'start', 'end', 'thread_ref']
+      }
+    };
+  }
+
+  /**
    * 返回当前这次发送应该暴露给 Responses API 的自定义函数工具列表。
    *
    * 当前工具暴露规则：
@@ -6248,7 +6390,10 @@ export function createMessageSender(appContext) {
    */
   function getResponsesCustomFunctionTools(usedApiConfig, pageToolEnvironment = resolveResponsesPageToolEnvironment()) {
     if (!isOpenAIResponsesApiConfig(usedApiConfig)) return [];
-    const tools = [];
+    const tools = [
+      buildResponsesHistorySearchFunctionToolDefinition(),
+      buildResponsesHistoryReadFunctionToolDefinition()
+    ];
     if (pageToolEnvironment?.exposePageContentTool) {
       tools.push(buildResponsesPageContentFunctionToolDefinition());
     }
@@ -6635,6 +6780,59 @@ export function createMessageSender(appContext) {
   }
 
   /**
+   * 执行 history_search。
+   *
+   * 读取范围：
+   * - 仅搜索已保存聊天记录；
+   * - 默认只搜索“用户可见正文”，不碰内部协议痕迹；
+   * - 同一轮 assistant 工具链内复用同一份 conv_ref 快照。
+   *
+   * @param {any} rawArgs
+   * @param {{attemptState?:Object|null}} [options]
+   * @returns {Promise<Object>}
+   */
+  async function executeResponsesHistorySearchFunction(rawArgs, options = {}) {
+    try {
+      const snapshot = await getHistoryToolSnapshot(options?.attemptState || null);
+      return await executeHistorySearchTool(rawArgs, {
+        snapshot,
+        loadConversationsByIds: async (ids) => {
+          return getConversationsByIds(ids, false);
+        }
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      };
+    }
+  }
+
+  /**
+   * 执行 history_read。
+   *
+   * @param {any} rawArgs
+   * @param {{attemptState?:Object|null}} [options]
+   * @returns {Promise<Object>}
+   */
+  async function executeResponsesHistoryReadFunction(rawArgs, options = {}) {
+    try {
+      const snapshot = await getHistoryToolSnapshot(options?.attemptState || null);
+      return await executeHistoryReadTool(rawArgs, {
+        snapshot,
+        loadConversationById: async (conversationId) => {
+          return getConversationById(conversationId, false);
+        }
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      };
+    }
+  }
+
+  /**
    * 执行一个客户端负责落地的 Responses function_call。
    *
    * 当前策略：
@@ -6679,6 +6877,10 @@ export function createMessageSender(appContext) {
       outputPayload = await executeResponsesJsRuntimeFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_PAGE_CONTENT_TOOL_NAME) {
       outputPayload = await executeResponsesPageContentFunction(parsedArgs);
+    } else if (functionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME) {
+      outputPayload = await executeResponsesHistorySearchFunction(parsedArgs, options);
+    } else if (functionName === RESPONSES_HISTORY_READ_TOOL_NAME) {
+      outputPayload = await executeResponsesHistoryReadFunction(parsedArgs, options);
     } else {
       outputPayload = {
         ok: false,

@@ -24,6 +24,24 @@ import { normalizeStoredMessageContent, splitStoredMessageContent } from '../uti
 import { buildApiFooterRenderData } from '../utils/api_footer_template.js';
 import { normalizeResponsesPromptCacheKey } from '../utils/responses_prompt_cache.js';
 import {
+  buildChatHistorySearchPlan as buildChatHistorySearchPlanShared,
+  buildChatHistoryTextPlan as buildChatHistoryTextPlanShared,
+  buildMetaSearchText as buildMetaSearchTextShared,
+  compareMessageDateRange as compareMessageDateRangeShared,
+  compareNumericRange as compareNumericRangeShared,
+  computeConversationMessageStats as computeConversationMessageStatsShared,
+  evaluateChatHistoryFilters as evaluateChatHistoryFiltersShared,
+  evaluateMetaTextMatch as evaluateMetaTextMatchShared,
+  extractMessagePlainText as extractMessagePlainTextShared,
+  extractPlainTextFromMessageContent as extractPlainTextFromMessageContentShared,
+  parseRelativeDateRange as parseRelativeDateRangeShared,
+  parseSearchDateRange as parseSearchDateRangeShared,
+  parseSearchFilterToken as parseSearchFilterTokenShared,
+  parseSearchOperatorValue as parseSearchOperatorValueShared,
+  resolveSearchScope as resolveSearchScopeShared,
+  scanConversationMessagesForSearch as scanConversationMessagesForSearchShared
+} from '../utils/chat_history_search_shared.js';
+import {
   normalizeConversationApiLock,
   mergeConversationApiLockState,
   mergeConversationSaveMetadataState
@@ -1512,19 +1530,11 @@ export function createChatHistoryUI(appContext) {
    * @returns {string} 纯文本内容
    */
   function extractPlainTextFromMessageContent(content) {
-    if (typeof content === 'string') return content.trim();
-    if (Array.isArray(content)) {
-      return content
-        .map(part => part?.type === 'image_url' ? '[图片]' : (part?.text?.trim() || ''))
-        .filter(Boolean)
-        .join(' ');
-    }
-    return '';
+    return extractPlainTextFromMessageContentShared(content);
   }
 
   function extractMessagePlainText(msg) {
-    if (!msg) return '';
-    return extractPlainTextFromMessageContent(msg.content);
+    return extractMessagePlainTextShared(msg, { includeHiddenThreadSelection: true });
   }
 
   /**
@@ -1533,37 +1543,7 @@ export function createChatHistoryUI(appContext) {
    * @returns {{totalCount:number, mainMessageCount:number, threadMessageCount:number, threadCount:number}}
    */
   function computeConversationMessageStats(messages) {
-    const list = Array.isArray(messages) ? messages : [];
-    let totalCount = 0;
-    let mainMessageCount = 0;
-    let threadMessageCount = 0;
-    const threadIds = new Set();
-
-    for (const msg of list) {
-      if (!msg) continue;
-      totalCount += 1;
-
-      const threadId = typeof msg.threadId === 'string' && msg.threadId.trim() ? msg.threadId.trim() : '';
-      const threadRootId = typeof msg.threadRootId === 'string' && msg.threadRootId.trim() ? msg.threadRootId.trim() : '';
-      const threadAnchorId = typeof msg.threadAnchorId === 'string' && msg.threadAnchorId.trim() ? msg.threadAnchorId.trim() : '';
-      const isThreadMessage = !!(threadId || msg.threadHiddenSelection || threadRootId || threadAnchorId);
-
-      if (isThreadMessage) {
-        threadMessageCount += 1;
-        if (threadId) threadIds.add(threadId);
-        else if (threadRootId) threadIds.add(`root:${threadRootId}`);
-        else if (threadAnchorId) threadIds.add(`anchor:${threadAnchorId}`);
-      } else {
-        mainMessageCount += 1;
-      }
-    }
-
-    return {
-      totalCount,
-      mainMessageCount,
-      threadMessageCount,
-      threadCount: threadIds.size
-    };
+    return computeConversationMessageStatsShared(messages);
   }
 
   function applyConversationMessageStats(conversation) {
@@ -1577,9 +1557,7 @@ export function createChatHistoryUI(appContext) {
   }
 
   function resolveSearchScope(textPlan) {
-    if (!textPlan) return 'session';
-    if (textPlan.scope === 'message' && textPlan.hasPositive) return 'message';
-    return 'session';
+    return resolveSearchScopeShared(textPlan);
   }
 
   /**
@@ -1623,168 +1601,47 @@ export function createChatHistoryUI(appContext) {
    * @returns {{ cancelled: boolean, matched: boolean, blocked: boolean, matchInfo: {messageId:string|null, excerpts:Array<Object>, reason:string, totalHitCount:number, matchedMessageCount:number}, remainingTerms: string[] }}
    */
   function scanConversationInlineMessagesForMatch(conversation, textPlan, remainingTerms, isCancelled) {
-    const empty = {
-      cancelled: false,
-      matched: false,
-      blocked: false,
-      matchInfo: { messageId: null, excerpts: [], reason: 'message', totalHitCount: 0, matchedMessageCount: 0 },
-      remainingTerms: []
-    };
-    if (!conversation || !Array.isArray(conversation.messages)) return empty;
-
-    const matchInfo = { messageId: null, excerpts: [], reason: 'message', totalHitCount: 0, matchedMessageCount: 0 };
+    const sharedResult = scanConversationMessagesForSearchShared(
+      conversation,
+      textPlan,
+      remainingTerms,
+      {
+        includeHiddenThreadSelection: true,
+        isCancelled
+      }
+    );
+    const sharedMatchInfo = sharedResult?.matchInfo || {};
     const highlightTerms = Array.isArray(textPlan?.highlightLower) ? textPlan.highlightLower : [];
-    const negativeTerms = Array.isArray(textPlan?.negativeLower) ? textPlan.negativeLower : [];
-    const hasNegative = !!textPlan?.hasNegative;
-    const highlightRegex = buildHighlightRegex(highlightTerms);
-    const matchedMessageKeySet = new Set();
-
-    const registerMatchedMessage = (messageKey) => {
-      if (!messageKey || matchedMessageKeySet.has(messageKey)) return;
-      matchedMessageKeySet.add(messageKey);
-      matchInfo.matchedMessageCount = matchedMessageKeySet.size;
+    const matchInfo = {
+      messageId: sharedMatchInfo.messageId || null,
+      excerpts: [],
+      reason: sharedMatchInfo.reason || 'message',
+      totalHitCount: Number(sharedMatchInfo.totalHitCount) || 0,
+      matchedMessageCount: Number(sharedMatchInfo.matchedMessageCount) || 0
     };
 
-    const appendMessagePreview = (plainText, messageId, messageIndex, hitCount) => {
-      if (!highlightTerms.length) return;
-      const preview = buildMessagePreviewExcerpt(plainText, highlightTerms, SEARCH_RESULT_SNIPPET_CONTEXT_LENGTH);
-      if (!preview) return;
-      preview.messageId = messageId || null;
-      preview.messageIndex = Number.isFinite(messageIndex) ? messageIndex : matchInfo.excerpts.length;
-      preview.hitCount = Math.max(0, Number(hitCount || 0));
+    for (const item of Array.isArray(sharedMatchInfo.matchedMessages) ? sharedMatchInfo.matchedMessages : []) {
+      const preview = buildMessagePreviewExcerpt(item?.plainText || '', highlightTerms, SEARCH_RESULT_SNIPPET_CONTEXT_LENGTH);
+      if (!preview) continue;
+      preview.messageId = item?.messageId || null;
+      preview.messageIndex = Number.isFinite(Number(item?.rawMessageIndex))
+        ? Number(item.rawMessageIndex)
+        : matchInfo.excerpts.length;
+      preview.hitCount = Math.max(0, Number(item?.hitCount || 0));
       matchInfo.excerpts.push(preview);
-    };
-
-    const collectHighlightHitsForMessage = (plainText, messageId, messageKey, messageIndex) => {
-      if (!plainText || !highlightRegex) return 0;
-      const hitCount = countRegexMatches(plainText, highlightRegex);
-      if (hitCount <= 0) return 0;
-      matchInfo.totalHitCount += hitCount;
-      registerMatchedMessage(messageKey);
-      appendMessagePreview(plainText, messageId, messageIndex, hitCount);
-      return hitCount;
-    };
-
-    const scope = resolveSearchScope(textPlan);
-    if (scope === 'message') {
-      const positiveTerms = Array.isArray(textPlan?.positiveLower) ? textPlan.positiveLower : [];
-      const hasPositive = positiveTerms.length > 0;
-
-      for (let index = 0; index < conversation.messages.length; index += 1) {
-        const message = conversation.messages[index];
-        if (isCancelled()) return { ...empty, cancelled: true };
-        if (!message) continue;
-        const messageId = typeof message?.id === 'string' ? message.id : '';
-        const messageKey = messageId || `__message_${index}`;
-
-        const plainText = extractMessagePlainText(message);
-
-        if (plainText) {
-          const lowerText = plainText.toLowerCase();
-          if (hasNegative) {
-            let hasNegativeTerm = false;
-            for (const term of negativeTerms) {
-              if (term && lowerText.includes(term)) {
-                hasNegativeTerm = true;
-                break;
-              }
-            }
-            if (hasNegativeTerm) continue;
-          }
-
-          if (hasPositive) {
-            let matchedInMessage = true;
-            for (const term of positiveTerms) {
-              if (term && !lowerText.includes(term)) {
-                matchedInMessage = false;
-                break;
-              }
-            }
-            if (matchedInMessage) {
-              if (!matchInfo.messageId && messageId) {
-                matchInfo.messageId = messageId;
-              }
-              collectHighlightHitsForMessage(plainText, messageId, messageKey, index);
-            }
-          }
-          continue;
-        }
-
-      }
-      sortSearchSnippetExcerptsByCoverage(matchInfo.excerpts, positiveTerms);
-      if (matchInfo.excerpts[0]?.messageId) {
-        matchInfo.messageId = matchInfo.excerpts[0].messageId;
-      }
-
-      const matched = !!matchInfo.messageId || matchInfo.matchedMessageCount > 0;
-      return {
-        cancelled: false,
-        matched,
-        blocked: false,
-        matchInfo,
-        remainingTerms: []
-      };
     }
 
-    const remainingSet = new Set(Array.isArray(remainingTerms) ? remainingTerms : (textPlan?.positiveLower || []));
-
-    for (let index = 0; index < conversation.messages.length; index += 1) {
-      const message = conversation.messages[index];
-      if (isCancelled()) return { ...empty, cancelled: true };
-      if (!message) continue;
-      const messageId = typeof message?.id === 'string' ? message.id : '';
-      const messageKey = messageId || `__message_${index}`;
-
-      const plainText = extractMessagePlainText(message);
-
-      if (plainText) {
-        const lowerText = plainText.toLowerCase();
-        if (hasNegative) {
-          for (const term of negativeTerms) {
-            if (term && lowerText.includes(term)) {
-            return {
-              cancelled: false,
-              matched: false,
-              blocked: true,
-              matchInfo,
-              remainingTerms: Array.from(remainingSet)
-            };
-          }
-        }
-        }
-
-        let matchedInMessage = false;
-        if (remainingSet.size > 0) {
-          for (const term of Array.from(remainingSet)) {
-            if (term && lowerText.includes(term)) {
-              remainingSet.delete(term);
-              matchedInMessage = true;
-            }
-          }
-        }
-
-        if (matchedInMessage && !matchInfo.messageId && messageId) {
-          matchInfo.messageId = messageId;
-        }
-
-        collectHighlightHitsForMessage(plainText, messageId, messageKey, index);
-        continue;
-      }
-
-    }
     sortSearchSnippetExcerptsByCoverage(matchInfo.excerpts, highlightTerms);
     if (matchInfo.excerpts[0]?.messageId) {
       matchInfo.messageId = matchInfo.excerpts[0].messageId;
     }
 
-    const matched = remainingSet.size === 0;
-
     return {
-      cancelled: false,
-      matched,
-      blocked: false,
+      cancelled: sharedResult?.cancelled === true,
+      matched: sharedResult?.matched === true,
+      blocked: sharedResult?.blocked === true,
       matchInfo,
-      remainingTerms: Array.from(remainingSet)
+      remainingTerms: Array.isArray(sharedResult?.remainingTerms) ? sharedResult.remainingTerms : []
     };
   }
 
@@ -4948,206 +4805,23 @@ export function createChatHistoryUI(appContext) {
   }
 
   function parseSearchOperatorValue(rawValue) {
-    const input = typeof rawValue === 'string' ? rawValue.trim() : '';
-    if (!input) return null;
-    const match = input.match(/^(>=|<=|==|!=|=|>|<)?\s*(.+)$/);
-    if (!match) return null;
-    const operator = match[1] || '=';
-    const operand = (match[2] || '').trim();
-    if (!operand) return null;
-    return { operator, operand };
+    return parseSearchOperatorValueShared(rawValue);
   }
 
   function parseRelativeDateRange(rawValue) {
-    const input = typeof rawValue === 'string' ? rawValue.trim() : '';
-    if (!input) return null;
-    const match = input.match(/^(\d+)\s*([dhwmy])$/i);
-    if (!match) return null;
-    const amount = Number(match[1]);
-    if (!Number.isFinite(amount) || amount <= 0) return null;
-    const unit = match[2].toLowerCase();
-    const end = Date.now();
-    const startDate = new Date(end);
-    switch (unit) {
-      case 'h':
-        startDate.setHours(startDate.getHours() - amount);
-        break;
-      case 'd':
-        startDate.setDate(startDate.getDate() - amount);
-        break;
-      case 'w':
-        startDate.setDate(startDate.getDate() - amount * 7);
-        break;
-      case 'm':
-        startDate.setMonth(startDate.getMonth() - amount);
-        break;
-      case 'y':
-        startDate.setFullYear(startDate.getFullYear() - amount);
-        break;
-      default:
-        return null;
-    }
-    const start = startDate.getTime();
-    if (!Number.isFinite(start)) return null;
-    return { start, end, isRelative: true };
+    return parseRelativeDateRangeShared(rawValue);
   }
 
   function parseSearchDateRange(rawValue) {
-    const input = typeof rawValue === 'string' ? rawValue.trim() : '';
-    if (!input) return null;
-
-    const relativeRange = parseRelativeDateRange(input);
-    if (relativeRange) return relativeRange;
-
-    if (/^\d{10}$/.test(input)) {
-      const seconds = Number(input);
-      if (!Number.isFinite(seconds)) return null;
-      const ts = seconds * 1000;
-      return { start: ts, end: ts };
-    }
-
-    if (/^\d{13}$/.test(input)) {
-      const ms = Number(input);
-      if (!Number.isFinite(ms)) return null;
-      return { start: ms, end: ms };
-    }
-
-    const compactDateMatch = input.match(/^(\d{4})(\d{2})(\d{2})$/);
-    if (compactDateMatch) {
-      const year = Number(compactDateMatch[1]);
-      const month = Number(compactDateMatch[2]);
-      const day = Number(compactDateMatch[3]);
-      const start = new Date(year, month - 1, day);
-      if (!Number.isFinite(start.getTime())) return null;
-      const startMs = start.getTime();
-      return { start: startMs, end: startMs + 24 * 60 * 60 * 1000 - 1 };
-    }
-
-    const dateMatch = input.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})$/);
-    if (dateMatch) {
-      const year = Number(dateMatch[1]);
-      const month = Number(dateMatch[2]);
-      const day = Number(dateMatch[3]);
-      const start = new Date(year, month - 1, day);
-      if (!Number.isFinite(start.getTime())) return null;
-      const startMs = start.getTime();
-      return { start: startMs, end: startMs + 24 * 60 * 60 * 1000 - 1 };
-    }
-
-    const parsed = Date.parse(input);
-    if (!Number.isFinite(parsed)) return null;
-    return { start: parsed, end: parsed };
+    return parseSearchDateRangeShared(rawValue);
   }
 
   function parseSearchFilterToken(rawToken) {
-    const token = typeof rawToken === 'string' ? rawToken.trim() : '';
-    if (!token) return null;
-    const colonIndex = token.indexOf(':');
-    if (colonIndex <= 0) return null;
-    const rawKey = token.slice(0, colonIndex).trim().toLowerCase();
-    const rawValue = token.slice(colonIndex + 1).trim();
-    if (!rawValue) return null;
-    const key = CHAT_HISTORY_SEARCH_FILTER_KEYS.get(rawKey);
-    if (!key) return null;
-
-    if (key === 'url') {
-      return {
-        key,
-        value: rawValue,
-        valueLower: rawValue.toLowerCase()
-      };
-    }
-
-    if (key === 'scope') {
-      const rawScope = rawValue.trim();
-      if (!rawScope) return null;
-      const normalized = CHAT_HISTORY_SEARCH_SCOPE_VALUES.get(rawScope.toLowerCase())
-        || CHAT_HISTORY_SEARCH_SCOPE_VALUES.get(rawScope);
-      if (!normalized) return null;
-      return { key, value: normalized };
-    }
-
-    const parsed = parseSearchOperatorValue(rawValue);
-    if (!parsed) return null;
-
-    if (key === 'count') {
-      const numericValue = Number(parsed.operand);
-      if (!Number.isFinite(numericValue)) return null;
-      return { key, operator: parsed.operator, rangeStart: numericValue, rangeEnd: numericValue };
-    }
-
-    if (key === 'date') {
-      const range = parseSearchDateRange(parsed.operand);
-      if (!range) return null;
-      let operator = parsed.operator;
-      if (range.isRelative) {
-        if (operator === '>' || operator === '>=') {
-          operator = '!=';
-        } else if (operator === '<' || operator === '<=' || operator === '=' || operator === '==') {
-          operator = '=';
-        }
-      }
-      return { key, operator, rangeStart: range.start, rangeEnd: range.end };
-    }
-
-    return null;
+    return parseSearchFilterTokenShared(rawToken);
   }
 
   function buildChatHistorySearchPlan(rawFilter) {
-    const raw = typeof rawFilter === 'string' ? rawFilter : '';
-    const normalized = raw.trim().toLowerCase();
-    const tokens = tokenizeSearchQuery(raw);
-    const terms = [];
-    const negativeTerms = [];
-    const filters = [];
-    let scope = 'session';
-
-    tokens.forEach((token) => {
-      let working = token.trim();
-      if (!working) return;
-      let negated = false;
-      while (working.startsWith('!')) {
-        negated = !negated;
-        working = working.slice(1);
-      }
-      if (!working) return;
-
-      const filter = parseSearchFilterToken(working);
-      if (filter) {
-        if (filter.key === 'scope') {
-          if (!negated && filter.value) {
-            scope = filter.value;
-          }
-          return;
-        }
-        filter.negated = negated;
-        filters.push(filter);
-        return;
-      }
-
-      if (negated) {
-        negativeTerms.push(working);
-      } else {
-        terms.push(working);
-      }
-    });
-
-    const positive = normalizeSearchTerms(terms);
-    const negative = normalizeSearchTerms(negativeTerms);
-
-    return {
-      raw,
-      normalized,
-      positiveTerms: positive.raw,
-      positiveTermsLower: positive.lower,
-      negativeTerms: negative.raw,
-      negativeTermsLower: negative.lower,
-      filters,
-      scope,
-      hasText: positive.lower.length > 0 || negative.lower.length > 0,
-      hasPositiveText: positive.lower.length > 0,
-      hasNegativeText: negative.lower.length > 0
-    };
+    return buildChatHistorySearchPlanShared(rawFilter);
   }
 
   function buildChatHistorySearchCacheContextKey(urlFilterMode, currentUrl) {
@@ -5163,108 +4837,27 @@ export function createChatHistoryUI(appContext) {
   }
 
   function compareNumericRange(value, operator, rangeStart, rangeEnd) {
-    const numericValue = Number(value) || 0;
-    switch (operator) {
-      case '>':
-        return numericValue > rangeEnd;
-      case '>=':
-        return numericValue >= rangeStart;
-      case '<':
-        return numericValue < rangeStart;
-      case '<=':
-        return numericValue <= rangeEnd;
-      case '!=':
-        return numericValue < rangeStart || numericValue > rangeEnd;
-      case '=':
-      case '==':
-        return numericValue >= rangeStart && numericValue <= rangeEnd;
-      default:
-        return false;
-    }
+    return compareNumericRangeShared(value, operator, rangeStart, rangeEnd);
   }
 
   function compareMessageDateRange(startTime, endTime, operator, rangeStart, rangeEnd) {
-    const convStart = Number(startTime) || 0;
-    const convEnd = Number(endTime) || 0;
-    switch (operator) {
-      case '>':
-        return convEnd > rangeEnd;
-      case '>=':
-        return convEnd >= rangeStart;
-      case '<':
-        return convStart < rangeStart;
-      case '<=':
-        return convStart <= rangeEnd;
-      case '!=':
-        return convEnd < rangeStart || convStart > rangeEnd;
-      case '=':
-      case '==':
-        return convStart <= rangeEnd && convEnd >= rangeStart;
-      default:
-        return false;
-    }
+    return compareMessageDateRangeShared(startTime, endTime, operator, rangeStart, rangeEnd);
   }
 
   function evaluateChatHistoryFilters(meta, filters) {
-    const list = Array.isArray(filters) ? filters : [];
-    if (!list.length) return true;
-    for (const filter of list) {
-      if (!filter || !filter.key) continue;
-      let matched = false;
-      if (filter.key === 'url') {
-        const url = typeof meta?.url === 'string' ? meta.url.toLowerCase() : '';
-        const value = filter.valueLower || '';
-        matched = value ? url.includes(value) : false;
-      } else if (filter.key === 'count') {
-        matched = compareNumericRange(meta?.messageCount, filter.operator, filter.rangeStart, filter.rangeEnd);
-      } else if (filter.key === 'date') {
-        matched = compareMessageDateRange(meta?.startTime, meta?.endTime, filter.operator, filter.rangeStart, filter.rangeEnd);
-      }
-
-      if (filter.negated) matched = !matched;
-      if (!matched) return false;
-    }
-    return true;
+    return evaluateChatHistoryFiltersShared(meta, filters);
   }
 
   function buildChatHistoryTextPlan(searchPlan) {
-    const positiveRaw = Array.isArray(searchPlan?.positiveTerms) ? searchPlan.positiveTerms.slice() : [];
-    const positiveLower = Array.isArray(searchPlan?.positiveTermsLower) ? searchPlan.positiveTermsLower.slice() : [];
-    const negativeLower = Array.isArray(searchPlan?.negativeTermsLower) ? searchPlan.negativeTermsLower.slice() : [];
-    const highlightRaw = positiveRaw.slice();
-    const highlightLower = positiveLower.slice();
-    const scope = searchPlan?.scope === 'message' ? 'message' : 'session';
-    return {
-      positiveRaw,
-      positiveLower,
-      negativeLower,
-      highlightRaw,
-      highlightLower,
-      scope,
-      hasPositive: positiveLower.length > 0,
-      hasNegative: negativeLower.length > 0
-    };
+    return buildChatHistoryTextPlanShared(searchPlan);
   }
 
   function buildMetaSearchText(meta) {
-    return (typeof meta?.url === 'string' ? meta.url.toLowerCase() : '');
+    return buildMetaSearchTextShared(meta);
   }
 
   function evaluateMetaTextMatch(metaText, textPlan) {
-    const remaining = new Set(textPlan.positiveLower);
-    if (textPlan.hasNegative) {
-      for (const term of textPlan.negativeLower) {
-        if (term && metaText.includes(term)) {
-          return { blocked: true, remaining };
-        }
-      }
-    }
-    for (const term of textPlan.positiveLower) {
-      if (term && metaText.includes(term)) {
-        remaining.delete(term);
-      }
-    }
-    return { blocked: false, remaining };
+    return evaluateMetaTextMatchShared(metaText, textPlan);
   }
 
   /**
