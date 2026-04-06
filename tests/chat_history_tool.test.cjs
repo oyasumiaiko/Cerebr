@@ -102,6 +102,10 @@ function toMetas(conversations) {
   }));
 }
 
+function assertLocalIsoString(value) {
+  assert.match(value, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}$/);
+}
+
 test('buildConversationReferenceSnapshot 使用 1-based 绝对编号且最新最大', async () => {
   const { buildConversationReferenceSnapshot } = await loadChatHistoryToolModule();
   const snapshot = buildConversationReferenceSnapshot([
@@ -157,12 +161,18 @@ test('executeHistorySearchTool 复用 query 语法并返回外部数字引用', 
   assert.equal(result.query.scope, 'message');
   assert.equal(result.result_mode, 'matches');
   assert.equal(result.results[0].conv_ref, 3);
-  assert.equal(result.results[0].created_at, 1700000005000);
-  assert.equal(result.results[0].updated_at, 1700000006000);
+  assert.equal(result.results[0].page_title, 'Recent session');
+  assert.equal(result.results[0].conversation_title, 'recent summary');
+  assertLocalIsoString(result.results[0].created_at);
+  assertLocalIsoString(result.results[0].updated_at);
+  assert.equal(result.results[0].created_at_ms, 1700000005000);
+  assert.equal(result.results[0].updated_at_ms, 1700000006000);
   assert.equal(result.results[0].message_count, 2);
   assert.equal(result.results[0].thread_message_count, 0);
   assert.deepEqual(result.results[0].match.locations, [{ msg_index: 1 }]);
   assert.equal(result.results[1].conv_ref, 1);
+  assert.equal(result.results[1].page_title, 'Alpha session');
+  assert.equal(result.results[1].conversation_title, 'alpha summary');
   assert.equal(result.results[1].thread_message_count, 1);
   assert.equal(result.results[1].has_threads, true);
   assert.deepEqual(result.results[1].match.locations, [{ msg_index: 1 }, { thread_ref: 1, thread_msg_index: 1 }]);
@@ -276,8 +286,11 @@ test('executeHistorySearchTool 支持 metadata_only 模式列出最近对话元�
   assert.equal(result.result_mode, 'metadata_only');
   assert.equal(result.total_matches, 3);
   assert.equal(result.results[0].conv_ref, 3);
-  assert.equal(result.results[0].updated_at, 1700000006000);
+  assertLocalIsoString(result.results[0].updated_at);
+  assert.equal(result.results[0].updated_at_ms, 1700000006000);
   assert.equal(result.results[0].thread_count, 0);
+  assert.equal(result.results[0].page_title, 'Recent session');
+  assert.equal(result.results[0].conversation_title, 'recent summary');
   assert.equal(result.results[1].conv_ref, 2);
   assert.equal(result.results[1].has_threads, false);
   assert.equal(result.results[2].conv_ref, 1);
@@ -322,6 +335,10 @@ test('executeHistoryReadTool 支持主线与线程窗口读取', async () => {
   );
   assert.equal(mainResult.ok, true);
   assert.equal(mainResult.scope, 'main');
+  assert.equal(mainResult.page_title, 'Alpha session');
+  assert.equal(mainResult.conversation_title, 'alpha summary');
+  assertLocalIsoString(mainResult.created_at);
+  assert.equal(mainResult.created_at_ms, 1700000001000);
   assert.equal(mainResult.messages.length, 2);
   assert.equal(mainResult.messages[0].msg_index, 1);
 
@@ -334,6 +351,10 @@ test('executeHistoryReadTool 支持主线与线程窗口读取', async () => {
   );
   assert.equal(threadResult.ok, true);
   assert.equal(threadResult.scope, 'thread');
+  assert.equal(threadResult.page_title, 'Alpha session');
+  assert.equal(threadResult.conversation_title, 'alpha summary');
+  assertLocalIsoString(threadResult.updated_at);
+  assert.equal(threadResult.updated_at_ms, 1700000002000);
   assert.equal(threadResult.thread_anchor_msg_index, 1);
   assert.equal(threadResult.messages[0].thread_msg_index, 1);
   assert.equal(threadResult.messages[0].content, 'thread alpha detail');

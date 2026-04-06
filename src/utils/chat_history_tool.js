@@ -509,6 +509,30 @@ function buildVisibleConversationCounts(referenceMap) {
   };
 }
 
+function formatLocalIsoOffset(timestamp) {
+  const numeric = Number(timestamp);
+  if (!Number.isFinite(numeric) || numeric <= 0) return '';
+  const date = new Date(numeric);
+  if (!Number.isFinite(date.getTime())) return '';
+
+  const pad = (value, length = 2) => String(value).padStart(length, '0');
+  const year = date.getFullYear();
+  const month = pad(date.getMonth() + 1);
+  const day = pad(date.getDate());
+  const hours = pad(date.getHours());
+  const minutes = pad(date.getMinutes());
+  const seconds = pad(date.getSeconds());
+  const milliseconds = pad(date.getMilliseconds(), 3);
+
+  const offsetMinutes = -date.getTimezoneOffset();
+  const sign = offsetMinutes >= 0 ? '+' : '-';
+  const absOffsetMinutes = Math.abs(offsetMinutes);
+  const offsetHours = pad(Math.floor(absOffsetMinutes / 60));
+  const offsetRemainderMinutes = pad(absOffsetMinutes % 60);
+
+  return `${year}-${month}-${day}T${hours}:${minutes}:${seconds}.${milliseconds}${sign}${offsetHours}:${offsetRemainderMinutes}`;
+}
+
 function buildConversationMetadataResult(meta, snapshot, visibleCounts = null) {
   const counts = visibleCounts || {
     message_count: Number(meta?.messageCount) || 0,
@@ -520,14 +544,18 @@ function buildConversationMetadataResult(meta, snapshot, visibleCounts = null) {
     ? meta.parentConversationId.trim()
     : '';
   const parentConvRef = parentConversationId ? (snapshot?.convRefById?.get(parentConversationId) || null) : null;
+  const createdAtMs = Number(meta?.startTime) || 0;
+  const updatedAtMs = Number(meta?.endTime) || 0;
 
   return {
     conv_ref: snapshot?.convRefById?.get(meta?.id) || 0,
-    title: typeof meta?.title === 'string' ? meta.title : '',
+    page_title: typeof meta?.title === 'string' ? meta.title : '',
+    conversation_title: typeof meta?.summary === 'string' ? meta.summary : '',
     url: typeof meta?.url === 'string' ? meta.url : '',
-    summary: typeof meta?.summary === 'string' ? meta.summary : '',
-    created_at: Number(meta?.startTime) || 0,
-    updated_at: Number(meta?.endTime) || 0,
+    created_at: formatLocalIsoOffset(createdAtMs),
+    updated_at: formatLocalIsoOffset(updatedAtMs),
+    created_at_ms: createdAtMs,
+    updated_at_ms: updatedAtMs,
     message_count: counts.message_count,
     main_message_count: counts.main_message_count,
     thread_message_count: counts.thread_message_count,
@@ -736,11 +764,7 @@ export async function executeHistoryReadTool(rawArgs, dependencies = {}) {
     return {
       ok: true,
       conv_ref: convRef,
-      title: typeof meta?.title === 'string' ? meta.title : '',
-      url: typeof meta?.url === 'string' ? meta.url : '',
-      message_count: visibleCounts.message_count,
-      main_message_count: visibleCounts.main_message_count,
-      thread_count: visibleCounts.thread_count,
+      ...buildConversationMetadataResult(meta, snapshot, visibleCounts),
       scope: 'main',
       start,
       end: effectiveEnd,
@@ -759,8 +783,7 @@ export async function executeHistoryReadTool(rawArgs, dependencies = {}) {
   return {
     ok: true,
     conv_ref: convRef,
-    title: typeof meta?.title === 'string' ? meta.title : '',
-    url: typeof meta?.url === 'string' ? meta.url : '',
+    ...buildConversationMetadataResult(meta, snapshot, visibleCounts),
     scope: 'thread',
     thread_ref: thread.thread_ref,
     thread_message_count: thread.thread_message_count,
