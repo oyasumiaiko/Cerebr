@@ -165,8 +165,6 @@ test('executeHistorySearchTool 复用 query 语法并返回外部数字引用', 
   assert.equal(result.results[0].conversation_title, 'recent summary');
   assertLocalIsoString(result.results[0].created_at);
   assertLocalIsoString(result.results[0].updated_at);
-  assert.equal(result.results[0].created_at_ms, 1700000005000);
-  assert.equal(result.results[0].updated_at_ms, 1700000006000);
   assert.equal(result.results[0].message_count, 2);
   assert.equal(result.results[0].thread_message_count, 0);
   assert.deepEqual(result.results[0].match.locations, [{ msg_index: 1 }]);
@@ -287,7 +285,6 @@ test('executeHistorySearchTool 支持 metadata_only 模式列出最近对话元�
   assert.equal(result.total_matches, 3);
   assert.equal(result.results[0].conv_ref, 3);
   assertLocalIsoString(result.results[0].updated_at);
-  assert.equal(result.results[0].updated_at_ms, 1700000006000);
   assert.equal(result.results[0].thread_count, 0);
   assert.equal(result.results[0].page_title, 'Recent session');
   assert.equal(result.results[0].conversation_title, 'recent summary');
@@ -338,7 +335,6 @@ test('executeHistoryReadTool 支持主线与线程窗口读取', async () => {
   assert.equal(mainResult.page_title, 'Alpha session');
   assert.equal(mainResult.conversation_title, 'alpha summary');
   assertLocalIsoString(mainResult.created_at);
-  assert.equal(mainResult.created_at_ms, 1700000001000);
   assert.equal(mainResult.messages.length, 2);
   assert.equal(mainResult.messages[0].msg_index, 1);
 
@@ -354,7 +350,6 @@ test('executeHistoryReadTool 支持主线与线程窗口读取', async () => {
   assert.equal(threadResult.page_title, 'Alpha session');
   assert.equal(threadResult.conversation_title, 'alpha summary');
   assertLocalIsoString(threadResult.updated_at);
-  assert.equal(threadResult.updated_at_ms, 1700000002000);
   assert.equal(threadResult.thread_anchor_msg_index, 1);
   assert.equal(threadResult.messages[0].thread_msg_index, 1);
   assert.equal(threadResult.messages[0].content, 'thread alpha detail');

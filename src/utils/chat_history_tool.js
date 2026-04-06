@@ -554,8 +554,6 @@ function buildConversationMetadataResult(meta, snapshot, visibleCounts = null) {
     url: typeof meta?.url === 'string' ? meta.url : '',
     created_at: formatLocalIsoOffset(createdAtMs),
     updated_at: formatLocalIsoOffset(updatedAtMs),
-    created_at_ms: createdAtMs,
-    updated_at_ms: updatedAtMs,
     message_count: counts.message_count,
     main_message_count: counts.main_message_count,
     thread_message_count: counts.thread_message_count,
