@@ -99,3 +99,96 @@ test('buildResponsesJsRuntimeToolOutputText 在多 frame 时输出 frame_results
   assert.match(text, /top ok/);
   assert.match(text, /one frame failed/);
 });
+
+test('buildResponsesPageContentToolOutputContentItems 使用 metadata + content XML 分块', async () => {
+  const { buildResponsesPageContentToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesPageContentToolOutputContentItems({
+    ok: true,
+    mode: 'preview',
+    title: 'Example',
+    url: 'https://example.com',
+    total_chars: 100,
+    approx_total_tokens: 25,
+    content: 'Alpha <b>Beta</b>\nGamma'
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<page_content_read_result>/);
+  assert.match(text, /<metadata>/);
+  assert.match(text, /"mode": "preview"/);
+  assert.match(text, /<content>\s*Alpha <b>Beta<\/b>/);
+});
+
+test('buildResponsesHistorySearchToolOutputContentItems 使用 conversation XML 分块', async () => {
+  const { buildResponsesHistorySearchToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesHistorySearchToolOutputContentItems({
+    ok: true,
+    query: { recent_within: '5d', result_mode: 'matches' },
+    max_results: 5,
+    result_mode: 'matches',
+    total_matches: 1,
+    results: [
+      {
+        conv_ref: 7,
+        page_title: 'Page',
+        conversation_title: 'Hello',
+        url: 'https://example.com',
+        created_at: '2026-04-07T00:00:00+08:00',
+        updated_at: '2026-04-07T00:01:00+08:00',
+        message_count: 3,
+        main_message_count: 3,
+        thread_message_count: 0,
+        thread_count: 0,
+        has_threads: false,
+        is_branch: false,
+        parent_conv_ref: null,
+        has_api_lock: false,
+        match: {
+          reason: 'message',
+          total_hit_count: 2,
+          matched_message_count: 1,
+          locations: [{ msg_index: 2 }],
+          excerpts: ['first excerpt', 'second excerpt']
+        }
+      }
+    ]
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<history_search_result>/);
+  assert.match(text, /<conversation rank="1">/);
+  assert.match(text, /<match_excerpts>/);
+  assert.match(text, /first excerpt/);
+  assert.doesNotMatch(text, /&lt;/);
+});
+
+test('buildResponsesHistoryReadToolOutputContentItems 使用 messages XML 分块', async () => {
+  const { buildResponsesHistoryReadToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesHistoryReadToolOutputContentItems({
+    ok: true,
+    conv_ref: 8,
+    page_title: 'Repo',
+    conversation_title: 'Read me',
+    url: 'https://example.com/repo',
+    created_at: '2026-04-07T00:00:00+08:00',
+    updated_at: '2026-04-07T00:02:00+08:00',
+    message_count: 4,
+    main_message_count: 4,
+    thread_message_count: 0,
+    thread_count: 0,
+    has_threads: false,
+    is_branch: false,
+    parent_conv_ref: null,
+    has_api_lock: false,
+    scope: 'main',
+    start: 1,
+    end: 2,
+    messages: [
+      { msg_index: 1, role: 'user', timestamp: 1775458218025, content: 'Hello <xml>' },
+      { msg_index: 2, role: 'assistant', timestamp: 1775458219000, content: 'World' }
+    ]
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<history_read_result>/);
+  assert.match(text, /<messages>/);
+  assert.match(text, /<message msg_index="1" role="user" timestamp="1775458218025">/);
+  assert.match(text, /Hello <xml>/);
+});

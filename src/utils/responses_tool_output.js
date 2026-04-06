@@ -216,6 +216,11 @@ function buildXmlBlock(tagName, body) {
   return `<${tagName}>\n${text}\n</${tagName}>`;
 }
 
+function trimJsonMetadataValue(value) {
+  const text = stringifyResponsesToolOutputValue(value);
+  return trimJsonText(text);
+}
+
 function formatResponsesJsRuntimeSpecialValue(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   switch (value.type) {
@@ -451,6 +456,226 @@ export function buildResponsesJsRuntimeToolOutputContentItems(result, options = 
     type: 'input_text',
     text: chunk
   }));
+}
+
+function buildXmlToolResultText(rootTag, metadata, blocks = [], options = {}) {
+  const sections = [];
+  if (metadata && typeof metadata === 'object') {
+    const metadataText = trimJsonMetadataValue(metadata);
+    if (metadataText) sections.push(buildXmlBlock('metadata', metadataText));
+  }
+
+  for (const block of Array.isArray(blocks) ? blocks : []) {
+    if (!block || typeof block !== 'object') continue;
+    const tag = (typeof block.tag === 'string' && block.tag.trim()) ? block.tag.trim() : '';
+    if (!tag) continue;
+    const rawText = trimTrailingWhitespace(block.text);
+    if (!rawText) continue;
+    const text = truncateResponsesToolOutputText(
+      rawText,
+      Number.isFinite(Number(block.maxTokens))
+        ? Number(block.maxTokens)
+        : (
+          Number.isFinite(Number(options?.defaultBlockMaxTokens))
+            ? Number(options.defaultBlockMaxTokens)
+            : RESPONSES_TOOL_OUTPUT_MAX_TOKENS
+        )
+    );
+    sections.push(buildXmlBlock(tag, text));
+  }
+
+  const body = sections.filter(Boolean).join('\n\n');
+  return `<${rootTag}>\n${body}\n</${rootTag}>`;
+}
+
+function buildResponsesXmlToolOutputContentItems(text, options = {}) {
+  const chunks = chunkTextByChars(
+    text,
+    Number.isFinite(Number(options?.chunkChars))
+      ? Number(options.chunkChars)
+      : RESPONSES_TOOL_OUTPUT_CHUNK_CHARS
+  );
+  return chunks.map((chunk) => ({
+    type: 'input_text',
+    text: chunk
+  }));
+}
+
+function buildResponsesPageContentToolOutputText(result) {
+  const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
+  const metadata = {
+    ok: normalized.ok === true,
+    mode: typeof normalized.mode === 'string' ? normalized.mode : null,
+    title: typeof normalized.title === 'string' ? normalized.title : '',
+    url: typeof normalized.url === 'string' ? normalized.url : '',
+    normalized_whitespace: normalized.normalized_whitespace === true,
+    extraction_scope: typeof normalized.extraction_scope === 'string' ? normalized.extraction_scope : '',
+    total_chars: Number.isFinite(Number(normalized.total_chars)) ? Number(normalized.total_chars) : null,
+    approx_total_tokens: Number.isFinite(Number(normalized.approx_total_tokens)) ? Number(normalized.approx_total_tokens) : null,
+    skip_chars: Number.isFinite(Number(normalized.skip_chars)) ? Number(normalized.skip_chars) : null,
+    max_chars: Number.isFinite(Number(normalized.max_chars)) ? Number(normalized.max_chars) : null,
+    returned_chars: Number.isFinite(Number(normalized.returned_chars)) ? Number(normalized.returned_chars) : null,
+    approx_returned_tokens: Number.isFinite(Number(normalized.approx_returned_tokens)) ? Number(normalized.approx_returned_tokens) : null,
+    omitted_chars: Number.isFinite(Number(normalized.omitted_chars)) ? Number(normalized.omitted_chars) : null,
+    omitted_pct: Number.isFinite(Number(normalized.omitted_pct)) ? Number(normalized.omitted_pct) : null,
+    approx_omitted_tokens: Number.isFinite(Number(normalized.approx_omitted_tokens)) ? Number(normalized.approx_omitted_tokens) : null,
+    truncated: normalized.truncated === true,
+    has_more_after_range: normalized.has_more_after_range === true
+  };
+  const blocks = [];
+  if (typeof normalized.content === 'string' && normalized.content.trim()) {
+    blocks.push({
+      tag: 'content',
+      text: normalized.content,
+      maxTokens: 2_000
+    });
+  }
+  if (normalized.error) {
+    blocks.push({
+      tag: 'error',
+      text: formatResponsesJsRuntimeErrorText(normalized.error),
+      maxTokens: RESPONSES_JS_RUNTIME_ERROR_MAX_TOKENS
+    });
+  }
+  return buildXmlToolResultText('page_content_read_result', metadata, blocks);
+}
+
+function buildHistorySearchResultMetadata(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return {};
+  const metadata = { ...result };
+  delete metadata.match;
+  return metadata;
+}
+
+function buildResponsesHistorySearchToolOutputText(result) {
+  const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
+  const metadata = {
+    ok: normalized.ok === true,
+    query: normalized.query && typeof normalized.query === 'object' ? normalized.query : {},
+    max_results: Number.isFinite(Number(normalized.max_results)) ? Number(normalized.max_results) : null,
+    result_mode: typeof normalized.result_mode === 'string' ? normalized.result_mode : null,
+    total_matches: Number.isFinite(Number(normalized.total_matches)) ? Number(normalized.total_matches) : 0
+  };
+
+  const blocks = [];
+  const results = Array.isArray(normalized.results) ? normalized.results : [];
+  if (results.length > 0) {
+    const resultsText = results.map((entry, index) => {
+      const metadataBlock = buildXmlBlock('metadata', trimJsonMetadataValue(buildHistorySearchResultMetadata(entry)));
+      const matchExcerpts = Array.isArray(entry?.match?.excerpts) ? entry.match.excerpts.filter((item) => typeof item === 'string' && item.trim()) : [];
+      const matchLocations = Array.isArray(entry?.match?.locations) ? entry.match.locations : [];
+      const matchMetadata = entry?.match && typeof entry.match === 'object'
+        ? {
+          reason: entry.match.reason || '',
+          total_hit_count: Number(entry.match.total_hit_count) || 0,
+          matched_message_count: Number(entry.match.matched_message_count) || 0,
+          locations: matchLocations
+        }
+        : null;
+      const parts = [metadataBlock];
+      if (matchMetadata) {
+        parts.push(buildXmlBlock('match', trimJsonMetadataValue(matchMetadata)));
+      }
+      if (matchExcerpts.length > 0) {
+        parts.push(buildXmlBlock('match_excerpts', matchExcerpts.join('\n\n---\n\n')));
+      }
+      return `<conversation rank="${index + 1}">\n${parts.filter(Boolean).join('\n\n')}\n</conversation>`;
+    }).join('\n\n');
+    blocks.push({
+      tag: 'results',
+      text: resultsText,
+      maxTokens: 2_000
+    });
+  }
+  if (normalized.error) {
+    blocks.push({
+      tag: 'error',
+      text: formatResponsesJsRuntimeErrorText(normalized.error),
+      maxTokens: RESPONSES_JS_RUNTIME_ERROR_MAX_TOKENS
+    });
+  }
+  return buildXmlToolResultText('history_search_result', metadata, blocks);
+}
+
+function buildResponsesHistoryReadToolOutputText(result) {
+  const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
+  const metadata = { ...normalized };
+  delete metadata.messages;
+  const blocks = [];
+  const messages = Array.isArray(normalized.messages) ? normalized.messages : [];
+  if (messages.length > 0) {
+    const messageText = messages.map((message) => {
+      const indexName = Number.isFinite(Number(message?.msg_index)) ? 'msg_index' : 'thread_msg_index';
+      const indexValue = Number.isFinite(Number(message?.[indexName])) ? Number(message[indexName]) : '';
+      const role = typeof message?.role === 'string' ? message.role : '';
+      const timestamp = Number.isFinite(Number(message?.timestamp)) ? Number(message.timestamp) : '';
+      const attrs = [
+        indexValue !== '' ? `${indexName}="${xmlAttributeEscape(indexValue)}"` : '',
+        role ? `role="${xmlAttributeEscape(role)}"` : '',
+        timestamp !== '' ? `timestamp="${xmlAttributeEscape(timestamp)}"` : ''
+      ].filter(Boolean).join(' ');
+      const content = typeof message?.content === 'string' ? message.content : '';
+      return `<message${attrs ? ` ${attrs}` : ''}>\n${content}\n</message>`;
+    }).join('\n\n');
+    blocks.push({
+      tag: 'messages',
+      text: messageText,
+      maxTokens: 2_000
+    });
+  }
+  if (normalized.error) {
+    blocks.push({
+      tag: 'error',
+      text: formatResponsesJsRuntimeErrorText(normalized.error),
+      maxTokens: RESPONSES_JS_RUNTIME_ERROR_MAX_TOKENS
+    });
+  }
+  return buildXmlToolResultText('history_read_result', metadata, blocks);
+}
+
+export function buildResponsesPageContentToolOutputContentItems(result, options = {}) {
+  return buildResponsesXmlToolOutputContentItems(
+    buildResponsesPageContentToolOutputText(result),
+    options
+  );
+}
+
+export function buildResponsesHistorySearchToolOutputContentItems(result, options = {}) {
+  return buildResponsesXmlToolOutputContentItems(
+    buildResponsesHistorySearchToolOutputText(result),
+    options
+  );
+}
+
+export function buildResponsesHistoryReadToolOutputContentItems(result, options = {}) {
+  return buildResponsesXmlToolOutputContentItems(
+    buildResponsesHistoryReadToolOutputText(result),
+    options
+  );
+}
+
+export function buildResponsesGenericXmlToolOutputContentItems(rootTag, result, options = {}) {
+  const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : { value: result };
+  const metadata = {
+    ok: normalized.ok === true
+  };
+  const blocks = [];
+  if ('value' in normalized) {
+    blocks.push({
+      tag: 'result',
+      text: stringifyResponsesToolOutputValue(normalized.value),
+      maxTokens: 2_000
+    });
+  }
+  if (normalized.error) {
+    blocks.push({
+      tag: 'error',
+      text: formatResponsesJsRuntimeErrorText(normalized.error),
+      maxTokens: RESPONSES_JS_RUNTIME_ERROR_MAX_TOKENS
+    });
+  }
+  const text = buildXmlToolResultText(rootTag, metadata, blocks, options);
+  return buildResponsesXmlToolOutputContentItems(text, options);
 }
 
 /**

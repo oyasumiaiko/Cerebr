@@ -31,6 +31,10 @@ import {
 import {
   buildResponsesToolOutputContentItems,
   buildResponsesJsRuntimeToolOutputContentItems,
+  buildResponsesPageContentToolOutputContentItems,
+  buildResponsesHistorySearchToolOutputContentItems,
+  buildResponsesHistoryReadToolOutputContentItems,
+  buildResponsesGenericXmlToolOutputContentItems,
   RESPONSES_TOOL_OUTPUT_MAX_BYTES,
   stringifyResponsesToolOutputValue
 } from '../utils/responses_tool_output.js';
@@ -6600,6 +6604,39 @@ export function createMessageSender(appContext) {
     }
   }
 
+  function serializeResponsesPageContentFunctionToolOutput(value) {
+    try {
+      return buildResponsesPageContentToolOutputContentItems(value);
+    } catch (error) {
+      return buildResponsesGenericXmlToolOutputContentItems('page_content_read_result', {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      });
+    }
+  }
+
+  function serializeResponsesHistorySearchFunctionToolOutput(value) {
+    try {
+      return buildResponsesHistorySearchToolOutputContentItems(value);
+    } catch (error) {
+      return buildResponsesGenericXmlToolOutputContentItems('history_search_result', {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      });
+    }
+  }
+
+  function serializeResponsesHistoryReadFunctionToolOutput(value) {
+    try {
+      return buildResponsesHistoryReadToolOutputContentItems(value);
+    } catch (error) {
+      return buildResponsesGenericXmlToolOutputContentItems('history_read_result', {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      });
+    }
+  }
+
   const RESPONSES_JS_RUNTIME_MAX_TEXT_PREVIEW_CHARS = 4000;
   const RESPONSES_JS_RUNTIME_MAX_ARRAY_ITEMS = 12;
   const RESPONSES_JS_RUNTIME_MAX_OBJECT_KEYS = 24;
@@ -6991,9 +7028,16 @@ export function createMessageSender(appContext) {
     return {
       type: 'function_call_output',
       call_id: callId,
-      output: functionName === RESPONSES_JS_RUNTIME_TOOL_NAME
-        ? serializeResponsesJsRuntimeFunctionToolOutput(outputPayload)
-        : serializeResponsesFunctionToolOutput(outputPayload)
+      output:
+        functionName === RESPONSES_JS_RUNTIME_TOOL_NAME
+          ? serializeResponsesJsRuntimeFunctionToolOutput(outputPayload)
+          : functionName === RESPONSES_PAGE_CONTENT_TOOL_NAME
+            ? serializeResponsesPageContentFunctionToolOutput(outputPayload)
+            : functionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME
+              ? serializeResponsesHistorySearchFunctionToolOutput(outputPayload)
+              : functionName === RESPONSES_HISTORY_READ_TOOL_NAME
+                ? serializeResponsesHistoryReadFunctionToolOutput(outputPayload)
+                : serializeResponsesFunctionToolOutput(outputPayload)
     };
   }
 
