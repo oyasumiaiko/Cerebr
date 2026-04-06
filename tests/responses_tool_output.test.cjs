@@ -129,6 +129,25 @@ test('buildResponsesPageContentToolOutputContentItems 使用 metadata + content 
   assert.match(text, /<content>\s*Alpha <b>Beta<\/b>/);
 });
 
+test('buildResponsesPageContentToolOutputContentItems 对长页面内容使用统一中间截断标记', async () => {
+  const { buildResponsesPageContentToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesPageContentToolOutputContentItems({
+    ok: true,
+    mode: 'preview',
+    title: 'Example',
+    url: 'https://example.com',
+    total_chars: 12000,
+    returned_chars: 12000,
+    omitted_chars: 0,
+    omitted_pct: 0,
+    truncated: false,
+    content: 'A'.repeat(12000)
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<content>/);
+  assert.match(text, /\[\.\.\. truncated \d+ chars out of 12000 total chars \([\d.]+%\); omitted range \[\d+, \d+\) \.\.\.\]/);
+});
+
 test('buildResponsesHistorySearchToolOutputContentItems 使用 conversation XML 分块', async () => {
   const { buildResponsesHistorySearchToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesHistorySearchToolOutputContentItems({

@@ -8,7 +8,6 @@
  * - 它不做 DOM 级结构化定位，因此不替代 js_runtime_execute。
  */
 
-export const PAGE_CONTENT_READ_DEFAULT_PREVIEW_CHARS = 5000;
 export const PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS = 5000;
 export const PAGE_CONTENT_READ_MAX_CHARS = 5000;
 
@@ -45,35 +44,6 @@ export function normalizePageContentReadText(text) {
     .trim();
 }
 
-function buildMiddlePreview(text, maxChars) {
-  const content = typeof text === 'string' ? text : '';
-  const safeMaxChars = Math.max(1, clampNonNegativeInt(maxChars, PAGE_CONTENT_READ_DEFAULT_PREVIEW_CHARS));
-  if (content.length <= safeMaxChars) {
-    return {
-      content,
-      truncated: false,
-      omittedChars: 0,
-      omittedPct: 0
-    };
-  }
-
-  const omittedChars = content.length - safeMaxChars;
-  const omittedPct = formatPercent(omittedChars, content.length);
-  const omittedStart = Math.ceil(safeMaxChars / 2);
-  const omittedEnd = content.length - (safeMaxChars - omittedStart);
-  const marker = `\n[... truncated ${omittedChars} chars out of ${content.length} total chars (${omittedPct}%); omitted range [${omittedStart}, ${omittedEnd}) ...]\n`;
-  const available = Math.max(0, safeMaxChars - marker.length);
-  const prefixLen = Math.floor(available / 2);
-  const suffixLen = available - prefixLen;
-
-  return {
-    content: `${content.slice(0, prefixLen)}${marker}${content.slice(content.length - suffixLen)}`,
-    truncated: true,
-    omittedChars,
-    omittedPct
-  };
-}
-
 function normalizePageContentReadArgs(rawArgs) {
   const args = (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs))
     ? rawArgs
@@ -92,9 +62,10 @@ function normalizePageContentReadArgs(rawArgs) {
  * 基于抽取后的页面内容，构造给模型看的快速读取结果。
  *
  * 规则：
- * - 默认（未显式指定 skip/max）走中间截断预览；
+ * - 默认（未显式指定 skip/max）返回完整规范化正文；
  * - 一旦显式指定 skip 或 max_chars，则按连续区间读取；
- * - 返回值带上总长度、跳过量与截断比例，方便模型决定是否继续读取下一段。
+ * - 真正展示给模型前，统一由工具输出层做 5000 字符中间截断；
+ * - 因此这里不再额外做一套 preview 截断，避免不同工具有不同的截断语义。
  *
  * @param {{title?:string, url?:string, content?:string}|null|undefined} pageContent
  * @param {any} rawArgs
@@ -122,7 +93,6 @@ export function buildPageContentReadResult(pageContent, rawArgs) {
   }
 
   if (!hasExplicitRange) {
-    const preview = buildMiddlePreview(normalizedText, PAGE_CONTENT_READ_DEFAULT_PREVIEW_CHARS);
     return {
       ok: true,
       mode: 'preview',
@@ -131,11 +101,11 @@ export function buildPageContentReadResult(pageContent, rawArgs) {
       normalized_whitespace: true,
       extraction_scope: 'page_plus_accessible_iframe_text',
       total_chars: totalChars,
-      returned_chars: preview.content.length,
-      omitted_chars: preview.omittedChars,
-      omitted_pct: preview.omittedPct,
-      truncated: preview.truncated,
-      content: preview.content
+      returned_chars: totalChars,
+      omitted_chars: 0,
+      omitted_pct: 0,
+      truncated: false,
+      content: normalizedText
     };
   }
 
