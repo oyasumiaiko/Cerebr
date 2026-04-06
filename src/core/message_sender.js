@@ -6306,7 +6306,8 @@ export function createMessageSender(appContext) {
         '搜索已保存的聊天记录。',
         '默认搜索全库会话，包含主线与线程消息，结果按最近会话优先返回。',
         '它只搜索用户可见聊天正文，不搜索 tool output、hidden contextual items、footer 元数据或 replay items。',
-        '返回的是会话级结果与命中位置：主线命中使用 msg_index，线程命中使用 thread_ref + thread_msg_index。',
+        '返回的每条结果都会带会话元数据，例如创建时间、最近时间、消息条数、线程数量等。',
+        'result_mode=matches 时返回会话级结果与命中位置：主线命中使用 msg_index，线程命中使用 thread_ref + thread_msg_index；result_mode=metadata_only 时只返回元数据列表。',
         'conv_ref 是当前聊天记录快照中的 1-based 会话编号，最新会话编号最大；若要继续读取正文窗口，请使用 history_read。'
       ].join(' '),
       strict: true,
@@ -6351,6 +6352,10 @@ export function createMessageSender(appContext) {
           scope: {
             type: ['string', 'null'],
             description: '可选。message 表示每个正向词必须在同一条消息内同时命中；session 表示同一会话内不同消息共同满足也算命中。'
+          },
+          result_mode: {
+            type: ['string', 'null'],
+            description: '可选。matches 返回元数据 + 命中摘要；metadata_only 只返回会话元数据列表，适合结合 recent_within 之类条件做最近对话清单。'
           },
           max_results: {
             type: ['integer', 'null'],

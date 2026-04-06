@@ -59,6 +59,7 @@ function normalizeHistorySearchArguments(rawArgs) {
   const urlContains = typeof args.url_contains === 'string' ? args.url_contains.trim() : '';
   const recentWithinRaw = typeof args.recent_within === 'string' ? args.recent_within.trim() : '';
   const scope = (typeof args.scope === 'string' ? args.scope.trim().toLowerCase() : '');
+  const resultMode = (typeof args.result_mode === 'string' ? args.result_mode.trim().toLowerCase() : '');
   const minMessageCount = (args.min_message_count == null)
     ? null
     : clampNonNegativeInt(args.min_message_count, 0, Number.MAX_SAFE_INTEGER);
@@ -81,6 +82,9 @@ function normalizeHistorySearchArguments(rawArgs) {
 
   if (scope && scope !== 'message' && scope !== 'session') {
     throw new Error('history_search 参数错误：scope 只能是 message 或 session。');
+  }
+  if (resultMode && resultMode !== 'matches' && resultMode !== 'metadata_only') {
+    throw new Error('history_search 参数错误：result_mode 只能是 matches 或 metadata_only。');
   }
   if (minMessageCount != null && maxMessageCount != null && minMessageCount > maxMessageCount) {
     throw new Error('history_search 参数错误：min_message_count 不能大于 max_message_count。');
@@ -110,6 +114,7 @@ function normalizeHistorySearchArguments(rawArgs) {
     dateTo,
     recentWithin,
     scope: scope || 'session',
+    resultMode: resultMode || 'matches',
     maxResults: clampPositiveInt(args.max_results, HISTORY_SEARCH_TOOL_DEFAULT_MAX_RESULTS, HISTORY_SEARCH_TOOL_MAX_RESULTS)
   };
 }
@@ -499,7 +504,38 @@ function buildVisibleConversationCounts(referenceMap) {
   return {
     message_count: mainCount + visibleThreadMessageCount,
     main_message_count: mainCount,
+    thread_message_count: visibleThreadMessageCount,
     thread_count: threadCount
+  };
+}
+
+function buildConversationMetadataResult(meta, snapshot, visibleCounts = null) {
+  const counts = visibleCounts || {
+    message_count: Number(meta?.messageCount) || 0,
+    main_message_count: Number(meta?.mainMessageCount) || 0,
+    thread_message_count: Number(meta?.threadMessageCount) || 0,
+    thread_count: Number(meta?.threadCount) || 0
+  };
+  const parentConversationId = (typeof meta?.parentConversationId === 'string' && meta.parentConversationId.trim())
+    ? meta.parentConversationId.trim()
+    : '';
+  const parentConvRef = parentConversationId ? (snapshot?.convRefById?.get(parentConversationId) || null) : null;
+
+  return {
+    conv_ref: snapshot?.convRefById?.get(meta?.id) || 0,
+    title: typeof meta?.title === 'string' ? meta.title : '',
+    url: typeof meta?.url === 'string' ? meta.url : '',
+    summary: typeof meta?.summary === 'string' ? meta.summary : '',
+    created_at: Number(meta?.startTime) || 0,
+    updated_at: Number(meta?.endTime) || 0,
+    message_count: counts.message_count,
+    main_message_count: counts.main_message_count,
+    thread_message_count: counts.thread_message_count,
+    thread_count: counts.thread_count,
+    has_threads: counts.thread_count > 0,
+    is_branch: !!parentConversationId,
+    parent_conv_ref: parentConvRef,
+    has_api_lock: !!(meta?.apiLock && typeof meta.apiLock === 'object')
   };
 }
 
@@ -512,7 +548,7 @@ function buildVisibleConversationCounts(referenceMap) {
  */
 export async function executeHistorySearchTool(rawArgs, dependencies = {}) {
   const normalizedArgs = normalizeHistorySearchArguments(rawArgs);
-  const { maxResults } = normalizedArgs;
+  const { maxResults, resultMode } = normalizedArgs;
   const snapshot = dependencies?.snapshot;
   if (!snapshot || !Array.isArray(snapshot.orderedMetas)) {
     throw new Error('history_search 缺少可用的会话快照。');
@@ -613,16 +649,11 @@ export async function executeHistorySearchTool(rawArgs, dependencies = {}) {
   }
 
   const results = topEntries.map(({ meta, matchInfo }) => {
-    const convRef = snapshot.convRefById.get(meta.id) || 0;
     const conversation = matchedConversationById.get(meta.id) || null;
     const referenceMap = conversation ? buildConversationReadReferenceMap(conversation) : null;
     const conversationStats = referenceMap
       ? buildVisibleConversationCounts(referenceMap)
-      : {
-        message_count: Number(meta?.messageCount) || 0,
-        main_message_count: Number(meta?.mainMessageCount) || 0,
-        thread_count: Number(meta?.threadCount) || 0
-      };
+      : null;
     let locations = [];
     let excerpts = [];
     if (matchInfo?.matchedMessages?.length && referenceMap) {
@@ -630,12 +661,12 @@ export async function executeHistorySearchTool(rawArgs, dependencies = {}) {
       excerpts = buildToolSearchExcerpts(matchInfo.matchedMessages, textPlan.highlightLower);
     }
 
+    const base = buildConversationMetadataResult(meta, snapshot, conversationStats);
+    if (resultMode === 'metadata_only') {
+      return base;
+    }
     return {
-      conv_ref: convRef,
-      title: typeof meta?.title === 'string' ? meta.title : '',
-      url: typeof meta?.url === 'string' ? meta.url : '',
-      summary: typeof meta?.summary === 'string' ? meta.summary : '',
-      ...conversationStats,
+      ...base,
       match: {
         reason: matchInfo?.reason || 'meta',
         total_hit_count: Number(matchInfo?.totalHitCount) || 0,
@@ -657,9 +688,11 @@ export async function executeHistorySearchTool(rawArgs, dependencies = {}) {
       date_from: rawArgs?.date_from ?? null,
       date_to: rawArgs?.date_to ?? null,
       recent_within: normalizedArgs.recentWithin ? rawArgs?.recent_within ?? null : null,
-      scope: normalizedArgs.scope
+      scope: normalizedArgs.scope,
+      result_mode: normalizedArgs.resultMode
     },
     max_results: maxResults,
+    result_mode: resultMode,
     total_matches: matchedEntries.length,
     results
   };

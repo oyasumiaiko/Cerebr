@@ -155,9 +155,16 @@ test('executeHistorySearchTool 复用 query 语法并返回外部数字引用', 
   assert.equal(result.total_matches, 2);
   assert.deepEqual(result.query.text_all, ['alpha']);
   assert.equal(result.query.scope, 'message');
+  assert.equal(result.result_mode, 'matches');
   assert.equal(result.results[0].conv_ref, 3);
+  assert.equal(result.results[0].created_at, 1700000005000);
+  assert.equal(result.results[0].updated_at, 1700000006000);
+  assert.equal(result.results[0].message_count, 2);
+  assert.equal(result.results[0].thread_message_count, 0);
   assert.deepEqual(result.results[0].match.locations, [{ msg_index: 1 }]);
   assert.equal(result.results[1].conv_ref, 1);
+  assert.equal(result.results[1].thread_message_count, 1);
+  assert.equal(result.results[1].has_threads, true);
   assert.deepEqual(result.results[1].match.locations, [{ msg_index: 1 }, { thread_ref: 1, thread_msg_index: 1 }]);
   const serialized = JSON.stringify(result);
   assert.doesNotMatch(serialized, /conv_alpha|conv_beta|conv_recent|\"m1\"|\"m3_thread\"|\"b3\"|\"r1\"/);
@@ -243,6 +250,39 @@ test('executeHistorySearchTool 支持 url/count/date 过滤语法', async () => 
 
   assert.equal(result.total_matches, 1);
   assert.equal(result.results[0].conv_ref, 3);
+});
+
+test('executeHistorySearchTool 支持 metadata_only 模式列出最近对话元数据', async () => {
+  const {
+    buildConversationReferenceSnapshot,
+    executeHistorySearchTool
+  } = await loadChatHistoryToolModule();
+  const conversations = buildSampleConversations();
+  const snapshot = buildConversationReferenceSnapshot(toMetas(conversations));
+
+  const result = await executeHistorySearchTool(
+    {
+      recent_within: '999y',
+      result_mode: 'metadata_only',
+      max_results: 10
+    },
+    {
+      snapshot,
+      loadConversationsByIds: async (ids) => conversations.filter(item => ids.includes(item.id))
+    }
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.result_mode, 'metadata_only');
+  assert.equal(result.total_matches, 3);
+  assert.equal(result.results[0].conv_ref, 3);
+  assert.equal(result.results[0].updated_at, 1700000006000);
+  assert.equal(result.results[0].thread_count, 0);
+  assert.equal(result.results[1].conv_ref, 2);
+  assert.equal(result.results[1].has_threads, false);
+  assert.equal(result.results[2].conv_ref, 1);
+  assert.equal(result.results[2].thread_message_count, 1);
+  assert.equal(typeof result.results[0].match, 'undefined');
 });
 
 test('executeHistorySearchTool 在没有任何条件时会报明确错误', async () => {
