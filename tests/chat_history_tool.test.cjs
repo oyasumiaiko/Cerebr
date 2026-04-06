@@ -141,7 +141,8 @@ test('executeHistorySearchTool 复用 query 语法并返回外部数字引用', 
 
   const result = await executeHistorySearchTool(
     {
-      query: 'alpha scope:message',
+      text_all: ['alpha'],
+      scope: 'message',
       max_results: 10
     },
     {
@@ -152,6 +153,8 @@ test('executeHistorySearchTool 复用 query 语法并返回外部数字引用', 
 
   assert.equal(result.ok, true);
   assert.equal(result.total_matches, 2);
+  assert.deepEqual(result.query.text_all, ['alpha']);
+  assert.equal(result.query.scope, 'message');
   assert.equal(result.results[0].conv_ref, 3);
   assert.deepEqual(result.results[0].match.locations, [{ msg_index: 1 }]);
   assert.equal(result.results[1].conv_ref, 1);
@@ -170,7 +173,7 @@ test('executeHistorySearchTool 的 scope:session 允许不同消息共同满足�
 
   const sessionResult = await executeHistorySearchTool(
     {
-      query: 'gamma delta',
+      text_all: ['gamma', 'delta'],
       max_results: 10
     },
     {
@@ -182,7 +185,8 @@ test('executeHistorySearchTool 的 scope:session 允许不同消息共同满足�
 
   const messageScopeResult = await executeHistorySearchTool(
     {
-      query: 'gamma delta scope:message',
+      text_all: ['gamma', 'delta'],
+      scope: 'message',
       max_results: 10
     },
     {
@@ -204,7 +208,7 @@ test('executeHistorySearchTool 不会命中隐藏线程占位文本', async () =
 
   const result = await executeHistorySearchTool(
     {
-      query: 'secret',
+      text_all: ['secret'],
       max_results: 10
     },
     {
@@ -226,7 +230,9 @@ test('executeHistorySearchTool 支持 url/count/date 过滤语法', async () => 
 
   const result = await executeHistorySearchTool(
     {
-      query: 'url:recent count:>1 date:>19700101',
+      url_contains: 'recent',
+      min_message_count: 2,
+      date_from: '1970-01-01',
       max_results: 10
     },
     {
@@ -237,6 +243,26 @@ test('executeHistorySearchTool 支持 url/count/date 过滤语法', async () => 
 
   assert.equal(result.total_matches, 1);
   assert.equal(result.results[0].conv_ref, 3);
+});
+
+test('executeHistorySearchTool 在没有任何条件时会报明确错误', async () => {
+  const {
+    buildConversationReferenceSnapshot,
+    executeHistorySearchTool
+  } = await loadChatHistoryToolModule();
+  const conversations = buildSampleConversations();
+  const snapshot = buildConversationReferenceSnapshot(toMetas(conversations));
+
+  await assert.rejects(
+    () => executeHistorySearchTool(
+      { max_results: 10 },
+      {
+        snapshot,
+        loadConversationsByIds: async (ids) => conversations.filter(item => ids.includes(item.id))
+      }
+    ),
+    /至少需要提供一个搜索条件/
+  );
 });
 
 test('executeHistoryReadTool 支持主线与线程窗口读取', async () => {

@@ -20,17 +20,168 @@ function clampPositiveInt(value, fallback, max = Number.POSITIVE_INFINITY) {
   return Math.max(1, Math.min(Math.trunc(numeric), max));
 }
 
+function clampNonNegativeInt(value, fallback, max = Number.POSITIVE_INFINITY) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0, Math.min(Math.trunc(numeric), max));
+}
+
+function normalizeStringArray(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map(item => (typeof item === 'string' ? item.trim() : ''))
+    .filter(Boolean);
+}
+
+function parseFlexibleDatePoint(rawValue) {
+  if (rawValue == null) return null;
+  const range = buildChatHistorySearchPlan(`date:${String(rawValue).trim()}`).filters.find(item => item?.key === 'date') || null;
+  if (!range) return null;
+  return {
+    start: range.rangeStart,
+    end: range.rangeEnd
+  };
+}
+
+function parseRecentWithin(rawValue) {
+  if (rawValue == null) return null;
+  const filter = buildChatHistorySearchPlan(`date:<${String(rawValue).trim()}`).filters.find(item => item?.key === 'date') || null;
+  if (!filter) return null;
+  return filter;
+}
+
 function normalizeHistorySearchArguments(rawArgs) {
   const args = (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs))
     ? rawArgs
     : {};
-  const query = typeof args.query === 'string' ? args.query.trim() : '';
-  if (!query) {
-    throw new Error('history_search 参数错误：query 不能为空。');
+  const textAll = normalizeStringArray(args.text_all);
+  const textNot = normalizeStringArray(args.text_not);
+  const urlContains = typeof args.url_contains === 'string' ? args.url_contains.trim() : '';
+  const recentWithinRaw = typeof args.recent_within === 'string' ? args.recent_within.trim() : '';
+  const scope = (typeof args.scope === 'string' ? args.scope.trim().toLowerCase() : '');
+  const minMessageCount = (args.min_message_count == null)
+    ? null
+    : clampNonNegativeInt(args.min_message_count, 0, Number.MAX_SAFE_INTEGER);
+  const maxMessageCount = (args.max_message_count == null)
+    ? null
+    : clampNonNegativeInt(args.max_message_count, 0, Number.MAX_SAFE_INTEGER);
+
+  const dateFrom = parseFlexibleDatePoint(args.date_from);
+  if (args.date_from != null && !dateFrom) {
+    throw new Error('history_search 参数错误：date_from 格式无效。');
   }
+  const dateTo = parseFlexibleDatePoint(args.date_to);
+  if (args.date_to != null && !dateTo) {
+    throw new Error('history_search 参数错误：date_to 格式无效。');
+  }
+  const recentWithin = recentWithinRaw ? parseRecentWithin(recentWithinRaw) : null;
+  if (recentWithinRaw && !recentWithin) {
+    throw new Error('history_search 参数错误：recent_within 应类似 5d / 1w / 1m / 1y。');
+  }
+
+  if (scope && scope !== 'message' && scope !== 'session') {
+    throw new Error('history_search 参数错误：scope 只能是 message 或 session。');
+  }
+  if (minMessageCount != null && maxMessageCount != null && minMessageCount > maxMessageCount) {
+    throw new Error('history_search 参数错误：min_message_count 不能大于 max_message_count。');
+  }
+
+  const hasAnySearchConstraint = (
+    textAll.length > 0
+    || textNot.length > 0
+    || !!urlContains
+    || minMessageCount != null
+    || maxMessageCount != null
+    || !!dateFrom
+    || !!dateTo
+    || !!recentWithin
+  );
+  if (!hasAnySearchConstraint) {
+    throw new Error('history_search 参数错误：至少需要提供一个搜索条件。');
+  }
+
   return {
-    query,
+    textAll,
+    textNot,
+    urlContains,
+    minMessageCount,
+    maxMessageCount,
+    dateFrom,
+    dateTo,
+    recentWithin,
+    scope: scope || 'session',
     maxResults: clampPositiveInt(args.max_results, HISTORY_SEARCH_TOOL_DEFAULT_MAX_RESULTS, HISTORY_SEARCH_TOOL_MAX_RESULTS)
+  };
+}
+
+function buildHistorySearchPlanFromStructuredArgs(normalizedArgs) {
+  const filters = [];
+  if (normalizedArgs.urlContains) {
+    filters.push({
+      key: 'url',
+      value: normalizedArgs.urlContains,
+      valueLower: normalizedArgs.urlContains.toLowerCase(),
+      negated: false
+    });
+  }
+  if (normalizedArgs.minMessageCount != null) {
+    filters.push({
+      key: 'count',
+      operator: '>=',
+      rangeStart: normalizedArgs.minMessageCount,
+      rangeEnd: normalizedArgs.minMessageCount,
+      negated: false
+    });
+  }
+  if (normalizedArgs.maxMessageCount != null) {
+    filters.push({
+      key: 'count',
+      operator: '<=',
+      rangeStart: normalizedArgs.maxMessageCount,
+      rangeEnd: normalizedArgs.maxMessageCount,
+      negated: false
+    });
+  }
+  if (normalizedArgs.dateFrom) {
+    filters.push({
+      key: 'date',
+      operator: '>=',
+      rangeStart: normalizedArgs.dateFrom.start,
+      rangeEnd: normalizedArgs.dateFrom.end,
+      negated: false
+    });
+  }
+  if (normalizedArgs.dateTo) {
+    filters.push({
+      key: 'date',
+      operator: '<=',
+      rangeStart: normalizedArgs.dateTo.start,
+      rangeEnd: normalizedArgs.dateTo.end,
+      negated: false
+    });
+  }
+  if (normalizedArgs.recentWithin) {
+    filters.push({
+      key: 'date',
+      operator: normalizedArgs.recentWithin.operator,
+      rangeStart: normalizedArgs.recentWithin.rangeStart,
+      rangeEnd: normalizedArgs.recentWithin.rangeEnd,
+      negated: false
+    });
+  }
+
+  return {
+    raw: '',
+    normalized: '',
+    positiveTerms: normalizedArgs.textAll.slice(),
+    positiveTermsLower: normalizedArgs.textAll.map(item => item.toLowerCase()),
+    negativeTerms: normalizedArgs.textNot.slice(),
+    negativeTermsLower: normalizedArgs.textNot.map(item => item.toLowerCase()),
+    filters,
+    scope: normalizedArgs.scope === 'message' ? 'message' : 'session',
+    hasText: normalizedArgs.textAll.length > 0 || normalizedArgs.textNot.length > 0,
+    hasPositiveText: normalizedArgs.textAll.length > 0,
+    hasNegativeText: normalizedArgs.textNot.length > 0
   };
 }
 
@@ -360,7 +511,8 @@ function buildVisibleConversationCounts(referenceMap) {
  * @returns {Promise<Object>}
  */
 export async function executeHistorySearchTool(rawArgs, dependencies = {}) {
-  const { query, maxResults } = normalizeHistorySearchArguments(rawArgs);
+  const normalizedArgs = normalizeHistorySearchArguments(rawArgs);
+  const { maxResults } = normalizedArgs;
   const snapshot = dependencies?.snapshot;
   if (!snapshot || !Array.isArray(snapshot.orderedMetas)) {
     throw new Error('history_search 缺少可用的会话快照。');
@@ -369,7 +521,7 @@ export async function executeHistorySearchTool(rawArgs, dependencies = {}) {
     throw new Error('history_search 缺少会话读取函数。');
   }
 
-  const searchPlan = buildChatHistorySearchPlan(query);
+  const searchPlan = buildHistorySearchPlanFromStructuredArgs(normalizedArgs);
   const textPlan = buildChatHistoryTextPlan(searchPlan);
   const resolvedScope = textPlan.hasPositive || textPlan.hasNegative
     ? (searchPlan.scope === 'message' ? 'message' : 'session')
@@ -496,7 +648,17 @@ export async function executeHistorySearchTool(rawArgs, dependencies = {}) {
 
   return {
     ok: true,
-    query,
+    query: {
+      text_all: normalizedArgs.textAll,
+      text_not: normalizedArgs.textNot,
+      url_contains: normalizedArgs.urlContains || null,
+      min_message_count: normalizedArgs.minMessageCount,
+      max_message_count: normalizedArgs.maxMessageCount,
+      date_from: rawArgs?.date_from ?? null,
+      date_to: rawArgs?.date_to ?? null,
+      recent_within: normalizedArgs.recentWithin ? rawArgs?.recent_within ?? null : null,
+      scope: normalizedArgs.scope
+    },
     max_results: maxResults,
     total_matches: matchedEntries.length,
     results

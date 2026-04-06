@@ -6303,26 +6303,61 @@ export function createMessageSender(appContext) {
       type: 'function',
       name: RESPONSES_HISTORY_SEARCH_TOOL_NAME,
       description: [
-        '搜索本地已保存的聊天记录。',
-        'query 直接复用聊天记录面板现有语法：空格=AND，!否定，url:xxx，count:>10，date:<5d，scope:message，scope:session。',
-        '返回的是会话级结果，不会暴露内部 conversationId/messageId；而是返回外部数字引用 conv_ref，以及命中位置索引 msg_index 或 thread_ref + thread_msg_index。',
-        '这些编号基于当前聊天记录快照动态计算：1-based，最新会话编号最大；若历史新增或删除，编号可能变化，因此建议先 search 再 read。'
+        '搜索已保存的聊天记录。',
+        '默认搜索全库会话，包含主线与线程消息，结果按最近会话优先返回。',
+        '它只搜索用户可见聊天正文，不搜索 tool output、hidden contextual items、footer 元数据或 replay items。',
+        '返回的是会话级结果与命中位置：主线命中使用 msg_index，线程命中使用 thread_ref + thread_msg_index。',
+        'conv_ref 是当前聊天记录快照中的 1-based 会话编号，最新会话编号最大；若要继续读取正文窗口，请使用 history_read。'
       ].join(' '),
       strict: true,
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          query: {
-            type: 'string',
-            description: '搜索 query，直接复用聊天记录 UI 语法，例如：websocket !失败 url:example.com date:<7d scope:message。'
+          text_all: {
+            type: ['array', 'null'],
+            description: '可选。正文里必须同时出现的词或短语列表（AND 关系）。每一项都按完整字符串匹配，可直接填写短语。',
+            items: { type: 'string' }
+          },
+          text_not: {
+            type: ['array', 'null'],
+            description: '可选。正文里不得出现的词或短语列表。',
+            items: { type: 'string' }
+          },
+          url_contains: {
+            type: ['string', 'null'],
+            description: '可选。只返回 URL 中包含该子串的会话。'
+          },
+          min_message_count: {
+            type: ['integer', 'null'],
+            description: '可选。只返回消息条数不少于该值的会话。'
+          },
+          max_message_count: {
+            type: ['integer', 'null'],
+            description: '可选。只返回消息条数不多于该值的会话。'
+          },
+          date_from: {
+            type: ['string', 'null'],
+            description: '可选。只返回结束时间不早于该时间点的会话。支持 YYYY-MM-DD、YYYYMMDD、10位秒时间戳、13位毫秒时间戳。'
+          },
+          date_to: {
+            type: ['string', 'null'],
+            description: '可选。只返回开始时间不晚于该时间点的会话。支持 YYYY-MM-DD、YYYYMMDD、10位秒时间戳、13位毫秒时间戳。'
+          },
+          recent_within: {
+            type: ['string', 'null'],
+            description: '可选。只返回最近一段时间内有活动的会话，例如 5d、1w、1m、1y。'
+          },
+          scope: {
+            type: ['string', 'null'],
+            description: '可选。message 表示每个正向词必须在同一条消息内同时命中；session 表示同一会话内不同消息共同满足也算命中。'
           },
           max_results: {
             type: ['integer', 'null'],
             description: '可选。最多返回多少条命中会话，默认 20。'
           }
         },
-        required: ['query', 'max_results']
+        required: []
       }
     };
   }
