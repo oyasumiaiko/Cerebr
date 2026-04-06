@@ -816,6 +816,7 @@ export async function getDatabaseStats() {
       preprocessRenderedText: 0,
       threadSelectionText: 0,
       pageRuntimeContextSignature: 0,
+      environmentContextSignature: 0,
       tool_calls: 0,
       response_tool_calls: 0,
       groundingMetadata: 0,
@@ -886,6 +887,11 @@ export async function getDatabaseStats() {
         const bytes = encoder.encode(msg.pageRuntimeContextSignature).length;
         size += bytes;
         addMetaSize('pageRuntimeContextSignature', bytes);
+      }
+      if (typeof msg.environmentContextSignature === 'string' && msg.environmentContextSignature) {
+        const bytes = encoder.encode(msg.environmentContextSignature).length;
+        size += bytes;
+        addMetaSize('environmentContextSignature', bytes);
       }
       if (msg.tool_calls) {
         const bytes = calcJsonBytes(msg.tool_calls);

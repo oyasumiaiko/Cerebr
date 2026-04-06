@@ -52,6 +52,10 @@ import {
   resolvePageRuntimeContextAttachment
 } from '../utils/page_runtime_context.js';
 import {
+  buildEnvironmentContextPayload,
+  resolveEnvironmentContextAttachment
+} from '../utils/environment_context.js';
+import {
   getAllConversationMetadata,
   getConversationById,
   getConversationsByIds
@@ -4326,6 +4330,7 @@ export function createMessageSender(appContext) {
       outboundContent: null,
       contextual_input_items_before: null,
       pageRuntimeContextSignature: null,
+      environmentContextSignature: null,
       pageMeta: null
     };
 
@@ -4390,6 +4395,7 @@ export function createMessageSender(appContext) {
       preprocessRenderedText: null,
       contextual_input_items_before: null,
       pageRuntimeContextSignature: null,
+      environmentContextSignature: null,
       pageMeta: null
     };
 
@@ -5940,11 +5946,33 @@ export function createMessageSender(appContext) {
   }
 
   /**
-   * 将“页面运行环境隐藏上下文”写到目标 user 节点上。
+   * 查找在当前目标 user 节点之前最近一次生效的某类隐藏上下文签名。
+   *
+   * @param {Array<any>} chain
+   * @param {number} targetIndex
+   * @param {string} fieldName
+   * @returns {string}
+   */
+  function findPreviousEffectiveUserContextSignature(chain, targetIndex, fieldName) {
+    const field = (typeof fieldName === 'string') ? fieldName.trim() : '';
+    if (!field) return '';
+    for (let index = targetIndex - 1; index >= 0; index -= 1) {
+      const node = chain[index];
+      if (String(node?.role || '').trim().toLowerCase() !== 'user') continue;
+      const signature = (typeof node?.[field] === 'string') ? node[field] : '';
+      if (!signature) continue;
+      return signature;
+    }
+    return '';
+  }
+
+  /**
+   * 将“页面运行环境 / 通用环境”的隐藏 contextual items 写到目标 user 节点上。
    *
    * 它不会污染用户正文，而是挂到独立字段：
    * - `contextual_input_items_before`
    * - `pageRuntimeContextSignature`
+   * - `environmentContextSignature`
    *
    * 同时采用“只有变化时才追加”的策略：
    * - 若与更早一次已生效的签名一致，则当前节点保持为空；
@@ -5953,11 +5981,12 @@ export function createMessageSender(appContext) {
    * @param {{
    *   conversationChain?: Array<any>,
    *   targetUserNode?: any,
-   *   pageRuntimeContextPayload?: Object|null
+   *   pageRuntimeContextPayload?: Object|null,
+   *   environmentContextPayload?: Object|null
    * }} options
    * @returns {boolean}
    */
-  function syncUserPageRuntimeContextForConversationTurn(options = {}) {
+  function syncUserContextualInputsForConversationTurn(options = {}) {
     const chain = Array.isArray(options?.conversationChain) ? options.conversationChain : [];
     const targetUserNode = options?.targetUserNode || null;
     if (!targetUserNode || String(targetUserNode?.role || '').trim().toLowerCase() !== 'user') {
@@ -5967,33 +5996,41 @@ export function createMessageSender(appContext) {
     const payload = (options?.pageRuntimeContextPayload && typeof options.pageRuntimeContextPayload === 'object')
       ? options.pageRuntimeContextPayload
       : null;
+    const environmentContextPayload = (options?.environmentContextPayload && typeof options.environmentContextPayload === 'object')
+      ? options.environmentContextPayload
+      : null;
 
     const targetIndex = chain.findIndex((node) => node && node.id === targetUserNode.id);
-    let previousEffectiveSignature = '';
-    for (let index = targetIndex - 1; index >= 0; index -= 1) {
-      const node = chain[index];
-      if (String(node?.role || '').trim().toLowerCase() !== 'user') continue;
-      const signature = (typeof node?.pageRuntimeContextSignature === 'string')
-        ? node.pageRuntimeContextSignature
-        : '';
-      if (!signature) continue;
-      previousEffectiveSignature = signature;
-      break;
-    }
-
-    const attachment = resolvePageRuntimeContextAttachment({
+    const pageAttachment = resolvePageRuntimeContextAttachment({
       payload,
-      previousEffectiveSignature
+      previousEffectiveSignature: findPreviousEffectiveUserContextSignature(
+        chain,
+        targetIndex,
+        'pageRuntimeContextSignature'
+      )
+    });
+    const environmentAttachment = resolveEnvironmentContextAttachment({
+      payload: environmentContextPayload,
+      previousEffectiveSignature: findPreviousEffectiveUserContextSignature(
+        chain,
+        targetIndex,
+        'environmentContextSignature'
+      )
     });
 
-    if (!attachment.signature || !Array.isArray(attachment.inputItems) || attachment.inputItems.length <= 0) {
-      targetUserNode.contextual_input_items_before = null;
-      targetUserNode.pageRuntimeContextSignature = null;
-      return true;
+    const contextualItems = [];
+    if (Array.isArray(environmentAttachment.inputItems) && environmentAttachment.inputItems.length > 0) {
+      contextualItems.push(...environmentAttachment.inputItems);
+    }
+    if (Array.isArray(pageAttachment.inputItems) && pageAttachment.inputItems.length > 0) {
+      contextualItems.push(...pageAttachment.inputItems);
     }
 
-    targetUserNode.contextual_input_items_before = cloneResponsesInputItems(attachment.inputItems);
-    targetUserNode.pageRuntimeContextSignature = attachment.signature;
+    targetUserNode.contextual_input_items_before = contextualItems.length > 0
+      ? cloneResponsesInputItems(contextualItems)
+      : null;
+    targetUserNode.pageRuntimeContextSignature = pageAttachment.signature || null;
+    targetUserNode.environmentContextSignature = environmentAttachment.signature || null;
     return true;
   }
 
@@ -7962,10 +7999,12 @@ export function createMessageSender(appContext) {
         attempt.supportsStandardSteer = isOpenAIResponsesApiConfig(config);
       }
       const responsesPageToolEnvironment = resolveResponsesPageToolEnvironment(attempt);
+      const shouldPrepareEnvironmentContext = isOpenAIResponsesApiConfig(effectiveApiConfig);
       const shouldPreparePageRuntimeContext = (
         isOpenAIResponsesApiConfig(effectiveApiConfig)
         && typeof utils?.executeJsRuntime === 'function'
       );
+      let pageRuntimeContextPayload = null;
       if (shouldPreparePageRuntimeContext) {
         let jsRuntimeFrames = null;
         if (
@@ -7977,15 +8016,18 @@ export function createMessageSender(appContext) {
             responsesPageToolEnvironment.jsRuntimeEnvironment
           );
         }
-        const pageRuntimeContextPayload = buildPageRuntimeContextPayload({
+        pageRuntimeContextPayload = buildPageRuntimeContextPayload({
           pageToolEnvironment: responsesPageToolEnvironment,
           pageMeta: buildCurrentPageMetaSnapshot(),
           frames: jsRuntimeFrames
         });
-        syncUserPageRuntimeContextForConversationTurn({
+      }
+      if (shouldPrepareEnvironmentContext) {
+        syncUserContextualInputsForConversationTurn({
           conversationChain: filteredConversationChain,
           targetUserNode: findLatestUserNodeInConversationChain(filteredConversationChain),
-          pageRuntimeContextPayload
+          pageRuntimeContextPayload,
+          environmentContextPayload: buildEnvironmentContextPayload()
         });
       }
 

@@ -11445,7 +11445,8 @@ export function createChatHistoryUI(appContext) {
     'preprocessOriginalText',
     'preprocessRenderedText',
     'threadSelectionText',
-    'pageRuntimeContextSignature'
+    'pageRuntimeContextSignature',
+    'environmentContextSignature'
   ];
   const META_JSON_FIELDS = [
     'response_activity_timeline',

@@ -18,6 +18,7 @@
  * @property {string|Array<any>|null} [outboundContent] 当历史节点曾以“不同于显示内容”的正文发送时，这里保存稳定发送快照（可选）
  * @property {Array<any>|null} [contextual_input_items_before] 仅供模型可见、位于该消息前面的隐藏 contextual input items（可选）
  * @property {string|null} [pageRuntimeContextSignature] 页面运行环境隐藏上下文的稳定签名（可选）
+ * @property {string|null} [environmentContextSignature] 通用 environment_context 的稳定签名（可选）
  */
 
 /**
@@ -139,6 +140,9 @@ export function composeMessages(args) {
 
     if (typeof node?.pageRuntimeContextSignature === 'string' && node.pageRuntimeContextSignature) {
       msg.pageRuntimeContextSignature = node.pageRuntimeContextSignature;
+    }
+    if (typeof node?.environmentContextSignature === 'string' && node.environmentContextSignature) {
+      msg.environmentContextSignature = node.environmentContextSignature;
     }
 
     return msg;
