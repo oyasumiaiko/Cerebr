@@ -2136,7 +2136,6 @@ export function createChatHistoryUI(appContext) {
     // 更新内存缓存
     updateConversationInCache(conversation);
     
-    console.log(`已${isUpdate ? '更新' : '保存'}对话记录:`, conversation);
     return conversation;
   }
 
