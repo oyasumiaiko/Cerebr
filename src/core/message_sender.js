@@ -66,6 +66,10 @@ import {
   resolveEnvironmentContextAttachment
 } from '../utils/environment_context.js';
 import {
+  getResponsesActivityTimelineEntryKey,
+  getResponsesToolCallRecordKey
+} from '../utils/responses_activity_keys.js';
+import {
   getAllConversationMetadata,
   getConversationById,
   getConversationsByIds
@@ -1183,41 +1187,6 @@ export function createMessageSender(appContext) {
       status: options.status || record.status || ''
     });
     return (entry && typeof entry === 'object' && !Array.isArray(entry)) ? entry : null;
-  }
-
-  function getResponsesToolCallRecordKey(record, fallbackIndex = 0) {
-    if (!record || typeof record !== 'object') {
-      return `unknown:${fallbackIndex}`;
-    }
-    const type = (typeof record.type === 'string' && record.type) ? record.type : 'unknown';
-    const id = (typeof record.id === 'string' && record.id) ? record.id : '';
-    if (id) return `${type}:${id}`;
-    if (type === 'function_call') {
-      return `${type}:${record.name || ''}:${fallbackIndex}`;
-    }
-    if (type === 'web_search_call') {
-      return `${type}:${record.action_type || ''}:${record.query || ''}:${record.url || ''}:${record.pattern || ''}:${fallbackIndex}`;
-    }
-    return `${type}:${fallbackIndex}`;
-  }
-
-  function getResponsesActivityTimelineEntryKey(entry, fallbackIndex = 0) {
-    if (!entry || typeof entry !== 'object') {
-      return `unknown:${fallbackIndex}`;
-    }
-    const kind = (typeof entry.kind === 'string' && entry.kind) ? entry.kind : 'unknown';
-    if (kind === 'commentary') {
-      const id = (typeof entry.id === 'string' && entry.id) ? entry.id : `commentary_${fallbackIndex}`;
-      return `commentary:${id}`;
-    }
-    if (kind === 'reasoning_summary') {
-      const id = (typeof entry.id === 'string' && entry.id) ? entry.id : `reasoning_${fallbackIndex}`;
-      return `reasoning:${id}`;
-    }
-    if (kind === 'tool_call') {
-      return `tool:${getResponsesToolCallRecordKey(entry, fallbackIndex)}`;
-    }
-    return `${kind}:${fallbackIndex}`;
   }
 
   function mergeResponsesActivityTimeline(existingTimeline, incomingTimeline) {

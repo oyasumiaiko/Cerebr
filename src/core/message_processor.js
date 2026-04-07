@@ -21,6 +21,11 @@ import {
   formatResponsesToolOutputForDisplay,
   hasResponsesToolOutputBody
 } from '../utils/responses_tool_output.js';
+import {
+  computeContiguousDiffWindow,
+  getLegacyToolCallSnapshotKey,
+  getResponseActivityEntrySnapshotKey
+} from '../utils/assistant_incremental_render.js';
 
 /**
  * 纯函数：从 pageInfo 中提取“可持久化的页面元数据快照”（仅 url/title）。
@@ -316,6 +321,11 @@ export function createMessageProcessor(appContext) {
   // - 代价只是“选中期间这条消息暂停视觉更新”，对交互更稳定。
   const deferredAiRenderByMessageId = new Map();
   let deferredAiRenderFlushRafId = null;
+  // assistant 消息的 surface 级快照缓存：
+  // - text / thoughts / response_activity / footer / legacy tool_calls 分开记录；
+  // - renderer 每次先构造下一版 surface snapshot，再做局部 reconcile；
+  // - 这样流式更新时可以只改真正变化的 surface / entry / markdown block。
+  const assistantSurfaceSnapshotByMessage = new WeakMap();
   // Response activity 面板是高频增量刷新的：
   // - 若每次都直接重建 DOM，不仅会让展开状态闪烁，
   // - 还会把用户正在阅读的代码/返回值块内部滚动位置重置到顶部。
@@ -362,6 +372,143 @@ export function createMessageProcessor(appContext) {
     if (messageElement?.dataset) {
       messageElement.dataset.selectionRenderDeferred = 'true';
     }
+  }
+
+  function getAssistantSurfaceSnapshots(messageElement) {
+    if (!messageElement || typeof messageElement !== 'object') return null;
+    let state = assistantSurfaceSnapshotByMessage.get(messageElement);
+    if (!state) {
+      state = {
+        text: null,
+        thoughts: null,
+        responseActivity: null,
+        footer: null,
+        legacyToolCalls: null
+      };
+      assistantSurfaceSnapshotByMessage.set(messageElement, state);
+    }
+    return state;
+  }
+
+  function resetAssistantSurfaceSnapshot(messageElement, surfaceName = null) {
+    if (!messageElement || typeof messageElement !== 'object') return;
+    if (!surfaceName) {
+      assistantSurfaceSnapshotByMessage.delete(messageElement);
+      return;
+    }
+    const state = getAssistantSurfaceSnapshots(messageElement);
+    if (!state || !Object.prototype.hasOwnProperty.call(state, surfaceName)) return;
+    state[surfaceName] = null;
+  }
+
+  function describeRenderedSurfaceBlock(node) {
+    if (!node) return null;
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = String(node.textContent || '');
+      if (!text) return null;
+      return {
+        type: 'text',
+        signature: `text:${text}`,
+        text
+      };
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return null;
+    return {
+      type: 'element',
+      signature: `element:${node.tagName.toLowerCase()}:${node.outerHTML}`,
+      html: node.outerHTML
+    };
+  }
+
+  function buildRenderedSurfaceBlocksFromHtml(renderedHtml) {
+    const template = document.createElement('template');
+    template.innerHTML = (typeof renderedHtml === 'string') ? renderedHtml : '';
+    return Array.from(template.content.childNodes)
+      .map(describeRenderedSurfaceBlock)
+      .filter(Boolean);
+  }
+
+  function buildRenderedSurfaceBlocksFromDom(container) {
+    if (!container) return [];
+    return Array.from(container.childNodes)
+      .map(describeRenderedSurfaceBlock)
+      .filter(Boolean);
+  }
+
+  function buildMarkdownSurfaceSnapshot(rawText, renderedHtml, existingContainer = null) {
+    const normalizedText = (typeof rawText === 'string') ? rawText : '';
+    const normalizedHtml = (typeof renderedHtml === 'string') ? renderedHtml : '';
+    const blocks = normalizedHtml
+      ? buildRenderedSurfaceBlocksFromHtml(normalizedHtml)
+      : [];
+    return {
+      rawText: normalizedText,
+      renderedHtml: normalizedHtml,
+      blocks,
+      blockSignatures: blocks.map((block) => block.signature),
+      domBlockSignatures: existingContainer ? buildRenderedSurfaceBlocksFromDom(existingContainer).map((block) => block.signature) : null
+    };
+  }
+
+  function createNodeFromRenderedSurfaceBlock(block) {
+    if (!block) return null;
+    if (block.type === 'text') {
+      return document.createTextNode(block.text || '');
+    }
+    if (block.type === 'element') {
+      const template = document.createElement('template');
+      template.innerHTML = block.html || '';
+      return template.content.firstChild;
+    }
+    return null;
+  }
+
+  function reconcileRenderedSurfaceBlocks(container, nextSnapshot, previousSnapshot, options = {}) {
+    if (!container || !nextSnapshot) return false;
+    const previousSignatures = Array.isArray(previousSnapshot?.blockSignatures)
+      ? previousSnapshot.blockSignatures
+      : (Array.isArray(nextSnapshot?.domBlockSignatures) ? nextSnapshot.domBlockSignatures : []);
+    const nextSignatures = Array.isArray(nextSnapshot.blockSignatures)
+      ? nextSnapshot.blockSignatures
+      : [];
+    const diffWindow = computeContiguousDiffWindow(previousSignatures, nextSignatures);
+    if (!diffWindow.hasChanges) {
+      return false;
+    }
+
+    const currentNodes = Array.from(container.childNodes);
+    const anchorNode = currentNodes[diffWindow.previousRangeStart] || null;
+    const fragment = document.createDocumentFragment();
+    const insertedElements = [];
+    nextSnapshot.blocks
+      .slice(diffWindow.nextRangeStart, diffWindow.nextRangeEnd)
+      .forEach((block) => {
+        const nextNode = createNodeFromRenderedSurfaceBlock(block);
+        if (!nextNode) return;
+        fragment.appendChild(nextNode);
+        if (nextNode.nodeType === Node.ELEMENT_NODE) {
+          insertedElements.push(nextNode);
+        }
+      });
+
+    if (anchorNode) {
+      container.insertBefore(fragment, anchorNode);
+    } else {
+      container.appendChild(fragment);
+    }
+
+    currentNodes
+      .slice(diffWindow.previousRangeStart, diffWindow.previousRangeEnd)
+      .forEach((node) => node.remove());
+
+    if (typeof options.afterInsert === 'function') {
+      insertedElements.forEach((element) => {
+        try {
+          options.afterInsert(element);
+        } catch (_) {}
+      });
+    }
+    return true;
   }
 
   // --- 超长对话虚拟化（远距离消息折叠）---
@@ -683,85 +830,95 @@ export function createMessageProcessor(appContext) {
    * @param {string|null} rawThoughts - 原始的思考过程文本，为null则移除该区域
    * @param {Function} processMathAndMarkdownFn - 用于处理Markdown和数学的函数引用
    */
+  function ensureThoughtsSurface(messageWrapperDiv) {
+    let thoughtsContentDiv = messageWrapperDiv.querySelector('.thoughts-content');
+    let created = false;
+    if (!thoughtsContentDiv) {
+      thoughtsContentDiv = document.createElement('div');
+      thoughtsContentDiv.className = 'thoughts-content';
+      created = true;
+    }
+
+    const legacyPrefix = thoughtsContentDiv.querySelector('.thoughts-prefix');
+    if (legacyPrefix) legacyPrefix.remove();
+    const legacyExpandButton = thoughtsContentDiv.querySelector('.expand-thoughts-btn');
+    if (legacyExpandButton) legacyExpandButton.remove();
+
+    let toggleButton = thoughtsContentDiv.querySelector('.thoughts-toggle');
+    if (!toggleButton) {
+      toggleButton = document.createElement('button');
+      toggleButton.className = 'thoughts-toggle';
+      toggleButton.setAttribute('type', 'button');
+      toggleButton.setAttribute('aria-label', '切换思考内容');
+      toggleButton.setAttribute('aria-expanded', 'false');
+      toggleButton.textContent = '思考内容';
+      thoughtsContentDiv.insertBefore(toggleButton, thoughtsContentDiv.firstChild);
+    }
+    if (!toggleButton.dataset.listenerAdded) {
+      toggleButton.addEventListener('click', (e) => {
+        e.stopPropagation();
+        thoughtsContentDiv.dataset.userToggled = 'true';
+        const isExpanded = thoughtsContentDiv.classList.toggle('expanded');
+        thoughtsContentDiv.dataset.manualState = isExpanded ? 'expanded' : 'collapsed';
+        toggleButton.setAttribute('aria-expanded', isExpanded.toString());
+      });
+      toggleButton.dataset.listenerAdded = 'true';
+    }
+
+    let thoughtsInnerContent = thoughtsContentDiv.querySelector('.thoughts-inner-content');
+    if (!thoughtsInnerContent) {
+      thoughtsInnerContent = document.createElement('div');
+      thoughtsInnerContent.className = 'thoughts-inner-content';
+      thoughtsContentDiv.appendChild(thoughtsInnerContent);
+    }
+
+    if (created) {
+      const textContentElement = messageWrapperDiv.querySelector('.text-content');
+      if (textContentElement) {
+        messageWrapperDiv.insertBefore(thoughtsContentDiv, textContentElement);
+      } else {
+        messageWrapperDiv.appendChild(thoughtsContentDiv);
+      }
+    }
+
+    return {
+      thoughtsContentDiv,
+      thoughtsInnerContent,
+      toggleButton
+    };
+  }
+
+  function reconcileMarkdownSurfaceContainer(container, rawText, processMathAndMarkdownFn, previousSnapshot) {
+    if (!container) return null;
+    const renderedHtml = processMathAndMarkdownFn(rawText || '');
+    const nextSnapshot = buildMarkdownSurfaceSnapshot(rawText, renderedHtml, container);
+    const previousSurfaceSnapshot = previousSnapshot || {
+      blockSignatures: nextSnapshot.domBlockSignatures || []
+    };
+    reconcileRenderedSurfaceBlocks(container, nextSnapshot, previousSurfaceSnapshot, {
+      afterInsert: (element) => enhanceMarkdownContent(element)
+    });
+    return nextSnapshot;
+  }
+
   function setupThoughtsDisplay(messageWrapperDiv, rawThoughts, processMathAndMarkdownFn) {
     let thoughtsContentDiv = messageWrapperDiv.querySelector('.thoughts-content');
+    const surfaceSnapshots = getAssistantSurfaceSnapshots(messageWrapperDiv);
 
     if (rawThoughts && rawThoughts.trim() !== '') {
-      let thoughtsInnerContent;
-      let toggleButton;
+      const {
+        thoughtsContentDiv: nextThoughtsContentDiv,
+        thoughtsInnerContent,
+        toggleButton
+      } = ensureThoughtsSurface(messageWrapperDiv);
+      thoughtsContentDiv = nextThoughtsContentDiv;
 
-      if (!thoughtsContentDiv) {
-        thoughtsContentDiv = document.createElement('div');
-        thoughtsContentDiv.className = 'thoughts-content';
-
-        // 说明：折叠态只显示“思考内容”这一行；展开后才显示完整思考文本。
-        // 设计目标：当 AI 开始输出正文（data-original-text 非空）时，默认自动折叠，避免思考块占用过多高度。
-        toggleButton = document.createElement('button');
-        toggleButton.className = 'thoughts-toggle';
-        toggleButton.setAttribute('type', 'button');
-        toggleButton.setAttribute('aria-label', '切换思考内容');
-        toggleButton.setAttribute('aria-expanded', 'false');
-        toggleButton.textContent = '思考内容';
-        thoughtsContentDiv.appendChild(toggleButton);
-
-        thoughtsInnerContent = document.createElement('div');
-        thoughtsInnerContent.className = 'thoughts-inner-content';
-        thoughtsContentDiv.appendChild(thoughtsInnerContent);
-
-        toggleButton.addEventListener('click', (e) => {
-          e.stopPropagation();
-          // 用户手动操作后，不再执行“自动折叠/自动展开”，避免与用户意图冲突。
-          thoughtsContentDiv.dataset.userToggled = 'true';
-          const isExpanded = thoughtsContentDiv.classList.toggle('expanded');
-          thoughtsContentDiv.dataset.manualState = isExpanded ? 'expanded' : 'collapsed';
-          toggleButton.setAttribute('aria-expanded', isExpanded.toString());
-        });
-        toggleButton.dataset.listenerAdded = 'true';
-        
-        const textContentElement = messageWrapperDiv.querySelector('.text-content');
-        if (textContentElement) {
-             messageWrapperDiv.insertBefore(thoughtsContentDiv, textContentElement);
-        } else {
-             messageWrapperDiv.appendChild(thoughtsContentDiv); // Fallback
-        }
-      } else {
-        // Thoughts section already exists, get its parts (兼容旧结构：清理旧的 prefix/button)
-        const legacyPrefix = thoughtsContentDiv.querySelector('.thoughts-prefix');
-        if (legacyPrefix) legacyPrefix.remove();
-        const legacyExpandButton = thoughtsContentDiv.querySelector('.expand-thoughts-btn');
-        if (legacyExpandButton) legacyExpandButton.remove();
-
-        thoughtsInnerContent = thoughtsContentDiv.querySelector('.thoughts-inner-content');
-        toggleButton = thoughtsContentDiv.querySelector('.thoughts-toggle');
-        if (!toggleButton) {
-          toggleButton = document.createElement('button');
-          toggleButton.className = 'thoughts-toggle';
-          toggleButton.setAttribute('type', 'button');
-          toggleButton.setAttribute('aria-label', '切换思考内容');
-          toggleButton.setAttribute('aria-expanded', 'false');
-          toggleButton.textContent = '思考内容';
-          thoughtsContentDiv.insertBefore(toggleButton, thoughtsContentDiv.firstChild);
-        }
-        if (!toggleButton.dataset.listenerAdded) {
-          toggleButton.addEventListener('click', (e) => {
-            e.stopPropagation();
-            thoughtsContentDiv.dataset.userToggled = 'true';
-            const isExpanded = thoughtsContentDiv.classList.toggle('expanded');
-            thoughtsContentDiv.dataset.manualState = isExpanded ? 'expanded' : 'collapsed';
-            toggleButton.setAttribute('aria-expanded', isExpanded.toString());
-          });
-          toggleButton.dataset.listenerAdded = 'true';
-        }
-        if (!thoughtsInnerContent) {
-          thoughtsInnerContent = document.createElement('div');
-          thoughtsInnerContent.className = 'thoughts-inner-content';
-          thoughtsContentDiv.appendChild(thoughtsInnerContent);
-        }
-      }
-      
-      if (thoughtsInnerContent) {
-          thoughtsInnerContent.innerHTML = processMathAndMarkdownFn(rawThoughts);
-      }
+      surfaceSnapshots.thoughts = reconcileMarkdownSurfaceContainer(
+        thoughtsInnerContent,
+        rawThoughts,
+        processMathAndMarkdownFn,
+        surfaceSnapshots.thoughts
+      );
 
       // 自动展开/折叠策略：
       // - 首次出现且“正文尚未开始输出”时，默认展开一次；
@@ -805,10 +962,11 @@ export function createMessageProcessor(appContext) {
       if (toggleButton) {
         toggleButton.setAttribute('aria-expanded', lifecycleState.expanded ? 'true' : 'false');
       }
-
     } else if (thoughtsContentDiv) {
-      // No new thoughts, or thoughts are cleared, remove the entire thoughts section
       thoughtsContentDiv.remove();
+      surfaceSnapshots.thoughts = null;
+    } else {
+      surfaceSnapshots.thoughts = null;
     }
   }
 
@@ -915,14 +1073,18 @@ export function createMessageProcessor(appContext) {
         if (sender === 'user') {
           textContentDiv.innerText = messageText;
         } else {
-          textContentDiv.innerHTML = processMathAndMarkdown(messageText);
+          const surfaceSnapshots = getAssistantSurfaceSnapshots(messageDiv);
+          surfaceSnapshots.text = reconcileMarkdownSurfaceContainer(
+            textContentDiv,
+            messageText,
+            processMathAndMarkdown,
+            surfaceSnapshots.text
+          );
         }
       } catch (error) {
         console.error('处理数学公式和Markdown失败:', error);
         textContentDiv.innerText = messageText;
       }
-      
-      enhanceMarkdownContent(messageDiv);
 
       // 数学公式已在渲染阶段通过 KaTeX 输出，无需二次 auto-render
 
@@ -1070,6 +1232,7 @@ export function createMessageProcessor(appContext) {
 
   function renderAiMessageDom(messageDiv, node, safeAnswerContent, resolvedThoughts) {
     if (!messageDiv) return false;
+    const surfaceSnapshots = getAssistantSurfaceSnapshots(messageDiv);
 
     clearDeferredAiRenderFlag(messageDiv);
     const scrollContainer = resolveScrollContainerForMessage(messageDiv);
@@ -1104,9 +1267,13 @@ export function createMessageProcessor(appContext) {
       }
     }
 
-    textContentDiv.innerHTML = processMathAndMarkdown(safeAnswerContent);
+    surfaceSnapshots.text = reconcileMarkdownSurfaceContainer(
+      textContentDiv,
+      safeAnswerContent,
+      processMathAndMarkdown,
+      surfaceSnapshots.text
+    );
 
-    enhanceMarkdownContent(messageDiv);
     setupResponseToolCallsDisplay(messageDiv, node.response_tool_calls || null);
 
     try {
@@ -1568,20 +1735,6 @@ export function createMessageProcessor(appContext) {
     };
   }
 
-  function getResponseActivityToolEntryKey(entry, fallbackIndex = 0) {
-    if (!entry || typeof entry !== 'object') return `tool:${fallbackIndex}`;
-    const type = String(entry.type || 'tool').trim().toLowerCase() || 'tool';
-    const id = String(entry.id || '').trim();
-    if (id) return `${type}:${id}`;
-    if (type === 'function_call') {
-      return `${type}:${String(entry.name || '').trim()}:${fallbackIndex}`;
-    }
-    if (type === 'web_search_call') {
-      return `${type}:${String(entry.action_type || '').trim()}:${String(entry.query || '').trim()}:${String(entry.url || '').trim()}:${fallbackIndex}`;
-    }
-    return `${type}:${fallbackIndex}`;
-  }
-
   function readResponseActivityToolKeySet(timelineRoot, datasetKey) {
     const key = (typeof datasetKey === 'string' && datasetKey.trim()) ? datasetKey.trim() : '';
     if (!key) return new Set();
@@ -1647,6 +1800,20 @@ export function createMessageProcessor(appContext) {
     return responseActivityUiStateByMessage.get(messageWrapperDiv) || null;
   }
 
+  function captureResponseActivityToolTransientUiState(toolItem) {
+    if (!toolItem) return null;
+    return {
+      isExpanded: toolItem.classList.contains('is-expanded'),
+      argumentsExpanded: toolItem.querySelector('.response-activity-tool-arguments')?.classList?.contains('is-fully-expanded') === true,
+      argumentsScrollTop: Number(toolItem.querySelector('.response-activity-tool-arguments')?.scrollTop || 0),
+      codeExpanded: toolItem.querySelector('.response-activity-tool-code')?.classList?.contains('is-fully-expanded') === true,
+      codeScrollTop: Number(toolItem.querySelector('.response-activity-tool-code')?.scrollTop || 0),
+      outputExpanded: toolItem.querySelector('.response-activity-tool-output')?.classList?.contains('is-fully-expanded') === true,
+      outputScrollTop: Number(toolItem.querySelector('.response-activity-tool-output')?.scrollTop || 0),
+      sourcesOpen: Array.from(toolItem.querySelectorAll('.response-activity-tool-sources')).some((detailsEl) => detailsEl?.open === true)
+    };
+  }
+
   function captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot = null) {
     const root = timelineRoot || messageWrapperDiv?.querySelector?.('.response-activity-timeline');
     if (!messageWrapperDiv || !root) return null;
@@ -1665,16 +1832,7 @@ export function createMessageProcessor(appContext) {
     root.querySelectorAll('.response-activity-entry--tool').forEach((item) => {
       const toolKey = String(item?.dataset?.responseActivityToolKey || '').trim();
       if (!toolKey) return;
-      const toolState = {
-        isExpanded: item.classList.contains('is-expanded'),
-        argumentsExpanded: item.querySelector('.response-activity-tool-arguments')?.classList?.contains('is-fully-expanded') === true,
-        argumentsScrollTop: Number(item.querySelector('.response-activity-tool-arguments')?.scrollTop || 0),
-        codeExpanded: item.querySelector('.response-activity-tool-code')?.classList?.contains('is-fully-expanded') === true,
-        codeScrollTop: Number(item.querySelector('.response-activity-tool-code')?.scrollTop || 0),
-        outputExpanded: item.querySelector('.response-activity-tool-output')?.classList?.contains('is-fully-expanded') === true,
-        outputScrollTop: Number(item.querySelector('.response-activity-tool-output')?.scrollTop || 0),
-        sourcesOpen: Array.from(item.querySelectorAll('.response-activity-tool-sources')).some((detailsEl) => detailsEl?.open === true)
-      };
+      const toolState = captureResponseActivityToolTransientUiState(item);
       nextState.toolUiByKey[toolKey] = toolState;
     });
 
@@ -1833,26 +1991,106 @@ export function createMessageProcessor(appContext) {
     return false;
   }
 
-  function removeResponseActivityTimelineDisplay(messageWrapperDiv) {
-    const timelineRoot = messageWrapperDiv?.querySelector?.('.response-activity-timeline');
-    if (timelineRoot) {
-      captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot);
-      timelineRoot.remove();
-    }
+  function buildResponseActivityToolEntrySnapshot(entry, index, isTurnRuntimeActive) {
+    const key = getResponseActivityEntrySnapshotKey(entry, index);
+    const renderSearchQueriesInline = isResponseActivitySearchQueryEntry(entry);
+    const searchQueryLines = renderSearchQueriesInline ? getResponseActivityToolQueryLines(entry) : [];
+    const hasDetails = hasResponseActivityToolDetails(entry);
+    const isInProgress = isResponseActivityEntryInProgress(entry);
+    const hasOutput = hasResponsesToolOutputBody(entry?.output);
+    const shouldAutoRemainExpanded = isInProgress || (!hasOutput && isTurnRuntimeActive);
+    const primaryParts = renderSearchQueriesInline ? null : buildResponseToolCallPrimaryParts(entry);
+    const secondaryLines = getResponseActivityToolSecondaryLines(entry);
+    const argumentsText = (typeof entry.arguments === 'string' && entry.arguments.trim())
+      ? formatResponseToolCallArguments(entry.arguments)
+      : '';
+    const outputText = formatResponseToolCallOutput(entry.output) || '';
+    const statusLabel = getResponseActivityStatusLabel(entry.status);
+    const jsMeta = isResponseActivityJsRuntimeEntry(entry) ? getResponseActivityJsRuntimeMeta(entry) : null;
+    const normalizedSources = Array.isArray(entry.sources)
+      ? entry.sources.map((source) => ({
+        title: source?.title || '',
+        domain: source?.domain || '',
+        url: source?.url || ''
+      }))
+      : [];
+
+    return {
+      key,
+      entryKind: 'tool',
+      entry,
+      hasDetails,
+      isInProgress,
+      hasOutput,
+      shouldAutoRemainExpanded,
+      renderSearchQueriesInline,
+      searchQueryLines,
+      primaryParts,
+      secondaryLines,
+      argumentsText,
+      outputText,
+      statusLabel,
+      jsMeta,
+      sources: normalizedSources,
+      summarySignature: JSON.stringify({
+        renderSearchQueriesInline,
+        searchQueryLines,
+        primaryParts,
+        statusLabel,
+        hasDetails
+      }),
+      bodySignature: JSON.stringify({
+        secondaryLines,
+        argumentsText,
+        outputText,
+        sources: normalizedSources,
+        jsMeta
+      })
+    };
   }
 
-  function setupResponseActivityTimelineDisplay(messageWrapperDiv, node, rawTimeline, processMathAndMarkdownFn) {
-    if (!messageWrapperDiv) return false;
-    const timeline = Array.isArray(rawTimeline)
-      ? rawTimeline.filter(entry => entry && typeof entry === 'object' && typeof entry.kind === 'string')
-      : [];
-    let timelineRoot = messageWrapperDiv.querySelector('.response-activity-timeline');
-
-    if (timeline.length === 0) {
-      if (timelineRoot) timelineRoot.remove();
-      return false;
+  function buildResponseActivityEntrySnapshot(entry, index, processMathAndMarkdownFn, isTurnRuntimeActive) {
+    const key = getResponseActivityEntrySnapshotKey(entry, index);
+    if (entry.kind === 'reasoning_summary' || entry.kind === 'commentary') {
+      const rawText = (typeof entry.text === 'string') ? entry.text : '';
+      const normalizedText = entry.kind === 'reasoning_summary'
+        ? normalizeResponsesReasoningText(rawText)
+        : rawText.trim();
+      const renderedHtml = processMathAndMarkdownFn(normalizedText);
+      return {
+        key,
+        entryKind: 'narrative',
+        narrativeKind: entry.kind,
+        markdown: buildMarkdownSurfaceSnapshot(normalizedText, renderedHtml),
+        signature: renderedHtml
+      };
     }
+    return buildResponseActivityToolEntrySnapshot(entry, index, isTurnRuntimeActive);
+  }
 
+  function buildResponseActivitySnapshot(node, timeline, processMathAndMarkdownFn, isTurnRuntimeActive) {
+    const panelSummary = buildResponseActivityPanelSummary(node, timeline, {
+      isInProgress: isTurnRuntimeActive
+    });
+    const entries = timeline.map((entry, index) => buildResponseActivityEntrySnapshot(
+      entry,
+      index,
+      processMathAndMarkdownFn,
+      isTurnRuntimeActive
+    ));
+    const entryByKey = {};
+    entries.forEach((entrySnapshot) => {
+      entryByKey[entrySnapshot.key] = entrySnapshot;
+    });
+    return {
+      panelSummary,
+      entries,
+      entryByKey
+    };
+  }
+
+  function ensureResponseActivityPanelShell(messageWrapperDiv) {
+    let timelineRoot = messageWrapperDiv.querySelector('.response-activity-timeline');
     if (!timelineRoot) {
       timelineRoot = document.createElement('div');
       timelineRoot.className = 'response-activity-timeline';
@@ -1869,17 +2107,82 @@ export function createMessageProcessor(appContext) {
       }
     }
 
-    const previousUiState = captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot);
-    restoreResponseActivityDatasetState(messageWrapperDiv, timelineRoot);
+    let panelToggle = timelineRoot.querySelector(':scope > .response-activity-panel-toggle');
+    if (!panelToggle) {
+      panelToggle = document.createElement('button');
+      panelToggle.className = 'response-activity-panel-toggle';
+      panelToggle.setAttribute('type', 'button');
+      timelineRoot.appendChild(panelToggle);
+    }
 
-    const isTurnRuntimeActive = isResponseActivityTurnRuntimeActive(messageWrapperDiv);
-    const panelSummary = buildResponseActivityPanelSummary(node, timeline, {
-      isInProgress: isTurnRuntimeActive
-    });
-    // 面板级自动展开/收起生命周期：
-    // - 首次出现且仍在进行中：默认展开一次；
-    // - 整个面板结束时：自动收起一次；
-    // - 用户一旦手动点击，后续刷新只读 panelManualState，不再自动反复干预。
+    let panelCopy = panelToggle.querySelector(':scope > .response-activity-panel-copy');
+    if (!panelCopy) {
+      panelCopy = document.createElement('span');
+      panelCopy.className = 'response-activity-panel-copy';
+      panelToggle.appendChild(panelCopy);
+    }
+
+    let panelTitle = panelCopy.querySelector(':scope > .response-activity-panel-title');
+    if (!panelTitle) {
+      panelTitle = document.createElement('span');
+      panelTitle.className = 'response-activity-panel-title';
+      panelCopy.appendChild(panelTitle);
+    }
+
+    let panelMeta = panelCopy.querySelector(':scope > .response-activity-panel-meta');
+    let panelChevron = panelToggle.querySelector(':scope > .response-activity-panel-chevron');
+    if (!panelChevron) {
+      panelChevron = document.createElement('i');
+      panelChevron.className = 'fa-solid fa-chevron-right response-activity-panel-chevron';
+      panelToggle.appendChild(panelChevron);
+    }
+
+    if (!panelToggle.dataset.listenerAdded) {
+      panelToggle.addEventListener('click', () => {
+        const nextExpanded = timelineRoot.dataset.panelExpanded !== 'true';
+        timelineRoot.dataset.panelManualState = nextExpanded ? 'expanded' : 'collapsed';
+        timelineRoot.dataset.panelExpanded = nextExpanded ? 'true' : 'false';
+        timelineRoot.classList.toggle('is-expanded', nextExpanded);
+        panelToggle.setAttribute('aria-expanded', nextExpanded ? 'true' : 'false');
+      });
+      panelToggle.dataset.listenerAdded = 'true';
+    }
+
+    let panelBody = timelineRoot.querySelector(':scope > .response-activity-panel-body');
+    if (!panelBody) {
+      panelBody = document.createElement('div');
+      panelBody.className = 'response-activity-panel-body';
+      timelineRoot.appendChild(panelBody);
+    }
+
+    let panelBodyInner = panelBody.querySelector(':scope > .response-activity-panel-body-inner');
+    if (!panelBodyInner) {
+      panelBodyInner = document.createElement('div');
+      panelBodyInner.className = 'response-activity-panel-body-inner';
+      panelBody.appendChild(panelBodyInner);
+    }
+
+    return {
+      timelineRoot,
+      panelToggle,
+      panelCopy,
+      panelTitle,
+      panelMeta,
+      panelChevron,
+      panelBody,
+      panelBodyInner
+    };
+  }
+
+  function reconcileResponseActivityPanelHeader(shell, panelSummary) {
+    const {
+      timelineRoot,
+      panelToggle,
+      panelCopy,
+      panelTitle,
+      panelChevron
+    } = shell;
+
     const panelManualState = String(timelineRoot.dataset.panelManualState || '').trim().toLowerCase();
     const panelLifecycleInitialized = timelineRoot.dataset.panelAutoLifecycleInitialized === 'true';
     const panelAutoCollapsedAfterFinish = timelineRoot.dataset.panelAutoCollapsedAfterFinish === 'true';
@@ -1903,71 +2206,265 @@ export function createMessageProcessor(appContext) {
     timelineRoot.dataset.panelExpanded = panelExpanded ? 'true' : 'false';
     timelineRoot.classList.toggle('is-expanded', panelExpanded);
     timelineRoot.classList.toggle('is-streaming', !!panelSummary.isInProgress);
-    let panelToggle = timelineRoot.querySelector(':scope > .response-activity-panel-toggle');
-    if (!panelToggle) {
-      panelToggle = document.createElement('button');
-      panelToggle.className = 'response-activity-panel-toggle';
-      panelToggle.setAttribute('type', 'button');
-      panelToggle.addEventListener('click', () => {
-        const nextExpanded = timelineRoot.dataset.panelExpanded !== 'true';
-        timelineRoot.dataset.panelManualState = nextExpanded ? 'expanded' : 'collapsed';
-        timelineRoot.dataset.panelExpanded = nextExpanded ? 'true' : 'false';
-        timelineRoot.classList.toggle('is-expanded', nextExpanded);
-        panelToggle.setAttribute('aria-expanded', nextExpanded ? 'true' : 'false');
-      });
-      timelineRoot.appendChild(panelToggle);
-    }
     panelToggle.setAttribute('aria-expanded', panelExpanded ? 'true' : 'false');
-    panelToggle.replaceChildren();
 
-    const panelCopy = document.createElement('span');
-    panelCopy.className = 'response-activity-panel-copy';
+    if (panelTitle.textContent !== panelSummary.title) {
+      panelTitle.textContent = panelSummary.title;
+    }
 
-    const panelTitle = document.createElement('span');
-    panelTitle.className = 'response-activity-panel-title';
-    panelTitle.textContent = panelSummary.title;
-    panelCopy.appendChild(panelTitle);
-
+    let panelMeta = shell.panelMeta;
     if (panelSummary.metaText) {
-      const panelMeta = document.createElement('span');
-      panelMeta.className = 'response-activity-panel-meta';
-      panelMeta.textContent = panelSummary.metaText;
-      panelCopy.appendChild(panelMeta);
+      if (!panelMeta) {
+        panelMeta = document.createElement('span');
+        panelMeta.className = 'response-activity-panel-meta';
+        panelCopy.appendChild(panelMeta);
+        shell.panelMeta = panelMeta;
+      }
+      if (panelMeta.textContent !== panelSummary.metaText) {
+        panelMeta.textContent = panelSummary.metaText;
+      }
+    } else if (panelMeta) {
+      panelMeta.remove();
+      shell.panelMeta = null;
     }
 
-    panelToggle.appendChild(panelCopy);
-
-    const panelChevron = document.createElement('i');
-    panelChevron.className = 'fa-solid fa-chevron-right response-activity-panel-chevron';
-    panelToggle.appendChild(panelChevron);
-
-    let panelBody = timelineRoot.querySelector(':scope > .response-activity-panel-body');
-    if (!panelBody) {
-      panelBody = document.createElement('div');
-      panelBody.className = 'response-activity-panel-body';
-      timelineRoot.appendChild(panelBody);
+    if (!panelChevron.parentNode) {
+      panelToggle.appendChild(panelChevron);
     }
-    let panelBodyInner = panelBody.querySelector(':scope > .response-activity-panel-body-inner');
-    if (!panelBodyInner) {
-      panelBodyInner = document.createElement('div');
-      panelBodyInner.className = 'response-activity-panel-body-inner';
-      panelBody.appendChild(panelBodyInner);
+  }
+
+  function renderResponseActivityToolSummaryChildren(summary, snapshot) {
+    const children = [];
+
+    const kind = document.createElement('span');
+    kind.className = 'response-activity-tool-kind';
+    kind.textContent = getResponseToolCallTypeLabel(snapshot.entry);
+    children.push(kind);
+
+    if (snapshot.renderSearchQueriesInline) {
+      const queryStack = document.createElement('span');
+      queryStack.className = 'response-activity-tool-query-stack';
+      snapshot.searchQueryLines.forEach((query) => {
+        const queryLine = document.createElement('span');
+        queryLine.className = 'response-activity-tool-query-line';
+        queryLine.textContent = query;
+        queryStack.appendChild(queryLine);
+      });
+      children.push(queryStack);
+    } else {
+      const primary = document.createElement('span');
+      primary.className = 'response-activity-tool-primary';
+      const primaryParts = snapshot.primaryParts || {};
+
+      if (primaryParts.action) {
+        const action = document.createElement('span');
+        action.className = 'response-activity-tool-action';
+        action.textContent = primaryParts.action;
+        primary.appendChild(action);
+      }
+
+      if (primaryParts.value) {
+        if (primaryParts.valueUrl) {
+          const link = document.createElement('a');
+          link.className = 'response-activity-tool-link';
+          link.href = primaryParts.valueUrl;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.textContent = primaryParts.value;
+          primary.appendChild(link);
+        } else {
+          const value = document.createElement('span');
+          value.className = 'response-activity-tool-value';
+          value.textContent = primaryParts.value;
+          primary.appendChild(value);
+        }
+      }
+
+      if (primaryParts.locationAction && primaryParts.locationValue) {
+        const locationAction = document.createElement('span');
+        locationAction.className = 'response-activity-tool-action';
+        locationAction.textContent = primaryParts.locationAction;
+        primary.appendChild(locationAction);
+
+        if (primaryParts.locationUrl) {
+          const link = document.createElement('a');
+          link.className = 'response-activity-tool-link';
+          link.href = primaryParts.locationUrl;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.textContent = primaryParts.locationValue;
+          primary.appendChild(link);
+        } else {
+          const locationValue = document.createElement('span');
+          locationValue.className = 'response-activity-tool-value';
+          locationValue.textContent = primaryParts.locationValue;
+          primary.appendChild(locationValue);
+        }
+      }
+
+      children.push(primary);
     }
-    panelBodyInner.replaceChildren();
+
+    if (snapshot.hasDetails) {
+      const chevron = document.createElement('i');
+      chevron.className = 'fa-solid fa-chevron-right response-activity-tool-chevron';
+      children.push(chevron);
+    }
+
+    summary.replaceChildren(...children);
+  }
+
+  function ensureResponseActivityToolSummary(item, snapshot, timelineRoot) {
+    const expectedTag = snapshot.hasDetails ? 'BUTTON' : 'DIV';
+    let summary = item.querySelector(':scope > .response-activity-tool-summary');
+    if (!summary || summary.tagName !== expectedTag) {
+      if (summary) summary.remove();
+      summary = document.createElement(snapshot.hasDetails ? 'button' : 'div');
+      summary.className = 'response-activity-tool-summary';
+      if (snapshot.renderSearchQueriesInline) {
+        summary.classList.add('response-activity-tool-summary--query-stack');
+      }
+      if (snapshot.hasDetails) {
+        summary.setAttribute('type', 'button');
+        summary.addEventListener('click', () => {
+          const toolKey = String(item.dataset.responseActivityToolKey || '').trim();
+          if (!toolKey) return;
+          const nextManualExpandedKeys = readManuallyExpandedResponseActivityToolKeys(timelineRoot);
+          const nextManualCollapsedKeys = readManuallyCollapsedResponseActivityToolKeys(timelineRoot);
+          const expanded = !item.classList.contains('is-expanded');
+          if (expanded) {
+            nextManualExpandedKeys.add(toolKey);
+            nextManualCollapsedKeys.delete(toolKey);
+          } else {
+            nextManualCollapsedKeys.add(toolKey);
+            nextManualExpandedKeys.delete(toolKey);
+          }
+          writeManuallyExpandedResponseActivityToolKeys(timelineRoot, nextManualExpandedKeys);
+          writeManuallyCollapsedResponseActivityToolKeys(timelineRoot, nextManualCollapsedKeys);
+          item.classList.toggle('is-expanded', expanded);
+          summary.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        });
+      }
+      item.insertBefore(summary, item.firstChild);
+    }
+    summary.classList.toggle('response-activity-tool-summary--query-stack', snapshot.renderSearchQueriesInline);
+    if (snapshot.hasDetails) {
+      summary.setAttribute('type', 'button');
+    } else {
+      summary.removeAttribute('type');
+    }
+    summary.setAttribute('aria-expanded', snapshot.expanded ? 'true' : 'false');
+    return summary;
+  }
+
+  function renderResponseActivityToolBodyContent(toolBodyInner, snapshot) {
+    if (isResponseActivityJsRuntimeEntry(snapshot.entry)) {
+      renderResponseActivityJsRuntimeBody(toolBodyInner, snapshot.entry);
+      return;
+    }
+    renderResponseActivityGenericToolBody(toolBodyInner, snapshot.entry);
+  }
+
+  function reconcileResponseActivityNarrativeEntry(item, snapshot, previousSnapshot) {
+    item.className = 'response-activity-entry response-activity-entry--reasoning';
+    let content = item.querySelector(':scope > .response-activity-content--reasoning');
+    if (!content) {
+      content = document.createElement('div');
+      content.className = 'response-activity-content response-activity-content--reasoning';
+      item.appendChild(content);
+    }
+
+    reconcileRenderedSurfaceBlocks(
+      content,
+      snapshot.markdown,
+      previousSnapshot?.markdown || {
+        blockSignatures: buildRenderedSurfaceBlocksFromDom(content).map((block) => block.signature)
+      },
+      { afterInsert: (element) => enhanceMarkdownContent(element) }
+    );
+  }
+
+  function reconcileResponseActivityToolEntry(item, snapshot, previousSnapshot, timelineRoot, preservedToolState) {
+    item.className = 'response-activity-entry response-activity-entry--tool';
+    item.dataset.responseActivityToolKey = snapshot.key;
+    item.classList.toggle('is-expanded', snapshot.expanded);
+
+    const summary = ensureResponseActivityToolSummary(item, snapshot, timelineRoot);
+    if (!previousSnapshot || previousSnapshot.summarySignature !== snapshot.summarySignature || previousSnapshot.hasDetails !== snapshot.hasDetails || previousSnapshot.expanded !== snapshot.expanded) {
+      renderResponseActivityToolSummaryChildren(summary, snapshot);
+    }
+    summary.setAttribute('aria-expanded', snapshot.expanded ? 'true' : 'false');
+
+    let toolBody = item.querySelector(':scope > .response-activity-tool-body');
+    let toolBodyInner = toolBody?.querySelector(':scope > .response-activity-tool-body-inner') || null;
+    if (!snapshot.hasDetails) {
+      if (toolBody) toolBody.remove();
+      return;
+    }
+
+    if (!toolBody) {
+      toolBody = document.createElement('div');
+      toolBody.className = 'response-activity-tool-body';
+      toolBodyInner = document.createElement('div');
+      toolBodyInner.className = 'response-activity-tool-body-inner';
+      toolBody.appendChild(toolBodyInner);
+      item.appendChild(toolBody);
+    } else if (!toolBodyInner) {
+      toolBodyInner = document.createElement('div');
+      toolBodyInner.className = 'response-activity-tool-body-inner';
+      toolBody.appendChild(toolBodyInner);
+    }
+
+    if (!previousSnapshot || previousSnapshot.bodySignature !== snapshot.bodySignature || previousSnapshot.hasDetails !== snapshot.hasDetails) {
+      const currentToolState = captureResponseActivityToolTransientUiState(item) || preservedToolState || null;
+      toolBodyInner.replaceChildren();
+      renderResponseActivityToolBodyContent(toolBodyInner, snapshot);
+      if (currentToolState) {
+        restoreResponseActivityToolTransientUiState(item, currentToolState);
+      }
+    } else if (preservedToolState) {
+      restoreResponseActivityToolTransientUiState(item, preservedToolState);
+    }
+  }
+
+  function removeResponseActivityTimelineDisplay(messageWrapperDiv) {
+    const timelineRoot = messageWrapperDiv?.querySelector?.('.response-activity-timeline');
+    if (timelineRoot) {
+      captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot);
+      timelineRoot.remove();
+    }
+    resetAssistantSurfaceSnapshot(messageWrapperDiv, 'responseActivity');
+  }
+
+  function setupResponseActivityTimelineDisplay(messageWrapperDiv, node, rawTimeline, processMathAndMarkdownFn) {
+    if (!messageWrapperDiv) return false;
+    const timeline = Array.isArray(rawTimeline)
+      ? rawTimeline.filter(entry => entry && typeof entry === 'object' && typeof entry.kind === 'string')
+      : [];
+    const surfaceSnapshots = getAssistantSurfaceSnapshots(messageWrapperDiv);
+    let timelineRoot = messageWrapperDiv.querySelector('.response-activity-timeline');
+
+    if (timeline.length === 0) {
+      if (timelineRoot) timelineRoot.remove();
+      surfaceSnapshots.responseActivity = null;
+      return false;
+    }
+
+    const isTurnRuntimeActive = isResponseActivityTurnRuntimeActive(messageWrapperDiv);
+    const nextSnapshot = buildResponseActivitySnapshot(node, timeline, processMathAndMarkdownFn, isTurnRuntimeActive);
+    const shell = ensureResponseActivityPanelShell(messageWrapperDiv);
+    timelineRoot = shell.timelineRoot;
+    const previousUiState = captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot);
+    restoreResponseActivityDatasetState(messageWrapperDiv, timelineRoot);
+    reconcileResponseActivityPanelHeader(shell, nextSnapshot.panelSummary);
 
     const manualExpandedToolKeys = readManuallyExpandedResponseActivityToolKeys(timelineRoot);
     const manualCollapsedToolKeys = readManuallyCollapsedResponseActivityToolKeys(timelineRoot);
     const autoCollapsedToolKeys = readAutoCollapsedResponseActivityToolKeys(timelineRoot);
     const visibleToolKeys = new Set();
-
-    const deferredUiRestorers = [];
-
-    timeline.forEach((entry, index) => {
-      if (entry?.kind !== 'tool_call') return;
-      const hasDetails = hasResponseActivityToolDetails(entry);
-      if (!hasDetails) return;
-      const toolKey = getResponseActivityToolEntryKey(entry, index);
-      visibleToolKeys.add(toolKey);
+    nextSnapshot.entries.forEach((entrySnapshot) => {
+      if (entrySnapshot.entryKind !== 'tool' || !entrySnapshot.hasDetails) return;
+      visibleToolKeys.add(entrySnapshot.key);
     });
 
     Array.from(manualExpandedToolKeys).forEach((key) => {
@@ -1989,187 +2486,68 @@ export function createMessageProcessor(appContext) {
     writeManuallyCollapsedResponseActivityToolKeys(timelineRoot, manualCollapsedToolKeys);
     writeAutoCollapsedResponseActivityToolKeys(timelineRoot, autoCollapsedToolKeys);
 
-    timeline.forEach((entry, index) => {
-      if (entry.kind === 'reasoning_summary' || entry.kind === 'commentary') {
-        const item = document.createElement('div');
-        item.className = 'response-activity-entry response-activity-entry--reasoning';
+    const panelBodyInner = shell.panelBodyInner;
+    const existingItemsByKey = new Map(
+      Array.from(panelBodyInner.querySelectorAll(':scope > .response-activity-entry'))
+        .map((item) => [String(item.dataset.responseActivityEntryKey || '').trim(), item])
+        .filter(([key]) => !!key)
+    );
+    const previousByKey = surfaceSnapshots.responseActivity?.entryByKey || {};
+    const nextByKey = nextSnapshot.entryByKey || {};
+    let cursor = panelBodyInner.firstChild;
 
-        const content = document.createElement('div');
-        content.className = 'response-activity-content response-activity-content--reasoning';
-        const rawText = (typeof entry.text === 'string') ? entry.text : '';
-        const normalizedText = entry.kind === 'reasoning_summary'
-          ? normalizeResponsesReasoningText(rawText)
-          : rawText.trim();
-        content.innerHTML = processMathAndMarkdownFn(normalizedText);
-        item.appendChild(content);
-        panelBodyInner.appendChild(item);
-        return;
-      }
-
-      const item = document.createElement('div');
-      item.className = 'response-activity-entry response-activity-entry--tool';
-      const toolKey = getResponseActivityToolEntryKey(entry, index);
-      item.dataset.responseActivityToolKey = toolKey;
-      const renderSearchQueriesInline = isResponseActivitySearchQueryEntry(entry);
-      const searchQueryLines = renderSearchQueriesInline ? getResponseActivityToolQueryLines(entry) : [];
-      const hasDetails = hasResponseActivityToolDetails(entry);
-      const isInProgress = isResponseActivityEntryInProgress(entry);
-      const hasOutput = hasResponsesToolOutputBody(entry?.output);
-      const shouldAutoRemainExpanded = isInProgress || (!hasOutput && isTurnRuntimeActive);
-      // 工具级生命周期与面板一致：
-      // - 默认只在“首次出现且尚无手动状态”时自动决定一次初始展开；
-      // - 完成后只自动收起一次；
-      // - 之后完全交由 manualExpanded/manualCollapsed 两个集合控制。
-      let isExpanded = false;
-      if (hasDetails) {
-        if (manualExpandedToolKeys.has(toolKey)) {
-          isExpanded = true;
-        } else if (manualCollapsedToolKeys.has(toolKey)) {
-          isExpanded = false;
-        } else if (shouldAutoRemainExpanded) {
-          isExpanded = true;
+    nextSnapshot.entries.forEach((entrySnapshot) => {
+      if (entrySnapshot.entryKind === 'tool' && entrySnapshot.hasDetails) {
+        if (manualExpandedToolKeys.has(entrySnapshot.key)) {
+          entrySnapshot.expanded = true;
+        } else if (manualCollapsedToolKeys.has(entrySnapshot.key)) {
+          entrySnapshot.expanded = false;
+        } else if (entrySnapshot.shouldAutoRemainExpanded) {
+          entrySnapshot.expanded = true;
         } else {
-          isExpanded = false;
-          if (!autoCollapsedToolKeys.has(toolKey)) {
-            autoCollapsedToolKeys.add(toolKey);
+          entrySnapshot.expanded = false;
+          if (!autoCollapsedToolKeys.has(entrySnapshot.key)) {
+            autoCollapsedToolKeys.add(entrySnapshot.key);
           }
         }
-      }
-      item.classList.toggle('is-expanded', isExpanded);
-
-      const summaryTag = hasDetails ? 'button' : 'div';
-      const summary = document.createElement(summaryTag);
-      summary.className = 'response-activity-tool-summary';
-      if (renderSearchQueriesInline) {
-        summary.classList.add('response-activity-tool-summary--query-stack');
-      }
-      if (hasDetails) {
-        summary.setAttribute('type', 'button');
-        summary.setAttribute('aria-expanded', isExpanded ? 'true' : 'false');
-      }
-
-      const kind = document.createElement('span');
-      kind.className = 'response-activity-tool-kind';
-      kind.textContent = getResponseToolCallTypeLabel(entry);
-      summary.appendChild(kind);
-
-      if (renderSearchQueriesInline) {
-        const queryStack = document.createElement('span');
-        queryStack.className = 'response-activity-tool-query-stack';
-        searchQueryLines.forEach((query) => {
-          const queryLine = document.createElement('span');
-          queryLine.className = 'response-activity-tool-query-line';
-          queryLine.textContent = query;
-          queryStack.appendChild(queryLine);
-        });
-        summary.appendChild(queryStack);
       } else {
-        const primaryParts = buildResponseToolCallPrimaryParts(entry);
-        const primary = document.createElement('span');
-        primary.className = 'response-activity-tool-primary';
-
-        if (primaryParts.action) {
-          const action = document.createElement('span');
-          action.className = 'response-activity-tool-action';
-          action.textContent = primaryParts.action;
-          primary.appendChild(action);
-        }
-
-        if (primaryParts.value) {
-          if (primaryParts.valueUrl) {
-            const link = document.createElement('a');
-            link.className = 'response-activity-tool-link';
-            link.href = primaryParts.valueUrl;
-            link.target = '_blank';
-            link.rel = 'noopener noreferrer';
-            link.textContent = primaryParts.value;
-            primary.appendChild(link);
-          } else {
-            const value = document.createElement('span');
-            value.className = 'response-activity-tool-value';
-            value.textContent = primaryParts.value;
-            primary.appendChild(value);
-          }
-        }
-
-        if (primaryParts.locationAction && primaryParts.locationValue) {
-          const locationAction = document.createElement('span');
-          locationAction.className = 'response-activity-tool-action';
-          locationAction.textContent = primaryParts.locationAction;
-          primary.appendChild(locationAction);
-
-          if (primaryParts.locationUrl) {
-            const link = document.createElement('a');
-            link.className = 'response-activity-tool-link';
-            link.href = primaryParts.locationUrl;
-            link.target = '_blank';
-            link.rel = 'noopener noreferrer';
-            link.textContent = primaryParts.locationValue;
-            primary.appendChild(link);
-          } else {
-            const locationValue = document.createElement('span');
-            locationValue.className = 'response-activity-tool-value';
-            locationValue.textContent = primaryParts.locationValue;
-            primary.appendChild(locationValue);
-          }
-        }
-
-        summary.appendChild(primary);
+        entrySnapshot.expanded = false;
       }
 
-      if (hasDetails) {
-        const chevron = document.createElement('i');
-        chevron.className = 'fa-solid fa-chevron-right response-activity-tool-chevron';
-        summary.appendChild(chevron);
-        summary.addEventListener('click', () => {
-          const nextManualExpandedKeys = readManuallyExpandedResponseActivityToolKeys(timelineRoot);
-          const nextManualCollapsedKeys = readManuallyCollapsedResponseActivityToolKeys(timelineRoot);
-          const expanded = !item.classList.contains('is-expanded');
-          if (expanded) {
-            nextManualExpandedKeys.add(toolKey);
-            nextManualCollapsedKeys.delete(toolKey);
-          } else {
-            nextManualCollapsedKeys.add(toolKey);
-            nextManualExpandedKeys.delete(toolKey);
-          }
-          writeManuallyExpandedResponseActivityToolKeys(timelineRoot, nextManualExpandedKeys);
-          writeManuallyCollapsedResponseActivityToolKeys(timelineRoot, nextManualCollapsedKeys);
-          item.classList.toggle('is-expanded', expanded);
-          summary.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-        });
+      let item = existingItemsByKey.get(entrySnapshot.key) || null;
+      if (!item) {
+        item = document.createElement('div');
+      }
+      item.dataset.responseActivityEntryKey = entrySnapshot.key;
+      if (item !== cursor) {
+        panelBodyInner.insertBefore(item, cursor || null);
       }
 
-      item.appendChild(summary);
-
-      if (hasDetails) {
-        const toolBody = document.createElement('div');
-        toolBody.className = 'response-activity-tool-body';
-        const toolBodyInner = document.createElement('div');
-        toolBodyInner.className = 'response-activity-tool-body-inner';
-
-        if (isResponseActivityJsRuntimeEntry(entry)) {
-          renderResponseActivityJsRuntimeBody(toolBodyInner, entry);
-        } else {
-          renderResponseActivityGenericToolBody(toolBodyInner, entry);
-        }
-
-        toolBody.appendChild(toolBodyInner);
-        item.appendChild(toolBody);
+      const previousEntrySnapshot = previousByKey[entrySnapshot.key] || null;
+      if (entrySnapshot.entryKind === 'narrative') {
+        reconcileResponseActivityNarrativeEntry(item, entrySnapshot, previousEntrySnapshot);
+      } else {
+        reconcileResponseActivityToolEntry(
+          item,
+          entrySnapshot,
+          previousEntrySnapshot,
+          timelineRoot,
+          previousUiState?.toolUiByKey?.[entrySnapshot.key] || null
+        );
       }
 
-      panelBodyInner.appendChild(item);
+      cursor = item.nextSibling;
+    });
 
-      const preservedToolState = previousUiState?.toolUiByKey?.[toolKey] || null;
-      if (preservedToolState) {
-        deferredUiRestorers.push(() => restoreResponseActivityToolTransientUiState(item, preservedToolState));
-      }
+    Array.from(panelBodyInner.querySelectorAll(':scope > .response-activity-entry')).forEach((item) => {
+      const key = String(item.dataset.responseActivityEntryKey || '').trim();
+      if (!key || nextByKey[key]) return;
+      item.remove();
     });
 
     writeAutoCollapsedResponseActivityToolKeys(timelineRoot, autoCollapsedToolKeys);
-    deferredUiRestorers.forEach((restore) => {
-      try { restore(); } catch (_) {}
-    });
     captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot);
+    surfaceSnapshots.responseActivity = nextSnapshot;
 
     return true;
   }
@@ -2183,8 +2561,105 @@ export function createMessageProcessor(appContext) {
    * @param {HTMLElement} messageWrapperDiv
    * @param {Array<any>|null|undefined} rawToolCalls
    */
+  function buildLegacyToolCallSnapshot(record, index) {
+    const key = getLegacyToolCallSnapshotKey(record, index);
+    const normalizedRecord = (record && typeof record === 'object') ? record : {};
+    return {
+      key,
+      record: normalizedRecord,
+      signature: JSON.stringify({
+        type: normalizedRecord.type || '',
+        primary: buildResponseToolCallPrimaryText(normalizedRecord),
+        status: normalizedRecord.status || '',
+        arguments: normalizedRecord.arguments || '',
+        url: normalizedRecord.url || '',
+        queries: Array.isArray(normalizedRecord.queries) ? normalizedRecord.queries : [],
+        sources: Array.isArray(normalizedRecord.sources) ? normalizedRecord.sources : []
+      })
+    };
+  }
+
+  function renderLegacyToolCallItemContent(item, snapshot) {
+    if (!item || !snapshot) return;
+    const record = snapshot.record || {};
+    item.replaceChildren();
+
+    const header = document.createElement('div');
+    header.className = 'response-tool-call-header';
+
+    const badge = document.createElement('span');
+    badge.className = 'response-tool-call-badge';
+    badge.textContent = getResponseToolCallTypeLabel(record);
+    header.appendChild(badge);
+
+    const primary = document.createElement('span');
+    primary.className = 'response-tool-call-primary';
+    primary.textContent = buildResponseToolCallPrimaryText(record);
+    header.appendChild(primary);
+
+    if (typeof record.status === 'string' && record.status.trim()) {
+      const status = document.createElement('span');
+      status.className = 'response-tool-call-status';
+      status.textContent = record.status.trim();
+      header.appendChild(status);
+    }
+
+    item.appendChild(header);
+
+    if (Array.isArray(record.queries) && record.queries.length > 1) {
+      const queries = document.createElement('div');
+      queries.className = 'response-tool-call-secondary';
+      queries.textContent = `查询：${record.queries.join(' | ')}`;
+      item.appendChild(queries);
+    } else if (typeof record.url === 'string' && record.url.trim() && String(record.type || '').toLowerCase() !== 'web_search_call') {
+      const urlLine = document.createElement('div');
+      urlLine.className = 'response-tool-call-secondary';
+      urlLine.textContent = record.url.trim();
+      item.appendChild(urlLine);
+    }
+
+    if (typeof record.arguments === 'string' && record.arguments.trim()) {
+      const pre = document.createElement('pre');
+      pre.className = 'response-tool-call-arguments';
+      pre.textContent = formatResponseToolCallArguments(record.arguments);
+      item.appendChild(pre);
+    }
+
+    if (Array.isArray(record.sources) && record.sources.length > 0) {
+      const sources = document.createElement('div');
+      sources.className = 'response-tool-call-sources';
+      const sourceTitle = document.createElement('div');
+      sourceTitle.className = 'response-tool-call-source-title';
+      sourceTitle.textContent = `来源 ${record.sources.length}`;
+      sources.appendChild(sourceTitle);
+
+      const sourceList = document.createElement('div');
+      sourceList.className = 'response-tool-call-source-list';
+      record.sources.forEach((source) => {
+        const label = source.title || source.domain || source.url || '未命名来源';
+        if (source.url) {
+          const link = document.createElement('a');
+          link.className = 'response-tool-call-source-link';
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          link.href = source.url;
+          link.textContent = label;
+          sourceList.appendChild(link);
+        } else {
+          const text = document.createElement('span');
+          text.className = 'response-tool-call-source-link';
+          text.textContent = label;
+          sourceList.appendChild(text);
+        }
+      });
+      sources.appendChild(sourceList);
+      item.appendChild(sources);
+    }
+  }
+
   function setupResponseToolCallsDisplay(messageWrapperDiv, rawToolCalls) {
     if (!messageWrapperDiv) return;
+    const surfaceSnapshots = getAssistantSurfaceSnapshots(messageWrapperDiv);
     let toolCallsRoot = messageWrapperDiv.querySelector('.response-tool-calls');
     const toolCalls = Array.isArray(rawToolCalls)
       ? rawToolCalls.filter(item => item && typeof item === 'object')
@@ -2192,6 +2667,7 @@ export function createMessageProcessor(appContext) {
 
     if (toolCalls.length === 0) {
       if (toolCallsRoot) toolCallsRoot.remove();
+      surfaceSnapshots.legacyToolCalls = null;
       return;
     }
 
@@ -2220,88 +2696,53 @@ export function createMessageProcessor(appContext) {
       list.className = 'response-tool-call-list';
       toolCallsRoot.appendChild(list);
     }
-    list.innerHTML = '';
+    const previousSnapshot = surfaceSnapshots.legacyToolCalls || null;
+    const previousByKey = previousSnapshot?.byKey || {};
+    const existingItemsByKey = new Map(
+      Array.from(list.querySelectorAll(':scope > .response-tool-call-item'))
+        .map((item) => [String(item.dataset.responseToolCallKey || '').trim(), item])
+        .filter(([key]) => !!key)
+    );
+    const nextSnapshots = toolCalls.map((record, index) => buildLegacyToolCallSnapshot(record, index));
+    const nextByKey = {};
 
-    toolCalls.forEach((record) => {
-      const item = document.createElement('div');
-      item.className = 'response-tool-call-item';
+    nextSnapshots.forEach((snapshot) => {
+      nextByKey[snapshot.key] = snapshot;
+    });
 
-      const header = document.createElement('div');
-      header.className = 'response-tool-call-header';
-
-      const badge = document.createElement('span');
-      badge.className = 'response-tool-call-badge';
-      badge.textContent = getResponseToolCallTypeLabel(record);
-      header.appendChild(badge);
-
-      const primary = document.createElement('span');
-      primary.className = 'response-tool-call-primary';
-      primary.textContent = buildResponseToolCallPrimaryText(record);
-      header.appendChild(primary);
-
-      if (typeof record.status === 'string' && record.status.trim()) {
-        const status = document.createElement('span');
-        status.className = 'response-tool-call-status';
-        status.textContent = record.status.trim();
-        header.appendChild(status);
+    let cursor = list.firstChild;
+    nextSnapshots.forEach((snapshot) => {
+      let item = existingItemsByKey.get(snapshot.key) || null;
+      if (!item) {
+        item = document.createElement('div');
+        item.className = 'response-tool-call-item';
+        item.dataset.responseToolCallKey = snapshot.key;
       }
-
-      item.appendChild(header);
-
-      if (Array.isArray(record.queries) && record.queries.length > 1) {
-        const queries = document.createElement('div');
-        queries.className = 'response-tool-call-secondary';
-        queries.textContent = `查询：${record.queries.join(' | ')}`;
-        item.appendChild(queries);
-      } else if (typeof record.url === 'string' && record.url.trim() && String(record.type || '').toLowerCase() !== 'web_search_call') {
-        const urlLine = document.createElement('div');
-        urlLine.className = 'response-tool-call-secondary';
-        urlLine.textContent = record.url.trim();
-        item.appendChild(urlLine);
+      if (item !== cursor) {
+        list.insertBefore(item, cursor || null);
+      } else {
+        cursor = cursor?.nextSibling || null;
       }
-
-      if (typeof record.arguments === 'string' && record.arguments.trim()) {
-        const pre = document.createElement('pre');
-        pre.className = 'response-tool-call-arguments';
-        pre.textContent = formatResponseToolCallArguments(record.arguments);
-        item.appendChild(pre);
+      if (!previousByKey[snapshot.key] || previousByKey[snapshot.key].signature !== snapshot.signature) {
+        renderLegacyToolCallItemContent(item, snapshot);
       }
-
-      if (Array.isArray(record.sources) && record.sources.length > 0) {
-        const sources = document.createElement('div');
-        sources.className = 'response-tool-call-sources';
-        const sourceTitle = document.createElement('div');
-        sourceTitle.className = 'response-tool-call-source-title';
-        sourceTitle.textContent = `来源 ${record.sources.length}`;
-        sources.appendChild(sourceTitle);
-
-        const sourceList = document.createElement('div');
-        sourceList.className = 'response-tool-call-source-list';
-        record.sources.forEach((source) => {
-          const label = source.title || source.domain || source.url || '未命名来源';
-          if (source.url) {
-            const link = document.createElement('a');
-            link.className = 'response-tool-call-source-link';
-            link.target = '_blank';
-            link.rel = 'noopener noreferrer';
-            link.href = source.url;
-            link.textContent = label;
-            sourceList.appendChild(link);
-          } else {
-            const text = document.createElement('span');
-            text.className = 'response-tool-call-source-link';
-            text.textContent = label;
-            sourceList.appendChild(text);
-          }
-        });
-        sources.appendChild(sourceList);
-        item.appendChild(sources);
+      if (item === cursor) {
+        cursor = cursor?.nextSibling || null;
+      } else {
+        cursor = item.nextSibling;
       }
+    });
 
-      list.appendChild(item);
+    Array.from(list.querySelectorAll(':scope > .response-tool-call-item')).forEach((item) => {
+      const key = String(item.dataset.responseToolCallKey || '').trim();
+      if (!key || nextByKey[key]) return;
+      item.remove();
     });
 
     toolCallsRoot.open = previousOpen;
+    surfaceSnapshots.legacyToolCalls = {
+      byKey: nextByKey
+    };
   }
 
   /**
@@ -2319,6 +2760,7 @@ export function createMessageProcessor(appContext) {
     if (!messageWrapperDiv || !nodeLike || typeof nodeLike !== 'object') return false;
     const role = String(nodeLike.role || '').toLowerCase();
     if (role !== 'assistant' && role !== 'ai') return false;
+    const surfaceSnapshots = getAssistantSurfaceSnapshots(messageWrapperDiv);
 
     let footer = messageWrapperDiv.querySelector('.api-footer');
     if (!footer) {
@@ -2337,8 +2779,17 @@ export function createMessageProcessor(appContext) {
       template: footerTemplate,
       tooltipTemplate: footerTooltipTemplate
     });
-    footer.textContent = renderData.text;
-    footer.title = renderData.title;
+    const previousSnapshot = surfaceSnapshots.footer || null;
+    if (!previousSnapshot || previousSnapshot.text !== renderData.text) {
+      footer.textContent = renderData.text;
+    }
+    if (!previousSnapshot || previousSnapshot.title !== renderData.title) {
+      footer.title = renderData.title;
+    }
+    surfaceSnapshots.footer = {
+      text: renderData.text,
+      title: renderData.title
+    };
     return true;
   }
 
