@@ -7085,6 +7085,24 @@ export function createMessageSender(appContext) {
     }).filter((item) => item.data);
   }
 
+  function extractGeminiAskOtherAiTextFromPayload(payload) {
+    const parts = Array.isArray(payload?.candidates?.[0]?.content?.parts)
+      ? payload.candidates[0].content.parts
+      : [];
+    return parts
+      .filter((part) => typeof part?.text === 'string' && !part?.thought)
+      .map((part) => part.text)
+      .join('');
+  }
+
+  function hasUsableResponsesOutputPayload(payload) {
+    if (!payload || typeof payload !== 'object') return false;
+    if (Array.isArray(payload.output) && payload.output.length > 0) return true;
+    if (typeof payload.output_text === 'string' && payload.output_text.trim()) return true;
+    if (Array.isArray(payload.output_text) && payload.output_text.length > 0) return true;
+    return false;
+  }
+
   async function readAskOtherAiResponsePayload(response, targetConfig, requestBody) {
     const requestedMode = resolveResponseHandlingMode({
       apiBase: targetConfig?.baseUrl,
@@ -7110,7 +7128,9 @@ export function createMessageSender(appContext) {
     const events = parseSseEventsFromText(rawText);
     let lastJson = null;
     let latestResponsesPayload = null;
+    let accumulatedResponsesText = '';
     let accumulatedChatText = '';
+    let accumulatedGeminiText = '';
     let latestUsage = null;
 
     for (const item of events) {
@@ -7118,6 +7138,19 @@ export function createMessageSender(appContext) {
       try {
         const payload = JSON.parse(item.data);
         lastJson = payload;
+        if (payload?.error) {
+          throw new Error(payload.error.message || '目标模型返回错误');
+        }
+        if (isGeminiApiConfig(targetConfig)) {
+          const geminiText = extractGeminiAskOtherAiTextFromPayload(payload);
+          if (geminiText) {
+            accumulatedGeminiText += geminiText;
+          }
+          if (payload?.usageMetadata || payload?.usage) {
+            latestUsage = payload?.usageMetadata || payload?.usage;
+          }
+          continue;
+        }
         if (
           item.event === 'response.completed'
           || String(payload?.type || '').toLowerCase() === 'response.completed'
@@ -7125,9 +7158,30 @@ export function createMessageSender(appContext) {
           latestResponsesPayload = payload?.response || payload;
           continue;
         }
-        if (isOpenAIResponsesPayload(payload)) {
+        if (isOpenAIResponsesPayload(payload) && hasUsableResponsesOutputPayload(payload)) {
           latestResponsesPayload = payload;
           continue;
+        }
+        const eventType = (typeof payload?.type === 'string') ? payload.type : '';
+        if (eventType === 'response.output_text.delta') {
+          const deltaText = (typeof payload?.delta === 'string')
+            ? payload.delta
+            : ((typeof payload?.text === 'string') ? payload.text : '');
+          if (deltaText) {
+            accumulatedResponsesText += deltaText;
+          }
+        } else if ((eventType === 'response.output_text.done') && !accumulatedResponsesText) {
+          const doneText = (typeof payload?.delta === 'string')
+            ? payload.delta
+            : ((typeof payload?.text === 'string') ? payload.text : '');
+          if (doneText) {
+            accumulatedResponsesText += doneText;
+          }
+        } else if ((eventType === 'response.output_item.done' || eventType === 'response.output_item.added') && !accumulatedResponsesText) {
+          const extracted = extractOpenAIResponsesOutput({ output: [payload?.item].filter(Boolean) });
+          if (typeof extracted?.answer === 'string' && extracted.answer) {
+            accumulatedResponsesText += extracted.answer;
+          }
         }
         const choice = Array.isArray(payload?.choices) ? payload.choices[0] : null;
         const deltaContent = choice?.delta?.content;
@@ -7143,7 +7197,36 @@ export function createMessageSender(appContext) {
       }
     }
 
-    if (latestResponsesPayload) return latestResponsesPayload;
+    if (latestResponsesPayload) {
+      if (accumulatedResponsesText) {
+        const mergedPayload = cloneDataSafely(latestResponsesPayload);
+        const currentOutputText = readResponsesOutputTextField(mergedPayload);
+        if (!currentOutputText) {
+          mergedPayload.output_text = accumulatedResponsesText;
+        }
+        return mergedPayload;
+      }
+      return latestResponsesPayload;
+    }
+    if (accumulatedResponsesText) {
+      return {
+        object: 'response',
+        output_text: accumulatedResponsesText,
+        usage: latestUsage
+      };
+    }
+    if (accumulatedGeminiText) {
+      return {
+        candidates: [
+          {
+            content: {
+              parts: [{ text: accumulatedGeminiText }]
+            }
+          }
+        ],
+        usageMetadata: latestUsage
+      };
+    }
     if (accumulatedChatText) {
       return {
         choices: [
@@ -7199,6 +7282,42 @@ export function createMessageSender(appContext) {
     return sanitized;
   }
 
+  /**
+   * ask_other_ai 的目标配置需要做“干净问答”裁剪：
+   * - 保留连接/auth/model/基础温度与传输模式；
+   * - 去掉额外工具、结构化输出、搜索、上一轮响应续写之类会干扰“独立提问”的复杂配置；
+   * - 避免某个用户平时拿来做 search / schema / tool calling 的配置，被 ask_other_ai 直接继承后导致 400。
+   *
+   * 这里的目标不是“完全复刻该配置的一切行为”，而是“稳定地向那个模型发起一次纯问答请求”。
+   *
+   * @param {Object|null|undefined} config
+   * @returns {Object}
+   */
+  function buildAskOtherAiSubrequestConfig(config) {
+    const source = (config && typeof config === 'object' && !Array.isArray(config))
+      ? config
+      : {};
+    const nextConfig = {
+      id: source.id,
+      connectionSourceId: source.connectionSourceId || '',
+      connectionType: source.connectionType,
+      connectionSourceName: source.connectionSourceName || '',
+      displayName: source.displayName || '',
+      modelName: source.modelName || '',
+      baseUrl: source.baseUrl || '',
+      apiKey: source.apiKey,
+      apiKeyFilePath: source.apiKeyFilePath,
+      temperature: Number.isFinite(Number(source.temperature)) ? Number(source.temperature) : 1,
+      useStreaming: source.useStreaming !== false
+    };
+
+    // 明确丢弃这些“会改变 ask_other_ai 语义”的字段：
+    // - customParams: 可能带入额外 provider 特性 / headers / tool 配置；
+    // - 自定义系统提示词与用户预处理：ask_other_ai 应只发送显式的 question/context；
+    // - Responses / Gemini 的额外工具与结构化输出配置：避免把一个 search/schema/tool 配置误当成纯问答配置。
+    return nextConfig;
+  }
+
   async function executeResponsesListAskableModelsFunction(_rawArgs, options = {}) {
     try {
       const configs = apiManager.getAllConfigs();
@@ -7232,7 +7351,7 @@ export function createMessageSender(appContext) {
             status: 'error',
             question: request.question,
             answer: '',
-            error: `目标 config_id 不存在、未启用“AI提问工具可用”，或就是当前正在使用的模型：${configId}`
+            error: `目标 config_id 不存在，或尚未启用“AI提问工具可用”：${configId}`
           });
           continue;
         }
@@ -7252,29 +7371,34 @@ export function createMessageSender(appContext) {
 
         try {
           const messageContent = buildAskOtherAiUserMessage(request.question, request.context);
+          const subrequestConfig = buildAskOtherAiSubrequestConfig(targetConfig);
+          const targetUseStreaming = subrequestConfig.useStreaming !== false;
           const requestBody = sanitizeAskOtherAiRequestBody(await apiManager.buildRequest({
             messages: [{ role: 'user', content: messageContent }],
             config: {
-              ...targetConfig,
-              useStreaming: false
+              ...subrequestConfig,
+              useStreaming: targetUseStreaming
             },
-            overrides: { stream: false }
+            overrides: isGeminiApiConfig(subrequestConfig) ? {} : { stream: targetUseStreaming }
           }));
           const response = await apiManager.sendRequest({
             requestBody,
             config: {
-              ...targetConfig,
-              useStreaming: false
+              ...subrequestConfig,
+              useStreaming: targetUseStreaming
             }
           });
 
           if (!response.ok) {
-            const errorText = await response.text().catch(() => '');
+            const errorText = await response.text().catch((error) => {
+              const detail = normalizeResponsesCustomToolError(error).message;
+              return `读取错误响应失败：${detail}`;
+            });
             throw new Error(`HTTP ${response.status}: ${errorText || '目标模型返回错误'}`);
           }
 
-          const payload = await readAskOtherAiResponsePayload(response, targetConfig, requestBody);
-          const extracted = extractAskOtherAiAnswerFromPayload(payload, targetConfig);
+          const payload = await readAskOtherAiResponsePayload(response, subrequestConfig, requestBody);
+          const extracted = extractAskOtherAiAnswerFromPayload(payload, subrequestConfig);
 
           answers.push({
             index: index + 1,
@@ -7283,10 +7407,10 @@ export function createMessageSender(appContext) {
             question: request.question,
             context_supplied: !!request.context,
             target: {
-              display_name: catalogEntry?.display_name || targetConfig.displayName || targetConfig.modelName || configId,
-              model_name: targetConfig.modelName || null,
-              connection_type: targetConfig.connectionType || null,
-              connection_source_name: targetConfig.connectionSourceName || null
+              display_name: catalogEntry?.display_name || subrequestConfig.displayName || subrequestConfig.modelName || configId,
+              model_name: subrequestConfig.modelName || null,
+              connection_type: subrequestConfig.connectionType || null,
+              connection_source_name: subrequestConfig.connectionSourceName || null
             },
             answer: extracted.answer || '',
             usage: extracted.usage || null
