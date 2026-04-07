@@ -578,6 +578,88 @@ function buildResponsesHistoryReadToolOutputText(result) {
   return buildXmlToolResultText('history_read_result', metadata, blocks);
 }
 
+function buildResponsesAskableModelsToolOutputText(result) {
+  const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
+  const metadata = {
+    ok: normalized.ok === true,
+    total_models: Number.isFinite(Number(normalized.total_models)) ? Number(normalized.total_models) : 0
+  };
+  const blocks = [];
+  if (typeof normalized.guidance === 'string' && normalized.guidance.trim()) {
+    blocks.push({
+      tag: 'guidance',
+      text: normalized.guidance
+    });
+  }
+  const models = Array.isArray(normalized.models) ? normalized.models : [];
+  if (models.length > 0) {
+    const modelsText = models.map((model, index) => {
+      const metadataBlock = buildXmlBlock('metadata', trimJsonMetadataValue(model));
+      return `<model rank="${index + 1}">\n${metadataBlock}\n</model>`;
+    }).join('\n\n');
+    blocks.push({
+      tag: 'models',
+      text: modelsText
+    });
+  }
+  if (normalized.error) {
+    blocks.push({
+      tag: 'error',
+      text: formatResponsesJsRuntimeErrorText(normalized.error)
+    });
+  }
+  return buildXmlToolResultText('list_askable_models_result', metadata, blocks);
+}
+
+function buildResponsesAskOtherAiToolOutputText(result) {
+  const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
+  const metadata = {
+    ok: normalized.ok === true,
+    total_requests: Number.isFinite(Number(normalized.total_requests)) ? Number(normalized.total_requests) : 0,
+    success_count: Number.isFinite(Number(normalized.success_count)) ? Number(normalized.success_count) : 0,
+    error_count: Number.isFinite(Number(normalized.error_count)) ? Number(normalized.error_count) : 0
+  };
+  const blocks = [];
+  const answers = Array.isArray(normalized.answers) ? normalized.answers : [];
+  if (answers.length > 0) {
+    const answersText = answers.map((item, index) => {
+      const attrs = [
+        `rank="${index + 1}"`,
+        typeof item?.status === 'string' && item.status ? `status="${xmlAttributeEscape(item.status)}"` : '',
+        typeof item?.config_id === 'string' && item.config_id ? `config_id="${xmlAttributeEscape(item.config_id)}"` : ''
+      ].filter(Boolean).join(' ');
+      const innerBlocks = [];
+      if (item?.target && typeof item.target === 'object') {
+        innerBlocks.push(buildXmlBlock('target', trimJsonMetadataValue(item.target)));
+      }
+      if (typeof item?.question === 'string' && item.question.trim()) {
+        innerBlocks.push(buildXmlBlock('question', item.question));
+      }
+      if (item?.usage && typeof item.usage === 'object') {
+        innerBlocks.push(buildXmlBlock('usage', trimJsonMetadataValue(item.usage)));
+      }
+      if (typeof item?.answer === 'string' && item.answer.trim()) {
+        innerBlocks.push(buildXmlBlock('answer', item.answer));
+      }
+      if (typeof item?.error === 'string' && item.error.trim()) {
+        innerBlocks.push(buildXmlBlock('error', item.error));
+      }
+      return `<response${attrs ? ` ${attrs}` : ''}>\n${innerBlocks.filter(Boolean).join('\n\n')}\n</response>`;
+    }).join('\n\n');
+    blocks.push({
+      tag: 'responses',
+      text: answersText
+    });
+  }
+  if (normalized.error) {
+    blocks.push({
+      tag: 'error',
+      text: formatResponsesJsRuntimeErrorText(normalized.error)
+    });
+  }
+  return buildXmlToolResultText('ask_other_ai_result', metadata, blocks);
+}
+
 export function buildResponsesPageContentToolOutputContentItems(result, options = {}) {
   return buildResponsesXmlToolOutputContentItems(
     buildResponsesPageContentToolOutputText(result),
@@ -595,6 +677,20 @@ export function buildResponsesHistorySearchToolOutputContentItems(result, option
 export function buildResponsesHistoryReadToolOutputContentItems(result, options = {}) {
   return buildResponsesXmlToolOutputContentItems(
     buildResponsesHistoryReadToolOutputText(result),
+    options
+  );
+}
+
+export function buildResponsesAskableModelsToolOutputContentItems(result, options = {}) {
+  return buildResponsesXmlToolOutputContentItems(
+    buildResponsesAskableModelsToolOutputText(result),
+    options
+  );
+}
+
+export function buildResponsesAskOtherAiToolOutputContentItems(result, options = {}) {
+  return buildResponsesXmlToolOutputContentItems(
+    buildResponsesAskOtherAiToolOutputText(result),
     options
   );
 }

@@ -1191,9 +1191,10 @@ export function createApiManager(appContext) {
         modelName: c.modelName,
         displayName: c.displayName,
         temperature: c.temperature,
-        useStreaming: (c.useStreaming !== false),
-        isFavorite: !!c.isFavorite,
-        // 旧字段：单一条数上限（按“消息条目”计数）。保留以便向后兼容与降级回滚。
+      useStreaming: (c.useStreaming !== false),
+      isFavorite: !!c.isFavorite,
+      enableAskOtherAiTool: !!c.enableAskOtherAiTool,
+      // 旧字段：单一条数上限（按“消息条目”计数）。保留以便向后兼容与降级回滚。
         maxChatHistory: c.maxChatHistory ?? 500,
         // 新字段：分别限制历史 user / assistant 消息条数（便于长对话压缩 AI 输出）
         maxChatHistoryUser: c.maxChatHistoryUser ?? null,
@@ -1820,6 +1821,7 @@ export function createApiManager(appContext) {
       temperature: 1,
       useStreaming: true,
       isFavorite: false,
+      enableAskOtherAiTool: false,
       customParams: '',
       customSystemPrompt: '',
       userMessagePreprocessorTemplate: '',
@@ -1922,6 +1924,7 @@ export function createApiManager(appContext) {
       config.temperature = Number.isFinite(Number(config.temperature)) ? Number(config.temperature) : 1;
       config.useStreaming = (config.useStreaming !== false);
       config.isFavorite = !!config.isFavorite;
+      config.enableAskOtherAiTool = !!config.enableAskOtherAiTool;
       config.customParams = (typeof config.customParams === 'string') ? config.customParams : '';
       config.customSystemPrompt = (typeof config.customSystemPrompt === 'string') ? config.customSystemPrompt.trim() : '';
       config.userMessagePreprocessorTemplate = (typeof config.userMessagePreprocessorTemplate === 'string')
@@ -2991,6 +2994,7 @@ export function createApiManager(appContext) {
    * @param {string} [config.modelName] - 模型名称
    * @param {number} [config.temperature] - temperature 值（可为 0）
    * @param {boolean} [config.isFavorite] - 是否收藏
+   * @param {boolean} [config.enableAskOtherAiTool] - 是否允许“向其他AI提问”工具使用该配置
    * @param {string} [config.customParams] - 自定义参数
    * @param {string} [config.userMessagePreprocessorTemplate] - 用户消息预处理模板（支持 {{#system}}/{{#assistant}}/{{#user}} 角色块与 {{no_system_prompt}} 控制标记）
    * @param {boolean} [config.userMessagePreprocessorIncludeInHistory] - 预处理结果是否写入历史
@@ -3032,6 +3036,7 @@ export function createApiManager(appContext) {
     const selectBtn = template.querySelector('.select-btn');
     const customParamsInput = template.querySelector('.custom-params');
     const customSystemPromptInput = template.querySelector('.custom-system-prompt');
+    const askOtherAiToolEnabledToggle = template.querySelector('.ask-other-ai-tool-enabled');
     const userMessageTemplateInput = template.querySelector('.user-message-template');
     const userMessageTemplateIncludeHistoryToggle = template.querySelector('.user-message-template-include-history');
     const userMessageTemplateHelpBtn = template.querySelector('.template-help-icon');
@@ -3932,6 +3937,9 @@ export function createApiManager(appContext) {
     if (customSystemPromptInput) {
       customSystemPromptInput.value = config.customSystemPrompt || '';
     }
+    if (askOtherAiToolEnabledToggle) {
+      askOtherAiToolEnabledToggle.checked = !!config.enableAskOtherAiTool;
+    }
     if (userMessageTemplateInput) {
       userMessageTemplateInput.value = config.userMessagePreprocessorTemplate || '';
     }
@@ -4093,6 +4101,17 @@ export function createApiManager(appContext) {
       });
       customSystemPromptInput.addEventListener('change', () => {
         apiConfigs[index].customSystemPrompt = customSystemPromptInput.value || '';
+        saveAPIConfigs();
+      });
+    }
+
+    // “向其他 AI 提问”工具开关：
+    // - 这是按 API 配置维度暴露的能力白名单；
+    // - 勾选后，该配置才会出现在 list_askable_models 的候选目录里；
+    // - sender 侧只读取这个布尔值，不依赖 DOM 状态做事实判断。
+    if (askOtherAiToolEnabledToggle) {
+      askOtherAiToolEnabledToggle.addEventListener('change', () => {
+        apiConfigs[index].enableAskOtherAiTool = !!askOtherAiToolEnabledToggle.checked;
         saveAPIConfigs();
       });
     }
@@ -5654,6 +5673,7 @@ export function createApiManager(appContext) {
    * @param {string} [partialConfig.apiKeyFilePath] - 本地 Key 文件路径（可选）
    * @param {number} [partialConfig.temperature] - 温度值
    * @param {string} [partialConfig.customParams] - 自定义参数字符串
+   * @param {boolean} [partialConfig.enableAskOtherAiTool] - 是否允许“向其他AI提问”工具使用该配置
    * @param {string} [partialConfig.userMessagePreprocessorTemplate] - 用户消息预处理模板（支持 {{#system}}/{{#assistant}}/{{#user}} 角色块与 {{no_system_prompt}} 控制标记）
    * @param {boolean} [partialConfig.userMessagePreprocessorIncludeInHistory] - 预处理结果是否写入历史
    * @returns {Object|null} 完整的 API 配置对象或 null
@@ -5727,6 +5747,7 @@ export function createApiManager(appContext) {
       temperature: partialConfig.temperature ?? 1.0,
       useStreaming: partialConfig.useStreaming !== false,
       isFavorite: false,
+      enableAskOtherAiTool: !!partialConfig.enableAskOtherAiTool,
       customParams: partialConfig.customParams || '',
       customSystemPrompt: partialConfig.customSystemPrompt || '',
       userMessagePreprocessorTemplate: (typeof partialConfig.userMessagePreprocessorTemplate === 'string')
@@ -5871,6 +5892,7 @@ export function createApiManager(appContext) {
       temperature: config.temperature ?? 1,
       useStreaming: config.useStreaming !== false,
       isFavorite: !!config.isFavorite,
+      enableAskOtherAiTool: !!config.enableAskOtherAiTool,
       customParams: config.customParams || '',
       customSystemPrompt: config.customSystemPrompt || '',
       userMessagePreprocessorTemplate: (typeof config.userMessagePreprocessorTemplate === 'string')

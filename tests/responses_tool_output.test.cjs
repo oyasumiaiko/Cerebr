@@ -245,3 +245,77 @@ test('buildResponsesHistoryReadToolOutputContentItems 使用 messages XML 分块
   assert.match(text, /<message msg_index="1" role="user" timestamp="1775458218025">/);
   assert.match(text, /Hello <xml>/);
 });
+
+test('buildResponsesAskableModelsToolOutputContentItems 使用 guidance 与 models XML 分块', async () => {
+  const { buildResponsesAskableModelsToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesAskableModelsToolOutputContentItems({
+    ok: true,
+    total_models: 1,
+    guidance: '先看目录，再提问。',
+    models: [
+      {
+        rank: 1,
+        config_id: 'cfg-1',
+        display_name: 'Reviewer',
+        model_name: 'gpt-4.1',
+        connection_type: 'openai',
+        connection_source_name: 'Proxy',
+        base_url: 'https://example.com/v1/chat/completions',
+        is_favorite: false,
+        has_custom_system_prompt: true
+      }
+    ]
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<list_askable_models_result>/);
+  assert.match(text, /<guidance>/);
+  assert.match(text, /先看目录，再提问/);
+  assert.match(text, /<model rank="1">/);
+  assert.match(text, /"config_id": "cfg-1"/);
+});
+
+test('buildResponsesAskOtherAiToolOutputContentItems 使用 responses XML 分块', async () => {
+  const { buildResponsesAskOtherAiToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesAskOtherAiToolOutputContentItems({
+    ok: true,
+    total_requests: 2,
+    success_count: 1,
+    error_count: 1,
+    answers: [
+      {
+        index: 1,
+        config_id: 'cfg-a',
+        status: 'ok',
+        question: '这个方案靠谱吗？',
+        target: {
+          display_name: 'Reviewer',
+          model_name: 'gpt-4.1',
+          connection_type: 'openai'
+        },
+        usage: {
+          promptTokens: 10,
+          completionTokens: 20,
+          totalTokens: 30
+        },
+        answer: '我认为大体可行，但要补测试。'
+      },
+      {
+        index: 2,
+        config_id: 'cfg-b',
+        status: 'error',
+        question: '请给反对意见',
+        answer: '',
+        error: 'HTTP 500'
+      }
+    ]
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<ask_other_ai_result>/);
+  assert.match(text, /<responses>/);
+  assert.match(text, /<response rank="1" status="ok" config_id="cfg-a">/);
+  assert.match(text, /<question>/);
+  assert.match(text, /这个方案靠谱吗/);
+  assert.match(text, /<answer>/);
+  assert.match(text, /补测试/);
+  assert.match(text, /HTTP 500/);
+});

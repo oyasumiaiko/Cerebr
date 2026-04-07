@@ -33,6 +33,8 @@ import {
   buildResponsesPageContentToolOutputContentItems,
   buildResponsesHistorySearchToolOutputContentItems,
   buildResponsesHistoryReadToolOutputContentItems,
+  buildResponsesAskableModelsToolOutputContentItems,
+  buildResponsesAskOtherAiToolOutputContentItems,
   buildResponsesGenericXmlToolOutputContentItems
 } from '../utils/responses_tool_output.js';
 import {
@@ -44,6 +46,11 @@ import {
   executeHistoryReadTool,
   executeHistorySearchTool
 } from '../utils/chat_history_tool.js';
+import {
+  buildAskOtherAiCatalog,
+  buildAskOtherAiUserMessage,
+  normalizeAskOtherAiArguments
+} from '../utils/ask_other_ai_tool.js';
 import {
   JS_RUNTIME_ENV_BOUND_HOST_PAGE,
   JS_RUNTIME_ENV_ISOLATED_SANDBOX,
@@ -68,6 +75,8 @@ const RESPONSES_JS_RUNTIME_TOOL_NAME = 'js_runtime_execute';
 const RESPONSES_PAGE_CONTENT_TOOL_NAME = 'page_content_read';
 const RESPONSES_HISTORY_SEARCH_TOOL_NAME = 'history_search';
 const RESPONSES_HISTORY_READ_TOOL_NAME = 'history_read';
+const RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME = 'list_askable_models';
+const RESPONSES_ASK_OTHER_AI_TOOL_NAME = 'ask_other_ai';
 
 /**
  * 创建消息发送器
@@ -6400,6 +6409,90 @@ export function createMessageSender(appContext) {
   }
 
   /**
+   * 列出当前允许被“向其他 AI 提问”工具使用的目标模型目录。
+   *
+   * 这把工具只做目录发现与使用须知说明：
+   * - 不直接发起任何模型调用；
+   * - 返回的 config_id 可直接用于 ask_other_ai；
+   * - 是否包含当前配置完全由用户勾选决定，这里不额外替用户做裁剪。
+   *
+   * @returns {Object}
+   */
+  function buildResponsesListAskableModelsFunctionToolDefinition() {
+    return {
+      type: 'function',
+      name: RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME,
+      description: [
+        '列出当前可通过“向其他AI提问”工具访问的目标模型配置。',
+        '结果会返回每个目标的 config_id、显示名、模型名与连接信息，并附带使用须知。',
+        '若后续要发起提问，请先调用这把工具，再把返回的 config_id 用于 ask_other_ai。'
+      ].join(' '),
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+        required: []
+      }
+    };
+  }
+
+  /**
+   * 向一个或多个已启用的“其他模型配置”发起独立提问。
+   *
+   * 参数设计：
+   * - requests 是显式结构化数组；
+   * - 每条 request 都明确给出目标 config_id 与问题文本；
+   * - context 为可选补充材料，避免模型误以为它天然继承当前对话的隐藏上下文。
+   *
+   * @returns {Object}
+   */
+  function buildResponsesAskOtherAiFunctionToolDefinition() {
+    const requestItemProperties = {
+      config_id: {
+        type: 'string',
+        description: '必填。目标模型配置的 config_id，请先通过 list_askable_models 获取。'
+      },
+      question: {
+        type: 'string',
+        description: '必填。要向该目标模型提问的具体问题。'
+      },
+      context: {
+        type: ['string', 'null'],
+        description: '可选。要额外提供给目标模型的补充上下文。若当前对话、页面内容或工具结果很重要，请自行整理后放进这里。'
+      }
+    };
+
+    return {
+      type: 'function',
+      name: RESPONSES_ASK_OTHER_AI_TOOL_NAME,
+      description: [
+        '向一个或多个已启用的其他模型配置提问，以获取独立观点、复核分析或比较不同模型结论。',
+        '每条 request 都需要显式给出 config_id 与 question；同一次调用里可以向相同或不同模型发送多条问题。',
+        '目标模型只会看到你提供的 question 与 context，不会自动继承当前对话、隐藏上下文、本地工具结果或页面状态。'
+      ].join(' '),
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          requests: {
+            type: 'array',
+            description: '必填。要执行的一组提问请求；每条 request 都是一次独立提问。',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: requestItemProperties,
+              required: Object.keys(requestItemProperties)
+            }
+          }
+        },
+        required: ['requests']
+      }
+    };
+  }
+
+  /**
    * 构造给 Responses API 使用的 history_search 自定义函数工具定义。
    *
    * 设计说明：
@@ -6545,6 +6638,8 @@ export function createMessageSender(appContext) {
   function getResponsesCustomFunctionTools(usedApiConfig, pageToolEnvironment = resolveResponsesPageToolEnvironment()) {
     if (!isOpenAIResponsesApiConfig(usedApiConfig)) return [];
     const tools = [
+      buildResponsesListAskableModelsFunctionToolDefinition(),
+      buildResponsesAskOtherAiFunctionToolDefinition(),
       buildResponsesHistorySearchFunctionToolDefinition(),
       buildResponsesHistoryReadFunctionToolDefinition()
     ];
@@ -6728,6 +6823,28 @@ export function createMessageSender(appContext) {
       return buildResponsesHistoryReadToolOutputContentItems(value);
     } catch (error) {
       return buildResponsesGenericXmlToolOutputContentItems('history_read_result', {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      });
+    }
+  }
+
+  function serializeResponsesListAskableModelsFunctionToolOutput(value) {
+    try {
+      return buildResponsesAskableModelsToolOutputContentItems(value);
+    } catch (error) {
+      return buildResponsesGenericXmlToolOutputContentItems('list_askable_models_result', {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      });
+    }
+  }
+
+  function serializeResponsesAskOtherAiFunctionToolOutput(value) {
+    try {
+      return buildResponsesAskOtherAiToolOutputContentItems(value);
+    } catch (error) {
+      return buildResponsesGenericXmlToolOutputContentItems('ask_other_ai_result', {
         ok: false,
         error: normalizeResponsesCustomToolError(error)
       });
@@ -6921,6 +7038,277 @@ export function createMessageSender(appContext) {
     }
   }
 
+  function extractChatCompletionContentText(content) {
+    if (typeof content === 'string') return content;
+    if (!Array.isArray(content)) return '';
+    return content.map((item) => {
+      if (typeof item === 'string') return item;
+      if (item && typeof item.text === 'string') return item.text;
+      if (item && typeof item.content === 'string') return item.content;
+      return '';
+    }).join('');
+  }
+
+  function parseSseEventsFromText(sourceText) {
+    const text = (typeof sourceText === 'string') ? sourceText : '';
+    if (!text.trim()) return [];
+    const normalized = text.replace(/\r\n/g, '\n');
+    const chunks = normalized.split(/\n\n+/);
+    return chunks.map((chunk) => {
+      const lines = chunk.split('\n');
+      let event = '';
+      const dataLines = [];
+      for (const rawLine of lines) {
+        const line = String(rawLine || '');
+        if (!line) continue;
+        if (line.startsWith('event:')) {
+          event = line.slice(6).trim();
+          continue;
+        }
+        if (line.startsWith('data:')) {
+          dataLines.push(line.slice(5).trimStart());
+        }
+      }
+      return {
+        event,
+        data: dataLines.join('\n').trim()
+      };
+    }).filter((item) => item.data);
+  }
+
+  async function readAskOtherAiResponsePayload(response, targetConfig, requestBody) {
+    const requestedMode = resolveResponseHandlingMode({
+      apiBase: targetConfig?.baseUrl,
+      connectionType: targetConfig?.connectionType,
+      geminiUseStreaming: targetConfig?.useStreaming !== false,
+      requestBodyStream: requestBody?.stream === true
+    });
+    const receivedMode = resolveReceivedResponseHandlingMode({
+      requestedMode,
+      responseContentType: response?.headers?.get?.('content-type') || '',
+      hasResponseBody: !!response?.body
+    });
+    const rawText = await response.text();
+
+    if (receivedMode !== 'stream') {
+      try {
+        return JSON.parse(rawText);
+      } catch (error) {
+        throw new Error(rawText || '解析子请求响应失败');
+      }
+    }
+
+    const events = parseSseEventsFromText(rawText);
+    let lastJson = null;
+    let latestResponsesPayload = null;
+    let accumulatedChatText = '';
+    let latestUsage = null;
+
+    for (const item of events) {
+      if (!item?.data || item.data === '[DONE]') continue;
+      try {
+        const payload = JSON.parse(item.data);
+        lastJson = payload;
+        if (
+          item.event === 'response.completed'
+          || String(payload?.type || '').toLowerCase() === 'response.completed'
+        ) {
+          latestResponsesPayload = payload?.response || payload;
+          continue;
+        }
+        if (isOpenAIResponsesPayload(payload)) {
+          latestResponsesPayload = payload;
+          continue;
+        }
+        const choice = Array.isArray(payload?.choices) ? payload.choices[0] : null;
+        const deltaContent = choice?.delta?.content;
+        const deltaText = extractChatCompletionContentText(deltaContent);
+        if (deltaText) {
+          accumulatedChatText += deltaText;
+        }
+        if (payload?.usage) {
+          latestUsage = payload.usage;
+        }
+      } catch (_) {
+        // 某些兼容端点可能夹带非 JSON 事件；这里忽略掉无法解析的行，继续寻找最终完成事件。
+      }
+    }
+
+    if (latestResponsesPayload) return latestResponsesPayload;
+    if (accumulatedChatText) {
+      return {
+        choices: [
+          {
+            message: {
+              content: accumulatedChatText
+            }
+          }
+        ],
+        usage: latestUsage
+      };
+    }
+    if (lastJson) return lastJson;
+    throw new Error(rawText || '解析 SSE 子请求响应失败');
+  }
+
+  function extractAskOtherAiAnswerFromPayload(payload, targetConfig) {
+    if (payload && payload.error) {
+      throw new Error(payload.error.message || '目标模型返回错误');
+    }
+
+    const usage = normalizeApiUsageMeta(payload?.usage || payload?.response?.usage);
+    if (isOpenAIResponsesPayload(payload) || isOpenAIResponsesApiConfig(targetConfig)) {
+      const extracted = extractOpenAIResponsesOutput(payload);
+      return {
+        answer: extracted?.answer || '',
+        usage
+      };
+    }
+
+    if (isGeminiApiConfig(targetConfig)) {
+      const parts = Array.isArray(payload?.candidates?.[0]?.content?.parts)
+        ? payload.candidates[0].content.parts
+        : [];
+      const answer = parts
+        .filter((part) => typeof part?.text === 'string' && !part?.thought)
+        .map((part) => part.text)
+        .join('');
+      return { answer, usage };
+    }
+
+    const firstChoice = Array.isArray(payload?.choices) ? payload.choices[0] : null;
+    const answer = extractChatCompletionContentText(firstChoice?.message?.content ?? firstChoice?.text ?? payload?.content ?? '');
+    return { answer, usage };
+  }
+
+  function sanitizeAskOtherAiRequestBody(requestBody) {
+    const sanitized = (requestBody && typeof requestBody === 'object' && !Array.isArray(requestBody))
+      ? cloneDataSafely(requestBody)
+      : {};
+    delete sanitized.tools;
+    delete sanitized.tool_choice;
+    return sanitized;
+  }
+
+  async function executeResponsesListAskableModelsFunction(_rawArgs, options = {}) {
+    try {
+      const configs = apiManager.getAllConfigs();
+      return buildAskOtherAiCatalog(configs);
+    } catch (error) {
+      return {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      };
+    }
+  }
+
+  async function executeResponsesAskOtherAiFunction(rawArgs, options = {}) {
+    try {
+      const { requests } = normalizeAskOtherAiArguments(rawArgs);
+      const allConfigs = apiManager.getAllConfigs();
+      const catalog = buildAskOtherAiCatalog(allConfigs);
+      const askableConfigIdSet = new Set((catalog.models || []).map((item) => item.config_id));
+      const catalogById = new Map((catalog.models || []).map((item) => [item.config_id, item]));
+      const answers = [];
+
+      for (let index = 0; index < requests.length; index += 1) {
+        const request = requests[index];
+        const configId = request.config_id;
+        const catalogEntry = catalogById.get(configId) || null;
+
+        if (!askableConfigIdSet.has(configId)) {
+          answers.push({
+            index: index + 1,
+            config_id: configId,
+            status: 'error',
+            question: request.question,
+            answer: '',
+            error: `目标 config_id 不存在、未启用“AI提问工具可用”，或就是当前正在使用的模型：${configId}`
+          });
+          continue;
+        }
+
+        const targetConfig = apiManager.resolveApiParam({ id: configId });
+        if (!targetConfig) {
+          answers.push({
+            index: index + 1,
+            config_id: configId,
+            status: 'error',
+            question: request.question,
+            answer: '',
+            error: `无法解析目标模型配置：${configId}`
+          });
+          continue;
+        }
+
+        try {
+          const messageContent = buildAskOtherAiUserMessage(request.question, request.context);
+          const requestBody = sanitizeAskOtherAiRequestBody(await apiManager.buildRequest({
+            messages: [{ role: 'user', content: messageContent }],
+            config: {
+              ...targetConfig,
+              useStreaming: false
+            },
+            overrides: { stream: false }
+          }));
+          const response = await apiManager.sendRequest({
+            requestBody,
+            config: {
+              ...targetConfig,
+              useStreaming: false
+            }
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text().catch(() => '');
+            throw new Error(`HTTP ${response.status}: ${errorText || '目标模型返回错误'}`);
+          }
+
+          const payload = await readAskOtherAiResponsePayload(response, targetConfig, requestBody);
+          const extracted = extractAskOtherAiAnswerFromPayload(payload, targetConfig);
+
+          answers.push({
+            index: index + 1,
+            config_id: configId,
+            status: 'ok',
+            question: request.question,
+            context_supplied: !!request.context,
+            target: {
+              display_name: catalogEntry?.display_name || targetConfig.displayName || targetConfig.modelName || configId,
+              model_name: targetConfig.modelName || null,
+              connection_type: targetConfig.connectionType || null,
+              connection_source_name: targetConfig.connectionSourceName || null
+            },
+            answer: extracted.answer || '',
+            usage: extracted.usage || null
+          });
+        } catch (error) {
+          answers.push({
+            index: index + 1,
+            config_id: configId,
+            status: 'error',
+            question: request.question,
+            answer: '',
+            error: normalizeResponsesCustomToolError(error).message
+          });
+        }
+      }
+
+      return {
+        ok: answers.some((item) => item.status === 'ok'),
+        total_requests: requests.length,
+        success_count: answers.filter((item) => item.status === 'ok').length,
+        error_count: answers.filter((item) => item.status !== 'ok').length,
+        answers
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      };
+    }
+  }
+
   /**
    * 执行一个客户端负责落地的 Responses function_call。
    *
@@ -6964,6 +7352,10 @@ export function createMessageSender(appContext) {
     let outputPayload = null;
     if (functionName === RESPONSES_JS_RUNTIME_TOOL_NAME) {
       outputPayload = await executeResponsesJsRuntimeFunction(parsedArgs, options);
+    } else if (functionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME) {
+      outputPayload = await executeResponsesListAskableModelsFunction(parsedArgs, options);
+    } else if (functionName === RESPONSES_ASK_OTHER_AI_TOOL_NAME) {
+      outputPayload = await executeResponsesAskOtherAiFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_PAGE_CONTENT_TOOL_NAME) {
       outputPayload = await executeResponsesPageContentFunction(parsedArgs);
     } else if (functionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME) {
@@ -6989,6 +7381,10 @@ export function createMessageSender(appContext) {
       output:
         functionName === RESPONSES_JS_RUNTIME_TOOL_NAME
           ? serializeResponsesJsRuntimeFunctionToolOutput(outputPayload)
+          : functionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME
+            ? serializeResponsesListAskableModelsFunctionToolOutput(outputPayload)
+            : functionName === RESPONSES_ASK_OTHER_AI_TOOL_NAME
+              ? serializeResponsesAskOtherAiFunctionToolOutput(outputPayload)
           : functionName === RESPONSES_PAGE_CONTENT_TOOL_NAME
             ? serializeResponsesPageContentFunctionToolOutput(outputPayload)
             : functionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME
@@ -7317,7 +7713,8 @@ export function createMessageSender(appContext) {
           throw new DOMException('The operation was aborted.', 'AbortError');
         }
         functionCallOutputs.push(await executeResponsesCustomFunctionToolCall(toolCall, {
-          attemptState
+          attemptState,
+          usedApiConfig
         }));
       }
       const replayOutputItemsForFollowUp = ensureResponsesReplayOutputItemsIncludeFunctionCalls(
