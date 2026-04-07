@@ -51,6 +51,23 @@ test('splitPendingSteersByTurn keeps matched and remaining order stable', async 
   assert.deepEqual(result.remaining.map(item => item.id), ['steer-b']);
 });
 
+test('splitPendingSteersByTurnIds supports stable attempt id plus legacy assistant message id aliases', async () => {
+  const { splitPendingSteersByTurnIds } = await loadPendingSteerModule();
+
+  const pendingSteers = [
+    { id: 'steer-attempt', targetTurnId: 'attempt-1', payload: { originalMessageText: 'A' } },
+    { id: 'steer-legacy-ai', targetTurnId: 'ai-msg-1', payload: { originalMessageText: 'B' } },
+    { id: 'steer-other', targetTurnId: 'attempt-2', payload: { originalMessageText: 'C' } }
+  ];
+
+  const result = splitPendingSteersByTurnIds(pendingSteers, {
+    turnIds: ['attempt-1', 'ai-msg-1']
+  });
+
+  assert.deepEqual(result.matched.map((item) => item.id), ['steer-attempt', 'steer-legacy-ai']);
+  assert.deepEqual(result.remaining.map((item) => item.id), ['steer-other']);
+});
+
 test('collectPendingSteersForFollowUpWindow keeps steer pending when no natural follow-up exists', async () => {
   const { collectPendingSteersForFollowUpWindow } = await loadPendingSteerModule();
 

@@ -33,6 +33,13 @@ function normalizeTimestamp(value) {
   return numeric;
 }
 
+function normalizeTurnIdList(turnIds) {
+  if (!Array.isArray(turnIds)) return [];
+  return turnIds
+    .map((turnId) => normalizeStringId(turnId))
+    .filter(Boolean);
+}
+
 /**
  * 判断某条 pending steer 是否属于指定 turn。
  *
@@ -69,14 +76,36 @@ export function pendingSteerTargetsTurn(pendingSteer, turnId, turnStartedAtMs) {
  * @returns {{matched: Array<any>, remaining: Array<any>}}
  */
 export function splitPendingSteersByTurn(pendingSteers, options = {}) {
+  return splitPendingSteersByTurnIds(pendingSteers, {
+    turnIds: [options?.turnId ?? null],
+    turnStartedAtMs: options?.turnStartedAtMs ?? null
+  });
+}
+
+/**
+ * 将 pending steer 列表按“是否属于当前 turnId 候选集合”拆成两组。
+ *
+ * 这里给 message_sender 提供一个低技术债务的能力：
+ * - 当前 turn 的稳定身份应该是 request/attempt 级 id；
+ * - 但历史上已有一部分 pending steer 可能绑定到了 assistant message id；
+ * - 因此在匹配时允许调用方一次给出多个等价 turn id（主 id + 兼容旧写法的 alias）。
+ *
+ * @param {Array<any>|null|undefined} pendingSteers
+ * @param {{turnIds?: Array<string|null|undefined>, turnStartedAtMs?: number|null}} options
+ * @returns {{matched: Array<any>, remaining: Array<any>}}
+ */
+export function splitPendingSteersByTurnIds(pendingSteers, options = {}) {
   const list = Array.isArray(pendingSteers) ? pendingSteers : [];
   const matched = [];
   const remaining = [];
-  const turnId = options?.turnId ?? null;
+  const turnIds = normalizeTurnIdList(options?.turnIds);
   const turnStartedAtMs = options?.turnStartedAtMs ?? null;
 
   list.forEach((pendingSteer) => {
-    if (pendingSteerTargetsTurn(pendingSteer, turnId, turnStartedAtMs)) {
+    const steerMatched = turnIds.length > 0
+      ? turnIds.some((turnId) => pendingSteerTargetsTurn(pendingSteer, turnId, turnStartedAtMs))
+      : pendingSteerTargetsTurn(pendingSteer, null, turnStartedAtMs);
+    if (steerMatched) {
       matched.push(cloneSteerData(pendingSteer));
     } else {
       remaining.push(cloneSteerData(pendingSteer));

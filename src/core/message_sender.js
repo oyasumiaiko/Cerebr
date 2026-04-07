@@ -18,10 +18,16 @@ import {
   planStreamingRenderTransition
 } from './response_flow_state.js';
 import {
-  splitPendingSteersByTurn,
+  splitPendingSteersByTurnIds,
   buildRestoredQueueJobsFromPendingSteers,
   resolvePendingSteerRestoreDisposition
 } from './conversation_pending_steer.js';
+import {
+  buildAttemptSteerTargetIdentity,
+  buildPendingSteerMatchOptionsForAttempt
+} from '../utils/conversation_steer_identity.js';
+import { attemptBelongsToConversationQueue } from '../utils/conversation_attempt_membership.js';
+import { selectLatestRunningAttemptForCurrentConversation } from '../utils/conversation_active_attempt_selector.js';
 import { serializeSelectionTextWithMath } from '../utils/math_selection_text.js';
 import { normalizeApiUsageMeta, normalizeApiTimingMeta } from '../utils/api_footer_template.js';
 import {
@@ -2196,6 +2202,14 @@ export function createMessageSender(appContext) {
   function getCurrentActiveConversationQueueKey() {
     const activeId = normalizeConversationId(currentConversationId)
       || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
+    const preferredAttempt = selectLatestRunningAttemptForCurrentConversation(
+      Array.from(activeAttempts.values()),
+      activeId
+    );
+    if (preferredAttempt) {
+      const attemptQueueKey = getAttemptRuntimeConversationKey(preferredAttempt, activeId || '');
+      if (attemptQueueKey) return attemptQueueKey;
+    }
     return resolveConversationQueueKey(activeId);
   }
 
@@ -3290,8 +3304,7 @@ export function createMessageSender(appContext) {
   }
 
   function doesAttemptBelongToConversationQueueKey(attemptState, queueKey) {
-    if (!attemptState || attemptState.finished) return false;
-    return resolveConversationQueueKey(attemptState.boundConversationId) === resolveConversationQueueKey(queueKey);
+    return attemptBelongsToConversationQueue(attemptState, resolveConversationQueueKey(queueKey));
   }
 
   function hasPendingWorkForConversationQueue(queueKey) {
@@ -3853,6 +3866,15 @@ export function createMessageSender(appContext) {
     return latestAttempt;
   }
 
+  function getLatestRunningAttemptForCurrentConversationUi() {
+    const activeId = normalizeConversationId(currentConversationId)
+      || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
+    return selectLatestRunningAttemptForCurrentConversation(
+      Array.from(activeAttempts.values()),
+      activeId
+    );
+  }
+
   function setConversationSteerRuntime(queueKey, steerStatePatch = {}) {
     const normalizedQueueKey = resolveConversationQueueKey(queueKey);
     if (!normalizedQueueKey) return null;
@@ -3882,22 +3904,10 @@ export function createMessageSender(appContext) {
   }
 
   function getAttemptSteerTargetIdentity(attemptState) {
-    if (!attemptState) {
-      return {
-        turnId: null,
-        turnStartedAtMs: null
-      };
-    }
-
-    return {
-      turnId: normalizeConversationId(attemptState.aiMessageId || attemptState.id || ''),
-      turnStartedAtMs: Number.isFinite(Number(attemptState.startedAt))
-        ? Number(attemptState.startedAt)
-        : null
-    };
+    return buildAttemptSteerTargetIdentity(attemptState);
   }
 
-  function removeConversationPendingSteersByIds(queueKey, steerIds) {
+  function removeConversationPendingSteersByIds(queueKey, steerIds, targetAttempt = null) {
     const normalizedQueueKey = resolveConversationQueueKey(queueKey);
     const steerIdSet = new Set(
       Array.isArray(steerIds)
@@ -3907,6 +3917,12 @@ export function createMessageSender(appContext) {
         : []
     );
     if (!normalizedQueueKey || steerIdSet.size <= 0) return getConversationPendingSteers(normalizedQueueKey);
+
+    if (targetAttempt && !targetAttempt.finished && Array.isArray(targetAttempt.pendingSteers)) {
+      targetAttempt.pendingSteers = targetAttempt.pendingSteers
+        .map((steer) => normalizePendingConversationSteer(steer))
+        .filter((steer) => !steerIdSet.has(String(steer?.id || '').trim()));
+    }
 
     const existing = getConversationPendingSteers(normalizedQueueKey);
     const remaining = existing.filter((steer) => !steerIdSet.has(String(steer?.id || '').trim()));
@@ -3921,12 +3937,22 @@ export function createMessageSender(appContext) {
 
   function getConversationPendingSteersForAttempt(attemptState) {
     if (!attemptState) return [];
+    const { turnIds, turnStartedAtMs } = buildPendingSteerMatchOptionsForAttempt(attemptState);
+    const localPendingSteers = Array.isArray(attemptState.pendingSteers)
+      ? attemptState.pendingSteers.map((steer) => normalizePendingConversationSteer(steer))
+      : [];
+    if (localPendingSteers.length > 0) {
+      return splitPendingSteersByTurnIds(localPendingSteers, {
+        turnIds,
+        turnStartedAtMs
+      }).matched.map((steer) => normalizePendingConversationSteer(steer));
+    }
+
     const runtimeConversationKey = getAttemptRuntimeConversationKey(attemptState);
     const pendingSteers = getConversationPendingSteers(runtimeConversationKey);
     if (pendingSteers.length <= 0) return [];
-    const { turnId, turnStartedAtMs } = getAttemptSteerTargetIdentity(attemptState);
-    return splitPendingSteersByTurn(pendingSteers, {
-      turnId,
+    return splitPendingSteersByTurnIds(pendingSteers, {
+      turnIds,
       turnStartedAtMs
     }).matched.map((steer) => normalizePendingConversationSteer(steer));
   }
@@ -3939,6 +3965,12 @@ export function createMessageSender(appContext) {
       targetTurnId: targetIdentity.turnId || pendingSteer?.targetTurnId || null,
       targetTurnStartedAtMs: targetIdentity.turnStartedAtMs ?? pendingSteer?.targetTurnStartedAtMs ?? null
     });
+    if (targetAttempt && !targetAttempt.finished) {
+      const existingLocalPendingSteers = Array.isArray(targetAttempt.pendingSteers)
+        ? targetAttempt.pendingSteers.map((steer) => normalizePendingConversationSteer(steer))
+        : [];
+      targetAttempt.pendingSteers = existingLocalPendingSteers.concat([normalizedSteer]);
+    }
     const existing = getConversationPendingSteers(normalizedQueueKey);
     return setConversationSteerRuntime(normalizedQueueKey, {
       pendingSteers: existing.concat([normalizedSteer]),
@@ -3981,27 +4013,35 @@ export function createMessageSender(appContext) {
    * - 不碰当前 queue；
    * - 只在当前 active turn 的下一个安全边界被吸收。
    */
-  async function requestConversationSteer({ queueKey, pendingSteer } = {}) {
-    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+  async function requestConversationSteer({ queueKey, pendingSteer, targetAttempt = null } = {}) {
     const normalizedSteer = normalizePendingConversationSteer(pendingSteer);
-    if (!normalizedQueueKey || !normalizedSteer?.responseInputItem) {
+    if (!normalizedSteer?.responseInputItem) {
       return { ok: false, error: new Error('invalid_pending_steer') };
     }
 
-    const targetAttempt = getLatestRunningAttemptForConversationQueue(normalizedQueueKey);
-    if (!targetAttempt) {
+    const resolvedTargetAttempt = targetAttempt
+      || getLatestRunningAttemptForConversationQueue(resolveConversationQueueKey(queueKey));
+    if (!resolvedTargetAttempt) {
       return { ok: false, reason: 'no_active_turn', error: new Error('当前没有可转向的生成') };
     }
-    if (targetAttempt.supportsStandardSteer !== true) {
+    if (resolvedTargetAttempt.supportsStandardSteer !== true) {
       return { ok: false, reason: 'unsupported_turn_transport', error: new Error('当前连接源不支持标准 steer') };
     }
 
-    appendConversationPendingSteer(normalizedQueueKey, normalizedSteer, targetAttempt);
+    const runtimeConversationKey = getAttemptRuntimeConversationKey(
+      resolvedTargetAttempt,
+      resolveConversationQueueKey(queueKey)
+    );
+    if (!runtimeConversationKey) {
+      return { ok: false, reason: 'invalid_target_attempt', error: new Error('无法解析当前生成所属会话') };
+    }
+
+    appendConversationPendingSteer(runtimeConversationKey, normalizedSteer, resolvedTargetAttempt);
     return {
       ok: true,
       pending: true,
-      targetTurnId: targetAttempt.aiMessageId || targetAttempt.id || null,
-      pendingCount: getConversationPendingSteers(normalizedQueueKey).length
+      targetTurnId: getAttemptSteerTargetIdentity(resolvedTargetAttempt).turnId,
+      pendingCount: getConversationPendingSteers(runtimeConversationKey).length
     };
   }
 
@@ -4013,7 +4053,8 @@ export function createMessageSender(appContext) {
 
     removeConversationPendingSteersByIds(
       runtimeConversationKey,
-      pendingSteers.map((steer) => steer.id)
+      pendingSteers.map((steer) => steer.id),
+      attemptState
     );
 
     const restoreDisposition = resolvePendingSteerRestoreDisposition(
@@ -7812,7 +7853,8 @@ export function createMessageSender(appContext) {
       if (pendingSteerIdsAwaitingRequestAcceptance.length > 0) {
         removeConversationPendingSteersByIds(
           getAttemptRuntimeConversationKey(attemptState),
-          pendingSteerIdsAwaitingRequestAcceptance
+          pendingSteerIdsAwaitingRequestAcceptance,
+          attemptState
         );
         if (attemptState && pendingSteerInputItemsAwaitingRequestAcceptance.length > 0) {
           const mergedAcceptedInputItems = mergeResponsesReplayOutputItems(
@@ -8222,7 +8264,8 @@ export function createMessageSender(appContext) {
         historyConversationRevision: conversationRevisionSnapshot != null
           ? normalizeConversationHistoryRevision(conversationRevisionSnapshot)
           : normalizedConversationRevisionAtStart,
-        retryPolicy: normalizedConversationRetryPolicy
+        retryPolicy: normalizedConversationRetryPolicy,
+        pendingSteers: []
       };
       activeAttempts.set(attemptState.id, attemptState);
       updateAttemptRuntimeState(attemptState, (draft) => {
@@ -9399,7 +9442,10 @@ export function createMessageSender(appContext) {
       || hasImagesInInput
     );
     const requestedSteer = submissionBehavior === 'steer';
-    const shouldSendAsSteer = requestedSteer && hasRunningAttemptInCurrentConversation;
+    const targetSteerAttempt = requestedSteer
+      ? getLatestRunningAttemptForCurrentConversationUi()
+      : null;
+    const shouldSendAsSteer = requestedSteer && !!targetSteerAttempt;
 
     if (singleOpts.regenerateMode) {
       return requestRegenerateMessage({
@@ -9414,7 +9460,7 @@ export function createMessageSender(appContext) {
       });
     }
 
-    if (requestedSteer && !hasRunningAttemptInCurrentConversation) {
+    if (requestedSteer && !targetSteerAttempt) {
       showNotification?.({ message: '当前没有可转向的生成', type: 'warning', duration: 1800 });
       return { ok: false, reason: 'no_active_turn' };
     }
@@ -9451,7 +9497,8 @@ export function createMessageSender(appContext) {
       }
       const result = await requestConversationSteer({
         queueKey: currentConversationQueueKey,
-        pendingSteer
+        pendingSteer,
+        targetAttempt: targetSteerAttempt
       });
       if (result?.ok && typeof showNotification === 'function') {
         clearInputs();
