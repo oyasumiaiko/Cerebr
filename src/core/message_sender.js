@@ -5460,6 +5460,7 @@ export function createMessageSender(appContext) {
     if (thoughtsContent.dataset) {
       delete thoughtsContent.dataset.manualState;
       delete thoughtsContent.dataset.autoLifecycleInitialized;
+      delete thoughtsContent.dataset.autoCollapsedAfterAnswerStart;
       delete thoughtsContent.dataset.autoCollapsedAfterFinish;
     }
   }

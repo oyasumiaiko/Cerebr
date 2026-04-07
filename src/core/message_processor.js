@@ -16,6 +16,7 @@ import { enhanceMermaidDiagrams } from '../utils/mermaid_renderer.js';
 import { extractThinkingFromText, mergeThoughts } from '../utils/thoughts_parser.js';
 import { normalizeResponsesReasoningText } from '../utils/responses_activity_reasoning.js';
 import { buildApiFooterRenderData } from '../utils/api_footer_template.js';
+import { resolveThoughtsPanelLifecycleState } from '../utils/thoughts_panel_lifecycle.js';
 import {
   formatResponsesToolOutputForDisplay,
   hasResponsesToolOutputBody
@@ -763,12 +764,17 @@ export function createMessageProcessor(appContext) {
       }
 
       // 自动展开/折叠策略：
-      // - 首次出现且仍在生成时，默认展开一次；
-      // - 生成结束时，自动收起一次；
-      // - 除这两个生命周期动作外，不再反复改写，避免刷新时闪烁；
+      // - 首次出现且“正文尚未开始输出”时，默认展开一次；
+      // - 一旦正文开始输出，就立即自动收起一次；
+      // - 如果直到结束都没有正文，也会在结束时自动收起一次；
+      // - 除这几个生命周期动作外，不再反复改写，避免刷新时闪烁；
       // - 用户一旦手动点击，后续刷新始终尊重用户选择。
       const isUpdating = messageWrapperDiv.classList.contains('updating')
         || isResponseActivityTurnRuntimeActive(messageWrapperDiv);
+      const visibleAnswerText = (typeof messageWrapperDiv.getAttribute === 'function')
+        ? String(messageWrapperDiv.getAttribute('data-original-text') || '').trim()
+        : '';
+      const hasVisibleAnswerStarted = visibleAnswerText.length > 0;
       if (
         thoughtsContentDiv.dataset.userToggled === 'true'
         && !String(thoughtsContentDiv.dataset.manualState || '').trim()
@@ -776,29 +782,28 @@ export function createMessageProcessor(appContext) {
         thoughtsContentDiv.dataset.manualState = thoughtsContentDiv.classList.contains('expanded') ? 'expanded' : 'collapsed';
       }
       const manualState = String(thoughtsContentDiv.dataset.manualState || '').trim().toLowerCase();
-      const lifecycleInitialized = thoughtsContentDiv.dataset.autoLifecycleInitialized === 'true';
-      const autoCollapsedAfterFinish = thoughtsContentDiv.dataset.autoCollapsedAfterFinish === 'true';
-      let shouldBeExpanded = thoughtsContentDiv.classList.contains('expanded');
+      const lifecycleState = resolveThoughtsPanelLifecycleState({
+        manualState,
+        lifecycleInitialized: thoughtsContentDiv.dataset.autoLifecycleInitialized === 'true',
+        autoCollapsedAfterAnswerStart:
+          thoughtsContentDiv.dataset.autoCollapsedAfterAnswerStart === 'true'
+          || thoughtsContentDiv.dataset.autoCollapsedAfterFinish === 'true',
+        isUpdating,
+        hasVisibleAnswerStarted,
+        currentlyExpanded: thoughtsContentDiv.classList.contains('expanded')
+      });
 
-      if (manualState === 'expanded' || manualState === 'collapsed') {
-        shouldBeExpanded = manualState === 'expanded';
-      } else if (!lifecycleInitialized) {
-        thoughtsContentDiv.dataset.autoLifecycleInitialized = 'true';
-        if (isUpdating) {
-          shouldBeExpanded = true;
-          delete thoughtsContentDiv.dataset.autoCollapsedAfterFinish;
-        } else {
-          shouldBeExpanded = false;
-          thoughtsContentDiv.dataset.autoCollapsedAfterFinish = 'true';
-        }
-      } else if (!autoCollapsedAfterFinish && !isUpdating) {
-        shouldBeExpanded = false;
-        thoughtsContentDiv.dataset.autoCollapsedAfterFinish = 'true';
+      thoughtsContentDiv.dataset.autoLifecycleInitialized = lifecycleState.lifecycleInitialized ? 'true' : 'false';
+      if (lifecycleState.autoCollapsedAfterAnswerStart) {
+        thoughtsContentDiv.dataset.autoCollapsedAfterAnswerStart = 'true';
+      } else {
+        delete thoughtsContentDiv.dataset.autoCollapsedAfterAnswerStart;
       }
+      delete thoughtsContentDiv.dataset.autoCollapsedAfterFinish;
 
-      thoughtsContentDiv.classList.toggle('expanded', shouldBeExpanded);
+      thoughtsContentDiv.classList.toggle('expanded', lifecycleState.expanded);
       if (toggleButton) {
-        toggleButton.setAttribute('aria-expanded', shouldBeExpanded ? 'true' : 'false');
+        toggleButton.setAttribute('aria-expanded', lifecycleState.expanded ? 'true' : 'false');
       }
 
     } else if (thoughtsContentDiv) {
