@@ -26,6 +26,10 @@ import {
   getLegacyToolCallSnapshotKey,
   getResponseActivityEntrySnapshotKey
 } from '../utils/assistant_incremental_render.js';
+import {
+  computeStableScrollAnchor,
+  computeStableScrollCompensation
+} from '../utils/scroll_anchor.js';
 
 /**
  * 纯函数：从 pageInfo 中提取“可持久化的页面元数据快照”（仅 url/title）。
@@ -301,6 +305,141 @@ export function createMessageProcessor(appContext) {
       return threadContainer;
     }
     return chatContainer;
+  }
+
+  const pendingStableToggleScrollAnchors = new WeakMap();
+
+  function scheduleAfterLayout(callback) {
+    const schedule = (typeof requestAnimationFrame === 'function')
+      ? requestAnimationFrame
+      : (cb) => setTimeout(cb, 16);
+    schedule(() => callback?.());
+  }
+
+  function captureStableToggleScrollAnchor(targetElement, scrollContainer = null) {
+    if (!(targetElement instanceof HTMLElement)) return null;
+    const ownerMessage = targetElement.classList?.contains('message')
+      ? targetElement
+      : targetElement.closest?.('.message');
+    const resolvedScrollContainer = scrollContainer || resolveScrollContainerForMessage(ownerMessage || targetElement);
+    if (!(resolvedScrollContainer instanceof HTMLElement)) return null;
+    if (!resolvedScrollContainer.isConnected || !targetElement.isConnected) return null;
+
+    const containerRect = resolvedScrollContainer.getBoundingClientRect();
+    const targetRect = targetElement.getBoundingClientRect();
+    const relativeTop = targetRect.top - containerRect.top;
+    const targetHeight = targetRect.height;
+    const viewportHeight = resolvedScrollContainer.clientHeight;
+    const { anchorRatio, anchorViewportY } = computeStableScrollAnchor({
+      elementTop: relativeTop,
+      elementHeight: targetHeight,
+      viewportHeight
+    });
+
+    return {
+      targetElement,
+      ownerMessage: ownerMessage instanceof HTMLElement ? ownerMessage : null,
+      scrollContainer: resolvedScrollContainer,
+      anchorRatio,
+      anchorViewportY,
+      beforeTop: relativeTop,
+      beforeHeight: targetHeight,
+      viewportHeight
+    };
+  }
+
+  function restoreStableToggleScrollAnchor(anchorSnapshot) {
+    if (!anchorSnapshot) return false;
+    const {
+      targetElement,
+      ownerMessage,
+      scrollContainer,
+      anchorViewportY,
+      anchorRatio,
+      beforeTop,
+      beforeHeight,
+      viewportHeight
+    } = anchorSnapshot;
+    if (!(targetElement instanceof HTMLElement) || !(scrollContainer instanceof HTMLElement)) return false;
+    if (!targetElement.isConnected || !scrollContainer.isConnected) return false;
+
+    const containerRect = scrollContainer.getBoundingClientRect();
+    const targetRect = targetElement.getBoundingClientRect();
+    const afterTop = targetRect.top - containerRect.top;
+    const afterHeight = targetRect.height;
+    const compensation = computeStableScrollCompensation({
+      beforeTop,
+      beforeHeight,
+      afterTop,
+      afterHeight,
+      viewportHeight
+    });
+    const scrollDelta = Number.isFinite(Number(compensation.scrollDelta))
+      ? Number(compensation.scrollDelta)
+      : ((afterTop + afterHeight * anchorRatio) - anchorViewportY);
+    if (Number.isFinite(scrollDelta) && Math.abs(scrollDelta) > 0.01) {
+      scrollContainer.scrollTop += scrollDelta;
+    }
+
+    const listContainer = resolveMessageListContainer(ownerMessage || targetElement);
+    if (listContainer) {
+      messageVirtualizer.scheduleUpdate(listContainer);
+    }
+    return true;
+  }
+
+  function runWithStableToggleScroll(targetElement, mutate, options = {}) {
+    const anchorSnapshot = captureStableToggleScrollAnchor(
+      targetElement,
+      options?.scrollContainer || null
+    );
+    const result = mutate?.();
+    if (anchorSnapshot) {
+      scheduleAfterLayout(() => {
+        restoreStableToggleScrollAnchor(anchorSnapshot);
+      });
+    }
+    return result;
+  }
+
+  function queueStableToggleScrollAnchor(toggleOwnerElement, targetElement, options = {}) {
+    if (!(toggleOwnerElement instanceof HTMLElement)) return;
+    const anchorSnapshot = captureStableToggleScrollAnchor(
+      targetElement,
+      options?.scrollContainer || null
+    );
+    if (anchorSnapshot) {
+      pendingStableToggleScrollAnchors.set(toggleOwnerElement, anchorSnapshot);
+    } else {
+      pendingStableToggleScrollAnchors.delete(toggleOwnerElement);
+    }
+  }
+
+  function flushQueuedStableToggleScrollAnchor(toggleOwnerElement) {
+    if (!(toggleOwnerElement instanceof HTMLElement)) return;
+    const anchorSnapshot = pendingStableToggleScrollAnchors.get(toggleOwnerElement);
+    if (!anchorSnapshot) return;
+    pendingStableToggleScrollAnchors.delete(toggleOwnerElement);
+    scheduleAfterLayout(() => {
+      restoreStableToggleScrollAnchor(anchorSnapshot);
+    });
+  }
+
+  function bindStableToggleDetails(detailsElement, anchorTarget = null, scrollContainer = null) {
+    if (!(detailsElement instanceof HTMLElement) || detailsElement.dataset.stableToggleBound === 'true') return;
+    const summary = detailsElement.querySelector(':scope > summary');
+    if (!(summary instanceof HTMLElement)) return;
+    const target = (anchorTarget instanceof HTMLElement) ? anchorTarget : detailsElement;
+    const queueAnchor = (event) => {
+      if (event?.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
+      queueStableToggleScrollAnchor(detailsElement, target, { scrollContainer });
+    };
+    summary.addEventListener('click', queueAnchor);
+    summary.addEventListener('keydown', queueAnchor);
+    detailsElement.addEventListener('toggle', () => {
+      flushQueuedStableToggleScrollAnchor(detailsElement);
+    });
+    detailsElement.dataset.stableToggleBound = 'true';
   }
 
   // 选区保护：当用户正在选中某条 AI 消息中的文本时，暂停对这条消息做整段 innerHTML 重渲染。
@@ -857,10 +996,12 @@ export function createMessageProcessor(appContext) {
     if (!toggleButton.dataset.listenerAdded) {
       toggleButton.addEventListener('click', (e) => {
         e.stopPropagation();
-        thoughtsContentDiv.dataset.userToggled = 'true';
-        const isExpanded = thoughtsContentDiv.classList.toggle('expanded');
-        thoughtsContentDiv.dataset.manualState = isExpanded ? 'expanded' : 'collapsed';
-        toggleButton.setAttribute('aria-expanded', isExpanded.toString());
+        runWithStableToggleScroll(thoughtsContentDiv, () => {
+          thoughtsContentDiv.dataset.userToggled = 'true';
+          const isExpanded = thoughtsContentDiv.classList.toggle('expanded');
+          thoughtsContentDiv.dataset.manualState = isExpanded ? 'expanded' : 'collapsed';
+          toggleButton.setAttribute('aria-expanded', isExpanded.toString());
+        });
       });
       toggleButton.dataset.listenerAdded = 'true';
     }
@@ -958,9 +1099,16 @@ export function createMessageProcessor(appContext) {
       }
       delete thoughtsContentDiv.dataset.autoCollapsedAfterFinish;
 
-      thoughtsContentDiv.classList.toggle('expanded', lifecycleState.expanded);
-      if (toggleButton) {
-        toggleButton.setAttribute('aria-expanded', lifecycleState.expanded ? 'true' : 'false');
+      const applyExpandedState = () => {
+        thoughtsContentDiv.classList.toggle('expanded', lifecycleState.expanded);
+        if (toggleButton) {
+          toggleButton.setAttribute('aria-expanded', lifecycleState.expanded ? 'true' : 'false');
+        }
+      };
+      if (thoughtsContentDiv.classList.contains('expanded') !== lifecycleState.expanded) {
+        runWithStableToggleScroll(thoughtsContentDiv, applyExpandedState);
+      } else {
+        applyExpandedState();
       }
     } else if (thoughtsContentDiv) {
       thoughtsContentDiv.remove();
@@ -1106,23 +1254,12 @@ export function createMessageProcessor(appContext) {
               return;
             }
 
-            const scrollContainer = targetContainer || chatContainer; // chatContainer 来自外部作用域
-            // const scrollYBefore = scrollContainer.scrollTop; // 不再需要
-            // const rectBefore = this.getBoundingClientRect(); // 不再需要
-
-            // 切换 details 元素的 open 状态
-            if (detailsElement.hasAttribute('open')) {
-              detailsElement.removeAttribute('open');
-            } else {
-              detailsElement.setAttribute('open', '');
-            }
-
-            // 使用 requestAnimationFrame 等待浏览器完成布局更新
-            requestAnimationFrame(() => {
-              const messageTopRelativeToViewport = this.getBoundingClientRect().top;
-              const scrollContainerTopRelativeToViewport = scrollContainer.getBoundingClientRect().top;
-              const offsetToScroll = messageTopRelativeToViewport - scrollContainerTopRelativeToViewport;
-              scrollContainer.scrollTop += offsetToScroll;
+            runWithStableToggleScroll(detailsElement, () => {
+              if (detailsElement.hasAttribute('open')) {
+                detailsElement.removeAttribute('open');
+              } else {
+                detailsElement.setAttribute('open', '');
+              }
             });
           }
         });
@@ -1493,6 +1630,7 @@ export function createMessageProcessor(appContext) {
       });
       sources.appendChild(sourceList);
       toolBodyInner.appendChild(sources);
+      bindStableToggleDetails(sources, sources);
     }
   }
 
@@ -1915,7 +2053,9 @@ export function createMessageProcessor(appContext) {
     block.classList.add('response-activity-tool-text-block');
 
     const toggleExpanded = () => {
-      block.classList.toggle('is-fully-expanded');
+      runWithStableToggleScroll(block, () => {
+        block.classList.toggle('is-fully-expanded');
+      });
     };
 
     block.addEventListener('click', () => {
@@ -2139,11 +2279,13 @@ export function createMessageProcessor(appContext) {
 
     if (!panelToggle.dataset.listenerAdded) {
       panelToggle.addEventListener('click', () => {
-        const nextExpanded = timelineRoot.dataset.panelExpanded !== 'true';
-        timelineRoot.dataset.panelManualState = nextExpanded ? 'expanded' : 'collapsed';
-        timelineRoot.dataset.panelExpanded = nextExpanded ? 'true' : 'false';
-        timelineRoot.classList.toggle('is-expanded', nextExpanded);
-        panelToggle.setAttribute('aria-expanded', nextExpanded ? 'true' : 'false');
+        runWithStableToggleScroll(timelineRoot, () => {
+          const nextExpanded = timelineRoot.dataset.panelExpanded !== 'true';
+          timelineRoot.dataset.panelManualState = nextExpanded ? 'expanded' : 'collapsed';
+          timelineRoot.dataset.panelExpanded = nextExpanded ? 'true' : 'false';
+          timelineRoot.classList.toggle('is-expanded', nextExpanded);
+          panelToggle.setAttribute('aria-expanded', nextExpanded ? 'true' : 'false');
+        });
       });
       panelToggle.dataset.listenerAdded = 'true';
     }
@@ -2203,10 +2345,17 @@ export function createMessageProcessor(appContext) {
       timelineRoot.dataset.panelAutoCollapsedAfterFinish = 'true';
     }
 
-    timelineRoot.dataset.panelExpanded = panelExpanded ? 'true' : 'false';
-    timelineRoot.classList.toggle('is-expanded', panelExpanded);
-    timelineRoot.classList.toggle('is-streaming', !!panelSummary.isInProgress);
-    panelToggle.setAttribute('aria-expanded', panelExpanded ? 'true' : 'false');
+    const applyPanelExpandedState = () => {
+      timelineRoot.dataset.panelExpanded = panelExpanded ? 'true' : 'false';
+      timelineRoot.classList.toggle('is-expanded', panelExpanded);
+      timelineRoot.classList.toggle('is-streaming', !!panelSummary.isInProgress);
+      panelToggle.setAttribute('aria-expanded', panelExpanded ? 'true' : 'false');
+    };
+    if (timelineRoot.classList.contains('is-expanded') !== panelExpanded) {
+      runWithStableToggleScroll(timelineRoot, applyPanelExpandedState);
+    } else {
+      applyPanelExpandedState();
+    }
 
     if (panelTitle.textContent !== panelSummary.title) {
       panelTitle.textContent = panelSummary.title;
@@ -2327,22 +2476,24 @@ export function createMessageProcessor(appContext) {
       if (snapshot.hasDetails) {
         summary.setAttribute('type', 'button');
         summary.addEventListener('click', () => {
-          const toolKey = String(item.dataset.responseActivityToolKey || '').trim();
-          if (!toolKey) return;
-          const nextManualExpandedKeys = readManuallyExpandedResponseActivityToolKeys(timelineRoot);
-          const nextManualCollapsedKeys = readManuallyCollapsedResponseActivityToolKeys(timelineRoot);
-          const expanded = !item.classList.contains('is-expanded');
-          if (expanded) {
-            nextManualExpandedKeys.add(toolKey);
-            nextManualCollapsedKeys.delete(toolKey);
-          } else {
-            nextManualCollapsedKeys.add(toolKey);
-            nextManualExpandedKeys.delete(toolKey);
-          }
-          writeManuallyExpandedResponseActivityToolKeys(timelineRoot, nextManualExpandedKeys);
-          writeManuallyCollapsedResponseActivityToolKeys(timelineRoot, nextManualCollapsedKeys);
-          item.classList.toggle('is-expanded', expanded);
-          summary.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+          runWithStableToggleScroll(item, () => {
+            const toolKey = String(item.dataset.responseActivityToolKey || '').trim();
+            if (!toolKey) return;
+            const nextManualExpandedKeys = readManuallyExpandedResponseActivityToolKeys(timelineRoot);
+            const nextManualCollapsedKeys = readManuallyCollapsedResponseActivityToolKeys(timelineRoot);
+            const expanded = !item.classList.contains('is-expanded');
+            if (expanded) {
+              nextManualExpandedKeys.add(toolKey);
+              nextManualCollapsedKeys.delete(toolKey);
+            } else {
+              nextManualCollapsedKeys.add(toolKey);
+              nextManualExpandedKeys.delete(toolKey);
+            }
+            writeManuallyExpandedResponseActivityToolKeys(timelineRoot, nextManualExpandedKeys);
+            writeManuallyCollapsedResponseActivityToolKeys(timelineRoot, nextManualCollapsedKeys);
+            item.classList.toggle('is-expanded', expanded);
+            summary.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+          });
         });
       }
       item.insertBefore(summary, item.firstChild);
@@ -2387,7 +2538,14 @@ export function createMessageProcessor(appContext) {
   function reconcileResponseActivityToolEntry(item, snapshot, previousSnapshot, timelineRoot, preservedToolState) {
     item.className = 'response-activity-entry response-activity-entry--tool';
     item.dataset.responseActivityToolKey = snapshot.key;
-    item.classList.toggle('is-expanded', snapshot.expanded);
+    const applyExpandedState = () => {
+      item.classList.toggle('is-expanded', snapshot.expanded);
+    };
+    if (item.classList.contains('is-expanded') !== snapshot.expanded) {
+      runWithStableToggleScroll(item, applyExpandedState);
+    } else {
+      applyExpandedState();
+    }
 
     const summary = ensureResponseActivityToolSummary(item, snapshot, timelineRoot);
     if (!previousSnapshot || previousSnapshot.summarySignature !== snapshot.summarySignature || previousSnapshot.hasDetails !== snapshot.hasDetails || previousSnapshot.expanded !== snapshot.expanded) {
@@ -2689,6 +2847,7 @@ export function createMessageProcessor(appContext) {
       toolCallsRoot.appendChild(summary);
     }
     summary.textContent = `工具调用 ${toolCalls.length}`;
+    bindStableToggleDetails(toolCallsRoot, toolCallsRoot);
 
     let list = toolCallsRoot.querySelector('.response-tool-call-list');
     if (!list) {
@@ -3022,6 +3181,9 @@ export function createMessageProcessor(appContext) {
     if (!rootElement) return;
 
     decorateMarkdownLinks(rootElement);
+    rootElement.querySelectorAll('details.folded-message').forEach((detailsElement) => {
+      bindStableToggleDetails(detailsElement, detailsElement);
+    });
 
     rootElement.querySelectorAll('pre code').forEach((block) => {
       if (block.closest('.mermaid-diagram__source')) return;
