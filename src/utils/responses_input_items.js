@@ -80,7 +80,7 @@ export function getResponsesReplayItemKey(item, fallbackIndex = 0) {
  * 清洗一个可重放 item。
  *
  * 当前策略：
- * - 删除 `id` / `status` 这类服务端运行态字段；
+ * - 删除 `id` / `item_id` / `status` 这类服务端运行态字段；
  * - 保留 `call_id` / `name` / `arguments` / `output` 等真正有上下文意义的字段；
  * - 丢弃“完全空”的 reasoning item，避免把无意义占位继续带进后续 prompt。
  *
@@ -98,6 +98,7 @@ export function sanitizeResponsesReplayItem(item) {
   }
 
   delete cloned.id;
+  delete cloned.item_id;
   delete cloned.status;
 
   const type = String(cloned.type || '').trim().toLowerCase();

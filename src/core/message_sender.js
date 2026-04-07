@@ -35,6 +35,9 @@ import {
   buildResponsesHistoryReadToolOutputContentItems,
   buildResponsesGenericXmlToolOutputContentItems
 } from '../utils/responses_tool_output.js';
+import {
+  ensureResponsesReplayOutputItemsIncludeFunctionCalls
+} from '../utils/responses_follow_up.js';
 import { buildPageContentReadResult } from '../utils/page_content_read_tool.js';
 import {
   buildConversationReferenceSnapshot,
@@ -7257,6 +7260,10 @@ export function createMessageSender(appContext) {
           attemptState
         }));
       }
+      const replayOutputItemsForFollowUp = ensureResponsesReplayOutputItemsIncludeFunctionCalls(
+        lastHandleResult?.responseOutputItems,
+        pendingFunctionCalls
+      );
 
       /**
        * 关键语义：标准 steer 应该在“下一个安全边界”被吸收。
@@ -7287,16 +7294,20 @@ export function createMessageSender(appContext) {
         );
         const mergedInputItems = mergeResponsesReplayOutputItems(
           attemptState.responsesToolLoopAccumulatedInputItems,
+          replayOutputItemsForFollowUp
+        );
+        const mergedInputItemsWithOutputs = mergeResponsesReplayOutputItems(
+          mergedInputItems,
           functionCallOutputs
         );
         applyResponsesActivityTimelineToAttempt(attemptState, mergedTimeline);
-        applyResponsesInputItemsToAttempt(attemptState, mergedInputItems);
+        applyResponsesInputItemsToAttempt(attemptState, mergedInputItemsWithOutputs);
         await persistAttemptConversationSnapshot(attemptState, { force: true });
       }
 
       currentRequestBody = buildResponsesFunctionToolFollowUpRequest(
         currentRequestBody,
-        lastHandleResult?.responseOutputItems,
+        replayOutputItemsForFollowUp,
         functionCallOutputs,
         pendingSteerInputItemsForFollowUp
       );
