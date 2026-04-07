@@ -3366,9 +3366,43 @@ export function createApiManager(appContext) {
       advancedDetails.appendChild(advancedGrid);
       body.appendChild(advancedDetails);
       const transientFieldKeys = new Set();
+      const fieldEntries = [];
       const getSectionEnabled = () => {
         if (!sectionToggleSpec) return true;
         return getNestedValue(getSettingsSnapshot(), sectionToggleSpec.path) === true;
+      };
+
+      /**
+       * 按“是否启用”动态重排字段位置：
+       * - 已启用/已有值的字段放到上方主展示区；
+       * - 未启用的字段统一放进折叠区；
+       * - 不再依赖静态 mainSpecs/advancedSpecs 列表决定最终视觉位置。
+       *
+       * 这样可以保证：
+       * 1. 用户勾选后，字段立即上浮到可见区；
+       * 2. 用户取消勾选后，字段立即沉回折叠区；
+       * 3. Gemini / Responses 两套额外配置语义保持一致，不需要各自维护特例。
+       */
+      const renderFieldPlacement = () => {
+        const enabledFields = [];
+        const disabledFields = [];
+
+        fieldEntries.forEach((entry) => {
+          if (!entry?.field) return;
+          if (entry.isEnabled()) {
+            enabledFields.push(entry.field);
+          } else {
+            disabledFields.push(entry.field);
+          }
+        });
+
+        mainGrid.replaceChildren(...enabledFields);
+        advancedGrid.replaceChildren(...disabledFields);
+        mainGrid.hidden = enabledFields.length <= 0;
+        advancedDetails.hidden = disabledFields.length <= 0;
+        if (advancedDetails.hidden) {
+          advancedDetails.open = false;
+        }
       };
 
       const createField = (spec) => {
@@ -3507,6 +3541,7 @@ export function createApiManager(appContext) {
               if (typeof parsed.value === 'undefined') {
                 transientFieldKeys.delete(spec.key);
                 syncControlVisibility();
+                renderFieldPlacement();
               }
             } else {
               const nextValue = compactResponsesApiSettingValue(control.value);
@@ -3514,6 +3549,7 @@ export function createApiManager(appContext) {
               if (typeof nextValue === 'undefined') {
                 transientFieldKeys.delete(spec.key);
                 syncControlVisibility();
+                renderFieldPlacement();
               }
             }
           };
@@ -3565,6 +3601,7 @@ export function createApiManager(appContext) {
             if (typeof parsed.value === 'undefined') {
               transientFieldKeys.delete(spec.key);
               syncControlVisibility();
+              renderFieldPlacement();
             }
           };
           control.addEventListener('focus', () => {
@@ -3648,26 +3685,24 @@ export function createApiManager(appContext) {
           }
           syncControlValue();
           syncControlVisibility();
+          renderFieldPlacement();
         });
 
         syncControlValue();
         syncControlVisibility();
         field.appendChild(error);
-        return field;
+        return {
+          spec,
+          field,
+          isEnabled
+        };
       };
 
-      (mainSpecs || []).forEach((spec) => {
-        mainGrid.appendChild(createField(spec));
+      [...(mainSpecs || []), ...(advancedSpecs || [])].forEach((spec) => {
+        const entry = createField(spec);
+        fieldEntries.push(entry);
       });
-      (advancedSpecs || []).forEach((spec) => {
-        advancedGrid.appendChild(createField(spec));
-      });
-      mainGrid.hidden = !(mainSpecs || []).length;
-      advancedDetails.hidden = !(advancedSpecs || []).length;
-
-      const computeHasAdvancedValue = () => (advancedSpecs || []).some(spec =>
-        typeof getNestedValue(getSettingsSnapshot(), spec.path) !== 'undefined');
-      advancedDetails.open = !advancedDetails.hidden && computeHasAdvancedValue();
+      renderFieldPlacement();
 
       const syncSectionVisibility = () => {
         const enabled = getSectionEnabled();
@@ -3678,9 +3713,9 @@ export function createApiManager(appContext) {
         section.classList.toggle('is-section-disabled', !enabled);
         if (!enabled) {
           advancedDetails.open = false;
-        } else if (!advancedDetails.hidden && computeHasAdvancedValue()) {
-          advancedDetails.open = true;
+          return;
         }
+        renderFieldPlacement();
       };
 
       if (sectionToggleInput) {
