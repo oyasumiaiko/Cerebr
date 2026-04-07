@@ -26,7 +26,8 @@ import { serializeSelectionTextWithMath } from '../utils/math_selection_text.js'
 import { normalizeApiUsageMeta, normalizeApiTimingMeta } from '../utils/api_footer_template.js';
 import {
   normalizeResponsesPromptCacheKey,
-  buildDefaultResponsesPromptCacheKey
+  buildDefaultResponsesPromptCacheKey,
+  resolveDefaultResponsesPromptCacheRetention
 } from '../utils/responses_prompt_cache.js';
 import {
   buildResponsesJsRuntimeToolOutputContentItems,
@@ -6294,31 +6295,16 @@ export function createMessageSender(appContext) {
    * @returns {Object}
    */
   function buildResponsesJsRuntimeFunctionToolDefinition(pageToolEnvironment = resolveResponsesPageToolEnvironment()) {
-    const runtimeEnvironment = pageToolEnvironment?.jsRuntimeEnvironment;
-    const isIsolatedSandbox = runtimeEnvironment === JS_RUNTIME_ENV_ISOLATED_SANDBOX;
-    const descriptionLines = isIsolatedSandbox
-      ? [
-        '在一个隔离的浏览器脚本环境中执行一次性 JavaScript。',
-        'code 字段会作为 async 函数体运行，可直接使用 await 和 return。',
-        '可访问该环境自身的 DOM / Web API；通常只有一个顶层 frame，frame_ids 一般可留空。',
-        'console.log/info/warn/error/debug 的输出会被捕获并一并回传，可用于调试或分步观察。',
-        '若需要回传大量长字符串或多行文本，优先使用 console.log 输出；为避免长字符串作为 return 值时变成 JSON 字符串表现，return 更适合简洁结果值。',
-        '工具返回结果采用 XML 分块文本：通常包含 <metadata>、<return_value>、<console_logs>、<error>；多 frame 时还可能包含 <frame_results>。',
-        '其中 metadata 是小型 JSON，其余正文块是纯文本；过长块会自动截断。请尽量返回紧凑、可序列化的小结果。'
-      ]
-      : [
-        '在当前请求关联的网页脚本环境中执行一次性 JavaScript。',
-        'code 字段会作为 async 函数体运行，可直接使用 await 和 return。',
-        '执行环境是基于浏览器脚本沙箱的独立 JS 世界，可访问 DOM / Web API，不要假设能直接访问页面主世界里的自定义 JS 对象。',
-        '若当前请求附带 page_runtime_context，可从中读取可用页面/iframe 环境与 frame_id。',
-        'console.log/info/warn/error/debug 的输出会被捕获并一并回传，可用于调试或分步观察。',
-        '若需要回传大量长字符串或多行文本，优先使用 console.log 输出；为避免长字符串作为 return 值时变成 JSON 字符串表现，return 更适合简洁结果值。',
-        '工具返回结果采用 XML 分块文本：通常包含 <metadata>、<return_value>、<console_logs>、<error>；多 frame 时还可能包含 <frame_results>。',
-        '其中 metadata 是小型 JSON，其余正文块是纯文本；过长块会自动截断。请尽量返回紧凑、可序列化的小结果。'
-      ];
-    const frameDescription = isIsolatedSandbox
-      ? '可选的 frame ID 数组。当前环境通常只有一个顶层 frame，省略、传空数组或 null 即可。'
-      : '可选的 frame ID 数组。省略或传空数组时，默认在顶层 frame 执行。若当前请求附带 page_runtime_context，可从其中读取可用 frame_id。';
+    const descriptionLines = [
+      '在浏览器脚本环境中执行一次性 JavaScript。',
+      'code 字段会作为 async 函数体运行，可直接使用 await 和 return。',
+      '可访问当前执行环境的 DOM / Web API，不要假设能直接访问页面主世界里的自定义 JS 对象。',
+      'console.log/info/warn/error/debug 的输出会被捕获并一并回传，可用于调试或分步观察。',
+      '若需要回传大量长字符串或多行文本，优先使用 console.log 输出；为避免长字符串作为 return 值时变成 JSON 字符串表现，return 更适合简洁结果值。',
+      '工具返回结果采用 XML 分块文本：通常包含 <metadata>、<return_value>、<console_logs>、<error>；多 frame 时还可能包含 <frame_results>。',
+      '其中 metadata 是小型 JSON，其余正文块是纯文本；过长块会自动截断。请尽量返回紧凑、可序列化的小结果。'
+    ];
+    const frameDescription = '可选的 frame ID 数组。省略、传空数组或 null 时，默认在顶层 frame 执行；若当前请求附带 page_runtime_context，可从中读取可用 frame_id。';
     return {
       type: 'function',
       name: RESPONSES_JS_RUNTIME_TOOL_NAME,
@@ -8714,6 +8700,17 @@ export function createMessageSender(appContext) {
         });
         if (autoPromptCacheKey) {
           requestBody.prompt_cache_key = autoPromptCacheKey;
+        }
+      }
+      if (isOpenAIResponsesApiConfig(effectiveApiConfig)) {
+        const normalizedPromptCacheKey = normalizeResponsesPromptCacheKey(requestBody?.prompt_cache_key);
+        const normalizedPromptCacheRetention = resolveDefaultResponsesPromptCacheRetention({
+          promptCacheKey: normalizedPromptCacheKey,
+          promptCacheRetention: requestBody?.prompt_cache_retention
+            ?? effectiveApiConfig?.responsesApiSettings?.prompt_cache_retention
+        });
+        if (normalizedPromptCacheRetention) {
+          requestBody.prompt_cache_retention = normalizedPromptCacheRetention;
         }
       }
       const preparedRequestBody = prepareResponsesRequestBodyForCustomTools(

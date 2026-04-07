@@ -61,6 +61,28 @@ test('buildDefaultResponsesPromptCacheKey falls back to draft key only when conv
   );
 });
 
+test('resolveDefaultResponsesPromptCacheRetention upgrades keyed requests to 24h by default', async () => {
+  const { resolveDefaultResponsesPromptCacheRetention } = await loadPromptCacheModule();
+  assert.equal(
+    resolveDefaultResponsesPromptCacheRetention({
+      promptCacheKey: 'conv:conversation-123',
+      promptCacheRetention: null
+    }),
+    '24h'
+  );
+});
+
+test('resolveDefaultResponsesPromptCacheRetention preserves explicit retention choice', async () => {
+  const { resolveDefaultResponsesPromptCacheRetention } = await loadPromptCacheModule();
+  assert.equal(
+    resolveDefaultResponsesPromptCacheRetention({
+      promptCacheKey: 'conv:conversation-123',
+      promptCacheRetention: 'in-memory'
+    }),
+    'in-memory'
+  );
+});
+
 test('composeMessages uses outboundContent for historical user messages', async () => {
   const { composeMessages } = await loadMessageComposerModule();
 

@@ -18,6 +18,24 @@ export function normalizeResponsesPromptCacheKey(value) {
 }
 
 /**
+ * 规范化 prompt_cache_retention。
+ *
+ * 当前只接受：
+ * - in-memory
+ * - 24h
+ *
+ * @param {any} value
+ * @returns {string}
+ */
+export function normalizeResponsesPromptCacheRetention(value) {
+  const normalized = (typeof value === 'string') ? value.trim().toLowerCase() : '';
+  if (normalized === 'in-memory' || normalized === '24h') {
+    return normalized;
+  }
+  return '';
+}
+
+/**
  * 为当前会话构造一个稳定的默认 prompt_cache_key。
  *
  * 规则：
@@ -51,4 +69,27 @@ export function buildDefaultResponsesPromptCacheKey(options = {}) {
   }
 
   return '';
+}
+
+/**
+ * 当请求已启用 prompt_cache_key，但调用方未显式指定 retention 时，
+ * 为 Responses 请求补一个更稳定的默认 retention。
+ *
+ * 背景：
+ * - in-memory retention 在数分钟无活动后很容易自然失效；
+ * - Cerebr 已默认为会话构造稳定 prompt_cache_key，若仍沿用短 retention，
+ *   用户会看到“同会话、相同前缀，但隔几分钟缓存又掉了”的体验；
+ * - 因此这里默认提升到 24h，用户若显式选择 in-memory，则仍尊重用户配置。
+ *
+ * @param {{promptCacheKey?: any, promptCacheRetention?: any}} options
+ * @returns {string}
+ */
+export function resolveDefaultResponsesPromptCacheRetention(options = {}) {
+  const promptCacheKey = normalizeResponsesPromptCacheKey(options.promptCacheKey);
+  if (!promptCacheKey) return '';
+
+  const explicitRetention = normalizeResponsesPromptCacheRetention(options.promptCacheRetention);
+  if (explicitRetention) return explicitRetention;
+
+  return '24h';
 }
