@@ -41,6 +41,32 @@ test('buildEnvironmentContextPayload 会生成 current_date 与 timezone', async
   assert.match(text, /<timezone>Asia\/Shanghai<\/timezone>/);
 });
 
+test('formatEnvironmentCurrentDate 在默认 now=null 时使用当前时间而不是 Unix epoch', async () => {
+  const { formatEnvironmentCurrentDate } = await loadEnvironmentContextModule();
+
+  const before = new Date();
+  const actual = formatEnvironmentCurrentDate('Asia/Shanghai', null);
+  const after = new Date();
+
+  const expectedCandidates = [];
+  for (const candidate of [before, after]) {
+    const formatter = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+    const parts = formatter.formatToParts(candidate);
+    const year = parts.find((item) => item.type === 'year')?.value || '';
+    const month = parts.find((item) => item.type === 'month')?.value || '';
+    const day = parts.find((item) => item.type === 'day')?.value || '';
+    expectedCandidates.push(`${year}-${month}-${day}`);
+  }
+
+  assert.ok(expectedCandidates.includes(actual), `unexpected current_date: ${actual}`);
+  assert.notEqual(actual, '1970-01-01');
+});
+
 test('resolveEnvironmentContextAttachment 在签名未变化时不重复追加', async () => {
   const {
     buildEnvironmentContextPayload,

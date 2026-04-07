@@ -43,9 +43,16 @@ export function detectEnvironmentTimezone() {
  */
 export function formatEnvironmentCurrentDate(timezone, now = null) {
   const tz = normalizeEnvironmentTimezone(timezone);
-  const date = (now instanceof Date)
-    ? now
-    : (Number.isFinite(Number(now)) ? new Date(Number(now)) : new Date());
+  let date = null;
+  if (now instanceof Date) {
+    date = now;
+  } else if (typeof now === 'number' && Number.isFinite(now)) {
+    date = new Date(now);
+  } else if (typeof now === 'string' && now.trim() !== '' && Number.isFinite(Number(now))) {
+    date = new Date(Number(now));
+  } else {
+    date = new Date();
+  }
 
   try {
     const formatter = new Intl.DateTimeFormat('en-US', {
