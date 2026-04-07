@@ -3640,6 +3640,49 @@ export function createMessageSender(appContext) {
       || null;
   }
 
+  /**
+   * 解析“本次 regenerate / retry 真正要复用的 AI 目标消息”。
+   *
+   * 为什么要集中做这一层：
+   * - 旧逻辑在不同阶段分别各自查 history / DOM，容易出现“开始发送时没认出目标，因此额外创建 loading 占位；
+   *   但原始待替换消息其实还在”的分裂状态；
+   * - 把目标解析统一后，开始发送、报错回写、手动重试三个阶段都能围绕同一目标工作。
+   *
+   * @param {{ attemptState?: Object|null, targetAiMessageId?: string|null }} options
+   * @returns {{
+   *   targetAiMessageId: string|null,
+   *   targetNode: Object|null,
+   *   targetElement: HTMLElement|null,
+   *   canReplaceInPlace: boolean
+   * }}
+   */
+  function resolveRetryOrRegenerateTargetBinding(options = {}) {
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const targetAiMessageId = normalizeConversationId(normalizedOptions.targetAiMessageId);
+    if (!targetAiMessageId) {
+      return {
+        targetAiMessageId: null,
+        targetNode: null,
+        targetElement: null,
+        canReplaceInPlace: false
+      };
+    }
+
+    const candidateNode = resolveAttemptAiNode(normalizedOptions.attemptState || null, targetAiMessageId);
+    const role = String(candidateNode?.role || '').trim().toLowerCase();
+    const targetNode = (role === 'assistant' || role === 'ai') ? candidateNode : null;
+
+    const candidateElement = findVisibleMessageElementById(targetAiMessageId);
+    const targetElement = candidateElement instanceof HTMLElement ? candidateElement : null;
+
+    return {
+      targetAiMessageId,
+      targetNode,
+      targetElement,
+      canReplaceInPlace: !!(targetAiMessageId && targetNode)
+    };
+  }
+
   function captureMessageElementImageDescriptors(messageElement) {
     if (!messageElement) return [];
     return Array.from(messageElement.querySelectorAll('.image-content .image-tag'))
@@ -5717,22 +5760,36 @@ export function createMessageSender(appContext) {
       event.stopPropagation();
       if (retryBtn.disabled) return;
       const boundMessageId = (messageElement.getAttribute('data-message-id') || '').trim();
+      const retryTargetAiMessageId = normalizeConversationId(retryFn?.__targetAiMessageId || '');
+      const retryTargetElement = retryTargetAiMessageId
+        ? findVisibleMessageElementById(retryTargetAiMessageId)
+        : null;
+      const reuseElement = boundMessageId
+        ? messageElement
+        : (retryTargetElement || null);
+      const reuseMessageId = (reuseElement?.getAttribute?.('data-message-id') || '').trim();
       const isEphemeralErrorMessage = !boundMessageId;
-      const shouldReuseErrorBubble = !isEphemeralErrorMessage;
+      const shouldReuseErrorBubble = !!reuseElement && !!reuseMessageId;
       let retryResult = null;
       retryBtn.disabled = true;
       const originalText = retryBtn.textContent;
       retryBtn.textContent = '重试中...';
       if (shouldReuseErrorBubble) {
         // 有 message-id 的错误消息可被后续请求原地复用，因此在原节点上切换到“重试中”状态。
-        resetErrorUiState(messageElement);
-        setMessageStatusText(messageElement, '正在重试...', {
+        resetErrorUiState(reuseElement);
+        setMessageStatusText(reuseElement, '正在重试...', {
           clearRetryActions: true,
           clearThoughts: true,
           clearTitle: true
         });
-        messageElement.classList.add('loading-message');
-        messageElement.classList.add('updating');
+        reuseElement.classList.add('loading-message');
+        reuseElement.classList.add('updating');
+        if (messageElement !== reuseElement) {
+          resetErrorUiState(messageElement);
+          if (messageElement.isConnected) {
+            messageElement.remove();
+          }
+        }
       } else {
         // 无 message-id 的错误占位无法被 sendMessageCore 复用。
         // 这里先移除该占位，避免与后续新建的 loading 占位并存，导致“重试时出现两条消息”。
@@ -5765,6 +5822,8 @@ export function createMessageSender(appContext) {
         }
       }
     });
+
+    retryBtn.dataset.retryTargetAiMessageId = normalizeConversationId(retryFn?.__targetAiMessageId || '') || '';
 
     actions.appendChild(retryBtn);
     messageElement.appendChild(actions);
@@ -7892,16 +7951,14 @@ export function createMessageSender(appContext) {
       // 注意：这里只决定“写回目标”，不改变 composeMessages 的裁剪策略；裁剪仍由 messageId（用户消息ID）负责。
       if (regenerateMode && normalizedTargetAiMessageId) {
         try {
-          const node = chatHistoryManager?.chatHistory?.messages?.find(m => m.id === normalizedTargetAiMessageId) || null;
-          const safeTargetId = escapeMessageIdForSelector(normalizedTargetAiMessageId);
-          const selector = safeTargetId ? `.message[data-message-id="${safeTargetId}"]` : '';
-          const el = selector
-            ? (chatContainer.querySelector(selector)
-              || (threadContainer ? threadContainer.querySelector(selector) : null))
-            : null;
-          const isAssistantNode = !!(node && node.role === 'assistant');
+          const targetBinding = resolveRetryOrRegenerateTargetBinding({
+            attemptState: attempt,
+            targetAiMessageId: normalizedTargetAiMessageId
+          });
+          const node = targetBinding.targetNode;
+          const el = targetBinding.targetElement;
           // 允许“仅历史节点存在但 DOM 缺失”的场景继续原地替换，避免线程切换时误追加新消息。
-          canUpdateExistingAiMessage = !!isAssistantNode;
+          canUpdateExistingAiMessage = targetBinding.canReplaceInPlace;
 
           if (canUpdateExistingAiMessage) {
             // 绑定 attempt 到目标 AI 消息，便于“停止更新”按消息粒度工作
@@ -8278,6 +8335,7 @@ export function createMessageSender(appContext) {
           nextJob
         );
       };
+      retry.__targetAiMessageId = normalizedTargetAiMessageId || '';
 
       const canAutoRetry = (
         autoRetryEnabled
@@ -8340,19 +8398,18 @@ export function createMessageSender(appContext) {
       const errorMessageText = `${prefix}${detail}`;
 
       let messageElement = null;
-      if (loadingMessage && loadingMessage.parentNode) {
-        messageElement = loadingMessage;
-      } else if (canUpdateExistingAiMessage && normalizedTargetAiMessageId) {
-        const safeTargetId = escapeMessageIdForSelector(normalizedTargetAiMessageId);
-        const selector = safeTargetId ? `.message[data-message-id="${safeTargetId}"]` : '';
-        const targetMessageElement = selector
-          ? (chatContainer.querySelector(selector)
-            || (activeThreadContext?.container ? activeThreadContext.container.querySelector(selector) : null))
-          : null;
-        if (targetMessageElement) {
-          messageElement = targetMessageElement;
+      if (normalizedTargetAiMessageId) {
+        const targetBinding = resolveRetryOrRegenerateTargetBinding({
+          attemptState: attempt,
+          targetAiMessageId: normalizedTargetAiMessageId
+        });
+        if (targetBinding.targetElement) {
+          messageElement = targetBinding.targetElement;
         }
-      } else {
+      }
+      if (!messageElement && loadingMessage && loadingMessage.parentNode) {
+        messageElement = loadingMessage;
+      } else if (!messageElement) {
         const errorUiActive = isThreadUiActive(activeThreadContext);
         const errorOptions = activeThreadContext
           ? { container: activeThreadContext.container, skipDom: !errorUiActive }
