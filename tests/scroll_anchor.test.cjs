@@ -46,7 +46,7 @@ test('computeStableScrollAnchorRatio 在长元素两边都看不到时按滚动�
   );
 });
 
-test('computeStableScrollAnchorRatio 在完整可见元素里按位置平滑插值', async () => {
+test('computeStableScrollAnchorRatio 在完整可见元素里也统一保持上边缘', async () => {
   const { computeStableScrollAnchorRatio } = await loadModule();
   assert.equal(
     computeStableScrollAnchorRatio({
@@ -54,11 +54,11 @@ test('computeStableScrollAnchorRatio 在完整可见元素里按位置平滑插�
       elementHeight: 200,
       viewportHeight: 800
     }),
-    0.5
+    0
   );
 });
 
-test('computeStableScrollCompensation 返回能保持同一锚点的 scrollTop 补偿量', async () => {
+test('computeStableScrollCompensation 在上边缘可见时统一保持顶部不动', async () => {
   const { computeStableScrollCompensation } = await loadModule();
   const compensation = computeStableScrollCompensation({
     beforeTop: 100,
@@ -67,6 +67,19 @@ test('computeStableScrollCompensation 返回能保持同一锚点的 scrollTop �
     afterHeight: 400,
     viewportHeight: 800
   });
-  assert.equal(compensation.anchorRatio, 100 / 600);
-  assert.ok(Math.abs(compensation.scrollDelta - 33.33333333333334) < 1e-6);
+  assert.equal(compensation.anchorRatio, 0);
+  assert.equal(compensation.scrollDelta, 0);
+});
+
+test('computeStableScrollCompensation 在只剩下边缘可见时保持底部不动', async () => {
+  const { computeStableScrollCompensation } = await loadModule();
+  const compensation = computeStableScrollCompensation({
+    beforeTop: -200,
+    beforeHeight: 1000,
+    afterTop: -200,
+    afterHeight: 1200,
+    viewportHeight: 800
+  });
+  assert.equal(compensation.anchorRatio, 1);
+  assert.equal(compensation.scrollDelta, 200);
 });

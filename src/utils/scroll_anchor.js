@@ -2,9 +2,10 @@
  * 展开 / 收起时的滚动锚点纯函数。
  *
  * 目标：
- * - 若元素顶部贴近视口顶部，则更偏向“保持顶部不动”；
- * - 若元素底部贴近视口底部，则更偏向“保持底部不动”；
- * - 中间情况按当前元素在视口中的相对位置做平滑插值，而不是硬切换。
+ * - 只要元素上边缘仍在视口里，就统一按“保持上边缘不动”处理，
+ *   这样展开时视觉上就是稳定地向下长，不会把顶部往上顶走；
+ * - 当上边缘已经不可见、但下边缘仍可见时，再切到“保持下边缘不动”；
+ * - 只有上下边缘都不可见时，才根据当前位置做平滑插值。
  */
 
 function clamp01(value) {
@@ -19,11 +20,11 @@ function clamp01(value) {
  * - 0 表示更偏向保持顶部位置不变
  * - 1 表示更偏向保持底部位置不变
  *
- * 统一公式：
- * - 当元素短于视口时，`elementTop` 会在 `[0, viewportHeight - elementHeight]` 之间移动；
- * - 当元素高于视口时，`elementTop` 会在 `[viewportHeight - elementHeight, 0]` 之间移动；
- * - 因而直接使用 `elementTop / (viewportHeight - elementHeight)` 就能同时覆盖两类情况，
- *   并在“只看得到上边缘 / 只看得到下边缘 / 两边都看不到 / 两边都看得到”之间平滑过渡。
+ * 规则：
+ * - 只要上边缘可见（包括整块都可见），直接返回 0，统一向下展开；
+ * - 仅下边缘可见时返回 1；
+ * - 只有上下边缘都不可见时，才用当前位置对可滚动区间做归一化，
+ *   在顶部锚点与底部锚点之间平滑插值。
  *
  * @param {{elementTop: number, elementHeight: number, viewportHeight: number}} metrics
  * @returns {number}
@@ -36,6 +37,17 @@ export function computeStableScrollAnchorRatio(metrics = {}) {
     return 0;
   }
   if (elementHeight <= 0 || viewportHeight <= 0) return 0;
+
+  const elementBottom = elementTop + elementHeight;
+  const isTopEdgeVisible = elementTop >= 0 && elementTop <= viewportHeight;
+  const isBottomEdgeVisible = elementBottom >= 0 && elementBottom <= viewportHeight;
+
+  if (isTopEdgeVisible) {
+    return 0;
+  }
+  if (isBottomEdgeVisible) {
+    return 1;
+  }
 
   const travel = viewportHeight - elementHeight;
   if (Math.abs(travel) < 1e-6) {
