@@ -30,6 +30,10 @@ import {
   resolveDefaultResponsesPromptCacheRetention
 } from '../utils/responses_prompt_cache.js';
 import {
+  canReplaceRetryOrRegenerateInPlace,
+  shouldReuseTransientRegeneratePlaceholder
+} from '../utils/regenerate_retry_target.js';
+import {
   buildResponsesJsRuntimeToolOutputContentItems,
   buildResponsesPageContentToolOutputContentItems,
   buildResponsesHistorySearchToolOutputContentItems,
@@ -3667,8 +3671,66 @@ export function createMessageSender(appContext) {
       targetAiMessageId,
       targetNode,
       targetElement,
-      canReplaceInPlace: !!(targetAiMessageId && targetNode)
+      canReplaceInPlace: canReplaceRetryOrRegenerateInPlace({
+        targetAiMessageId,
+        hasTargetNode: !!targetNode,
+        hasTargetElement: !!targetElement
+      })
     };
+  }
+
+  /**
+   * 查找“某条用户消息后方、可被 regenerate 复用”的临时 AI 占位气泡。
+   *
+   * 典型来源：
+   * - 首 token 前失败时留下的无 message-id 错误提示；
+   * - 带重试按钮的临时错误消息；
+   * - 某些还未成功晋升为正式 AI 历史节点的 loading 占位。
+   *
+   * 设计约束：
+   * - 只检查“该用户消息后的第一条 AI 消息”，不跨越到更后面的其它 AI；
+   * - 一旦第一条 AI 已经有稳定 message-id，说明它是正式历史节点，不应被当作临时占位复用。
+   *
+   * @param {{ userMessageId?: string|null }} options
+   * @returns {HTMLElement|null}
+   */
+  function resolveTransientRegeneratePlaceholder(options = {}) {
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const userMessageId = normalizeConversationId(normalizedOptions.userMessageId);
+    if (!userMessageId) return null;
+
+    const userElement = findVisibleMessageElementById(userMessageId);
+    if (!(userElement instanceof HTMLElement)) return null;
+
+    let cursor = userElement.nextElementSibling;
+    while (cursor) {
+      if (!(cursor instanceof HTMLElement)) {
+        cursor = cursor.nextElementSibling;
+        continue;
+      }
+      if (!cursor.classList?.contains('message')) {
+        cursor = cursor.nextElementSibling;
+        continue;
+      }
+      if (cursor.classList.contains('user-message')) {
+        return null;
+      }
+      if (!cursor.classList.contains('ai-message')) {
+        return null;
+      }
+
+      const boundMessageId = normalizeConversationId(cursor.getAttribute('data-message-id') || '');
+      const reusable = shouldReuseTransientRegeneratePlaceholder({
+        isAiMessage: true,
+        hasBoundMessageId: !!boundMessageId,
+        isErrorMessage: cursor.classList.contains('error-message'),
+        isLoadingMessage: cursor.classList.contains('loading-message'),
+        hasRetryActions: !!cursor.querySelector('.error-retry-actions')
+      });
+      return reusable ? cursor : null;
+    }
+
+    return null;
   }
 
   function captureMessageElementImageDescriptors(messageElement) {
@@ -8115,6 +8177,7 @@ export function createMessageSender(appContext) {
     }
     // 提前创建 loadingMessage 配合finally使用
     let loadingMessage;
+    let transientRegeneratePlaceholder = null;
     let canUpdateExistingAiMessage = false;
     let conversationChain = null;
     let effectiveApiConfig = null;
@@ -8486,19 +8549,52 @@ export function createMessageSender(appContext) {
         }
       }
 
+      if (regenerateMode && !canUpdateExistingAiMessage) {
+        transientRegeneratePlaceholder = resolveTransientRegeneratePlaceholder({
+          userMessageId: normalizedRegenerateUserMessageId
+        });
+      }
+
       // 添加加载状态消息（仅在“追加新消息”模式下需要占位）
       if (!canUpdateExistingAiMessage) {
-        const threadUiActive = isThreadUiActive(activeThreadContext);
-        const shouldRenderMainConversationDom = isAttemptMainConversationActive(attempt);
-        const loadingOptions = activeThreadContext
-          ? { container: activeThreadContext.container, skipDom: !threadUiActive }
-          : (!shouldRenderMainConversationDom ? { skipDom: true } : null);
-        loadingMessage = messageProcessor.appendMessage('正在处理...', 'ai', true, null, null, null, null, null, loadingOptions);
-        attempt.loadingMessage = loadingMessage;
-        if (loadingMessage) {
+        if (transientRegeneratePlaceholder) {
+          loadingMessage = transientRegeneratePlaceholder;
+          attempt.loadingMessage = loadingMessage;
+          try {
+            loadingMessage.querySelectorAll('.error-retry-actions').forEach((actionEl) => actionEl.remove());
+          } catch (_) {}
+          try {
+            loadingMessage.querySelectorAll('.thoughts-content').forEach((thoughtsEl) => thoughtsEl.remove());
+          } catch (_) {}
+          try {
+            loadingMessage.querySelectorAll('.response-activity-timeline, .response-tool-calls').forEach((panelEl) => panelEl.remove());
+          } catch (_) {}
+          let textContentDiv = loadingMessage.querySelector('.text-content');
+          if (!textContentDiv) {
+            textContentDiv = document.createElement('div');
+            textContentDiv.classList.add('text-content');
+            loadingMessage.appendChild(textContentDiv);
+          }
+          textContentDiv.textContent = '正在处理...';
+          loadingMessage.setAttribute('data-original-text', '正在处理...');
+          loadingMessage.removeAttribute('title');
+          loadingMessage.classList.remove('error-message');
           loadingMessage.classList.add('loading-message');
-          // 让“等待回复”占位消息也带有 updating 状态，便于右键菜单显示“停止更新”
           loadingMessage.classList.add('updating');
+          loadingMessage.classList.add('regenerating');
+        } else {
+          const threadUiActive = isThreadUiActive(activeThreadContext);
+          const shouldRenderMainConversationDom = isAttemptMainConversationActive(attempt);
+          const loadingOptions = activeThreadContext
+            ? { container: activeThreadContext.container, skipDom: !threadUiActive }
+            : (!shouldRenderMainConversationDom ? { skipDom: true } : null);
+          loadingMessage = messageProcessor.appendMessage('正在处理...', 'ai', true, null, null, null, null, null, loadingOptions);
+          attempt.loadingMessage = loadingMessage;
+          if (loadingMessage) {
+            loadingMessage.classList.add('loading-message');
+            // 让“等待回复”占位消息也带有 updating 状态，便于右键菜单显示“停止更新”
+            loadingMessage.classList.add('updating');
+          }
         }
       } else {
         loadingMessage = null;
