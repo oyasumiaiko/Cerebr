@@ -315,6 +315,18 @@ export function createMessageProcessor(appContext) {
   // - 代价只是“选中期间这条消息暂停视觉更新”，对交互更稳定。
   const deferredAiRenderByMessageId = new Map();
   let deferredAiRenderFlushRafId = null;
+  // Response activity 面板是高频增量刷新的：
+  // - 若每次都直接重建 DOM，不仅会让展开状态闪烁，
+  // - 还会把用户正在阅读的代码/返回值块内部滚动位置重置到顶部。
+  //
+  // 这里用 message-wrapper 级 WeakMap 保留“瞬时 UI 状态”：
+  // - 面板/工具展开状态的兜底快照；
+  // - 各工具详情块（代码/参数/返回值）的内部 scrollTop；
+  // - 嵌套 <details>（如来源列表）的 open 状态。
+  //
+  // 之所以挂在 messageWrapperDiv 上，而不是 timelineRoot 上，是因为
+  // timelineRoot 在某些清理/重建路径里会被整个 remove；message wrapper 更稳定。
+  const responseActivityUiStateByMessage = new WeakMap();
 
   function getSafeWindowSelection() {
     try {
@@ -1055,6 +1067,10 @@ export function createMessageProcessor(appContext) {
     if (!messageDiv) return false;
 
     clearDeferredAiRenderFlag(messageDiv);
+    const scrollContainer = resolveScrollContainerForMessage(messageDiv);
+    // 只在用户原本就接近底部时继续“粘底”滚动。
+    // 这样流式更新不会把正在上方阅读旧内容的用户强行拽回底部。
+    const shouldStickToBottom = isScrollContainerNearBottom(scrollContainer);
 
     // 统一清理“错误态”残留，避免重试成功后仍显示红字/旧重试按钮。
     try {
@@ -1093,7 +1109,9 @@ export function createMessageProcessor(appContext) {
     } catch (e) {
       console.warn('更新 AI 消息时应用划词线程高亮失败:', e);
     }
-    scrollToBottom(resolveScrollContainerForMessage(messageDiv));
+    if (shouldStickToBottom && scrollContainer) {
+      scrollToBottom(scrollContainer);
+    }
     messageVirtualizer.scheduleUpdate(resolveMessageListContainer(messageDiv));
     return true;
   }
@@ -1615,6 +1633,101 @@ export function createMessageProcessor(appContext) {
     writeResponseActivityToolKeySet(timelineRoot, 'autoCollapsedToolKeys', keys);
   }
 
+  function getResponseActivityStoredUiState(messageWrapperDiv) {
+    if (!messageWrapperDiv || typeof messageWrapperDiv !== 'object') return null;
+    return responseActivityUiStateByMessage.get(messageWrapperDiv) || null;
+  }
+
+  function captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot = null) {
+    const root = timelineRoot || messageWrapperDiv?.querySelector?.('.response-activity-timeline');
+    if (!messageWrapperDiv || !root) return null;
+
+    const nextState = {
+      panelManualState: String(root.dataset?.panelManualState || '').trim(),
+      panelExpanded: String(root.dataset?.panelExpanded || '').trim(),
+      panelAutoLifecycleInitialized: String(root.dataset?.panelAutoLifecycleInitialized || '').trim(),
+      panelAutoCollapsedAfterFinish: String(root.dataset?.panelAutoCollapsedAfterFinish || '').trim(),
+      manualExpandedToolKeys: Array.from(readManuallyExpandedResponseActivityToolKeys(root)),
+      manualCollapsedToolKeys: Array.from(readManuallyCollapsedResponseActivityToolKeys(root)),
+      autoCollapsedToolKeys: Array.from(readAutoCollapsedResponseActivityToolKeys(root)),
+      toolUiByKey: {}
+    };
+
+    root.querySelectorAll('.response-activity-entry--tool').forEach((item) => {
+      const toolKey = String(item?.dataset?.responseActivityToolKey || '').trim();
+      if (!toolKey) return;
+      const toolState = {
+        isExpanded: item.classList.contains('is-expanded'),
+        argumentsScrollTop: Number(item.querySelector('.response-activity-tool-arguments')?.scrollTop || 0),
+        codeScrollTop: Number(item.querySelector('.response-activity-tool-code')?.scrollTop || 0),
+        outputScrollTop: Number(item.querySelector('.response-activity-tool-output')?.scrollTop || 0),
+        sourcesOpen: Array.from(item.querySelectorAll('.response-activity-tool-sources')).some((detailsEl) => detailsEl?.open === true)
+      };
+      nextState.toolUiByKey[toolKey] = toolState;
+    });
+
+    responseActivityUiStateByMessage.set(messageWrapperDiv, nextState);
+    return nextState;
+  }
+
+  function clearResponseActivityUiState(messageWrapperDiv) {
+    if (!messageWrapperDiv || typeof messageWrapperDiv !== 'object') return;
+    responseActivityUiStateByMessage.delete(messageWrapperDiv);
+  }
+
+  function restoreResponseActivityDatasetState(messageWrapperDiv, timelineRoot) {
+    const stored = getResponseActivityStoredUiState(messageWrapperDiv);
+    if (!stored || !timelineRoot?.dataset) return stored;
+
+    if (!String(timelineRoot.dataset.panelManualState || '').trim() && stored.panelManualState) {
+      timelineRoot.dataset.panelManualState = stored.panelManualState;
+    }
+    if (!String(timelineRoot.dataset.panelExpanded || '').trim() && stored.panelExpanded) {
+      timelineRoot.dataset.panelExpanded = stored.panelExpanded;
+    }
+    if (!String(timelineRoot.dataset.panelAutoLifecycleInitialized || '').trim() && stored.panelAutoLifecycleInitialized) {
+      timelineRoot.dataset.panelAutoLifecycleInitialized = stored.panelAutoLifecycleInitialized;
+    }
+    if (!String(timelineRoot.dataset.panelAutoCollapsedAfterFinish || '').trim() && stored.panelAutoCollapsedAfterFinish) {
+      timelineRoot.dataset.panelAutoCollapsedAfterFinish = stored.panelAutoCollapsedAfterFinish;
+    }
+    if (readManuallyExpandedResponseActivityToolKeys(timelineRoot).size <= 0 && stored.manualExpandedToolKeys.length > 0) {
+      writeManuallyExpandedResponseActivityToolKeys(timelineRoot, new Set(stored.manualExpandedToolKeys));
+    }
+    if (readManuallyCollapsedResponseActivityToolKeys(timelineRoot).size <= 0 && stored.manualCollapsedToolKeys.length > 0) {
+      writeManuallyCollapsedResponseActivityToolKeys(timelineRoot, new Set(stored.manualCollapsedToolKeys));
+    }
+    if (readAutoCollapsedResponseActivityToolKeys(timelineRoot).size <= 0 && stored.autoCollapsedToolKeys.length > 0) {
+      writeAutoCollapsedResponseActivityToolKeys(timelineRoot, new Set(stored.autoCollapsedToolKeys));
+    }
+    return stored;
+  }
+
+  function restoreResponseActivityToolTransientUiState(toolItem, toolState) {
+    if (!toolItem || !toolState || typeof toolState !== 'object') return;
+
+    const argumentsBlock = toolItem.querySelector('.response-activity-tool-arguments');
+    if (argumentsBlock && Number.isFinite(toolState.argumentsScrollTop) && toolState.argumentsScrollTop > 0) {
+      argumentsBlock.scrollTop = toolState.argumentsScrollTop;
+    }
+
+    const codeBlock = toolItem.querySelector('.response-activity-tool-code');
+    if (codeBlock && Number.isFinite(toolState.codeScrollTop) && toolState.codeScrollTop > 0) {
+      codeBlock.scrollTop = toolState.codeScrollTop;
+    }
+
+    const outputBlock = toolItem.querySelector('.response-activity-tool-output');
+    if (outputBlock && Number.isFinite(toolState.outputScrollTop) && toolState.outputScrollTop > 0) {
+      outputBlock.scrollTop = toolState.outputScrollTop;
+    }
+
+    if (toolState.sourcesOpen === true) {
+      toolItem.querySelectorAll('.response-activity-tool-sources').forEach((detailsEl) => {
+        detailsEl.open = true;
+      });
+    }
+  }
+
   function getResponseActivityToolSecondaryLines(entry) {
     const lines = [];
     const actionType = String(entry?.action_type || '').toLowerCase();
@@ -1680,7 +1793,10 @@ export function createMessageProcessor(appContext) {
 
   function removeResponseActivityTimelineDisplay(messageWrapperDiv) {
     const timelineRoot = messageWrapperDiv?.querySelector?.('.response-activity-timeline');
-    if (timelineRoot) timelineRoot.remove();
+    if (timelineRoot) {
+      captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot);
+      timelineRoot.remove();
+    }
   }
 
   function setupResponseActivityTimelineDisplay(messageWrapperDiv, node, rawTimeline, processMathAndMarkdownFn) {
@@ -1710,6 +1826,9 @@ export function createMessageProcessor(appContext) {
         }
       }
     }
+
+    const previousUiState = captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot);
+    restoreResponseActivityDatasetState(messageWrapperDiv, timelineRoot);
 
     const isTurnRuntimeActive = isResponseActivityTurnRuntimeActive(messageWrapperDiv);
     const panelSummary = buildResponseActivityPanelSummary(node, timeline, {
@@ -1742,12 +1861,22 @@ export function createMessageProcessor(appContext) {
     timelineRoot.dataset.panelExpanded = panelExpanded ? 'true' : 'false';
     timelineRoot.classList.toggle('is-expanded', panelExpanded);
     timelineRoot.classList.toggle('is-streaming', !!panelSummary.isInProgress);
-    timelineRoot.innerHTML = '';
-
-    const panelToggle = document.createElement('button');
-    panelToggle.className = 'response-activity-panel-toggle';
-    panelToggle.setAttribute('type', 'button');
+    let panelToggle = timelineRoot.querySelector(':scope > .response-activity-panel-toggle');
+    if (!panelToggle) {
+      panelToggle = document.createElement('button');
+      panelToggle.className = 'response-activity-panel-toggle';
+      panelToggle.setAttribute('type', 'button');
+      panelToggle.addEventListener('click', () => {
+        const nextExpanded = timelineRoot.dataset.panelExpanded !== 'true';
+        timelineRoot.dataset.panelManualState = nextExpanded ? 'expanded' : 'collapsed';
+        timelineRoot.dataset.panelExpanded = nextExpanded ? 'true' : 'false';
+        timelineRoot.classList.toggle('is-expanded', nextExpanded);
+        panelToggle.setAttribute('aria-expanded', nextExpanded ? 'true' : 'false');
+      });
+      timelineRoot.appendChild(panelToggle);
+    }
     panelToggle.setAttribute('aria-expanded', panelExpanded ? 'true' : 'false');
+    panelToggle.replaceChildren();
 
     const panelCopy = document.createElement('span');
     panelCopy.className = 'response-activity-panel-copy';
@@ -1770,25 +1899,26 @@ export function createMessageProcessor(appContext) {
     panelChevron.className = 'fa-solid fa-chevron-right response-activity-panel-chevron';
     panelToggle.appendChild(panelChevron);
 
-    panelToggle.addEventListener('click', () => {
-      const nextExpanded = timelineRoot.dataset.panelExpanded !== 'true';
-      timelineRoot.dataset.panelManualState = nextExpanded ? 'expanded' : 'collapsed';
-      timelineRoot.dataset.panelExpanded = nextExpanded ? 'true' : 'false';
-      timelineRoot.classList.toggle('is-expanded', nextExpanded);
-      panelToggle.setAttribute('aria-expanded', nextExpanded ? 'true' : 'false');
-    });
-    timelineRoot.appendChild(panelToggle);
-
-    const panelBody = document.createElement('div');
-    panelBody.className = 'response-activity-panel-body';
-    const panelBodyInner = document.createElement('div');
-    panelBodyInner.className = 'response-activity-panel-body-inner';
-    panelBody.appendChild(panelBodyInner);
+    let panelBody = timelineRoot.querySelector(':scope > .response-activity-panel-body');
+    if (!panelBody) {
+      panelBody = document.createElement('div');
+      panelBody.className = 'response-activity-panel-body';
+      timelineRoot.appendChild(panelBody);
+    }
+    let panelBodyInner = panelBody.querySelector(':scope > .response-activity-panel-body-inner');
+    if (!panelBodyInner) {
+      panelBodyInner = document.createElement('div');
+      panelBodyInner.className = 'response-activity-panel-body-inner';
+      panelBody.appendChild(panelBodyInner);
+    }
+    panelBodyInner.replaceChildren();
 
     const manualExpandedToolKeys = readManuallyExpandedResponseActivityToolKeys(timelineRoot);
     const manualCollapsedToolKeys = readManuallyCollapsedResponseActivityToolKeys(timelineRoot);
     const autoCollapsedToolKeys = readAutoCollapsedResponseActivityToolKeys(timelineRoot);
     const visibleToolKeys = new Set();
+
+    const deferredUiRestorers = [];
 
     timeline.forEach((entry, index) => {
       if (entry?.kind !== 'tool_call') return;
@@ -1836,8 +1966,8 @@ export function createMessageProcessor(appContext) {
 
       const item = document.createElement('div');
       item.className = 'response-activity-entry response-activity-entry--tool';
-
       const toolKey = getResponseActivityToolEntryKey(entry, index);
+      item.dataset.responseActivityToolKey = toolKey;
       const renderSearchQueriesInline = isResponseActivitySearchQueryEntry(entry);
       const searchQueryLines = renderSearchQueriesInline ? getResponseActivityToolQueryLines(entry) : [];
       const hasDetails = hasResponseActivityToolDetails(entry);
@@ -1986,10 +2116,18 @@ export function createMessageProcessor(appContext) {
       }
 
       panelBodyInner.appendChild(item);
+
+      const preservedToolState = previousUiState?.toolUiByKey?.[toolKey] || null;
+      if (preservedToolState) {
+        deferredUiRestorers.push(() => restoreResponseActivityToolTransientUiState(item, preservedToolState));
+      }
     });
 
     writeAutoCollapsedResponseActivityToolKeys(timelineRoot, autoCollapsedToolKeys);
-    timelineRoot.appendChild(panelBody);
+    deferredUiRestorers.forEach((restore) => {
+      try { restore(); } catch (_) {}
+    });
+    captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot);
 
     return true;
   }
@@ -2662,6 +2800,7 @@ export function createMessageProcessor(appContext) {
     updateAIMessage,
     syncAssistantMessageView,
     syncAssistantMessageMetadata,
+    clearResponseActivityUiState,
     renderAssistantApiFooter,
     processMathAndMarkdown,
     enhanceMarkdownContent,

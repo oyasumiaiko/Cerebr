@@ -5464,6 +5464,9 @@ export function createMessageSender(appContext) {
   function resetResponsesActivityToggleStateForRegenerate(targetElement) {
     if (!targetElement) return;
     const timelineRoot = targetElement.querySelector('.response-activity-timeline');
+    try {
+      services?.messageProcessor?.clearResponseActivityUiState?.(targetElement);
+    } catch (_) {}
     if (!timelineRoot || !timelineRoot.dataset) return;
     delete timelineRoot.dataset.panelUserToggled;
     delete timelineRoot.dataset.panelManualState;
