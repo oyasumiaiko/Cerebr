@@ -6,7 +6,7 @@
  * 2. 过长输出统一按字符数做中间截断，避免上下文被意外撑爆；
  * 3. 需要时把长文本切成多个 input_text content item，避免“大块 JSON 字符串二次转义”。
  */
-export const RESPONSES_TOOL_OUTPUT_MAX_CHARS = 5_000;
+export const RESPONSES_TOOL_OUTPUT_MAX_CHARS = 10_000;
 export const RESPONSES_TOOL_OUTPUT_CHUNK_CHARS = 3_000;
 export const RESPONSES_TOOL_OUTPUT_PRETTY_JSON_MAX_CHARS = 1_000;
 
@@ -594,8 +594,15 @@ function buildResponsesAskableModelsToolOutputText(result) {
   const models = Array.isArray(normalized.models) ? normalized.models : [];
   if (models.length > 0) {
     const modelsText = models.map((model, index) => {
-      const metadataBlock = buildXmlBlock('metadata', trimJsonMetadataValue(model));
-      return `<model rank="${index + 1}">\n${metadataBlock}\n</model>`;
+      const displayName = (typeof model?.display_name === 'string' && model.display_name.trim())
+        ? model.display_name.trim()
+        : ((typeof model?.model_name === 'string' && model.model_name.trim()) ? model.model_name.trim() : '');
+      const attrs = [
+        `rank="${xmlAttributeEscape(index + 1)}"`,
+        typeof model?.config_id === 'string' && model.config_id ? `config_id="${xmlAttributeEscape(model.config_id)}"` : '',
+        displayName ? `display_name="${xmlAttributeEscape(displayName)}"` : ''
+      ].filter(Boolean).join(' ');
+      return `<model${attrs ? ` ${attrs}` : ''}>\n${displayName}\n</model>`;
     }).join('\n\n');
     blocks.push({
       tag: 'models',
@@ -623,15 +630,16 @@ function buildResponsesAskOtherAiToolOutputText(result) {
   const answers = Array.isArray(normalized.answers) ? normalized.answers : [];
   if (answers.length > 0) {
     const answersText = answers.map((item, index) => {
+      const displayName = (typeof item?.target?.display_name === 'string' && item.target.display_name.trim())
+        ? item.target.display_name.trim()
+        : ((typeof item?.display_name === 'string' && item.display_name.trim()) ? item.display_name.trim() : '');
       const attrs = [
         `rank="${index + 1}"`,
         typeof item?.status === 'string' && item.status ? `status="${xmlAttributeEscape(item.status)}"` : '',
-        typeof item?.config_id === 'string' && item.config_id ? `config_id="${xmlAttributeEscape(item.config_id)}"` : ''
+        typeof item?.config_id === 'string' && item.config_id ? `config_id="${xmlAttributeEscape(item.config_id)}"` : '',
+        displayName ? `display_name="${xmlAttributeEscape(displayName)}"` : ''
       ].filter(Boolean).join(' ');
       const innerBlocks = [];
-      if (item?.target && typeof item.target === 'object') {
-        innerBlocks.push(buildXmlBlock('target', trimJsonMetadataValue(item.target)));
-      }
       if (typeof item?.question === 'string' && item.question.trim()) {
         innerBlocks.push(buildXmlBlock('question', item.question));
       }

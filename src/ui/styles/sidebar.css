@@ -8762,6 +8762,8 @@ body.chat-empty .empty-state-content {
     white-space: pre-wrap;
     word-break: break-word;
     overflow-x: auto;
+    max-height: 220px;
+    overflow-y: auto;
 }
 
 .message .response-activity-tool-block-title {
@@ -8782,8 +8784,18 @@ body.chat-empty .empty-state-content {
     white-space: pre-wrap;
     word-break: break-word;
     overflow-x: auto;
-    max-height: 168px;
+    max-height: 320px;
     overflow-y: auto;
+}
+
+.message .response-activity-tool-text-block {
+    cursor: zoom-in;
+}
+
+.message .response-activity-tool-text-block.is-fully-expanded {
+    max-height: none;
+    overflow-y: visible;
+    cursor: zoom-out;
 }
 
 .message .response-activity-tool-code code {

@@ -270,8 +270,8 @@ test('buildResponsesAskableModelsToolOutputContentItems 使用 guidance 与 mode
   assert.match(text, /<list_askable_models_result>/);
   assert.match(text, /<guidance>/);
   assert.match(text, /先看目录，再提问/);
-  assert.match(text, /<model rank="1">/);
-  assert.match(text, /"config_id": "cfg-1"/);
+  assert.match(text, /<model rank="1" config_id="cfg-1" display_name="Reviewer">/);
+  assert.match(text, /Reviewer/);
 });
 
 test('buildResponsesAskOtherAiToolOutputContentItems 使用 responses XML 分块', async () => {
@@ -312,10 +312,11 @@ test('buildResponsesAskOtherAiToolOutputContentItems 使用 responses XML 分块
   const text = formatResponsesToolOutputForDisplay(items);
   assert.match(text, /<ask_other_ai_result>/);
   assert.match(text, /<responses>/);
-  assert.match(text, /<response rank="1" status="ok" config_id="cfg-a">/);
+  assert.match(text, /<response rank="1" status="ok" config_id="cfg-a" display_name="Reviewer">/);
   assert.match(text, /<question>/);
   assert.match(text, /这个方案靠谱吗/);
   assert.match(text, /<answer>/);
   assert.match(text, /补测试/);
   assert.match(text, /HTTP 500/);
+  assert.doesNotMatch(text, /<target>/);
 });

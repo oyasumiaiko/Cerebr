@@ -1232,6 +1232,7 @@ export function createMessageProcessor(appContext) {
 
     const codeBlock = document.createElement('pre');
     codeBlock.className = 'response-activity-tool-code';
+    setupResponseActivityExpandableTextBlock(codeBlock);
     const codeInner = document.createElement('code');
     codeInner.className = 'language-javascript';
     codeInner.textContent = meta.code || '';
@@ -1246,6 +1247,7 @@ export function createMessageProcessor(appContext) {
 
       const outputBlock = document.createElement('pre');
       outputBlock.className = 'response-activity-tool-output';
+      setupResponseActivityExpandableTextBlock(outputBlock);
       outputBlock.textContent = formattedOutput;
       toolBodyInner.appendChild(outputBlock);
     }
@@ -1275,6 +1277,7 @@ export function createMessageProcessor(appContext) {
     if (typeof entry.arguments === 'string' && entry.arguments.trim()) {
       const pre = document.createElement('pre');
       pre.className = 'response-activity-tool-arguments';
+      setupResponseActivityExpandableTextBlock(pre);
       pre.textContent = formatResponseToolCallArguments(entry.arguments);
       toolBodyInner.appendChild(pre);
     }
@@ -1288,6 +1291,7 @@ export function createMessageProcessor(appContext) {
 
       const outputBlock = document.createElement('pre');
       outputBlock.className = 'response-activity-tool-output';
+      setupResponseActivityExpandableTextBlock(outputBlock);
       outputBlock.textContent = formattedOutput;
       toolBodyInner.appendChild(outputBlock);
     }
@@ -1663,8 +1667,11 @@ export function createMessageProcessor(appContext) {
       if (!toolKey) return;
       const toolState = {
         isExpanded: item.classList.contains('is-expanded'),
+        argumentsExpanded: item.querySelector('.response-activity-tool-arguments')?.classList?.contains('is-fully-expanded') === true,
         argumentsScrollTop: Number(item.querySelector('.response-activity-tool-arguments')?.scrollTop || 0),
+        codeExpanded: item.querySelector('.response-activity-tool-code')?.classList?.contains('is-fully-expanded') === true,
         codeScrollTop: Number(item.querySelector('.response-activity-tool-code')?.scrollTop || 0),
+        outputExpanded: item.querySelector('.response-activity-tool-output')?.classList?.contains('is-fully-expanded') === true,
         outputScrollTop: Number(item.querySelector('.response-activity-tool-output')?.scrollTop || 0),
         sourcesOpen: Array.from(item.querySelectorAll('.response-activity-tool-sources')).some((detailsEl) => detailsEl?.open === true)
       };
@@ -1712,16 +1719,25 @@ export function createMessageProcessor(appContext) {
     if (!toolItem || !toolState || typeof toolState !== 'object') return;
 
     const argumentsBlock = toolItem.querySelector('.response-activity-tool-arguments');
+    if (argumentsBlock && toolState.argumentsExpanded === true) {
+      argumentsBlock.classList.add('is-fully-expanded');
+    }
     if (argumentsBlock && Number.isFinite(toolState.argumentsScrollTop) && toolState.argumentsScrollTop > 0) {
       argumentsBlock.scrollTop = toolState.argumentsScrollTop;
     }
 
     const codeBlock = toolItem.querySelector('.response-activity-tool-code');
+    if (codeBlock && toolState.codeExpanded === true) {
+      codeBlock.classList.add('is-fully-expanded');
+    }
     if (codeBlock && Number.isFinite(toolState.codeScrollTop) && toolState.codeScrollTop > 0) {
       codeBlock.scrollTop = toolState.codeScrollTop;
     }
 
     const outputBlock = toolItem.querySelector('.response-activity-tool-output');
+    if (outputBlock && toolState.outputExpanded === true) {
+      outputBlock.classList.add('is-fully-expanded');
+    }
     if (outputBlock && Number.isFinite(toolState.outputScrollTop) && toolState.outputScrollTop > 0) {
       outputBlock.scrollTop = toolState.outputScrollTop;
     }
@@ -1731,6 +1747,27 @@ export function createMessageProcessor(appContext) {
         detailsEl.open = true;
       });
     }
+  }
+
+  function setupResponseActivityExpandableTextBlock(block) {
+    if (!block || block.dataset?.expandableBound === 'true') return;
+    block.dataset.expandableBound = 'true';
+    block.tabIndex = 0;
+    block.title = '点击展开/收起完整内容';
+    block.classList.add('response-activity-tool-text-block');
+
+    const toggleExpanded = () => {
+      block.classList.toggle('is-fully-expanded');
+    };
+
+    block.addEventListener('click', () => {
+      toggleExpanded();
+    });
+    block.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      toggleExpanded();
+    });
   }
 
   function getResponseActivityToolSecondaryLines(entry) {
