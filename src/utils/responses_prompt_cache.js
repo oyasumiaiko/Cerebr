@@ -36,6 +36,33 @@ export function normalizeResponsesPromptCacheRetention(value) {
 }
 
 /**
+ * 判断当前 baseUrl 是否属于“官方 OpenAI Responses 端点”。
+ *
+ * 设计原因：
+ * - `prompt_cache_retention` 不是所有 OpenAI-compatible 代理都支持；
+ * - 一些第三方代理虽然兼容 `/responses`，但会在看到该字段时直接返回 400；
+ * - 因此“自动补默认 retention”必须收敛到我们能确认支持的官方端点，
+ *   避免再次把代理兼容性问题推给用户。
+ *
+ * 说明：
+ * - 这里不阻止“用户显式填写 retention”；显式配置仍然尊重用户选择；
+ * - 这里只控制“自动默认补 24h”的范围。
+ *
+ * @param {any} baseUrl
+ * @returns {boolean}
+ */
+export function isOfficialOpenAIResponsesBaseUrl(baseUrl) {
+  const normalized = (typeof baseUrl === 'string') ? baseUrl.trim() : '';
+  if (!normalized) return false;
+  try {
+    const parsed = new URL(normalized);
+    return parsed.hostname.toLowerCase() === 'api.openai.com';
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
  * 为当前会话构造一个稳定的默认 prompt_cache_key。
  *
  * 规则：
@@ -79,9 +106,11 @@ export function buildDefaultResponsesPromptCacheKey(options = {}) {
  * - in-memory retention 在数分钟无活动后很容易自然失效；
  * - Cerebr 已默认为会话构造稳定 prompt_cache_key，若仍沿用短 retention，
  *   用户会看到“同会话、相同前缀，但隔几分钟缓存又掉了”的体验；
- * - 因此这里默认提升到 24h，用户若显式选择 in-memory，则仍尊重用户配置。
+ * - 但并非所有 OpenAI-compatible `/responses` 代理都支持该字段；
+ * - 因此这里只会在“官方 OpenAI Responses 端点”上自动提升到 24h，
+ *   其它代理保持不注入，用户若显式配置则仍尊重用户配置。
  *
- * @param {{promptCacheKey?: any, promptCacheRetention?: any}} options
+ * @param {{promptCacheKey?: any, promptCacheRetention?: any, baseUrl?: any}} options
  * @returns {string}
  */
 export function resolveDefaultResponsesPromptCacheRetention(options = {}) {
@@ -90,6 +119,10 @@ export function resolveDefaultResponsesPromptCacheRetention(options = {}) {
 
   const explicitRetention = normalizeResponsesPromptCacheRetention(options.promptCacheRetention);
   if (explicitRetention) return explicitRetention;
+
+  if (!isOfficialOpenAIResponsesBaseUrl(options.baseUrl)) {
+    return '';
+  }
 
   return '24h';
 }

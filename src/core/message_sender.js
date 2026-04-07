@@ -8706,6 +8706,7 @@ export function createMessageSender(appContext) {
         const normalizedPromptCacheKey = normalizeResponsesPromptCacheKey(requestBody?.prompt_cache_key);
         const normalizedPromptCacheRetention = resolveDefaultResponsesPromptCacheRetention({
           promptCacheKey: normalizedPromptCacheKey,
+          baseUrl: effectiveApiConfig?.baseUrl,
           promptCacheRetention: requestBody?.prompt_cache_retention
             ?? effectiveApiConfig?.responsesApiSettings?.prompt_cache_retention
         });

@@ -61,14 +61,27 @@ test('buildDefaultResponsesPromptCacheKey falls back to draft key only when conv
   );
 });
 
-test('resolveDefaultResponsesPromptCacheRetention upgrades keyed requests to 24h by default', async () => {
+test('resolveDefaultResponsesPromptCacheRetention upgrades keyed official OpenAI requests to 24h by default', async () => {
   const { resolveDefaultResponsesPromptCacheRetention } = await loadPromptCacheModule();
   assert.equal(
     resolveDefaultResponsesPromptCacheRetention({
       promptCacheKey: 'conv:conversation-123',
+      baseUrl: 'https://api.openai.com/v1/responses',
       promptCacheRetention: null
     }),
     '24h'
+  );
+});
+
+test('resolveDefaultResponsesPromptCacheRetention does not auto-inject retention for third-party proxies', async () => {
+  const { resolveDefaultResponsesPromptCacheRetention } = await loadPromptCacheModule();
+  assert.equal(
+    resolveDefaultResponsesPromptCacheRetention({
+      promptCacheKey: 'conv:conversation-123',
+      baseUrl: 'https://xynode1.xychatai.com/codex/responses',
+      promptCacheRetention: null
+    }),
+    ''
   );
 });
 
@@ -77,6 +90,7 @@ test('resolveDefaultResponsesPromptCacheRetention preserves explicit retention c
   assert.equal(
     resolveDefaultResponsesPromptCacheRetention({
       promptCacheKey: 'conv:conversation-123',
+      baseUrl: 'https://xynode1.xychatai.com/codex/responses',
       promptCacheRetention: 'in-memory'
     }),
     'in-memory'
