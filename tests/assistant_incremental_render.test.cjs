@@ -74,6 +74,28 @@ test('computeContiguousDiffWindow 在完全一致时返回 noop 窗口', async (
   });
 });
 
+test('resolveRenderedSurfaceDiffBaseSignatures 在 DOM 实况存在时优先相信当前 DOM', async () => {
+  const { resolveRenderedSurfaceDiffBaseSignatures } = await loadAssistantIncrementalRenderModule();
+
+  const result = resolveRenderedSurfaceDiffBaseSignatures(
+    ['stale:a', 'stale:b'],
+    ['dom:a', 'dom:b']
+  );
+
+  assert.deepEqual(result, ['dom:a', 'dom:b']);
+});
+
+test('resolveRenderedSurfaceDiffBaseSignatures 在 DOM 还没挂载 block 时回退到上一版 snapshot', async () => {
+  const { resolveRenderedSurfaceDiffBaseSignatures } = await loadAssistantIncrementalRenderModule();
+
+  const result = resolveRenderedSurfaceDiffBaseSignatures(
+    ['snapshot:a', 'snapshot:b'],
+    []
+  );
+
+  assert.deepEqual(result, ['snapshot:a', 'snapshot:b']);
+});
+
 test('response_activity 与 legacy tool key 规则与 sender 合并键保持一致', async () => {
   const {
     getResponseActivityEntrySnapshotKey,

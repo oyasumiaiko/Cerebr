@@ -23,6 +23,7 @@ import {
 } from '../utils/responses_tool_output.js';
 import {
   computeContiguousDiffWindow,
+  resolveRenderedSurfaceDiffBaseSignatures,
   getLegacyToolCallSnapshotKey,
   getResponseActivityEntrySnapshotKey
 } from '../utils/assistant_incremental_render.js';
@@ -442,24 +443,6 @@ export function createMessageProcessor(appContext) {
     detailsElement.dataset.stableToggleBound = 'true';
   }
 
-  // 选区保护：当用户正在选中某条 AI 消息中的文本时，暂停对这条消息做整段 innerHTML 重渲染。
-  //
-  // 背景：
-  // - 流式输出会频繁调用 updateAIMessage；
-  // - 现有实现每次都会重写 `.text-content.innerHTML`，浏览器会把旧文本节点整体替换掉；
-  // - 一旦用户正在选中文本，Range 绑定的节点被替换，选区就会闪烁、坍塌或直接消失。
-  //
-  // 这里采用“延迟渲染而不是强行恢复选区”的策略：
-  // - 生成过程继续收流、继续写历史节点；
-  // - 仅把这条消息的“最新待渲染快照”缓存在内存里；
-  // - 等用户取消选区后，再把最后一版内容一次性渲染到 DOM。
-  //
-  // 这样做的优点是：
-  // - 不需要把 DOM Range 映射回 Markdown/高亮后的复杂 HTML；
-  // - 不会因为代码块高亮、KaTeX、折叠块等二次渲染而引入新的偏移误差；
-  // - 代价只是“选中期间这条消息暂停视觉更新”，对交互更稳定。
-  const deferredAiRenderByMessageId = new Map();
-  let deferredAiRenderFlushRafId = null;
   // assistant 消息的 surface 级快照缓存：
   // - text / thoughts / response_activity / footer / legacy tool_calls 分开记录；
   // - renderer 每次先构造下一版 surface snapshot，再做局部 reconcile；
@@ -477,41 +460,6 @@ export function createMessageProcessor(appContext) {
   // 之所以挂在 messageWrapperDiv 上，而不是 timelineRoot 上，是因为
   // timelineRoot 在某些清理/重建路径里会被整个 remove；message wrapper 更稳定。
   const responseActivityUiStateByMessage = new WeakMap();
-
-  function getSafeWindowSelection() {
-    try {
-      return window.getSelection ? window.getSelection() : null;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  function isNodeInsideMessage(node, messageElement) {
-    if (!node || !messageElement || typeof messageElement.contains !== 'function') return false;
-    return messageElement.contains(node);
-  }
-
-  function isMessageRenderBlockedBySelection(messageElement) {
-    const selection = getSafeWindowSelection();
-    if (!messageElement || !selection || selection.rangeCount === 0 || selection.isCollapsed) {
-      return false;
-    }
-    return isNodeInsideMessage(selection.anchorNode, messageElement)
-      && isNodeInsideMessage(selection.focusNode, messageElement);
-  }
-
-  function clearDeferredAiRenderFlag(messageElement) {
-    if (!messageElement?.dataset) return;
-    delete messageElement.dataset.selectionRenderDeferred;
-  }
-
-  function markDeferredAiRender(messageId, payload, messageElement = null) {
-    if (!messageId || !payload) return;
-    deferredAiRenderByMessageId.set(messageId, payload);
-    if (messageElement?.dataset) {
-      messageElement.dataset.selectionRenderDeferred = 'true';
-    }
-  }
 
   function getAssistantSurfaceSnapshots(messageElement) {
     if (!messageElement || typeof messageElement !== 'object') return null;
@@ -540,23 +488,32 @@ export function createMessageProcessor(appContext) {
     state[surfaceName] = null;
   }
 
-  function describeRenderedSurfaceBlock(node) {
+  function describeRenderedSurfaceBlock(node, options = {}) {
     if (!node) return null;
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
     if (node.nodeType === Node.TEXT_NODE) {
       const text = String(node.textContent || '');
       if (!text) return null;
-      return {
+      const descriptor = {
         type: 'text',
         signature: `text:${text}`,
         text
       };
+      if (normalizedOptions.includeNode) {
+        descriptor.node = node;
+      }
+      return descriptor;
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return null;
-    return {
+    const descriptor = {
       type: 'element',
       signature: `element:${node.tagName.toLowerCase()}:${node.outerHTML}`,
       html: node.outerHTML
     };
+    if (normalizedOptions.includeNode) {
+      descriptor.node = node;
+    }
+    return descriptor;
   }
 
   function buildRenderedSurfaceBlocksFromHtml(renderedHtml) {
@@ -567,10 +524,10 @@ export function createMessageProcessor(appContext) {
       .filter(Boolean);
   }
 
-  function buildRenderedSurfaceBlocksFromDom(container) {
+  function buildRenderedSurfaceBlocksFromDom(container, options = {}) {
     if (!container) return [];
     return Array.from(container.childNodes)
-      .map(describeRenderedSurfaceBlock)
+      .map((node) => describeRenderedSurfaceBlock(node, options))
       .filter(Boolean);
   }
 
@@ -604,9 +561,11 @@ export function createMessageProcessor(appContext) {
 
   function reconcileRenderedSurfaceBlocks(container, nextSnapshot, previousSnapshot, options = {}) {
     if (!container || !nextSnapshot) return false;
-    const previousSignatures = Array.isArray(previousSnapshot?.blockSignatures)
-      ? previousSnapshot.blockSignatures
-      : (Array.isArray(nextSnapshot?.domBlockSignatures) ? nextSnapshot.domBlockSignatures : []);
+    const currentDomBlocks = buildRenderedSurfaceBlocksFromDom(container, { includeNode: true });
+    const previousSignatures = resolveRenderedSurfaceDiffBaseSignatures(
+      Array.isArray(previousSnapshot?.blockSignatures) ? previousSnapshot.blockSignatures : [],
+      currentDomBlocks.map((block) => block.signature)
+    );
     const nextSignatures = Array.isArray(nextSnapshot.blockSignatures)
       ? nextSnapshot.blockSignatures
       : [];
@@ -615,8 +574,7 @@ export function createMessageProcessor(appContext) {
       return false;
     }
 
-    const currentNodes = Array.from(container.childNodes);
-    const anchorNode = currentNodes[diffWindow.previousRangeStart] || null;
+    const anchorNode = currentDomBlocks[diffWindow.previousRangeStart]?.node || null;
     const fragment = document.createDocumentFragment();
     const insertedElements = [];
     nextSnapshot.blocks
@@ -636,9 +594,9 @@ export function createMessageProcessor(appContext) {
       container.appendChild(fragment);
     }
 
-    currentNodes
+    currentDomBlocks
       .slice(diffWindow.previousRangeStart, diffWindow.previousRangeEnd)
-      .forEach((node) => node.remove());
+      .forEach((block) => block?.node?.remove?.());
 
     if (typeof options.afterInsert === 'function') {
       insertedElements.forEach((element) => {
@@ -1370,8 +1328,6 @@ export function createMessageProcessor(appContext) {
   function renderAiMessageDom(messageDiv, node, safeAnswerContent, resolvedThoughts) {
     if (!messageDiv) return false;
     const surfaceSnapshots = getAssistantSurfaceSnapshots(messageDiv);
-
-    clearDeferredAiRenderFlag(messageDiv);
     const scrollContainer = resolveScrollContainerForMessage(messageDiv);
     // 只在用户原本就接近底部时继续“粘底”滚动。
     // 这样流式更新不会把正在上方阅读旧内容的用户强行拽回底部。
@@ -1423,29 +1379,6 @@ export function createMessageProcessor(appContext) {
     }
     messageVirtualizer.scheduleUpdate(resolveMessageListContainer(messageDiv));
     return true;
-  }
-
-  function flushDeferredAiRenders() {
-    if (!deferredAiRenderByMessageId.size) return;
-
-    for (const [messageId, payload] of deferredAiRenderByMessageId.entries()) {
-      const messageDiv = resolveMessageElement(messageId);
-      if (!messageDiv) {
-        deferredAiRenderByMessageId.delete(messageId);
-        continue;
-      }
-      if (isMessageRenderBlockedBySelection(messageDiv)) {
-        continue;
-      }
-
-      deferredAiRenderByMessageId.delete(messageId);
-      renderAiMessageDom(
-        messageDiv,
-        payload?.node || null,
-        payload?.safeAnswerContent || '',
-        payload?.resolvedThoughts
-      );
-    }
   }
 
   function formatResponseToolCallArguments(rawArguments) {
@@ -3042,17 +2975,6 @@ export function createMessageProcessor(appContext) {
     return syncedAny;
   }
 
-  function scheduleFlushDeferredAiRenders() {
-    if (deferredAiRenderFlushRafId != null) return;
-    const schedule = (typeof requestAnimationFrame === 'function')
-      ? requestAnimationFrame
-      : (cb) => setTimeout(cb, 16);
-    deferredAiRenderFlushRafId = schedule(() => {
-      deferredAiRenderFlushRafId = null;
-      flushDeferredAiRenders();
-    });
-  }
-
   /**
    * 更新AI消息内容，包括思考过程和最终答案
    * @param {string} messageId - 要更新的消息的ID
@@ -3122,21 +3044,6 @@ export function createMessageProcessor(appContext) {
       return true;
     }
 
-    // 若用户正在这条消息里拖选文本，则只缓存“最后一版待渲染内容”，等选区结束后再补渲染。
-    if (isMessageRenderBlockedBySelection(messageDiv)) {
-      markDeferredAiRender(
-        messageId,
-        {
-          node,
-          safeAnswerContent,
-          resolvedThoughts
-        },
-        messageDiv
-      );
-      return true;
-    }
-
-    deferredAiRenderByMessageId.delete(messageId);
     return renderAiMessageDom(messageDiv, node, safeAnswerContent, resolvedThoughts);
   }
 
@@ -3364,13 +3271,6 @@ export function createMessageProcessor(appContext) {
     });
   } catch (error) {
     console.warn('订阅 enableDollarMath 设置变化失败:', error);
-  }
-
-  // 监听全局选区变化：一旦用户取消/移出当前选区，就把之前延迟的 AI 消息 DOM 更新补上。
-  try {
-    document.addEventListener('selectionchange', scheduleFlushDeferredAiRenders);
-  } catch (error) {
-    console.warn('绑定 selectionchange 监听失败，选区保护将退化为仅本次渲染有效:', error);
   }
 
   try {

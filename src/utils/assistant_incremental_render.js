@@ -60,6 +60,32 @@ export function computeContiguousDiffWindow(previousSignatures, nextSignatures) 
 }
 
 /**
+ * 为已挂载 surface 选择“本次 diff 应该信任哪一版前态签名”。
+ *
+ * 设计原因：
+ * - surface 在多轮增量 patch 后，真正的当前 DOM 才是最可信的前态；
+ * - 若继续盲信上一次缓存下来的 snapshot，前一次 patch 一旦有轻微漂移，
+ *   下一轮就会在错误的 block 索引上继续插删，最终表现为段落重复、空标题、列表残片。
+ *
+ * 规则：
+ * - 只要当前 DOM 已经有 block，就优先用 DOM 实况；
+ * - 只有在容器还没挂载任何 block 时，才回退到上一版 snapshot。
+ *
+ * @param {Array<string>|null|undefined} previousSignatures
+ * @param {Array<string>|null|undefined} currentDomSignatures
+ * @returns {Array<string>}
+ */
+export function resolveRenderedSurfaceDiffBaseSignatures(previousSignatures, currentDomSignatures) {
+  if (Array.isArray(currentDomSignatures) && currentDomSignatures.length > 0) {
+    return currentDomSignatures.slice();
+  }
+  if (Array.isArray(previousSignatures)) {
+    return previousSignatures.slice();
+  }
+  return [];
+}
+
+/**
  * 构建 response_activity 条目快照的稳定 key。
  *
  * 这里单独 re-export 一层，方便 message_processor 的视图快照层直接消费，
