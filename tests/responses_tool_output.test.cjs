@@ -92,6 +92,29 @@ test('buildResponsesJsRuntimeToolOutputText 使用 XML 分块且避免大 JSON �
   assert.doesNotMatch(text, /"items":/);
 });
 
+test('buildResponsesJsRuntimeToolOutputText 会在单 frame 且仅 item.logs 存在时仍显示 console_logs', async () => {
+  const { buildResponsesJsRuntimeToolOutputText } = await loadResponsesToolOutputModule();
+  const text = buildResponsesJsRuntimeToolOutputText({
+    ok: true,
+    tabId: 321,
+    value: 60,
+    logs: [],
+    items: [
+      {
+        frameId: 0,
+        documentId: 'doc-1',
+        result: 60,
+        logs: [{ frameId: 0, level: 'log', text: 'hello from item logs' }],
+        error: null
+      }
+    ],
+    error: null
+  });
+  assert.match(text, /"console_log_count": 1/);
+  assert.match(text, /<console_logs>/);
+  assert.match(text, /hello from item logs/);
+});
+
 test('buildResponsesJsRuntimeToolOutputText 在多 frame 时输出 frame_results 块', async () => {
   const { buildResponsesJsRuntimeToolOutputText } = await loadResponsesToolOutputModule();
   const text = buildResponsesJsRuntimeToolOutputText({

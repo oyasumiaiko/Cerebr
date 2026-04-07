@@ -6749,6 +6749,7 @@ export function createMessageSender(appContext) {
           ok: false,
           tabId: Number.isFinite(Number(result?.tabId)) ? Number(result.tabId) : null,
           value: null,
+          logs: Array.isArray(result?.logs) ? cloneDataSafely(result.logs) : [],
           items: Array.isArray(result?.items) ? cloneDataSafely(result.items) : [],
           error: {
             message: (typeof result?.error === 'string' && result.error.trim())
@@ -6764,6 +6765,7 @@ export function createMessageSender(appContext) {
         ok: result.ok === true,
         tabId: Number.isFinite(Number(result?.tabId)) ? Number(result.tabId) : null,
         value: result?.value ?? null,
+        logs: Array.isArray(result?.logs) ? cloneDataSafely(result.logs) : [],
         items: Array.isArray(result?.items) ? cloneDataSafely(result.items) : [],
         error: null
       });

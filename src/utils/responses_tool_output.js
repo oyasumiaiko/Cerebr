@@ -291,6 +291,14 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
   const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
   const items = Array.isArray(normalized.items) ? normalized.items : [];
   const topLevelLogs = Array.isArray(normalized.logs) ? normalized.logs : [];
+  const singleFrameLogs = (
+    topLevelLogs.length <= 0
+    && items.length === 1
+    && Array.isArray(items[0]?.logs)
+  )
+    ? items[0].logs
+    : [];
+  const effectiveTopLevelLogs = topLevelLogs.length > 0 ? topLevelLogs : singleFrameLogs;
   const successFrameCount = items.filter((item) => !item?.error).length;
   const errorFrameCount = items.filter((item) => item?.error).length;
   const metadata = {
@@ -299,8 +307,8 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
     frame_count: items.length,
     success_frame_count: successFrameCount,
     error_frame_count: errorFrameCount,
-    console_log_count: topLevelLogs.length > 0
-      ? topLevelLogs.length
+    console_log_count: effectiveTopLevelLogs.length > 0
+      ? effectiveTopLevelLogs.length
       : items.reduce((sum, item) => sum + (Array.isArray(item?.logs) ? item.logs.length : 0), 0)
   };
 
@@ -319,9 +327,9 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
     blocks.push(buildXmlBlock('return_value', returnValueText));
   }
 
-  if (topLevelLogs.length > 0 && items.length <= 1) {
+  if (effectiveTopLevelLogs.length > 0 && items.length <= 1) {
     const consoleLogsText = truncateResponsesToolOutputText(
-      trimTrailingWhitespace(topLevelLogs.map((log) => formatResponsesJsRuntimeLogText(log)).filter(Boolean).join('\n')),
+      trimTrailingWhitespace(effectiveTopLevelLogs.map((log) => formatResponsesJsRuntimeLogText(log)).filter(Boolean).join('\n')),
       RESPONSES_TOOL_OUTPUT_MAX_CHARS
     );
     if (consoleLogsText) {
