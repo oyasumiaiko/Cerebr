@@ -53,6 +53,36 @@ test('renderUserMessageTemplateWithInjection treats marker-only template as empt
   assert.equal(result.injectOnly, false);
 });
 
+test('renderUserMessageTemplateWithInjection 对仅 system 角色块不吞掉原始 user 上下文', async () => {
+  const { renderUserMessageTemplateWithInjection } = await loadMessagePreprocessorModule();
+  const result = renderUserMessageTemplateWithInjection({
+    template: '{{#system}}请只输出 JSON。{{/system}}',
+    inputText: '分析一下这个页面'
+  });
+
+  assert.equal(result.hasTemplate, true);
+  assert.equal(result.hasInjectedBlocks, true);
+  assert.equal(result.injectOnly, false);
+  assert.deepEqual(result.injectedMessages, [
+    { role: 'system', content: '请只输出 JSON。' }
+  ]);
+});
+
+test('renderUserMessageTemplateWithInjection 只有显式 user 块时才接管原始 user 消息', async () => {
+  const { renderUserMessageTemplateWithInjection } = await loadMessagePreprocessorModule();
+  const result = renderUserMessageTemplateWithInjection({
+    template: '{{#system}}你是量化分析师。{{/system}}\n{{#user}}{{input}}{{/user}}',
+    inputText: '分析一下这个页面'
+  });
+
+  assert.equal(result.hasInjectedBlocks, true);
+  assert.equal(result.injectOnly, true);
+  assert.deepEqual(result.injectedMessages, [
+    { role: 'system', content: '你是量化分析师。' },
+    { role: 'user', content: '分析一下这个页面' }
+  ]);
+});
+
 test('composeMessages omits default system prompt when requested', async () => {
   const { composeMessages } = await loadMessageComposerModule();
   const messages = composeMessages({

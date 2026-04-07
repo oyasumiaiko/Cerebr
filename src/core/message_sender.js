@@ -797,9 +797,18 @@ export function createMessageSender(appContext) {
         ...messages.slice(lastUserIndex + 1)
       ];
     }
+
+    // 当模板只注入 system/assistant、但不替换原始 user 时：
+    // - system 应该放到当前 user 之前，作为补充指令；
+    // - assistant / 其他注入消息放到当前 user 之后，作为附加上下文；
+    // 这样既不会吞掉真实请求上下文，也能保持“system 优先、user 仍是当前问题”的整体语义。
+    const leadingSystemMessages = normalized.filter((item) => item?.role === 'system');
+    const trailingMessages = normalized.filter((item) => item?.role !== 'system');
     return [
-      ...messages.slice(0, lastUserIndex + 1),
-      ...normalized,
+      ...messages.slice(0, lastUserIndex),
+      ...leadingSystemMessages,
+      messages[lastUserIndex],
+      ...trailingMessages,
       ...messages.slice(lastUserIndex + 1)
     ];
   }

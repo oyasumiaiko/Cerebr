@@ -127,7 +127,8 @@ export function renderUserMessageTemplate({ template, inputText }) {
  * 语法与规则：
  * - 模板中直接写 {{#assistant}}/{{#user}}/{{#system}} 或 {{#message role="assistant"}}；
  * - 角色块外的文本 trim 后作为 user 消息插入（空白忽略）；
- * - 只要存在任意角色块，就由模板完全控制发送结构（不会再追加空白 user）。
+ * - 只有模板最终显式产出了 user 消息时，才由模板完全控制发送结构；
+ *   若模板只注入 system/assistant，则仍保留原始 user 作为请求上下文。
  * - 所有内容都会应用 {{input}} / {{date}} / {{time}} 等占位符替换。
  *
  * @param {Object} args
@@ -154,7 +155,8 @@ export function renderUserMessageTemplateWithInjection({ template, inputText }) 
 
   const { messages, hasRoleBlocks } = buildTemplateMessages(renderedText);
   const hasInjectedBlocks = hasRoleBlocks;
-  const injectOnly = hasRoleBlocks;
+  const hasExplicitUserMessage = messages.some((item) => item?.role === 'user' && typeof item.content === 'string' && item.content.trim());
+  const injectOnly = hasRoleBlocks && hasExplicitUserMessage;
   const injectedMessages = hasRoleBlocks ? messages : [];
 
   return {

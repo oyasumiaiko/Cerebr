@@ -5160,6 +5160,9 @@ export function createApiManager(appContext) {
           instructions: responsesSystemInstructions
         } = extractResponsesSystemInstructions(normalizedMessages);
         const responsesInput = await convertOpenAIMessagesToResponsesInput(responsesMessages);
+        if (responsesInput.length <= 0) {
+          throw new Error('Responses 请求缺少非 system 上下文：当前发送内容在预处理与 system 指令抽离后为空。请检查“用户消息预处理模板”，确保最终至少保留一条 user 消息或正文文本。');
+        }
         const responsesOverrides = buildResponsesApiRequestOverrides(config) || {};
         requestBody = {
           model: config.modelName,
