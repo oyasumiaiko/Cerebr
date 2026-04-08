@@ -3459,13 +3459,25 @@ export function createApiManager(appContext) {
           if (spec.kind === 'range') return Number.isFinite(spec.max) ? spec.max : 1;
           return '';
         };
-        const syncControlVisibility = () => {
-          controlWrap.hidden = !isEnabled();
-          enableToggle.checked = isEnabled();
-          if (editorWrap) {
-            editorWrap.hidden = !isEnabled() || !field.classList.contains('is-editor-open');
-          }
-        };
+      const syncControlDisabledState = () => {
+        const enabled = isEnabled();
+        field.classList.toggle('responses-setting-field--disabled', !enabled);
+        if (control) {
+          control.disabled = !enabled;
+        }
+        if (editorToggle) {
+          editorToggle.disabled = false;
+          editorToggle.classList.toggle('is-disabled', !enabled);
+        }
+      };
+      const syncControlVisibility = () => {
+        controlWrap.hidden = false;
+        enableToggle.checked = isEnabled();
+        if (editorWrap) {
+          editorWrap.hidden = !field.classList.contains('is-editor-open');
+        }
+        syncControlDisabledState();
+      };
 
         let control = null;
         let controlValueLabel = null;
@@ -3562,7 +3574,6 @@ export function createApiManager(appContext) {
           editorToggle.className = 'responses-setting-editor-toggle';
           editorToggle.addEventListener('click', (event) => {
             event.stopPropagation();
-            if (!isEnabled()) return;
             field.classList.toggle('is-editor-open');
             syncControlVisibility();
           });

@@ -3087,6 +3087,10 @@ input:checked + .slider::before {
     gap: 4px;
 }
 
+.responses-setting-field--disabled .responses-setting-row {
+    opacity: 0.78;
+}
+
 .responses-setting-row {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr) minmax(0, var(--responses-setting-control-width));
@@ -3198,6 +3202,10 @@ input:checked + .slider::before {
 .responses-setting-editor-toggle:hover {
     background: var(--cerebr-control-bg-hover);
     border-color: var(--cerebr-control-border-hover);
+}
+
+.responses-setting-editor-toggle.is-disabled {
+    opacity: 0.72;
 }
 
 .responses-setting-editor-wrap {
