@@ -3746,6 +3746,58 @@ export function createMessageSender(appContext) {
     return null;
   }
 
+  /**
+   * 查找“某条用户消息后面的第一条 AI 消息”，用于 regenerate 的最终兜底。
+   *
+   * 适用场景：
+   * - 编辑用户消息后立刻重新生成时，当前上下文里的 targetAiMessageId 可能暂时丢失；
+   * - 但从用户消息在当前 DOM 的可见顺序看，“它后面的第一条 AI”仍然就是要被替换的目标。
+   *
+   * 这里不区分正式 AI 与临时错误占位，交给调用方按是否有 bound message-id 决定：
+   * - 有 message-id：走“原地替换正式 AI”；
+   * - 无 message-id：走“复用临时错误/加载占位”。
+   *
+   * @param {{ userMessageId?: string|null }} options
+   * @returns {{ element: HTMLElement|null, targetAiMessageId: string|null }}
+   */
+  function resolveAdjacentRegenerateTargetCandidate(options = {}) {
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const userMessageId = normalizeConversationId(normalizedOptions.userMessageId);
+    if (!userMessageId) {
+      return { element: null, targetAiMessageId: null };
+    }
+
+    const userElement = findVisibleMessageElementById(userMessageId);
+    if (!(userElement instanceof HTMLElement)) {
+      return { element: null, targetAiMessageId: null };
+    }
+
+    let cursor = userElement.nextElementSibling;
+    while (cursor) {
+      if (!(cursor instanceof HTMLElement)) {
+        cursor = cursor.nextElementSibling;
+        continue;
+      }
+      if (!cursor.classList?.contains('message')) {
+        cursor = cursor.nextElementSibling;
+        continue;
+      }
+      if (cursor.classList.contains('user-message')) {
+        return { element: null, targetAiMessageId: null };
+      }
+      if (!cursor.classList.contains('ai-message')) {
+        return { element: null, targetAiMessageId: null };
+      }
+      const boundMessageId = normalizeConversationId(cursor.getAttribute('data-message-id') || '');
+      return {
+        element: cursor,
+        targetAiMessageId: boundMessageId || null
+      };
+    }
+
+    return { element: null, targetAiMessageId: null };
+  }
+
   function captureMessageElementImageDescriptors(messageElement) {
     if (!messageElement) return [];
     return Array.from(messageElement.querySelectorAll('.image-content .image-tag'))
@@ -4674,6 +4726,167 @@ export function createMessageSender(appContext) {
   }
 
   /**
+   * 将可能为空的时间戳字段安全规范化为 number|null。
+   *
+   * 注意：
+   * - 不能直接写 `Number.isFinite(Number(value))`，因为 `Number(null) === 0`；
+   * - 这里把 null / undefined / 空字符串都视为“尚未设置”，避免把 epoch 误当成有效时间。
+   *
+   * @param {any} value
+   * @returns {number|null}
+   */
+  function normalizeOptionalTimestamp(value) {
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : null;
+    }
+    if (typeof value === 'string') {
+      const trimmed = value.trim();
+      if (!trimmed) return null;
+      const parsed = Number(trimmed);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+  }
+
+  /**
+   * 获取当前仍然有效的“状态文案承载节点”。
+   *
+   * 说明：
+   * - 重新生成时，旧 AI 消息 DOM 可能在编辑/保存后被同 id 的新节点替换；
+   * - 因此不能长期信任早先捕获的 HTMLElement，必须优先按稳定 message-id 回查当前可见节点。
+   *
+   * @param {HTMLElement|null} loadingMessage
+   * @param {{ aiMessageId?: string|null }} [attemptState]
+   * @returns {HTMLElement|null}
+   */
+  function resolveLiveLoadingStatusElement(loadingMessage, attemptState = null) {
+    const boundMessageId = normalizeConversationId(attemptState?.aiMessageId)
+      || normalizeConversationId(loadingMessage?.getAttribute?.('data-message-id') || '');
+    if (boundMessageId) {
+      const liveElement = findVisibleMessageElementById(boundMessageId);
+      if (liveElement instanceof HTMLElement && liveElement.parentNode) {
+        return liveElement;
+      }
+    }
+    return (loadingMessage instanceof HTMLElement && loadingMessage.parentNode)
+      ? loadingMessage
+      : null;
+  }
+
+  /**
+   * 更新“请求进行中”的状态文案，并在原地替换场景下同步到 assistant 节点本身。
+   *
+   * 这样即使中途发生一次基于历史节点的局部重渲染，也不会把旧答案重新顶回屏幕。
+   *
+   * @param {HTMLElement|null} loadingMessage
+   * @param {{ aiMessageId?: string|null, firstVisibleOutputAtMs?: number|null }} [attemptState]
+   * @param {string} text
+   * @param {Object|null} [meta]
+   */
+  function syncAttemptLoadingStatus(loadingMessage, attemptState = null, text = '', meta = null) {
+    const liveElement = resolveLiveLoadingStatusElement(loadingMessage, attemptState);
+    const targetMessageId = normalizeConversationId(attemptState?.aiMessageId)
+      || normalizeConversationId(liveElement?.getAttribute?.('data-message-id') || '')
+      || normalizeConversationId(loadingMessage?.getAttribute?.('data-message-id') || '');
+
+    if (attemptState && typeof attemptState === 'object') {
+      attemptState.pendingLoadingStatusText = text;
+      attemptState.pendingLoadingStatusMeta = meta && typeof meta === 'object'
+        ? { ...meta }
+        : null;
+      ensureAttemptLoadingStatusPulse(attemptState, loadingMessage || liveElement || null);
+    }
+
+    if (liveElement) {
+      updateLoadingStatus(liveElement, text, meta);
+    }
+
+    if (!targetMessageId || normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) != null) {
+      return;
+    }
+
+    const node = resolveAttemptAiNode(attemptState, targetMessageId)
+      || chatHistoryManager?.chatHistory?.messages?.find?.((item) => item?.id === targetMessageId)
+      || null;
+    if (!node || String(node.role || '').toLowerCase() !== 'assistant') return;
+
+    node.content = text;
+    node.thoughtsRaw = null;
+    syncAttemptAssistantView(targetMessageId, {
+      attemptState,
+      node,
+      content: text,
+      thoughtsRaw: null,
+      fallbackElement: liveElement || null,
+      suppressMissingNodeWarning: true
+    });
+  }
+
+  /**
+   * 清理“请求前状态文案”的短周期同步器。
+   *
+   * 设计目的：
+   * - 编辑用户消息后重试会触发会话局部重渲染，原地替换的 AI 气泡可能在短时间内被旧 DOM/新 DOM 来回替换；
+   * - SSE 的 response.created / in_progress 往往来得很早，如果只依赖单次事件写入，状态文案可能正好打到失效节点上；
+   * - 这里用一个极短生命周期的 pulse，在首个可见正文出现前持续把“当前状态文案”压到目标 AI 气泡上。
+   *
+   * 这样我们不需要依赖某个单一时刻“恰好命中正确 DOM”，而是把状态同步变成确定性的过程。
+   *
+   * @param {Object|null} attemptState
+   */
+  function clearAttemptLoadingStatusPulse(attemptState) {
+    if (!attemptState || typeof attemptState !== 'object') return;
+    const timerId = Number(attemptState.loadingStatusPulseTimerId);
+    if (Number.isFinite(timerId) && timerId > 0) {
+      try { clearTimeout(timerId); } catch (_) {}
+    }
+    attemptState.loadingStatusPulseTimerId = null;
+    attemptState.loadingStatusPulseActive = false;
+  }
+
+  /**
+   * 在首个正文出现前，持续把 attempt.pendingLoadingStatusText 同步到当前可见 AI 气泡。
+   *
+   * @param {Object|null} attemptState
+   * @param {HTMLElement|null} loadingMessage
+   */
+  function ensureAttemptLoadingStatusPulse(attemptState, loadingMessage = null) {
+    if (!attemptState || typeof attemptState !== 'object') return;
+    if (attemptState.loadingStatusPulseActive === true) return;
+
+    const tick = () => {
+      attemptState.loadingStatusPulseTimerId = null;
+      if (!attemptState || typeof attemptState !== 'object') return;
+      if (attemptState.finished || normalizeOptionalTimestamp(attemptState.firstVisibleOutputAtMs) != null) {
+        clearAttemptLoadingStatusPulse(attemptState);
+        return;
+      }
+
+      const text = (typeof attemptState.pendingLoadingStatusText === 'string')
+        ? attemptState.pendingLoadingStatusText
+        : '';
+      if (!text) {
+        clearAttemptLoadingStatusPulse(attemptState);
+        return;
+      }
+
+      const meta = (attemptState.pendingLoadingStatusMeta && typeof attemptState.pendingLoadingStatusMeta === 'object')
+        ? attemptState.pendingLoadingStatusMeta
+        : null;
+      const liveElement = resolveLiveLoadingStatusElement(loadingMessage || attemptState.loadingMessage || null, attemptState);
+      if (liveElement) {
+        updateLoadingStatus(liveElement, text, meta);
+      }
+
+      attemptState.loadingStatusPulseActive = true;
+      attemptState.loadingStatusPulseTimerId = setTimeout(tick, 80);
+    };
+
+    attemptState.loadingStatusPulseActive = true;
+    attemptState.loadingStatusPulseTimerId = setTimeout(tick, 0);
+  }
+
+  /**
    * 将 apiManager.sendRequest 的“结构化阶段事件”映射为对用户可见的文案。
    * 目的：把“正在发送请求...”细分为更贴近真实网络生命周期的多个阶段，提升透明度。
    *
@@ -4682,17 +4895,23 @@ export function createMessageSender(appContext) {
    * @param {HTMLElement|null} loadingMessage
    * @returns {(evt: {stage: string, [key: string]: any}) => void}
    */
-  function createRequestStatusHandler(loadingMessage) {
+  function createRequestStatusHandler(loadingMessageOrResolver, attemptState = null) {
+    const resolveTarget = (typeof loadingMessageOrResolver === 'function')
+      ? loadingMessageOrResolver
+      : () => loadingMessageOrResolver;
     return (evt) => {
-      if (!loadingMessage || !loadingMessage.parentNode) return;
+      const loadingMessage = resolveTarget();
       if (!evt || typeof evt !== 'object') return;
+      const writeStatus = (text, meta = null) => {
+        if (normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) != null) return;
+        syncAttemptLoadingStatus(loadingMessage, attemptState, text, meta);
+      };
 
       const stage = evt.stage;
       switch (stage) {
         case 'api_key_file_loaded': {
           const count = Number(evt.keyCount) || 0;
-          updateLoadingStatus(
-            loadingMessage,
+          writeStatus(
             count > 0 ? `已读取本地 Key 文件 (${count} 个 key)...` : '已读取本地 Key 文件...',
             { stage, apiBase: evt.apiBase || '', modelName: evt.modelName || '' }
           );
@@ -4704,8 +4923,7 @@ export function createMessageSender(appContext) {
           const note = (typeof evt.reason === 'string' && evt.reason.trim())
             ? `本地文件读取失败：${evt.reason.trim().slice(0, 220)}`
             : '本地文件读取失败。';
-          updateLoadingStatus(
-            loadingMessage,
+          writeStatus(
             willFallback
               ? `本地 Key 文件读取失败，回退到输入框 Key (${fallbackCount} 个)...`
               : '本地 Key 文件读取失败，且没有可回退的 Key。',
@@ -4714,8 +4932,7 @@ export function createMessageSender(appContext) {
           break;
         }
         case 'api_key_file_reload_start': {
-          updateLoadingStatus(
-            loadingMessage,
+          writeStatus(
             '当前 Key 不可用，正在重读本地 Key 文件...',
             { stage, apiBase: evt.apiBase || '', modelName: evt.modelName || '' }
           );
@@ -4732,7 +4949,7 @@ export function createMessageSender(appContext) {
           const text = keyCount > 1 && hasIndex
             ? `正在选择可用的 API Key (${keyIndex + 1}/${keyCount})${sourceText}...`
             : `正在校验 API Key${sourceText}...`;
-          updateLoadingStatus(loadingMessage, text, {
+          writeStatus(text, {
             stage,
             apiBase: evt.apiBase || '',
             modelName: evt.modelName || '',
@@ -4741,15 +4958,14 @@ export function createMessageSender(appContext) {
           break;
         }
         case 'api_key_omitted': {
-          updateLoadingStatus(
-            loadingMessage,
+          writeStatus(
             '未提供 API Key，按免 key 模式发起请求...',
             { stage, apiBase: evt.apiBase || '', modelName: evt.modelName || '' }
           );
           break;
         }
         case 'http_request_start': {
-          updateLoadingStatus(loadingMessage, '正在建立连接并上传请求载荷...', {
+          writeStatus('正在建立连接并上传请求载荷...', {
             stage,
             apiBase: evt.apiBase || '',
             modelName: evt.modelName || ''
@@ -4757,7 +4973,7 @@ export function createMessageSender(appContext) {
           break;
         }
         case 'http_request_sent': {
-          updateLoadingStatus(loadingMessage, '请求已发出，等待服务器响应...', {
+          writeStatus('请求已发出，等待服务器响应...', {
             stage,
             apiBase: evt.apiBase || '',
             modelName: evt.modelName || '',
@@ -4767,7 +4983,7 @@ export function createMessageSender(appContext) {
         }
         case 'http_response_headers_received': {
           const httpStatus = Number(evt.status);
-          updateLoadingStatus(loadingMessage, '已收到响应头，服务器正在开始处理...', {
+          writeStatus('已收到响应头，服务器正在开始处理...', {
             stage,
             apiBase: evt.apiBase || '',
             modelName: evt.modelName || '',
@@ -4778,16 +4994,14 @@ export function createMessageSender(appContext) {
         }
         case 'http_429_rate_limited': {
           const willRetry = !!evt.willRetry;
-          updateLoadingStatus(
-            loadingMessage,
+          writeStatus(
             willRetry ? '触发限流 (HTTP 429)，正在切换 API Key 重试...' : '触发限流 (HTTP 429)...',
             { stage, apiBase: evt.apiBase || '', modelName: evt.modelName || '', httpStatus: 429 }
           );
           break;
         }
         case 'http_400_bad_request_not_blacklisted': {
-          updateLoadingStatus(
-            loadingMessage,
+          writeStatus(
             '请求参数错误 (HTTP 400)，本次不会拉黑 API Key。',
             { stage, apiBase: evt.apiBase || '', modelName: evt.modelName || '', httpStatus: 400 }
           );
@@ -4797,8 +5011,7 @@ export function createMessageSender(appContext) {
           const httpStatus = Number(evt.status);
           const willRetry = !!evt.willRetry;
           const noApiKey = !!evt.noApiKey;
-          updateLoadingStatus(
-            loadingMessage,
+          writeStatus(
             noApiKey
               ? `请求被拒绝 (HTTP ${Number.isFinite(httpStatus) ? httpStatus : '?'})，当前为免 key 模式。`
               : (
@@ -5996,6 +6209,51 @@ export function createMessageSender(appContext) {
       console.error('获取网页内容失败:', error);
       return null;
     }
+  }
+
+  /**
+   * 在重新生成开始前重置既有 AI 消息的基础时序/usage 元信息。
+   *
+   * 说明：
+   * - 这里是 sendMessageCore 早期阶段可调用的轻量版本，不依赖 handleStreamResponse 内部局部 helper；
+   * - 只负责把旧的 startedAt / usage / duration 清空到“本轮重新开始”的状态；
+   * - 更完整的首帧/完成时序仍由后续流式或非流式处理链路覆盖。
+   *
+   * @param {string|null} messageId
+   * @param {Object|null} attemptState
+   * @param {HTMLElement|null} [fallbackElement]
+   */
+  function resetAssistantResponseMetaForRegenerateStart(messageId, attemptState, fallbackElement = null) {
+    const id = normalizeConversationId(messageId);
+    if (!id) return;
+    const startedAtMs = Number.isFinite(Number(attemptState?.startedAt))
+      ? Number(attemptState.startedAt)
+      : Date.now();
+    const node = resolveAttemptAiNode(attemptState, id)
+      || chatHistoryManager?.chatHistory?.messages?.find?.((item) => item?.id === id)
+      || null;
+    if (node) {
+      node.timestamp = startedAtMs;
+      node.apiUsage = null;
+      node.responseTiming = {
+        startedAtMs,
+        firstVisibleOutputAtMs: null,
+        completedAtMs: null,
+        generationDurationMs: null,
+        thinkingDurationMs: null,
+        outputDurationMs: null
+      };
+      delete node.response_activity_duration_ms;
+    }
+    const element = (fallbackElement instanceof HTMLElement)
+      ? fallbackElement
+      : findVisibleMessageElementById(id);
+    syncAttemptAssistantView(id, {
+      attemptState,
+      node,
+      fallbackElement: element || null,
+      suppressMissingNodeWarning: true
+    });
   }
 
   /**
@@ -7763,15 +8021,11 @@ export function createMessageSender(appContext) {
     loadingMessage,
     attemptState
   }) {
-    const canUpdateLoadingStatus = !!(
-      loadingMessage
-      && loadingMessage.parentNode
-      && !attemptState?.aiMessageId
-      && !loadingMessage.classList?.contains('ai-message')
-    );
+    const resolveLoadingStatusTarget = () => resolveLiveLoadingStatusElement(loadingMessage, attemptState);
+    const canUpdateLoadingStatus = () => normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) == null;
 
-    if (canUpdateLoadingStatus) {
-      updateLoadingStatus(loadingMessage, '正在发送请求（上传请求载荷）...', {
+    if (canUpdateLoadingStatus()) {
+      syncAttemptLoadingStatus(resolveLoadingStatusTarget() || loadingMessage, attemptState, '正在发送请求（上传请求载荷）...', {
         stage: 'send_request',
         apiBase: usedApiConfig?.baseUrl || '',
         modelName: usedApiConfig?.modelName || ''
@@ -7785,13 +8039,17 @@ export function createMessageSender(appContext) {
       requestBody,
       config: usedApiConfig,
       signal,
-      onStatus: canUpdateLoadingStatus ? createRequestStatusHandler(loadingMessage) : undefined
+      onStatus: createRequestStatusHandler(
+        () => resolveLoadingStatusTarget() || loadingMessage || null,
+        attemptState
+      )
     });
 
     if (!response.ok) {
-      if (canUpdateLoadingStatus) {
-        updateLoadingStatus(
-          loadingMessage,
+      if (canUpdateLoadingStatus()) {
+        syncAttemptLoadingStatus(
+          resolveLoadingStatusTarget() || loadingMessage,
+          attemptState,
           `服务器返回错误 (HTTP ${response.status})，正在读取错误详情...`,
           { stage: 'read_error_body', httpStatus: response.status, apiBase: usedApiConfig?.baseUrl || '', modelName: usedApiConfig?.modelName || '' }
         );
@@ -7800,12 +8058,16 @@ export function createMessageSender(appContext) {
       throw new Error(`API错误 (${response.status}): ${error}`);
     }
 
-    if (canUpdateLoadingStatus) {
-      updateLoadingStatus(
-        loadingMessage,
-        `已收到响应头 (HTTP ${response.status})，准备接收回复...`,
-        { stage: 'response_headers_received', httpStatus: response.status, apiBase: usedApiConfig?.baseUrl || '', modelName: usedApiConfig?.modelName || '' }
-      );
+    {
+      const responseHeadersTarget = resolveLoadingStatusTarget() || loadingMessage || null;
+      if (responseHeadersTarget && normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) == null) {
+        syncAttemptLoadingStatus(
+          responseHeadersTarget,
+          attemptState,
+          `已收到响应头 (HTTP ${response.status})，准备接收回复...`,
+          { stage: 'response_headers_received', httpStatus: response.status, apiBase: usedApiConfig?.baseUrl || '', modelName: usedApiConfig?.modelName || '' }
+        );
+      }
     }
 
     return response;
@@ -8208,6 +8470,7 @@ export function createMessageSender(appContext) {
     const normalizedTargetAiMessageId = (typeof targetAiMessageId === 'string' && targetAiMessageId.trim())
       ? targetAiMessageId.trim()
       : null;
+    let effectiveTargetAiMessageId = normalizedTargetAiMessageId;
     const normalizedRegenerateUserMessageId = (typeof messageId === 'string' && messageId.trim())
       ? messageId.trim()
       : null;
@@ -8221,6 +8484,7 @@ export function createMessageSender(appContext) {
     let loadingMessage;
     let transientRegeneratePlaceholder = null;
     let canUpdateExistingAiMessage = false;
+    let inPlaceRegenerateElement = null;
     let conversationChain = null;
     let effectiveApiConfig = null;
 
@@ -8274,7 +8538,7 @@ export function createMessageSender(appContext) {
         draft.activeTurn.status = 'streaming';
         draft.activeTurn.startedAt = startedAt;
         draft.activeTurn.boundAssistantMessageId = null;
-        draft.activeTurn.writeMode = normalizedTargetAiMessageId ? 'replace' : 'append';
+        draft.activeTurn.writeMode = effectiveTargetAiMessageId ? 'replace' : 'append';
         draft.activeTurn.conversationRevisionAtStart = attemptState.conversationRevisionAtStart;
         draft.responses.accumulatedInputItems = [];
         draft.responses.accumulatedTimeline = [];
@@ -8301,6 +8565,9 @@ export function createMessageSender(appContext) {
 	      try { attemptState.uiUpdateThrottler?.flush?.({ force: true }); } catch (_) {}
 	      try { attemptState.uiUpdateThrottler?.cancel?.(); } catch (_) {}
 	      try { attemptState.uiUpdateThrottler = null; } catch (_) {}
+        clearAttemptLoadingStatusPulse(attemptState);
+        attemptState.pendingLoadingStatusText = '';
+        attemptState.pendingLoadingStatusMeta = null;
 
 	      attemptState.finished = true;
       activeAttempts.delete(attemptState.id);
@@ -8540,11 +8807,11 @@ export function createMessageSender(appContext) {
 
       // --- 重新生成：原地替换指定 AI 消息（不新增/不删除其他消息）---
       // 注意：这里只决定“写回目标”，不改变 composeMessages 的裁剪策略；裁剪仍由 messageId（用户消息ID）负责。
-      if (regenerateMode && normalizedTargetAiMessageId) {
+      if (regenerateMode && effectiveTargetAiMessageId) {
         try {
           const targetBinding = resolveRetryOrRegenerateTargetBinding({
             attemptState: attempt,
-            targetAiMessageId: normalizedTargetAiMessageId
+            targetAiMessageId: effectiveTargetAiMessageId
           });
           const node = targetBinding.targetNode;
           const el = targetBinding.targetElement;
@@ -8553,15 +8820,16 @@ export function createMessageSender(appContext) {
 
           if (canUpdateExistingAiMessage) {
             // 绑定 attempt 到目标 AI 消息，便于“停止更新”按消息粒度工作
-            bindAttemptAiMessage(attempt, normalizedTargetAiMessageId, node);
+            bindAttemptAiMessage(attempt, effectiveTargetAiMessageId, node);
             // 阅读位置锁定：仅对“原地替换”重新生成开启。
             // - preserveTargetMessageId 用于在流式/非流式更新时判断是否需要做滚动补偿；
             // - preserveReadingPosition 用于总开关，避免普通发送/普通更新带来额外开销。
             attempt.preserveReadingPosition = true;
-            attempt.preserveTargetMessageId = normalizedTargetAiMessageId;
-            resetAssistantResponseMetaForAttempt(normalizedTargetAiMessageId, el);
-            clearBoundSignatureForRegenerate(normalizedTargetAiMessageId, attempt);
+            attempt.preserveTargetMessageId = effectiveTargetAiMessageId;
+            resetAssistantResponseMetaForRegenerateStart(effectiveTargetAiMessageId, attempt, el);
+            clearBoundSignatureForRegenerate(effectiveTargetAiMessageId, attempt);
             if (el) {
+              inPlaceRegenerateElement = el;
               // 若该消息曾进入错误态（红字/重试按钮），开始重试前先清理，避免视觉状态遗留。
               try {
                 el.classList.remove('error-message');
@@ -8593,9 +8861,43 @@ export function createMessageSender(appContext) {
       }
 
       if (regenerateMode && !canUpdateExistingAiMessage) {
-        transientRegeneratePlaceholder = resolveTransientRegeneratePlaceholder({
+        const adjacentTarget = resolveAdjacentRegenerateTargetCandidate({
           userMessageId: normalizedRegenerateUserMessageId
         });
+        const adjacentElement = adjacentTarget.element instanceof HTMLElement
+          ? adjacentTarget.element
+          : null;
+        const adjacentTargetAiMessageId = normalizeConversationId(adjacentTarget.targetAiMessageId || '');
+
+        if (adjacentElement && adjacentTargetAiMessageId) {
+          effectiveTargetAiMessageId = adjacentTargetAiMessageId;
+          canUpdateExistingAiMessage = true;
+          inPlaceRegenerateElement = adjacentElement;
+          bindAttemptAiMessage(attempt, effectiveTargetAiMessageId);
+          attempt.preserveReadingPosition = true;
+          attempt.preserveTargetMessageId = effectiveTargetAiMessageId;
+          resetAssistantResponseMetaForRegenerateStart(effectiveTargetAiMessageId, attempt, adjacentElement);
+          clearBoundSignatureForRegenerate(effectiveTargetAiMessageId, attempt);
+          try {
+            adjacentElement.classList.remove('error-message');
+            adjacentElement.classList.remove('loading-message');
+            adjacentElement.querySelectorAll('.error-retry-actions').forEach((actionEl) => actionEl.remove());
+          } catch (_) {}
+          resetThoughtsToggleStateForRegenerate(adjacentElement);
+          resetResponsesActivityToggleStateForRegenerate(adjacentElement);
+          try {
+            adjacentElement.classList.add('updating');
+            adjacentElement.classList.add('regenerating');
+          } catch (_) {}
+          updateAttemptRuntimeState(attempt, (draft) => {
+            draft.activeTurn.writeMode = 'replace';
+            draft.activeTurn.boundAssistantMessageId = effectiveTargetAiMessageId;
+          });
+        } else {
+          transientRegeneratePlaceholder = resolveTransientRegeneratePlaceholder({
+            userMessageId: normalizedRegenerateUserMessageId
+          });
+        }
       }
 
       // 添加加载状态消息（仅在“追加新消息”模式下需要占位）
@@ -8640,12 +8942,14 @@ export function createMessageSender(appContext) {
           }
         }
       } else {
-        loadingMessage = null;
-        attempt.loadingMessage = null;
+        loadingMessage = inPlaceRegenerateElement
+          || (effectiveTargetAiMessageId ? findVisibleMessageElementById(effectiveTargetAiMessageId) : null)
+          || null;
+        attempt.loadingMessage = loadingMessage;
       }
 
       // 更新加载状态：正在构建消息
-      updateLoadingStatus(loadingMessage, '正在构建消息...', { stage: 'compose_messages' });
+      syncAttemptLoadingStatus(loadingMessage, attempt, '正在构建消息...', { stage: 'compose_messages' });
 
       // 构建消息数组（改为纯函数 composer）
       if (Array.isArray(conversationSnapshot) && conversationSnapshot.length > 0) {
@@ -8709,7 +9013,7 @@ export function createMessageSender(appContext) {
           typeof utils?.getJsRuntimeFrames === 'function'
           && responsesPageToolEnvironment?.shouldInjectJsRuntimeFrameContext === true
         ) {
-          updateLoadingStatus(loadingMessage, '正在获取页面运行环境上下文...', { stage: 'get_js_runtime_frames' });
+          syncAttemptLoadingStatus(loadingMessage, attempt, '正在获取页面运行环境上下文...', { stage: 'get_js_runtime_frames' });
           jsRuntimeFrames = await getJsRuntimeFrameSnapshot(
             responsesPageToolEnvironment.jsRuntimeEnvironment
           );
@@ -8801,7 +9105,7 @@ export function createMessageSender(appContext) {
       }
 
       // 更新加载状态：构造请求载荷（此阶段尚未发起网络请求，可能包含图片编码/自定义参数合并等耗时操作）
-      updateLoadingStatus(loadingMessage, '正在构造请求载荷...', { stage: 'build_request_body' });
+      syncAttemptLoadingStatus(loadingMessage, attempt, '正在构造请求载荷...', { stage: 'build_request_body' });
 
       // 解析宽高比控制标记（如果存在），用于单次请求级别的图片配置覆盖
       if (!aspectRatioOverride) {
@@ -8933,7 +9237,7 @@ export function createMessageSender(appContext) {
         conversationApiLockSnapshot,
         regenerateMode,
         messageId,
-        targetAiMessageId: normalizedTargetAiMessageId,
+        targetAiMessageId: effectiveTargetAiMessageId,
         forceSendFullHistory,
         pageContentSnapshot: pageContentSnapshot || buildCurrentPageMetaSnapshot(),
         conversationSnapshot: Array.isArray(conversationChain) ? conversationChain : conversationSnapshot,
@@ -8971,7 +9275,7 @@ export function createMessageSender(appContext) {
           nextJob
         );
       };
-      retry.__targetAiMessageId = normalizedTargetAiMessageId || '';
+      retry.__targetAiMessageId = effectiveTargetAiMessageId || '';
 
       const canAutoRetry = (
         autoRetryEnabled
@@ -9008,7 +9312,7 @@ export function createMessageSender(appContext) {
             || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.()),
           conversationRevisionAtEnqueue: normalizedConversationRevisionAtStart,
           anchorMessageId: normalizeConversationId(messageId),
-          targetAiMessageId: normalizedTargetAiMessageId,
+          targetAiMessageId: effectiveTargetAiMessageId,
           retryPolicy: normalizedConversationRetryPolicy,
           retryCount: nextAttemptIndex,
           availableAt: Date.now() + delayMs,
@@ -9034,10 +9338,10 @@ export function createMessageSender(appContext) {
       const errorMessageText = `${prefix}${detail}`;
 
       let messageElement = null;
-      if (normalizedTargetAiMessageId) {
+      if (effectiveTargetAiMessageId) {
         const targetBinding = resolveRetryOrRegenerateTargetBinding({
           attemptState: attempt,
-          targetAiMessageId: normalizedTargetAiMessageId
+          targetAiMessageId: effectiveTargetAiMessageId
         });
         if (targetBinding.targetElement) {
           messageElement = targetBinding.targetElement;
@@ -9656,9 +9960,8 @@ export function createMessageSender(appContext) {
       const startedAtMs = Number.isFinite(Number(overrideObject.startedAtMs))
         ? Number(overrideObject.startedAtMs)
         : (Number.isFinite(Number(attemptState?.startedAt)) ? Number(attemptState.startedAt) : null);
-      const firstVisibleOutputAtMs = Number.isFinite(Number(overrideObject.firstVisibleOutputAtMs))
-        ? Number(overrideObject.firstVisibleOutputAtMs)
-        : (Number.isFinite(Number(attemptState?.firstVisibleOutputAtMs)) ? Number(attemptState.firstVisibleOutputAtMs) : null);
+      const firstVisibleOutputAtMs = normalizeOptionalTimestamp(overrideObject.firstVisibleOutputAtMs)
+        ?? normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs);
       const completedAtMs = Number.isFinite(Number(overrideObject.completedAtMs))
         ? Number(overrideObject.completedAtMs)
         : null;
@@ -9773,20 +10076,20 @@ export function createMessageSender(appContext) {
    */
   async function handleStreamResponse(response, loadingMessage, usedApiConfig, attemptState) {
     captureAttemptConversationContext(attemptState);
-    const canStillUpdateLoadingStatus = () => !!(
-      loadingMessage
-      && loadingMessage.parentNode
-      && !attemptState?.aiMessageId
-      && !loadingMessage.classList?.contains('ai-message')
-    );
+    const resolveLoadingStatusTarget = () => resolveLiveLoadingStatusElement(loadingMessage, attemptState);
+    const canStillUpdateLoadingStatus = () => normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) == null;
     // 流式场景：此时已拿到响应头，但正文 token 尚未到达。
     // 在首个 token 到达前维持占位消息，并展示“等待首 token”的细粒度状态。
-    if (canStillUpdateLoadingStatus()) {
-      updateLoadingStatus(
-        loadingMessage,
-        '已建立流式连接，等待首个 token...',
-        { stage: 'stream_wait_first_token', apiBase: usedApiConfig?.baseUrl || '', modelName: usedApiConfig?.modelName || '' }
-      );
+    {
+      const streamStartTarget = resolveLoadingStatusTarget() || loadingMessage || null;
+      if (streamStartTarget && normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) == null) {
+        syncAttemptLoadingStatus(
+          streamStartTarget,
+          attemptState,
+          '已建立流式连接，等待首个 token...',
+          { stage: 'stream_wait_first_token', apiBase: usedApiConfig?.baseUrl || '', modelName: usedApiConfig?.modelName || '' }
+        );
+      }
     }
 
     const threadContext = attemptState?.threadContext || null;
@@ -9979,8 +10282,9 @@ export function createMessageSender(appContext) {
       if (!isOpenAIResponsesStream || !canStillUpdateLoadingStatus()) return;
       const nextStatus = deriveResponsesSseLoadingStatus(eventType, data);
       if (!nextStatus) return;
-      updateLoadingStatus(
-        loadingMessage,
+      syncAttemptLoadingStatus(
+        resolveLoadingStatusTarget() || loadingMessage || null,
+        attemptState,
         nextStatus.text,
         {
           ...nextStatus.meta,
@@ -10202,9 +10506,12 @@ export function createMessageSender(appContext) {
         && aiResponse.trim() !== '';
       if (shouldCaptureFirstVisibleOutput && attemptState) {
         const now = Date.now();
-        if (!Number.isFinite(Number(attemptState.firstVisibleOutputAtMs))) {
+        if (normalizeOptionalTimestamp(attemptState.firstVisibleOutputAtMs) == null) {
           attemptState.firstVisibleOutputAtMs = now;
         }
+        clearAttemptLoadingStatusPulse(attemptState);
+        attemptState.pendingLoadingStatusText = '';
+        attemptState.pendingLoadingStatusMeta = null;
         if (currentAiMessageId) {
           applyTimingMetaToMessage(
             currentAiMessageId,
@@ -10976,16 +11283,13 @@ export function createMessageSender(appContext) {
    * @returns {Promise<{answer:string, responseId:string|null, responseOutputItems:Array<Object>|null, responseInputItems:Array<Object>|null, responseActivityTimeline:Array<Object>|null, responseToolCalls:Array<Object>|null, assistantPhase:string|null, isResponsesApi:boolean}>}
    */
   async function handleNonStreamResponse(response, loadingMessage, usedApiConfig, attemptState) {
-    const canUpdateLoadingStatus = !!(
-      loadingMessage
-      && loadingMessage.parentNode
-      && !attemptState?.aiMessageId
-      && !loadingMessage.classList?.contains('ai-message')
-    );
+    const resolveLoadingStatusTarget = () => resolveLiveLoadingStatusElement(loadingMessage, attemptState);
+    const canUpdateLoadingStatus = () => normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) == null;
     // 非流式场景：响应头已收到，但需要完整下载/解析 body，可能会明显等待。
-    if (canUpdateLoadingStatus) {
-      updateLoadingStatus(
-        loadingMessage,
+    if (canUpdateLoadingStatus()) {
+      syncAttemptLoadingStatus(
+        resolveLoadingStatusTarget() || loadingMessage || null,
+        attemptState,
         '正在下载并解析完整回复（非流式）...',
         { stage: 'non_stream_read_body', apiBase: usedApiConfig?.baseUrl || '', modelName: usedApiConfig?.modelName || '' }
       );
@@ -11054,8 +11358,13 @@ export function createMessageSender(appContext) {
     const markNonStreamCompletion = (messageId, messageDiv = null) => {
       if (!messageId) return;
       const completedAtMs = Date.now();
-      if (!Number.isFinite(Number(attemptState?.firstVisibleOutputAtMs))) {
+      if (normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) == null) {
         attemptState.firstVisibleOutputAtMs = completedAtMs;
+      }
+      clearAttemptLoadingStatusPulse(attemptState);
+      if (attemptState) {
+        attemptState.pendingLoadingStatusText = '';
+        attemptState.pendingLoadingStatusMeta = null;
       }
       const node = resolveAttemptAiNode(attemptState, messageId);
       const thinkingDurationMs = Number.isFinite(Number(node?.response_activity_duration_ms))
@@ -11798,6 +12107,24 @@ export function createMessageSender(appContext) {
     return isTemporaryMode;
   }
 
+  function getDebugActiveAttemptsSnapshot() {
+    return Array.from(activeAttempts.values()).map((attemptState) => ({
+      id: attemptState?.id || '',
+      aiMessageId: attemptState?.aiMessageId || '',
+      boundConversationId: attemptState?.boundConversationId || '',
+      firstVisibleOutputAtMs: normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs),
+      pendingLoadingStatusText: (typeof attemptState?.pendingLoadingStatusText === 'string')
+        ? attemptState.pendingLoadingStatusText
+        : '',
+      pendingLoadingStatusStage: (typeof attemptState?.pendingLoadingStatusMeta?.stage === 'string')
+        ? attemptState.pendingLoadingStatusMeta.stage
+        : '',
+      loadingMessageId: normalizeConversationId(attemptState?.loadingMessage?.getAttribute?.('data-message-id') || ''),
+      loadingMessageConnected: !!attemptState?.loadingMessage?.isConnected,
+      finished: attemptState?.finished === true
+    }));
+  }
+
   /**
    * 切换临时模式
    * @public
@@ -11837,6 +12164,7 @@ export function createMessageSender(appContext) {
     getStreamingConversationIds,
     getBackgroundCompletedConversationIds,
     subscribeStreamingConversationState,
-    hasAbortableRequest
+    hasAbortableRequest,
+    __debugGetActiveAttemptsSnapshot: getDebugActiveAttemptsSnapshot
   };
 } 
