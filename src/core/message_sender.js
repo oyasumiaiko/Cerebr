@@ -4705,24 +4705,7 @@ export function createMessageSender(appContext) {
     }
     textContentDiv.textContent = safeText;
     loadingMessage.setAttribute('data-original-text', safeText);
-
-    // 使用 title 提供“更细节但不打扰”的信息密度：鼠标悬停可查看。
-    // 注意：不要在这里拼接/透出任何 API Key 或包含 key 的 URL。
-    if (!meta || typeof meta !== 'object') {
-      loadingMessage.title = '';
-      return;
-    }
-    try {
-      const lines = [];
-      if (meta.stage) lines.push(`阶段: ${String(meta.stage)}`);
-      if (meta.apiBase) lines.push(`API: ${String(meta.apiBase)}`);
-      if (meta.modelName) lines.push(`模型: ${String(meta.modelName)}`);
-      if (Number.isFinite(meta.httpStatus)) lines.push(`HTTP: ${meta.httpStatus}`);
-      if (typeof meta.note === 'string' && meta.note.trim()) lines.push(meta.note.trim().slice(0, 300));
-      loadingMessage.title = lines.join('\n');
-    } catch (_) {
-      loadingMessage.title = '';
-    }
+    try { loadingMessage.removeAttribute('title'); } catch (_) {}
   }
 
   /**
@@ -4884,6 +4867,29 @@ export function createMessageSender(appContext) {
 
     attemptState.loadingStatusPulseActive = true;
     attemptState.loadingStatusPulseTimerId = setTimeout(tick, 0);
+  }
+
+  /**
+   * 判定当前 assistant 是否已经出现任何“用户可见内容”。
+   *
+   * 范围：
+   * - 正文答案；
+   * - 思考文本；
+   * - Responses 的 reasoning / commentary / tool timeline。
+   *
+   * 一旦这些任意一种已经开始可见，就不应该继续显示“等待首个 token”之类的纯占位状态。
+   *
+   * @param {{answer?: string, thoughts?: string, responseActivityTimeline?: Array<any>}} input
+   * @returns {boolean}
+   */
+  function hasVisibleAssistantOutput(input = {}) {
+    if (typeof input?.answer === 'string' && input.answer.trim() !== '') {
+      return true;
+    }
+    if (typeof input?.thoughts === 'string' && input.thoughts.trim() !== '') {
+      return true;
+    }
+    return Array.isArray(input?.responseActivityTimeline) && input.responseActivityTimeline.length > 0;
   }
 
   /**
@@ -10500,10 +10506,14 @@ export function createMessageSender(appContext) {
       streamRenderState.hasStartedResponse = transition.nextState.hasStartedResponse;
       streamRenderState.hasEverShownAnswerContent = transition.nextState.hasEverShownAnswerContent;
 
-      const shouldCaptureFirstVisibleOutput = !hadEverShownAnswerContent
-        && transition.nextState.hasEverShownAnswerContent
-        && typeof aiResponse === 'string'
-        && aiResponse.trim() !== '';
+      const shouldCaptureFirstVisibleOutput = (
+        normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) == null
+        && hasVisibleAssistantOutput({
+          answer: aiResponse,
+          thoughts: isOpenAIResponsesStream ? null : aiThoughtsRaw,
+          responseActivityTimeline: isOpenAIResponsesStream ? latestResponsesActivityTimeline : null
+        })
+      );
       if (shouldCaptureFirstVisibleOutput && attemptState) {
         const now = Date.now();
         if (normalizeOptionalTimestamp(attemptState.firstVisibleOutputAtMs) == null) {

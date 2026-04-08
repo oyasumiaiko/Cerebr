@@ -156,6 +156,7 @@ async function runMockResponsesServer() {
   const pageHtml = createPageHtml();
   const firstReplyText = 'FIRST_REPLY_20260408';
   const secondReplyText = 'SECOND_REPLY_AFTER_EDIT_20260408';
+  const secondReasoningText = 'SECOND_REASONING_20260408';
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -239,6 +240,11 @@ async function runMockResponsesServer() {
           writeSseEvent(res, { type: 'response.created', response: { id: 'resp_second' } });
           writeSseEvent(res, { type: 'response.in_progress', response: { id: 'resp_second' } });
           await sleep(120);
+          writeSseEvent(res, {
+            type: 'response.reasoning_summary_text.delta',
+            item_id: 'reasoning_second',
+            delta: secondReasoningText
+          });
           await sleep(1200);
           writeSseEvent(res, { type: 'response.output_item.added', item: messageItem });
           writeSseEvent(res, {
@@ -480,6 +486,54 @@ async function main() {
       finalText: mockServer.secondReplyText
     });
 
+    const reasoningStatePromise = sidebarFrame.evaluate(({ aiId, finalText }) => {
+      return new Promise((resolve) => {
+        const readSnapshot = () => {
+          const aiMessage = document.querySelector(`.message.ai-message[data-message-id="${aiId}"]`);
+          const statusText = aiMessage?.querySelector?.('.text-content')?.innerText || '';
+          const title = aiMessage?.getAttribute?.('title') || '';
+          const hasResponseActivity = !!aiMessage?.querySelector?.('.response-activity-timeline');
+          return {
+            title,
+            statusText,
+            hasResponseActivity,
+            reachedFinalTextEarly: statusText.includes(finalText)
+          };
+        };
+        const maybeResolve = () => {
+          const snapshot = readSnapshot();
+          if ((snapshot.hasResponseActivity && !snapshot.reachedFinalTextEarly) || snapshot.reachedFinalTextEarly) {
+            cleanup();
+            resolve(snapshot);
+          }
+        };
+        const observer = new MutationObserver(() => {
+          maybeResolve();
+        });
+        const cleanup = () => {
+          try { observer.disconnect(); } catch (_) {}
+          try { clearTimeout(timeoutId); } catch (_) {}
+        };
+        const timeoutId = setTimeout(() => {
+          const snapshot = readSnapshot();
+          cleanup();
+          resolve(snapshot);
+        }, 2000);
+        const chatRoot = document.querySelector('#chat-container') || document.body;
+        observer.observe(chatRoot, {
+          subtree: true,
+          childList: true,
+          characterData: true,
+          attributes: true,
+          attributeFilter: ['title']
+        });
+        maybeResolve();
+      });
+    }, {
+      aiId: initialConversation.aiId,
+      finalText: mockServer.secondReplyText
+    });
+
     await waitFor(async () => (
       mockServer.requestLog.length >= 2 ? true : null
     ), { timeoutMs: 15000, intervalMs: 100, label: 'second request observed' });
@@ -490,6 +544,17 @@ async function main() {
       : [];
     if (!result.midStreamState?.matched) {
       throw new Error('Timed out waiting for mid-stream server-side status text');
+    }
+
+    result.reasoningState = await reasoningStatePromise;
+    if (!result.reasoningState?.hasResponseActivity) {
+      throw new Error('Timed out waiting for reasoning activity to become visible');
+    }
+    if (result.reasoningState.title) {
+      throw new Error(`Expected empty assistant title after reasoning became visible, got: ${result.reasoningState.title}`);
+    }
+    if (/等待首个 token|stream_wait_first_token/i.test(result.reasoningState.statusText || '')) {
+      throw new Error(`Reasoning-visible state still showed wait-first-token text: ${result.reasoningState.statusText}`);
     }
 
     const finalState = await waitFor(async () => {

@@ -1338,6 +1338,7 @@ export function createMessageProcessor(appContext) {
       messageDiv.classList.remove('error-message');
       messageDiv.classList.remove('loading-message');
       messageDiv.classList.remove('regenerating');
+      messageDiv.removeAttribute('title');
       const retryActions = messageDiv.querySelectorAll('.error-retry-actions');
       retryActions.forEach((actionEl) => actionEl.remove());
       const rootTextNodes = Array.from(messageDiv.childNodes || []).filter(node => node && node.nodeType === 3);
@@ -2900,6 +2901,7 @@ export function createMessageProcessor(appContext) {
     if (!messageWrapperDiv || !node) return false;
     const role = String(node.role || '').toLowerCase();
     if (role !== 'assistant' && role !== 'ai') return false;
+    try { messageWrapperDiv.removeAttribute('title'); } catch (_) {}
 
     const responseTimeline = getResponseActivityTimeline(node);
     if (responseTimeline.length > 0) {
