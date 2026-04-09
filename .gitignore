@@ -20,6 +20,7 @@ Thumbs.db
 # 其他工具生成的缓存文件
 .cache/
 *.sublime-workspace
+.env
 
 # 本地临时引入的第三方库文件
 lib/mermaid.min.js

@@ -6907,9 +6907,9 @@ export function createMessageSender(appContext) {
   function getResponsesCustomFunctionTools(usedApiConfig, pageToolEnvironment = resolveResponsesPageToolEnvironment()) {
     if (!isOpenAIResponsesApiConfig(usedApiConfig)) return [];
     const tools = [
-      buildResponsesRequestUserInputFunctionToolDefinition(),
-      buildResponsesListAskableModelsFunctionToolDefinition(),
-      buildResponsesAskOtherAiFunctionToolDefinition(),
+      buildRequestUserInputFunctionToolDefinition(),
+      buildListAskableModelsFunctionToolDefinition(),
+      buildAskOtherAiFunctionToolDefinition(),
       buildResponsesHistorySearchFunctionToolDefinition(),
       buildResponsesHistoryReadFunctionToolDefinition()
     ];

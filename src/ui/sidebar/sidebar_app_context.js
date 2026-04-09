@@ -9,6 +9,23 @@ import {
   resolvePageToolEnvironment
 } from '../../agent_tools/page_tool_environment.js';
 
+const JS_RUNTIME_STATUS_TIMEOUT_MS = 5000;
+const JS_RUNTIME_FRAME_SNAPSHOT_TIMEOUT_MS = 5000;
+const JS_RUNTIME_EXECUTION_TIMEOUT_MS = 30000;
+
+function raceWithTimeout(promise, timeoutMs, timeoutMessage) {
+  const normalizedTimeout = Number.isFinite(Number(timeoutMs)) ? Math.max(1, Math.trunc(Number(timeoutMs))) : 0;
+  if (!normalizedTimeout) return promise;
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      window.setTimeout(() => {
+        reject(new Error(timeoutMessage || '操作超时'));
+      }, normalizedTimeout);
+    })
+  ]);
+}
+
 /**
  * 创建侧边栏 appContext 基础结构。
  * @param {boolean} isStandalone - 当前是否处于独立页面模式。
@@ -961,7 +978,11 @@ export function registerSidebarUtilities(appContext) {
       };
     }
     try {
-      return await chrome.runtime.sendMessage({ type: 'GET_JS_RUNTIME_STATUS' });
+      return await raceWithTimeout(
+        chrome.runtime.sendMessage({ type: 'GET_JS_RUNTIME_STATUS' }),
+        JS_RUNTIME_STATUS_TIMEOUT_MS,
+        '获取 JS Runtime 状态超时'
+      );
     } catch (error) {
       return {
         success: false,
@@ -1006,7 +1027,11 @@ export function registerSidebarUtilities(appContext) {
           error: '当前侧栏尚未解析出稳定的宿主标签页，暂时无法读取 JS Runtime frame 快照。'
         };
       }
-      return await chrome.runtime.sendMessage({ type: 'GET_JS_RUNTIME_FRAMES', tabId: targetTabId });
+      return await raceWithTimeout(
+        chrome.runtime.sendMessage({ type: 'GET_JS_RUNTIME_FRAMES', tabId: targetTabId }),
+        JS_RUNTIME_FRAME_SNAPSHOT_TIMEOUT_MS,
+        '获取 JS Runtime frame 快照超时'
+      );
     } catch (error) {
       return {
         success: false,
@@ -1058,13 +1083,17 @@ export function registerSidebarUtilities(appContext) {
           error: '当前侧栏尚未解析出稳定的宿主标签页，暂时无法执行 JS Runtime。'
         };
       }
-      return await chrome.runtime.sendMessage({
-        type: 'EXECUTE_JS_RUNTIME',
-        tabId: targetTabId,
-        code: (typeof code === 'string') ? code : '',
-        frameIds: Array.isArray(options?.frameIds) ? options.frameIds : null,
-        injectImmediately: options?.injectImmediately === true
-      });
+      return await raceWithTimeout(
+        chrome.runtime.sendMessage({
+          type: 'EXECUTE_JS_RUNTIME',
+          tabId: targetTabId,
+          code: (typeof code === 'string') ? code : '',
+          frameIds: Array.isArray(options?.frameIds) ? options.frameIds : null,
+          injectImmediately: options?.injectImmediately === true
+        }),
+        JS_RUNTIME_EXECUTION_TIMEOUT_MS,
+        '执行 JS Runtime 超时'
+      );
     } catch (error) {
       return {
         success: false,
