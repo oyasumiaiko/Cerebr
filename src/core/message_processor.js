@@ -17,6 +17,7 @@ import { extractThinkingFromText, mergeThoughts } from '../utils/thoughts_parser
 import { normalizeResponsesReasoningText } from '../utils/responses_activity_reasoning.js';
 import { buildApiFooterRenderData } from '../utils/api_footer_template.js';
 import { resolveThoughtsPanelLifecycleState } from '../utils/thoughts_panel_lifecycle.js';
+import { getAssistantActivityTimeline } from '../utils/assistant_activity_timeline.js';
 import { resolveResponseActivityToolExpansionState } from '../utils/response_activity_tool_auto_collapse.js';
 import {
   formatResponsesToolOutputForDisplay,
@@ -1315,6 +1316,9 @@ export function createMessageProcessor(appContext) {
       if (sender === 'ai' && !messageIdToUpdate && messageDiv) {
         messageDiv.classList.add('updating');
       }
+      if (sender === 'ai' && messageDiv && node) {
+        syncAssistantMessageMetadata(node.id, node, { fallbackElement: messageDiv });
+      }
     }
 
     // 如果存在划词线程管理器，则在渲染后补充高亮装饰
@@ -1352,8 +1356,6 @@ export function createMessageProcessor(appContext) {
     } catch (_) {}
 
     messageDiv.setAttribute('data-original-text', safeAnswerContent);
-    // 思考过程文本由 setupThoughtsDisplay 统一处理
-    setupThoughtsDisplay(messageDiv, resolvedThoughts, processMathAndMarkdown);
 
     let textContentDiv = messageDiv.querySelector('.text-content');
     if (!textContentDiv) {
@@ -1374,7 +1376,7 @@ export function createMessageProcessor(appContext) {
       surfaceSnapshots.text
     );
 
-    setupResponseToolCallsDisplay(messageDiv, node.response_tool_calls || null);
+    syncAssistantMessageMetadata(node?.id || null, node, { fallbackElement: messageDiv });
 
     try {
       services.selectionThreadManager?.decorateMessageElement?.(messageDiv, node);
@@ -1695,47 +1697,6 @@ export function createMessageProcessor(appContext) {
       value: getResponseToolCallTypeLabel(record),
       valueUrl: ''
     };
-  }
-
-  function buildResponseActivityTimelineFromLegacyMetadata(node) {
-    if (!node || typeof node !== 'object') return [];
-    const timeline = [];
-    const reasoningSummary = (typeof node.response_reasoning_summary === 'string')
-      ? node.response_reasoning_summary.trim()
-      : '';
-    if (reasoningSummary) {
-      timeline.push({
-        kind: 'reasoning_summary',
-        id: 'legacy_reasoning_summary',
-        status: 'completed',
-        text: reasoningSummary
-      });
-    }
-    if (Array.isArray(node.response_tool_calls)) {
-      node.response_tool_calls.forEach((record, index) => {
-        if (!record || typeof record !== 'object') return;
-        timeline.push({
-          kind: 'tool_call',
-          id: record.id || `legacy_tool_${index}`,
-          ...record
-        });
-      });
-    }
-    return timeline;
-  }
-
-  function getResponseActivityTimeline(node) {
-    if (!node || typeof node !== 'object') return [];
-    const source = Array.isArray(node.response_activity_timeline) && node.response_activity_timeline.length > 0
-      ? node.response_activity_timeline
-      : buildResponseActivityTimelineFromLegacyMetadata(node);
-    const timeline = Array.isArray(source)
-      ? source.filter(entry => entry && typeof entry === 'object' && typeof entry.kind === 'string')
-      : [];
-    const hasCommentary = timeline.some(entry => String(entry?.kind || '').toLowerCase() === 'commentary');
-    return hasCommentary
-      ? timeline.filter(entry => String(entry?.kind || '').toLowerCase() !== 'reasoning_summary')
-      : timeline;
   }
 
   function formatResponseActivityElapsedDuration(durationMs) {
@@ -3063,7 +3024,7 @@ export function createMessageProcessor(appContext) {
     if (role !== 'assistant' && role !== 'ai') return false;
     try { messageWrapperDiv.removeAttribute('title'); } catch (_) {}
 
-    const responseTimeline = getResponseActivityTimeline(node);
+    const responseTimeline = getAssistantActivityTimeline(node);
     if (responseTimeline.length > 0) {
       setupThoughtsDisplay(messageWrapperDiv, null, processMathAndMarkdown);
       setupResponseToolCallsDisplay(messageWrapperDiv, null);
@@ -3076,9 +3037,8 @@ export function createMessageProcessor(appContext) {
       );
     } else {
       removeResponseActivityTimelineDisplay(messageWrapperDiv);
-      const responseThoughts = node.thoughtsRaw || node.response_reasoning_summary || null;
-      setupThoughtsDisplay(messageWrapperDiv, responseThoughts, processMathAndMarkdown);
-      setupResponseToolCallsDisplay(messageWrapperDiv, node.response_tool_calls || null);
+      setupThoughtsDisplay(messageWrapperDiv, null, processMathAndMarkdown);
+      setupResponseToolCallsDisplay(messageWrapperDiv, null);
     }
     enhanceMarkdownContent(messageWrapperDiv);
     messageVirtualizer.scheduleUpdate(resolveMessageListContainer(messageWrapperDiv));
