@@ -94,7 +94,7 @@ export function normalizeRequestUserInputArguments(rawArgs) {
 }
 
 export function buildRequestUserInputToolDescription() {
-  return 'Request user input for one to three short questions and wait for the response. This tool is only available in Default or Plan mode.';
+  return 'Request user input for short questions and wait for the response.';
 }
 
 export function buildRequestUserInputFunctionToolDefinition() {
@@ -123,7 +123,7 @@ export function buildRequestUserInputFunctionToolDefinition() {
     },
     options: {
       type: 'array',
-      description: 'Provide 2-3 mutually exclusive choices. Put the recommended option first and suffix its label with "(Recommended)". Do not include an "Other" option in this list; the client will add a free-form "Other" option automatically.',
+      description: 'Provide choices. Do not include an "Other" option in this list; the client will add a free-form "Other" option automatically.',
       items: {
         type: 'object',
         additionalProperties: false,
@@ -144,7 +144,7 @@ export function buildRequestUserInputFunctionToolDefinition() {
       properties: {
         questions: {
           type: 'array',
-          description: 'Questions to show the user. Prefer 1 and do not exceed 3',
+          description: 'Questions to show the user.',
           items: {
             type: 'object',
             additionalProperties: false,
