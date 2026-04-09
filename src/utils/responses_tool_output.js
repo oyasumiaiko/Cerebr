@@ -703,6 +703,59 @@ export function buildResponsesAskOtherAiToolOutputContentItems(result, options =
   );
 }
 
+function buildResponsesRequestUserInputToolOutputText(result) {
+  const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
+  const metadata = {
+    ok: normalized.ok === true,
+    cancelled: normalized.cancelled === true,
+    question_count: Number.isFinite(Number(normalized.question_count)) ? Number(normalized.question_count) : 0,
+    answered_count: Number.isFinite(Number(normalized.answered_count)) ? Number(normalized.answered_count) : 0
+  };
+  const blocks = [];
+  const questions = Array.isArray(normalized.questions) ? normalized.questions : [];
+  if (questions.length > 0) {
+    const questionsText = questions.map((item, index) => {
+      const header = (typeof item?.header === 'string' && item.header.trim()) ? item.header.trim() : '';
+      const attrs = [
+        `rank="${index + 1}"`,
+        typeof item?.id === 'string' && item.id ? `id="${xmlAttributeEscape(item.id)}"` : '',
+        header ? `header="${xmlAttributeEscape(header)}"` : '',
+        Array.isArray(item?.answers) && item.answers.length > 0 ? 'status="answered"' : 'status="unanswered"'
+      ].filter(Boolean).join(' ');
+      const innerBlocks = [];
+      if (typeof item?.question === 'string' && item.question.trim()) {
+        innerBlocks.push(buildXmlBlock('prompt', item.question));
+      }
+      const answers = Array.isArray(item?.answers) ? item.answers : [];
+      if (answers.length > 0) {
+        const answersText = answers.map((answer, answerIndex) => {
+          return `<answer rank="${answerIndex + 1}">\n${trimTrailingWhitespace(answer)}\n</answer>`;
+        }).join('\n\n');
+        innerBlocks.push(`<answers>\n${answersText}\n</answers>`);
+      }
+      return `<question${attrs ? ` ${attrs}` : ''}>\n${innerBlocks.filter(Boolean).join('\n\n')}\n</question>`;
+    }).join('\n\n');
+    blocks.push({
+      tag: 'questions',
+      text: questionsText
+    });
+  }
+  if (normalized.error) {
+    blocks.push({
+      tag: 'error',
+      text: formatResponsesJsRuntimeErrorText(normalized.error)
+    });
+  }
+  return buildXmlToolResultText('request_user_input_result', metadata, blocks);
+}
+
+export function buildResponsesRequestUserInputToolOutputContentItems(result, options = {}) {
+  return buildResponsesXmlToolOutputContentItems(
+    buildResponsesRequestUserInputToolOutputText(result),
+    options
+  );
+}
+
 export function buildResponsesGenericXmlToolOutputContentItems(rootTag, result, options = {}) {
   const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : { value: result };
   const metadata = {

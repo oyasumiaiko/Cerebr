@@ -46,6 +46,7 @@ import {
   buildResponsesHistoryReadToolOutputContentItems,
   buildResponsesAskableModelsToolOutputContentItems,
   buildResponsesAskOtherAiToolOutputContentItems,
+  buildResponsesRequestUserInputToolOutputContentItems,
   buildResponsesGenericXmlToolOutputContentItems
 } from '../utils/responses_tool_output.js';
 import {
@@ -62,6 +63,10 @@ import {
   buildAskOtherAiUserMessage,
   normalizeAskOtherAiArguments
 } from '../utils/ask_other_ai_tool.js';
+import {
+  buildRequestUserInputResult,
+  normalizeRequestUserInputArguments
+} from '../utils/request_user_input_tool.js';
 import {
   JS_RUNTIME_ENV_BOUND_HOST_PAGE,
   JS_RUNTIME_ENV_ISOLATED_SANDBOX,
@@ -90,6 +95,7 @@ const RESPONSES_JS_RUNTIME_TOOL_NAME = 'js_runtime_execute';
 const RESPONSES_PAGE_CONTENT_TOOL_NAME = 'page_content_read';
 const RESPONSES_HISTORY_SEARCH_TOOL_NAME = 'history_search';
 const RESPONSES_HISTORY_READ_TOOL_NAME = 'history_read';
+const RESPONSES_REQUEST_USER_INPUT_TOOL_NAME = 'request_user_input';
 const RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME = 'list_askable_models';
 const RESPONSES_ASK_OTHER_AI_TOOL_NAME = 'ask_other_ai';
 
@@ -6740,6 +6746,81 @@ export function createMessageSender(appContext) {
   }
 
   /**
+   * 构造给 Responses API 使用的 request_user_input 自定义函数工具定义。
+   *
+   * 这把工具的语义尽量贴近 Codex 当前的交互式提问能力：
+   * - 一次调用可提交 1 到 3 个问题；
+   * - 每个问题提供 2 到 3 个互斥选项；
+   * - 推荐项应放在第一位，并在 label 末尾带上 `(Recommended)`；
+   * - 不要显式提供 Other，客户端会自动补一个可自由输入的 Other 选项。
+   *
+   * @returns {Object}
+   */
+  function buildResponsesRequestUserInputFunctionToolDefinition() {
+    const optionProperties = {
+      label: {
+        type: 'string',
+        description: '用户可见的短标签。推荐项请放在第一位，并在标签末尾追加 "(Recommended)"。'
+      },
+      description: {
+        type: 'string',
+        description: '对该选项影响或取舍的一句话说明。'
+      }
+    };
+    const questionProperties = {
+      header: {
+        type: 'string',
+        description: '显示在 UI 顶部的短标题，建议 12 个字符以内。'
+      },
+      id: {
+        type: 'string',
+        description: '稳定的 snake_case 标识符，用于在答案结果里映射该问题。'
+      },
+      question: {
+        type: 'string',
+        description: '展示给用户的单句问题。'
+      },
+      options: {
+        type: 'array',
+        description: '提供 2 到 3 个互斥选项。推荐项请放在第一位并带 "(Recommended)"；不要显式包含 Other，客户端会自动追加可自由输入的 Other。',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: optionProperties,
+          required: Object.keys(optionProperties)
+        }
+      }
+    };
+    return {
+      type: 'function',
+      name: RESPONSES_REQUEST_USER_INPUT_TOOL_NAME,
+      description: [
+        '向用户发起 1 到 3 个简短问题，并等待用户回答。',
+        '仅在下一步确实依赖用户拍板，且无法从当前上下文自行发现答案时使用。',
+        '每个问题都应带 2 到 3 个互斥选项；推荐项放第一位，并在 label 末尾加上 "(Recommended)"；不要显式提供 Other，客户端会自动补一个可自由输入的 Other。'
+      ].join(' '),
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          questions: {
+            type: 'array',
+            description: '必填。要展示给用户的一组简短问题，数量为 1 到 3 个。',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: questionProperties,
+              required: Object.keys(questionProperties)
+            }
+          }
+        },
+        required: ['questions']
+      }
+    };
+  }
+
+  /**
    * 列出当前允许被“向其他 AI 提问”工具使用的目标模型目录。
    *
    * 这把工具只做目录发现与使用须知说明：
@@ -6969,6 +7050,7 @@ export function createMessageSender(appContext) {
   function getResponsesCustomFunctionTools(usedApiConfig, pageToolEnvironment = resolveResponsesPageToolEnvironment()) {
     if (!isOpenAIResponsesApiConfig(usedApiConfig)) return [];
     const tools = [
+      buildResponsesRequestUserInputFunctionToolDefinition(),
       buildResponsesListAskableModelsFunctionToolDefinition(),
       buildResponsesAskOtherAiFunctionToolDefinition(),
       buildResponsesHistorySearchFunctionToolDefinition(),
@@ -7176,6 +7258,17 @@ export function createMessageSender(appContext) {
       return buildResponsesAskOtherAiToolOutputContentItems(value);
     } catch (error) {
       return buildResponsesGenericXmlToolOutputContentItems('ask_other_ai_result', {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      });
+    }
+  }
+
+  function serializeResponsesRequestUserInputFunctionToolOutput(value) {
+    try {
+      return buildResponsesRequestUserInputToolOutputContentItems(value);
+    } catch (error) {
+      return buildResponsesGenericXmlToolOutputContentItems('request_user_input_result', {
         ok: false,
         error: normalizeResponsesCustomToolError(error)
       });
@@ -7765,6 +7858,56 @@ export function createMessageSender(appContext) {
   }
 
   /**
+   * 执行 request_user_input。
+   *
+   * 交互语义：
+   * - 由模型提交结构化问题；
+   * - 由当前 sidebar UI 负责展示选项并收集答案；
+   * - 答案结果尽量贴近 Codex 当前 `function_call_output.answers` 结构，方便模型理解。
+   *
+   * @param {any} rawArgs
+   * @returns {Promise<Object>}
+   */
+  async function executeResponsesRequestUserInputFunction(rawArgs) {
+    try {
+      const { questions } = normalizeRequestUserInputArguments(rawArgs);
+      if (typeof utils?.showRequestUserInput !== 'function') {
+        throw new Error('当前界面尚未提供 request_user_input 交互能力。');
+      }
+
+      const interactionResult = await utils.showRequestUserInput({ questions });
+      const result = buildRequestUserInputResult(
+        questions,
+        interactionResult?.answers || {},
+        { cancelled: interactionResult?.cancelled === true }
+      );
+
+      if (interactionResult?.cancelled === true) {
+        return {
+          ...result,
+          error: {
+            message: '用户取消了 request_user_input。',
+            name: 'UserCancelledError',
+            stack: ''
+          }
+        };
+      }
+
+      return result;
+    } catch (error) {
+      return {
+        ok: false,
+        cancelled: false,
+        question_count: 0,
+        answered_count: 0,
+        questions: [],
+        answers: {},
+        error: normalizeResponsesCustomToolError(error)
+      };
+    }
+  }
+
+  /**
    * 执行一个客户端负责落地的 Responses function_call。
    *
    * 当前策略：
@@ -7807,6 +7950,8 @@ export function createMessageSender(appContext) {
     let outputPayload = null;
     if (functionName === RESPONSES_JS_RUNTIME_TOOL_NAME) {
       outputPayload = await executeResponsesJsRuntimeFunction(parsedArgs, options);
+    } else if (functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME) {
+      outputPayload = await executeResponsesRequestUserInputFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME) {
       outputPayload = await executeResponsesListAskableModelsFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_ASK_OTHER_AI_TOOL_NAME) {
@@ -7836,6 +7981,8 @@ export function createMessageSender(appContext) {
       output:
         functionName === RESPONSES_JS_RUNTIME_TOOL_NAME
           ? serializeResponsesJsRuntimeFunctionToolOutput(outputPayload)
+          : functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME
+            ? serializeResponsesRequestUserInputFunctionToolOutput(outputPayload)
           : functionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME
             ? serializeResponsesListAskableModelsFunctionToolOutput(outputPayload)
             : functionName === RESPONSES_ASK_OTHER_AI_TOOL_NAME

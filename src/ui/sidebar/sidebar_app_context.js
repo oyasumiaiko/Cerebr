@@ -332,6 +332,282 @@ export function registerSidebarUtilities(appContext) {
     });
   };
 
+  /**
+   * 展示一个结构化的“向用户提问”对话框，并等待用户回答后再继续。
+   *
+   * 设计取向：
+   * - 尽量贴近 Codex `request_user_input` 的交互语义：模型给出问题与选项，客户端补一个自由输入的 Other；
+   * - 这里不自行校验 schema，只负责展示与收集答案；schema 约束由 sender + 纯函数模块负责；
+   * - 返回值保持极小，只返回 `cancelled` 与 `answers`，避免 UI 层与工具协议耦得过深。
+   *
+   * @param {{questions?: Array<{id:string, header:string, question:string, options?: Array<{label:string, description:string}>}>}} [options]
+   * @returns {Promise<{cancelled:boolean, answers:Record<string, {answers:string[]}>}>}
+   */
+  appContext.utils.showRequestUserInput = (options = {}) => {
+    const questions = Array.isArray(options.questions) ? options.questions : [];
+
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.className = 'confirm-overlay user-question-overlay';
+      overlay.setAttribute('role', 'presentation');
+
+      const dialog = document.createElement('div');
+      dialog.className = 'confirm-dialog user-question-dialog';
+      dialog.setAttribute('role', 'dialog');
+      dialog.setAttribute('aria-modal', 'true');
+
+      const titleEl = document.createElement('div');
+      titleEl.className = 'confirm-title';
+      titleEl.textContent = '请回答以下问题';
+      dialog.appendChild(titleEl);
+
+      const descEl = document.createElement('div');
+      descEl.className = 'confirm-desc user-question-subtitle';
+      descEl.textContent = '模型调用了 request_user_input；你回答后，本轮生成会继续往下走。';
+      dialog.appendChild(descEl);
+
+      const questionsEl = document.createElement('div');
+      questionsEl.className = 'user-question-list';
+      dialog.appendChild(questionsEl);
+
+      const controlEntries = [];
+
+      function buildAnswerMap() {
+        const answers = {};
+        controlEntries.forEach((entry) => {
+          const answer = entry.getAnswer();
+          if (!answer) return;
+          answers[entry.question.id] = { answers: [answer] };
+        });
+        return answers;
+      }
+
+      function getPendingQuestionHeaders() {
+        return controlEntries
+          .filter(entry => !entry.getAnswer())
+          .map(entry => entry.question.header || entry.question.id)
+          .filter(Boolean);
+      }
+
+      questions.forEach((question, index) => {
+        const itemEl = document.createElement('section');
+        itemEl.className = 'user-question-item';
+
+        const headerRow = document.createElement('div');
+        headerRow.className = 'user-question-header';
+
+        const badgeEl = document.createElement('span');
+        badgeEl.className = 'user-question-badge';
+        badgeEl.textContent = question.header || `问题 ${index + 1}`;
+        headerRow.appendChild(badgeEl);
+
+        const indexEl = document.createElement('span');
+        indexEl.className = 'user-question-index';
+        indexEl.textContent = `${index + 1}/${questions.length}`;
+        headerRow.appendChild(indexEl);
+
+        itemEl.appendChild(headerRow);
+
+        const promptEl = document.createElement('div');
+        promptEl.className = 'user-question-prompt';
+        promptEl.textContent = question.question || '';
+        itemEl.appendChild(promptEl);
+
+        const optionsEl = document.createElement('div');
+        optionsEl.className = 'user-question-options';
+        itemEl.appendChild(optionsEl);
+
+        const groupName = `user-question-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`;
+        const optionList = [
+          ...(Array.isArray(question.options) ? question.options : []),
+          {
+            label: 'Other',
+            description: '如果以上都不合适，可自行输入答案。',
+            __other: true
+          }
+        ];
+
+        let otherRadio = null;
+        let firstRadio = null;
+        const otherInput = document.createElement('input');
+        otherInput.type = 'text';
+        otherInput.className = 'settings-text-input user-question-other-input';
+        otherInput.placeholder = '填写其他答案';
+        otherInput.disabled = true;
+
+        const getSelectedRadio = () => {
+          return optionsEl.querySelector(`input[name="${groupName}"]:checked`);
+        };
+
+        const syncOtherInputState = () => {
+          const isOtherSelected = otherRadio?.checked === true;
+          otherInput.disabled = !isOtherSelected;
+          if (!isOtherSelected) return;
+          requestAnimationFrame(() => {
+            otherInput.focus();
+            otherInput.select();
+          });
+        };
+
+        optionList.forEach((option) => {
+          const optionLabel = document.createElement('label');
+          optionLabel.className = 'user-question-option';
+
+          const radio = document.createElement('input');
+          radio.type = 'radio';
+          radio.className = 'user-question-option-input';
+          radio.name = groupName;
+          radio.value = option.__other ? '__other__' : (option.label || '');
+
+          if (!firstRadio) firstRadio = radio;
+          if (option.__other) otherRadio = radio;
+
+          radio.addEventListener('change', () => {
+            syncOtherInputState();
+            updateSubmitState();
+          });
+
+          const body = document.createElement('div');
+          body.className = 'user-question-option-body';
+
+          const optionTitle = document.createElement('div');
+          optionTitle.className = 'user-question-option-title';
+          optionTitle.textContent = option.label || '';
+          body.appendChild(optionTitle);
+
+          const optionDesc = document.createElement('div');
+          optionDesc.className = 'user-question-option-desc';
+          optionDesc.textContent = option.description || '';
+          body.appendChild(optionDesc);
+
+          optionLabel.appendChild(radio);
+          optionLabel.appendChild(body);
+          optionsEl.appendChild(optionLabel);
+        });
+
+        otherInput.addEventListener('input', () => updateSubmitState());
+
+        const otherWrap = document.createElement('div');
+        otherWrap.className = 'user-question-other-wrap';
+        otherWrap.appendChild(otherInput);
+        optionsEl.appendChild(otherWrap);
+
+        questionsEl.appendChild(itemEl);
+
+        controlEntries.push({
+          question,
+          focusFirst() {
+            firstRadio?.focus();
+          },
+          getAnswer() {
+            const selectedRadio = getSelectedRadio();
+            if (!selectedRadio) return '';
+            if (selectedRadio.value === '__other__') {
+              return otherInput.value.trim();
+            }
+            return String(selectedRadio.value || '').trim();
+          }
+        });
+      });
+
+      const statusEl = document.createElement('div');
+      statusEl.className = 'confirm-desc user-question-status';
+      dialog.appendChild(statusEl);
+
+      const shortcutEl = document.createElement('div');
+      shortcutEl.className = 'confirm-desc user-question-shortcut';
+      shortcutEl.textContent = '可用 Ctrl/Cmd + Enter 直接提交。';
+      dialog.appendChild(shortcutEl);
+
+      const actions = document.createElement('div');
+      actions.className = 'confirm-actions';
+
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'btn btn-secondary';
+      cancelBtn.textContent = '取消';
+
+      const submitBtn = document.createElement('button');
+      submitBtn.className = 'btn btn-primary';
+      submitBtn.textContent = '继续生成';
+
+      actions.appendChild(cancelBtn);
+      actions.appendChild(submitBtn);
+      dialog.appendChild(actions);
+
+      overlay.appendChild(dialog);
+      document.body.appendChild(overlay);
+
+      let settled = false;
+      let removeKeyListener = null;
+
+      const cleanUp = () => {
+        if (typeof removeKeyListener === 'function') {
+          removeKeyListener();
+          removeKeyListener = null;
+        }
+        overlay.classList.add('fade-out');
+        setTimeout(() => overlay.remove(), 200);
+      };
+
+      const finish = (payload) => {
+        if (settled) return;
+        settled = true;
+        cleanUp();
+        resolve(payload);
+      };
+
+      const onCancel = () => finish({ cancelled: true, answers: {} });
+      const onSubmit = () => {
+        if (submitBtn.disabled) {
+          updateSubmitState();
+          return;
+        }
+        finish({
+          cancelled: false,
+          answers: buildAnswerMap()
+        });
+      };
+
+      function updateSubmitState() {
+        const pendingHeaders = getPendingQuestionHeaders();
+        submitBtn.disabled = pendingHeaders.length > 0;
+        if (pendingHeaders.length > 0) {
+          statusEl.textContent = `请先回答：${pendingHeaders.join('、')}。`;
+          statusEl.dataset.state = 'pending';
+          return;
+        }
+        statusEl.textContent = '答案会作为本地工具结果回传给模型，并继续当前生成。';
+        statusEl.dataset.state = 'ready';
+      }
+
+      cancelBtn.addEventListener('click', onCancel);
+      submitBtn.addEventListener('click', onSubmit);
+      overlay.addEventListener('click', (event) => {
+        if (event.target === overlay) onCancel();
+      });
+
+      const onKeyDown = (event) => {
+        if (!document.body.contains(overlay)) return;
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          event.stopPropagation();
+          onCancel();
+          return;
+        }
+        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+          event.preventDefault();
+          event.stopPropagation();
+          onSubmit();
+        }
+      };
+      document.addEventListener('keydown', onKeyDown, true);
+      removeKeyListener = () => document.removeEventListener('keydown', onKeyDown, true);
+
+      updateSubmitState();
+      controlEntries[0]?.focusFirst?.();
+    });
+  };
+
   // 多步骤进度条工具：等分整体进度，支持每步子进度
   appContext.utils.createStepProgress = (config = {}) => {
     const steps = Array.isArray(config.steps) ? config.steps.slice() : [];

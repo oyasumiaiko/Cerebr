@@ -8261,6 +8261,167 @@ body.chat-history-panel-resizing {
 .confirm-actions .btn { padding: 6px 12px; border-radius: 10px; border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 70%, transparent); cursor: pointer; background: var(--cerebr-input-bg, #fff); color: var(--cerebr-text-color); }
 .confirm-actions .btn.btn-primary { background: var(--cerebr-highlight, #2ecc71); color: #fff; border-color: transparent; }
 .confirm-actions .btn.btn-secondary { background: color-mix(in srgb, var(--cerebr-surface, #ffffff) 88%, transparent); }
+
+.user-question-dialog {
+  width: min(760px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 32px));
+  overflow: auto;
+}
+
+.user-question-subtitle {
+  margin-bottom: 14px;
+}
+
+.user-question-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.user-question-item {
+  border-radius: 14px;
+  padding: 12px;
+  background: color-mix(in srgb, var(--cerebr-message-ai-bg) 72%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 58%, transparent);
+}
+
+.user-question-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.user-question-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cerebr-highlight, #2ecc71) 16%, transparent);
+  color: var(--cerebr-text-color);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.user-question-index {
+  font-size: 12px;
+  color: color-mix(in srgb, var(--cerebr-text-color) 70%, transparent);
+}
+
+.user-question-prompt {
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--cerebr-text-color);
+  margin-bottom: 10px;
+}
+
+.user-question-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.user-question-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--cerebr-surface, #ffffff) 88%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 58%, transparent);
+  transition: border-color 0.16s ease, transform 0.16s ease, background 0.16s ease;
+}
+
+.user-question-option:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--cerebr-highlight, #2ecc71) 42%, transparent);
+}
+
+.user-question-option:has(.user-question-option-input:checked) {
+  background: color-mix(in srgb, var(--cerebr-highlight, #2ecc71) 12%, transparent);
+  border-color: color-mix(in srgb, var(--cerebr-highlight, #2ecc71) 58%, transparent);
+}
+
+.user-question-option-input {
+  margin-top: 2px;
+  accent-color: var(--cerebr-highlight, #2ecc71);
+}
+
+.user-question-option-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.user-question-option-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--cerebr-text-color);
+}
+
+.user-question-option-desc {
+  font-size: 12px;
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--cerebr-text-color) 78%, transparent);
+}
+
+.user-question-other-wrap {
+  padding-left: 34px;
+}
+
+.user-question-other-input {
+  width: 100%;
+}
+
+.user-question-other-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.user-question-status {
+  margin-top: 12px;
+}
+
+.user-question-status[data-state="pending"] {
+  color: color-mix(in srgb, var(--cerebr-warning-text, #b45309) 88%, var(--cerebr-text-color));
+}
+
+.user-question-status[data-state="ready"] {
+  color: color-mix(in srgb, var(--cerebr-highlight, #2ecc71) 84%, var(--cerebr-text-color));
+}
+
+.user-question-shortcut {
+  margin-top: 6px;
+}
+
+@media (max-width: 640px) {
+  .user-question-dialog {
+    width: min(100vw, calc(100vw - 16px));
+    max-height: calc(100vh - 16px);
+    padding: 14px 14px 12px;
+  }
+
+  .user-question-item {
+    padding: 10px;
+  }
+
+  .user-question-other-wrap {
+    padding-left: 0;
+  }
+
+  .confirm-actions {
+    flex-wrap: wrap;
+  }
+
+  .confirm-actions .btn {
+    flex: 1 1 0;
+  }
+}
 /* 空状态样式 - 轻盈空灵的设计 */
 .empty-state-content {
     mix-blend-mode: plus-lighter;

@@ -320,3 +320,35 @@ test('buildResponsesAskOtherAiToolOutputContentItems 使用 responses XML 分块
   assert.match(text, /HTTP 500/);
   assert.doesNotMatch(text, /<target>/);
 });
+
+test('buildResponsesRequestUserInputToolOutputContentItems 使用 questions XML 分块', async () => {
+  const { buildResponsesRequestUserInputToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesRequestUserInputToolOutputContentItems({
+    ok: true,
+    cancelled: false,
+    question_count: 2,
+    answered_count: 2,
+    questions: [
+      {
+        id: 'output_mode',
+        header: '输出方式',
+        question: '新版宏观报告你希望怎么落地？',
+        answers: ['并行出V2 (Recommended)']
+      },
+      {
+        id: 'window_scope',
+        header: '窗口范围',
+        question: '下一步默认还只看当前窗口吗？',
+        answers: ['只看当前窗口 (Recommended)']
+      }
+    ]
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<request_user_input_result>/);
+  assert.match(text, /<questions>/);
+  assert.match(text, /<question rank="1" id="output_mode" header="输出方式" status="answered">/);
+  assert.match(text, /<prompt>/);
+  assert.match(text, /新版宏观报告你希望怎么落地/);
+  assert.match(text, /<answer rank="1">/);
+  assert.match(text, /并行出V2 \(Recommended\)/);
+});
