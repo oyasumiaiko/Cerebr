@@ -1,8 +1,15 @@
 const fsp = require('fs/promises');
 const path = require('path');
-const os = require('os');
-const net = require('net');
-const { spawn, spawnSync } = require('child_process');
+const {
+  buildSendContentMessageExpression,
+  launchFixedSidebarContext,
+  loadPlaywright,
+  resolveFixedSidebarProfileDir,
+  shouldRunHeadless,
+  waitFor,
+  waitForExtensionWorker,
+  waitForSidebarFrame
+} = require('./lib/stable_chrome_sidebar_harness.cjs');
 
 const [
   repoRoot,
@@ -22,59 +29,8 @@ if (!repoRoot || !outputDir || !chromePath || !baseUrl || !apiKey || !modelName)
 }
 
 const useStreaming = useStreamingArg !== 'false';
-
-function loadPlaywright() {
-  const candidateBases = [
-    process.cwd(),
-    repoRoot,
-    path.join(repoRoot, 'node_modules'),
-    path.join(os.tmpdir(), 'cerebr-playwright-cdp'),
-    path.join(os.tmpdir(), 'cerebr-playwright-cdp', 'node_modules')
-  ];
-  for (const base of candidateBases) {
-    try {
-      const resolved = require.resolve('playwright', { paths: [base] });
-      return require(resolved);
-    } catch (_) {}
-  }
-  throw new Error(
-    'Cannot resolve playwright. Tried repo-local paths and the known temp harness cache under %TEMP%\\\\cerebr-playwright-cdp.'
-  );
-}
-
-const { chromium } = loadPlaywright();
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function getFreePort() {
-  return await new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address();
-      const port = address && typeof address === 'object' ? address.port : 0;
-      server.close((error) => error ? reject(error) : resolve(port));
-    });
-    server.on('error', reject);
-  });
-}
-
-async function waitFor(condition, { timeoutMs = 30000, intervalMs = 200, label = 'condition' } = {}) {
-  const startedAt = Date.now();
-  while (true) {
-    try {
-      const value = await condition();
-      if (value) return value;
-    } catch (error) {
-      if (Date.now() - startedAt >= timeoutMs) throw error;
-    }
-    if (Date.now() - startedAt >= timeoutMs) {
-      throw new Error(`Timed out waiting for ${label}`);
-    }
-    await sleep(intervalMs);
-  }
-}
+const runHeadless = shouldRunHeadless();
+const { chromium } = loadPlaywright(repoRoot);
 
 async function captureRightBottomCrop(page, outputPath, {
   width = 420,
@@ -104,72 +60,6 @@ async function captureRightBottomCrop(page, outputPath, {
   });
 }
 
-async function listCdpTargets(cdpPort) {
-  const response = await fetch(`http://127.0.0.1:${cdpPort}/json/list`);
-  if (!response.ok) throw new Error(`failed to list CDP targets: HTTP ${response.status}`);
-  return await response.json();
-}
-
-async function createCdpTargetSession(webSocketDebuggerUrl) {
-  const ws = new WebSocket(webSocketDebuggerUrl);
-  const pending = new Map();
-  let nextId = 0;
-
-  await new Promise((resolve, reject) => {
-    ws.addEventListener('open', resolve);
-    ws.addEventListener('error', (event) => reject(event.error || new Error('cdp websocket error')));
-  });
-
-  ws.addEventListener('message', (event) => {
-    const payload = JSON.parse(String(event.data));
-    if (!payload || typeof payload !== 'object') return;
-    if (!payload.id || !pending.has(payload.id)) return;
-    const entry = pending.get(payload.id);
-    pending.delete(payload.id);
-    if (payload.error) {
-      entry.reject(new Error(payload.error.message || JSON.stringify(payload.error)));
-      return;
-    }
-    entry.resolve(payload.result || {});
-  });
-
-  const send = (method, params = {}) => {
-    nextId += 1;
-    const id = nextId;
-    return new Promise((resolve, reject) => {
-      pending.set(id, { resolve, reject });
-      ws.send(JSON.stringify({ id, method, params }));
-    });
-  };
-
-  await send('Runtime.enable');
-
-  return {
-    async evaluate(expression) {
-      const evaluation = await send('Runtime.evaluate', {
-        expression,
-        awaitPromise: true,
-        returnByValue: true
-      });
-      if (evaluation.exceptionDetails) {
-        throw new Error(evaluation.exceptionDetails.text || evaluation.result?.description || 'Runtime.evaluate failed');
-      }
-      return evaluation.result?.value;
-    },
-    close() {
-      try { ws.close(); } catch (_) {}
-    }
-  };
-}
-
-function buildSendContentMessageExpression(messageLiteral) {
-  return `(async () => {
-    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-    if (!tab || typeof tab.id !== 'number') throw new Error('active tab not found');
-    const response = await chrome.tabs.sendMessage(tab.id, ${messageLiteral});
-    return { tabId: tab.id, response };
-  })()`;
-}
 
 function buildStorageSeed() {
   return {
@@ -240,24 +130,6 @@ function buildPrompt(currentScenario) {
   };
 }
 
-function resolvePersistentProfileDir(repoRootPath) {
-  const fromEnv = (typeof process.env.CEREBR_CDP_PROFILE_DIR === 'string')
-    ? process.env.CEREBR_CDP_PROFILE_DIR.trim()
-    : '';
-  if (fromEnv) {
-    return path.resolve(fromEnv);
-  }
-
-  /**
-   * 默认复用固定 profile，原因：
-   * - Chrome 138+ 的 Allow User Scripts 是“每扩展单独开关”，且新安装默认关闭；
-   * - 若每次都创建临时 profile，这个开关永远不会被记住，手动打开一次也会丢失；
-   * - 测试脚本仍然使用 `--load-extension=<repoRoot>`，所以即使 profile 固定，
-   *   只要重启 Chrome，就会从当前仓库目录重新加载 unpacked 扩展代码。
-   */
-  return path.join(repoRootPath, 'output', 'playwright', '_profiles', 'cdp_sidebar_smoke');
-}
-
 async function main() {
   await fsp.mkdir(outputDir, { recursive: true });
 
@@ -267,62 +139,41 @@ async function main() {
     baseUrl,
     modelName,
     useStreaming,
+    headless: runHeadless,
     scenario,
     console: [],
     backgroundConsole: [],
     steps: []
   };
 
-  const cdpPort = await getFreePort();
-  const profileDir = resolvePersistentProfileDir(repoRoot);
+  const profileDir = resolveFixedSidebarProfileDir(repoRoot);
   await fsp.mkdir(profileDir, { recursive: true });
   result.profileDir = profileDir;
 
-  const chromeArgs = [
-    `--remote-debugging-port=${cdpPort}`,
-    `--user-data-dir=${profileDir}`,
-    `--disable-extensions-except=${repoRoot}`,
-    `--load-extension=${repoRoot}`,
-    '--enable-unsafe-extension-debugging',
-    '--no-first-run',
-    '--no-default-browser-check',
-    '--disable-search-engine-choice-screen',
-    'about:blank'
-  ];
-  const chrome = spawn(chromePath, chromeArgs, { stdio: 'ignore', windowsHide: false });
-
-  let browser = null;
-  let backgroundSession = null;
+  let context = null;
+  let extensionWorker = null;
   try {
-    await waitFor(async () => {
-      try {
-        const response = await fetch(`http://127.0.0.1:${cdpPort}/json/version`);
-        return response.ok;
-      } catch (_) {
-        return false;
-      }
-    }, { timeoutMs: 30000, label: 'cdp endpoint' });
-    result.steps.push('cdp_ready');
+    context = await launchFixedSidebarContext({
+      chromium,
+      profileDir,
+      executablePath: chromePath,
+      headless: runHeadless
+    });
+    result.steps.push('browser_ready');
 
-    const backgroundTarget = await waitFor(async () => {
-      const targets = await listCdpTargets(cdpPort);
-      return targets.find((target) => typeof target?.url === 'string' && target.url.endsWith('/src/extension/background.js')) || null;
-    }, { timeoutMs: 30000, intervalMs: 500, label: 'background target' });
-    const extensionId = new URL(backgroundTarget.url).host;
-    backgroundSession = await createCdpTargetSession(backgroundTarget.webSocketDebuggerUrl);
+    extensionWorker = await waitForExtensionWorker(context, { timeoutMs: 30_000 });
+    const extensionId = new URL(extensionWorker.url()).host;
     result.extensionId = extensionId;
     result.steps.push('background_ready');
 
-    await backgroundSession.evaluate(`(async () => {
+    await extensionWorker.evaluate(`(async () => {
       await chrome.storage.sync.clear();
       await chrome.storage.sync.set(${JSON.stringify(buildStorageSeed())});
       return true;
     })()`);
     result.steps.push('storage_seeded');
 
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`);
-    const context = await waitFor(async () => browser.contexts()[0] || null, { timeoutMs: 10000, label: 'browser context' });
-    const page = await context.newPage();
+    const page = context.pages().find((entry) => entry.url().startsWith('https://example.com/')) || await context.newPage();
     page.on('console', (msg) => {
       result.console.push({ type: msg.type(), text: msg.text() });
     });
@@ -334,7 +185,7 @@ async function main() {
     result.steps.push('page_loaded');
 
     const preOpenSidebarState = await waitFor(async () => {
-      const payload = await backgroundSession.evaluate(
+      const payload = await extensionWorker.evaluate(
         buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
       );
       const debugState = payload?.response?.debugState || null;
@@ -343,7 +194,7 @@ async function main() {
     result.preOpenSidebarState = preOpenSidebarState;
     result.steps.push('sidebar_initialized');
 
-    const openSidebarResponse = await backgroundSession.evaluate(
+    const openSidebarResponse = await extensionWorker.evaluate(
       buildSendContentMessageExpression(JSON.stringify({ type: 'OPEN_SIDEBAR' }))
     );
     result.openSidebarResponse = openSidebarResponse;
@@ -353,7 +204,7 @@ async function main() {
     result.steps.push('sidebar_open_requested');
 
     const sidebarDebugState = await waitFor(async () => {
-      const payload = await backgroundSession.evaluate(
+      const payload = await extensionWorker.evaluate(
         buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
       );
       const state = payload?.response?.debugState || null;
@@ -362,9 +213,7 @@ async function main() {
     result.sidebarDebugState = sidebarDebugState;
     result.steps.push('sidebar_visible_confirmed');
 
-    const sidebarFrame = await waitFor(async () => {
-      return page.frames().find((frame) => frame.url().startsWith(`chrome-extension://${extensionId}/src/ui/sidebar/sidebar.html`)) || null;
-    }, { timeoutMs: 30000, label: 'sidebar frame' });
+    const sidebarFrame = await waitForSidebarFrame(page, extensionId, { timeoutMs: 30000 });
     await sidebarFrame.locator('#message-input').waitFor({ state: 'visible', timeout: 30000 });
     await page.screenshot({ path: path.join(outputDir, '01-sidebar-visible.png'), fullPage: true });
     result.steps.push('sidebar_frame_ready');
@@ -685,13 +534,7 @@ async function main() {
     result.finishedAt = new Date().toISOString();
     await fsp.writeFile(path.join(outputDir, 'cdp-sidebar-smoke-result.json'), JSON.stringify(result, null, 2), 'utf8');
   } finally {
-    try { backgroundSession?.close?.(); } catch (_) {}
-    try { await browser?.close(); } catch (_) {}
-    try {
-      if (chrome?.pid) {
-        spawnSync('taskkill', ['/PID', String(chrome.pid), '/T', '/F'], { stdio: 'ignore' });
-      }
-    } catch (_) {}
+    try { await context?.close(); } catch (_) {}
   }
 }
 

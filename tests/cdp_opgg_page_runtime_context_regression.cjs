@@ -1,6 +1,15 @@
 const fsp = require('fs/promises');
 const path = require('path');
-const os = require('os');
+const {
+  launchFixedSidebarContext,
+  loadPlaywright,
+  resolveFixedSidebarProfileDir,
+  resolveStableChromeExecutablePath,
+  shouldRunHeadless,
+  waitFor,
+  waitForExtensionWorker,
+  waitForSidebarFrame
+} = require('./lib/stable_chrome_sidebar_harness.cjs');
 
 const [
   rawRepoRoot,
@@ -28,53 +37,12 @@ const inferredPageUrl = (() => {
 const pageUrl = inferredPageUrl;
 const JS_RUNTIME_LIST_FRAMES_TIMEOUT_MS = 15_000;
 const SEND_PROGRESS_TIMEOUT_MS = 25_000;
-const runHeadless = String(process.env.CEREBR_PW_HEADLESS || 'true').trim().toLowerCase() !== 'false';
+const runHeadless = shouldRunHeadless();
 const forceHangGetJsRuntimeFrames = String(process.env.CEREBR_FORCE_HANG_GET_JS_RUNTIME_FRAMES || '').trim().toLowerCase() === 'true';
 const externalChromePath = (typeof process.env.CEREBR_EXTERNAL_CHROME_PATH === 'string')
   ? process.env.CEREBR_EXTERNAL_CHROME_PATH.trim()
-  : '';
-const skipLoadExtensionArgs = String(process.env.CEREBR_SKIP_LOAD_EXTENSION_ARGS || '').trim().toLowerCase() === 'true';
-
-function loadPlaywright() {
-  const candidateBases = [
-    process.cwd(),
-    repoRoot,
-    path.join(repoRoot, 'node_modules'),
-    path.join(os.tmpdir(), 'cerebr-playwright-cdp'),
-    path.join(os.tmpdir(), 'cerebr-playwright-cdp', 'node_modules')
-  ];
-  for (const base of candidateBases) {
-    try {
-      const resolved = require.resolve('playwright', { paths: [base] });
-      return require(resolved);
-    } catch (_) {}
-  }
-  throw new Error(
-    'Cannot resolve playwright. Tried repo-local paths and the known temp harness cache under %TEMP%\\cerebr-playwright-cdp.'
-  );
-}
-
-const { chromium } = loadPlaywright();
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitFor(condition, { timeoutMs = 30_000, intervalMs = 200, label = 'condition' } = {}) {
-  const startedAt = Date.now();
-  while (true) {
-    try {
-      const value = await condition();
-      if (value) return value;
-    } catch (error) {
-      if (Date.now() - startedAt >= timeoutMs) throw error;
-    }
-    if (Date.now() - startedAt >= timeoutMs) {
-      throw new Error(`Timed out waiting for ${label}`);
-    }
-    await sleep(intervalMs);
-  }
-}
+  : resolveStableChromeExecutablePath();
+const { chromium } = loadPlaywright(repoRoot);
 
 function parseDotEnv(content) {
   const env = {};
@@ -212,35 +180,6 @@ function buildStorageSeed(fixedEnv) {
   };
 }
 
-function resolvePersistentProfileDir(repoRootPath) {
-  const fromEnv = (typeof process.env.CEREBR_CDP_PROFILE_DIR === 'string')
-    ? process.env.CEREBR_CDP_PROFILE_DIR.trim()
-    : '';
-  if (fromEnv) {
-    return path.resolve(fromEnv);
-  }
-  return path.join(repoRootPath, 'output', 'playwright', '_profiles', 'cdp_opgg_page_runtime_context');
-}
-
-function buildBrowserLaunchArgs(repoRootPath) {
-  const args = [
-    '--no-first-run',
-    '--no-default-browser-check',
-    '--disable-search-engine-choice-screen',
-    ...(runHeadless ? [] : ['--window-position=-2400,-2400', '--window-size=1440,960', '--start-minimized'])
-  ];
-
-  if (!skipLoadExtensionArgs) {
-    args.unshift(
-      '--enable-unsafe-extension-debugging',
-      `--load-extension=${repoRootPath}`,
-      `--disable-extensions-except=${repoRootPath}`
-    );
-  }
-
-  return args;
-}
-
 async function readSidebarSnapshot(sidebarFrame) {
   return await sidebarFrame.evaluate(() => {
     const input = document.querySelector('#message-input');
@@ -276,10 +215,9 @@ async function main() {
     startedAt: new Date().toISOString(),
     outputDir,
     pageUrl,
-    browserBinary: externalChromePath || chromium.executablePath(),
+    browserBinary: externalChromePath,
     headless: runHeadless,
     forceHangGetJsRuntimeFrames,
-    skipLoadExtensionArgs,
     fixedConfig: {
       responsesBaseUrl: fixedEnv.responsesBaseUrl,
       geminiBaseUrl: fixedEnv.geminiBaseUrl,
@@ -290,24 +228,22 @@ async function main() {
     steps: []
   };
 
-  const profileDir = resolvePersistentProfileDir(repoRoot);
+  const profileDir = resolveFixedSidebarProfileDir(repoRoot);
   await fsp.mkdir(profileDir, { recursive: true });
   result.profileDir = profileDir;
 
   let context = null;
   let pageCdpSession = null;
   try {
-    context = await chromium.launchPersistentContext(profileDir, {
-      headless: runHeadless,
-      ...(externalChromePath ? { executablePath: externalChromePath } : {}),
-      ignoreDefaultArgs: ['--disable-extensions'],
-      args: buildBrowserLaunchArgs(repoRoot)
+    context = await launchFixedSidebarContext({
+      chromium,
+      profileDir,
+      executablePath: externalChromePath,
+      headless: runHeadless
     });
     result.steps.push('browser_ready');
 
-    const extensionWorker = await waitFor(async () => (
-      context.serviceWorkers().find((worker) => worker.url().endsWith('/src/extension/background.js')) || null
-    ), { timeoutMs: 30_000, intervalMs: 300, label: 'extension service worker' });
+    const extensionWorker = await waitForExtensionWorker(context, { timeoutMs: 30_000 });
     const extensionId = new URL(extensionWorker.url()).host;
     result.extensionId = extensionId;
     result.extensionWorkerUserScripts = await extensionWorker.evaluate(async () => {
@@ -397,9 +333,7 @@ async function main() {
     result.openSidebarResponse = openSidebarResponse;
     result.steps.push('sidebar_open_requested');
 
-    const sidebarFrame = await waitFor(async () => {
-      return page.frames().find((frame) => frame.url().startsWith(`chrome-extension://${extensionId}/src/ui/sidebar/sidebar.html`)) || null;
-    }, { timeoutMs: 30_000, label: 'sidebar frame' });
+    const sidebarFrame = await waitForSidebarFrame(page, extensionId, { timeoutMs: 30_000 });
     await sidebarFrame.locator('#message-input').waitFor({ state: 'visible', timeout: 30_000 });
     await waitFor(async () => {
       return await sidebarFrame.evaluate(() => Array.isArray(window.apiConfigs) && window.apiConfigs.length >= 2);

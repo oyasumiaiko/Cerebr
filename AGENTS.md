@@ -31,20 +31,16 @@
 
 ### Browser / CDP regression notes for this repo
 - **不要默认用 standalone sidebar 做最终验证**。这个仓库的大多数真实问题都发生在**宿主页内嵌侧栏**路径；优先用 `https://example.com/` 之类简单宿主页加载扩展，再在页面里打开嵌入式 sidebar。
-- **本机稳定版 Chrome 往往不会真正加载 unpacked extension**。需要真实扩展验证时，优先用本机已验证可加载扩展的 **Chrome for Testing / Puppeteer 缓存 Chrome**，不要在稳定版上反复踩坑。
-- 如果用户已经在**稳定版 Chrome 固定 profile**里手动装好了 `Cerebr` unpacked 扩展，并且已经打开 **Allow User Scripts**，后续回归应**优先复用那个 profile**，不要再新建 profile 反复装扩展。
-  - 当前固定 profile 路径：`output/playwright/_profiles/chrome_stable_manual_extension_profile`
-  - 复用这个 profile 时，**不要**再传 `--load-extension` / `--disable-extensions-except`，否则会重新走“稳定版不真正加载 unpacked 扩展”的旧坑；应直接启动稳定版 Chrome 并复用该 profile 里已安装好的扩展。
-  - 对应 `tests/cdp_opgg_page_runtime_context_regression.cjs` 可通过环境变量切到这条模式：
-    - `CEREBR_EXTERNAL_CHROME_PATH=C:\Program Files\Google\Chrome\Application\chrome.exe`
-    - `CEREBR_CDP_PROFILE_DIR=<repoRoot>\output\playwright\_profiles\chrome_stable_manual_extension_profile`
-    - `CEREBR_SKIP_LOAD_EXTENSION_ARGS=true`
-    - `CEREBR_PW_HEADLESS=false`（稳定版 + 已装扩展 profile 目前优先走有头但移出屏幕的模式）
-- 用 Playwright 跑扩展时，优先：
+- 浏览器回归的**默认且唯一推荐路径**：
   - `chromium.launchPersistentContext(...)`
+  - `executablePath = C:\Program Files\Google\Chrome\Application\chrome.exe`
+  - `userDataDir/profile = output/playwright/_profiles/chrome_stable_manual_extension_profile`
   - `ignoreDefaultArgs: ['--disable-extensions']`
-  - `args: ['--disable-extensions-except=<repoRoot>', '--load-extension=<repoRoot>']`
-  - 给独立 `userDataDir/profile`，避免污染默认配置。
+  - **不要默认再传** `--load-extension` / `--disable-extensions-except`
+  - `CEREBR_PW_HEADLESS=false` 时把窗口移出屏幕并最小化
+- **禁止**为了图省事直接 raw `spawn chrome.exe --user-data-dir=...` 再赌它会隔离到独立实例；这个路径已经在真实机器上证明会偏航，可能把页面开进用户当前正在使用的 Chrome。
+- 当前固定 profile 路径：`output/playwright/_profiles/chrome_stable_manual_extension_profile`
+- 浏览器/CDP 回归脚本统一优先复用 `tests/lib/stable_chrome_sidebar_harness.cjs`，不要各自再造一套浏览器启动分支。
 - 如果需要验证 **service worker / extension target / 更底层网络日志**，再走 **CDP**；但先确认浏览器实例里确实已经看到扩展 service worker。
 - 打开侧栏后，**先等 sidebar 内部真正读到 API 配置**，再发消息。至少确认：
   - `window.apiConfigs.length > 0`
@@ -52,6 +48,7 @@
 - **发消息优先直接对 sidebar iframe 里的 `#message-input` 执行 `fill(...)` + `press('Enter')`**。不要只依赖宿主页键盘事件，否则容易出现“只输入了换行/文本留在输入框里没有真正发送”的假阳性。
 - **做嵌入式 sidebar 的视觉截图时，优先直接对 `sidebarFrame.locator('body')` 截图**。这条是已经被 session 历史证明过的有效路径；`page.screenshot(...)`、活动窗口截图、桌面区域截图都可能漏掉扩展 iframe，或者截到错误窗口。
 - 如果 `locator('body').screenshot(...)` 因为 Playwright 的“等待稳定”卡住，优先先保留 DOM 状态断言与 `result.json`，然后再单独处理截图，不要把宿主页整页截图误当成 sidebar 视觉证据。
+- `request_user_input` 的截图回归不要再临时拼命令，直接跑 `node tests/cdp_request_user_input_screenshot_probe.cjs . output/playwright/<case>`；脚本默认复用固定 stable Chrome profile，并输出 `panel/body` 两套截图与 `result.json`。
 - 跑浏览器回归时，优先把结果落到 `output/playwright/<case>/result.json` 和截图里，确保失败时能直接看：
   - 是否真正发出请求
   - 当前使用的扩展 `extensionId`
