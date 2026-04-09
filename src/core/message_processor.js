@@ -17,6 +17,7 @@ import { extractThinkingFromText, mergeThoughts } from '../utils/thoughts_parser
 import { normalizeResponsesReasoningText } from '../utils/responses_activity_reasoning.js';
 import { buildApiFooterRenderData } from '../utils/api_footer_template.js';
 import { resolveThoughtsPanelLifecycleState } from '../utils/thoughts_panel_lifecycle.js';
+import { resolveResponseActivityToolExpansionState } from '../utils/response_activity_tool_auto_collapse.js';
 import {
   formatResponsesToolOutputForDisplay,
   hasResponsesToolOutputBody
@@ -460,6 +461,11 @@ export function createMessageProcessor(appContext) {
   // 之所以挂在 messageWrapperDiv 上，而不是 timelineRoot 上，是因为
   // timelineRoot 在某些清理/重建路径里会被整个 remove；message wrapper 更稳定。
   const responseActivityUiStateByMessage = new WeakMap();
+  // 工具详情块“完成后延迟自动收起”的定时器也挂在 message-wrapper 上：
+  // - 同一条消息里的多个工具块彼此独立计时；
+  // - DOM 局部重绘时不需要重新从零等待；
+  // - 一旦消息 wrapper 被释放，WeakMap 内的定时器元数据也可一并回收。
+  const responseActivityAutoCollapseTimersByMessage = new WeakMap();
 
   function getAssistantSurfaceSnapshots(messageElement) {
     if (!messageElement || typeof messageElement !== 'object') return null;
@@ -1948,7 +1954,98 @@ export function createMessageProcessor(appContext) {
 
   function clearResponseActivityUiState(messageWrapperDiv) {
     if (!messageWrapperDiv || typeof messageWrapperDiv !== 'object') return;
+    clearAllResponseActivityToolAutoCollapseSchedules(messageWrapperDiv);
     responseActivityUiStateByMessage.delete(messageWrapperDiv);
+  }
+
+  function getResponseActivityAutoCollapseScheduleMap(messageWrapperDiv, create = false) {
+    if (!messageWrapperDiv || typeof messageWrapperDiv !== 'object') return null;
+    let scheduleMap = responseActivityAutoCollapseTimersByMessage.get(messageWrapperDiv) || null;
+    if (!scheduleMap && create) {
+      scheduleMap = new Map();
+      responseActivityAutoCollapseTimersByMessage.set(messageWrapperDiv, scheduleMap);
+    }
+    return scheduleMap;
+  }
+
+  function readResponseActivityToolAutoCollapseDeadline(messageWrapperDiv, toolKey) {
+    const normalizedToolKey = String(toolKey || '').trim();
+    if (!normalizedToolKey) return null;
+    const scheduleMap = getResponseActivityAutoCollapseScheduleMap(messageWrapperDiv, false);
+    const record = scheduleMap?.get(normalizedToolKey) || null;
+    const deadlineAtMs = Number(record?.deadlineAtMs);
+    return Number.isFinite(deadlineAtMs) && deadlineAtMs >= 0 ? deadlineAtMs : null;
+  }
+
+  function clearResponseActivityToolAutoCollapseSchedule(messageWrapperDiv, toolKey) {
+    const normalizedToolKey = String(toolKey || '').trim();
+    if (!normalizedToolKey) return;
+    const scheduleMap = getResponseActivityAutoCollapseScheduleMap(messageWrapperDiv, false);
+    if (!scheduleMap) return;
+    const record = scheduleMap.get(normalizedToolKey) || null;
+    const timerId = Number(record?.timerId);
+    if (Number.isFinite(timerId) && timerId > 0) {
+      try { clearTimeout(timerId); } catch (_) {}
+    }
+    scheduleMap.delete(normalizedToolKey);
+    if (scheduleMap.size <= 0) {
+      responseActivityAutoCollapseTimersByMessage.delete(messageWrapperDiv);
+    }
+  }
+
+  function clearAllResponseActivityToolAutoCollapseSchedules(messageWrapperDiv) {
+    const scheduleMap = getResponseActivityAutoCollapseScheduleMap(messageWrapperDiv, false);
+    if (!scheduleMap) return;
+    scheduleMap.forEach((record) => {
+      const timerId = Number(record?.timerId);
+      if (Number.isFinite(timerId) && timerId > 0) {
+        try { clearTimeout(timerId); } catch (_) {}
+      }
+    });
+    scheduleMap.clear();
+    responseActivityAutoCollapseTimersByMessage.delete(messageWrapperDiv);
+  }
+
+  function scheduleResponseActivityToolAutoCollapse(messageWrapperDiv, toolKey, deadlineAtMs) {
+    const normalizedToolKey = String(toolKey || '').trim();
+    const normalizedDeadlineAtMs = Number(deadlineAtMs);
+    if (!messageWrapperDiv || !normalizedToolKey || !Number.isFinite(normalizedDeadlineAtMs) || normalizedDeadlineAtMs < 0) {
+      return;
+    }
+
+    const scheduleMap = getResponseActivityAutoCollapseScheduleMap(messageWrapperDiv, true);
+    const existingRecord = scheduleMap?.get(normalizedToolKey) || null;
+    if (existingRecord?.deadlineAtMs === normalizedDeadlineAtMs && Number(existingRecord?.timerId) > 0) {
+      return;
+    }
+    clearResponseActivityToolAutoCollapseSchedule(messageWrapperDiv, normalizedToolKey);
+
+    const delayMs = Math.max(0, normalizedDeadlineAtMs - Date.now());
+    const timerId = setTimeout(() => {
+      const liveScheduleMap = getResponseActivityAutoCollapseScheduleMap(messageWrapperDiv, false);
+      const liveRecord = liveScheduleMap?.get(normalizedToolKey) || null;
+      if (!liveRecord || liveRecord.deadlineAtMs !== normalizedDeadlineAtMs) return;
+
+      liveScheduleMap.set(normalizedToolKey, {
+        deadlineAtMs: normalizedDeadlineAtMs,
+        timerId: null
+      });
+
+      if (!messageWrapperDiv.isConnected) {
+        return;
+      }
+
+      const messageId = String(messageWrapperDiv.getAttribute('data-message-id') || '').trim();
+      if (!messageId) return;
+      syncAssistantMessageMetadata(messageId, null, {
+        fallbackElement: messageWrapperDiv
+      });
+    }, delayMs);
+
+    scheduleMap.set(normalizedToolKey, {
+      deadlineAtMs: normalizedDeadlineAtMs,
+      timerId
+    });
   }
 
   function restoreResponseActivityDatasetState(messageWrapperDiv, timelineRoot) {
@@ -2449,9 +2546,11 @@ export function createMessageProcessor(appContext) {
           runWithStableToggleScroll(item, () => {
             const toolKey = String(item.dataset.responseActivityToolKey || '').trim();
             if (!toolKey) return;
+            const messageWrapperDiv = item.closest('.message');
             const nextManualExpandedKeys = readManuallyExpandedResponseActivityToolKeys(timelineRoot);
             const nextManualCollapsedKeys = readManuallyCollapsedResponseActivityToolKeys(timelineRoot);
             const expanded = !item.classList.contains('is-expanded');
+            clearResponseActivityToolAutoCollapseSchedule(messageWrapperDiv, toolKey);
             if (expanded) {
               nextManualExpandedKeys.add(toolKey);
               nextManualCollapsedKeys.delete(toolKey);
@@ -2561,6 +2660,7 @@ export function createMessageProcessor(appContext) {
       captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot);
       timelineRoot.remove();
     }
+    clearAllResponseActivityToolAutoCollapseSchedules(messageWrapperDiv);
     resetAssistantSurfaceSnapshot(messageWrapperDiv, 'responseActivity');
   }
 
@@ -2575,6 +2675,7 @@ export function createMessageProcessor(appContext) {
 
     if (timeline.length === 0) {
       if (timelineRoot) timelineRoot.remove();
+      clearAllResponseActivityToolAutoCollapseSchedules(messageWrapperDiv);
       surfaceSnapshots.responseActivity = null;
       return false;
     }
@@ -2614,6 +2715,7 @@ export function createMessageProcessor(appContext) {
     });
     Array.from(autoCollapsedToolKeys).forEach((key) => {
       if (!visibleToolKeys.has(key)) {
+        clearResponseActivityToolAutoCollapseSchedule(messageWrapperDiv, key);
         autoCollapsedToolKeys.delete(key);
       }
     });
@@ -2633,19 +2735,33 @@ export function createMessageProcessor(appContext) {
 
     nextSnapshot.entries.forEach((entrySnapshot) => {
       if (entrySnapshot.entryKind === 'tool' && entrySnapshot.hasDetails) {
-        if (manualExpandedToolKeys.has(entrySnapshot.key)) {
-          entrySnapshot.expanded = true;
-        } else if (manualCollapsedToolKeys.has(entrySnapshot.key)) {
-          entrySnapshot.expanded = false;
-        } else if (entrySnapshot.shouldAutoRemainExpanded) {
-          entrySnapshot.expanded = true;
+        const manualState = manualExpandedToolKeys.has(entrySnapshot.key)
+          ? 'expanded'
+          : (manualCollapsedToolKeys.has(entrySnapshot.key) ? 'collapsed' : '');
+        const expansionState = resolveResponseActivityToolExpansionState({
+          manualState,
+          shouldAutoRemainExpanded: entrySnapshot.shouldAutoRemainExpanded,
+          autoCollapsed: autoCollapsedToolKeys.has(entrySnapshot.key),
+          pendingAutoCollapseDeadlineAtMs: readResponseActivityToolAutoCollapseDeadline(messageWrapperDiv, entrySnapshot.key)
+        });
+
+        entrySnapshot.expanded = expansionState.expanded;
+        if (expansionState.autoCollapsed) {
+          autoCollapsedToolKeys.add(entrySnapshot.key);
         } else {
-          entrySnapshot.expanded = false;
-          if (!autoCollapsedToolKeys.has(entrySnapshot.key)) {
-            autoCollapsedToolKeys.add(entrySnapshot.key);
-          }
+          autoCollapsedToolKeys.delete(entrySnapshot.key);
+        }
+        if (expansionState.pendingAutoCollapseDeadlineAtMs != null) {
+          scheduleResponseActivityToolAutoCollapse(
+            messageWrapperDiv,
+            entrySnapshot.key,
+            expansionState.pendingAutoCollapseDeadlineAtMs
+          );
+        } else {
+          clearResponseActivityToolAutoCollapseSchedule(messageWrapperDiv, entrySnapshot.key);
         }
       } else {
+        clearResponseActivityToolAutoCollapseSchedule(messageWrapperDiv, entrySnapshot.key);
         entrySnapshot.expanded = false;
       }
 
