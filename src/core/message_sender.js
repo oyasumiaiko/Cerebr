@@ -5850,6 +5850,7 @@ export function createMessageSender(appContext) {
     delete timelineRoot.dataset.panelManualState;
     delete timelineRoot.dataset.panelExpanded;
     delete timelineRoot.dataset.panelAutoLifecycleInitialized;
+    delete timelineRoot.dataset.panelAutoCollapsedAfterAnswerStart;
     delete timelineRoot.dataset.panelAutoCollapsedAfterFinish;
     delete timelineRoot.dataset.expandedToolKeys;
     delete timelineRoot.dataset.collapsedInProgressToolKeys;
@@ -8545,6 +8546,11 @@ export function createMessageSender(appContext) {
         draft.activeTurn.status = 'streaming';
         draft.activeTurn.startedAt = startedAt;
         draft.activeTurn.boundAssistantMessageId = null;
+        // 这是真正“正文 answer 已开始可见”的窄信号：
+        // - 仅在 answer 文本首次出现后才置为 true；
+        // - 不把 reasoning / commentary / tool timeline / 状态占位文案算作正文；
+        // - 供 UI 决定何时收起思考面板，避免“正文一出来仍要等整轮结束才收起”。
+        draft.activeTurn.hasVisibleAnswerStarted = false;
         draft.activeTurn.writeMode = effectiveTargetAiMessageId ? 'replace' : 'append';
         draft.activeTurn.conversationRevisionAtStart = attemptState.conversationRevisionAtStart;
         draft.responses.accumulatedInputItems = [];
@@ -10506,6 +10512,13 @@ export function createMessageSender(appContext) {
 
       streamRenderState.hasStartedResponse = transition.nextState.hasStartedResponse;
       streamRenderState.hasEverShownAnswerContent = transition.nextState.hasEverShownAnswerContent;
+      if (streamRenderState.hasEverShownAnswerContent !== hadEverShownAnswerContent) {
+        updateAttemptRuntimeState(attemptState, (draft) => {
+          // 只跟随“真实 answer 是否已开始出现”的状态机，
+          // 不让前面的状态文案 / reasoning summary 抢先触发正文开始信号。
+          draft.activeTurn.hasVisibleAnswerStarted = streamRenderState.hasEverShownAnswerContent;
+        });
+      }
 
       const shouldCaptureFirstVisibleOutput = (
         normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) == null

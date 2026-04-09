@@ -1766,6 +1766,36 @@ export function createMessageProcessor(appContext) {
     return !['idle', 'completed', 'aborted', 'error'].includes(runtimeStatus);
   }
 
+  /**
+   * 判断当前 runtime 快照是否已经明确记录“正文 answer 已开始可见”。
+   *
+   * 这里故意不看 `.text-content` / `data-original-text` 是否非空：
+   * - 在 Responses 流式阶段，状态占位文案（例如“模型正在思考...”）也会暂时写进同一个 assistant 气泡；
+   * - 若直接把“文本非空”当成正文开始，就会在 reasoning/commentary 阶段过早收起思考面板；
+   * - 因此只认 sender 在 answer 首次出现时显式写入的窄信号。
+   *
+   * @param {Object|null} runtimeSnapshot
+   * @param {HTMLElement|null} messageWrapperDiv
+   * @returns {boolean}
+   */
+  function hasRuntimeVisibleAnswerStarted(runtimeSnapshot, messageWrapperDiv) {
+    const activeTurn = runtimeSnapshot?.activeTurn;
+    if (!activeTurn || typeof activeTurn !== 'object') return false;
+    if (activeTurn.hasVisibleAnswerStarted !== true) return false;
+
+    const boundAssistantMessageId = String(activeTurn.boundAssistantMessageId || '').trim();
+    const currentMessageId = String(
+      messageWrapperDiv?.getAttribute?.('data-message-id')
+      || messageWrapperDiv?.dataset?.messageId
+      || ''
+    ).trim();
+
+    if (!boundAssistantMessageId || !currentMessageId) {
+      return true;
+    }
+    return boundAssistantMessageId === currentMessageId;
+  }
+
   function getResponseActivityDurationMs(node, timeline, isInProgress = false) {
     const storedDuration = Number(node?.response_activity_duration_ms);
     if (!isInProgress && Number.isFinite(storedDuration) && storedDuration >= 0) {
@@ -1894,7 +1924,11 @@ export function createMessageProcessor(appContext) {
       panelManualState: String(root.dataset?.panelManualState || '').trim(),
       panelExpanded: String(root.dataset?.panelExpanded || '').trim(),
       panelAutoLifecycleInitialized: String(root.dataset?.panelAutoLifecycleInitialized || '').trim(),
-      panelAutoCollapsedAfterFinish: String(root.dataset?.panelAutoCollapsedAfterFinish || '').trim(),
+      panelAutoCollapsedAfterAnswerStart: String(
+        root.dataset?.panelAutoCollapsedAfterAnswerStart
+        || root.dataset?.panelAutoCollapsedAfterFinish
+        || ''
+      ).trim(),
       manualExpandedToolKeys: Array.from(readManuallyExpandedResponseActivityToolKeys(root)),
       manualCollapsedToolKeys: Array.from(readManuallyCollapsedResponseActivityToolKeys(root)),
       autoCollapsedToolKeys: Array.from(readAutoCollapsedResponseActivityToolKeys(root)),
@@ -1930,8 +1964,8 @@ export function createMessageProcessor(appContext) {
     if (!String(timelineRoot.dataset.panelAutoLifecycleInitialized || '').trim() && stored.panelAutoLifecycleInitialized) {
       timelineRoot.dataset.panelAutoLifecycleInitialized = stored.panelAutoLifecycleInitialized;
     }
-    if (!String(timelineRoot.dataset.panelAutoCollapsedAfterFinish || '').trim() && stored.panelAutoCollapsedAfterFinish) {
-      timelineRoot.dataset.panelAutoCollapsedAfterFinish = stored.panelAutoCollapsedAfterFinish;
+    if (!String(timelineRoot.dataset.panelAutoCollapsedAfterAnswerStart || '').trim() && stored.panelAutoCollapsedAfterAnswerStart) {
+      timelineRoot.dataset.panelAutoCollapsedAfterAnswerStart = stored.panelAutoCollapsedAfterAnswerStart;
     }
     if (readManuallyExpandedResponseActivityToolKeys(timelineRoot).size <= 0 && stored.manualExpandedToolKeys.length > 0) {
       writeManuallyExpandedResponseActivityToolKeys(timelineRoot, new Set(stored.manualExpandedToolKeys));
@@ -2250,7 +2284,7 @@ export function createMessageProcessor(appContext) {
     };
   }
 
-  function reconcileResponseActivityPanelHeader(shell, panelSummary) {
+  function reconcileResponseActivityPanelHeader(shell, panelSummary, options = {}) {
     const {
       timelineRoot,
       panelToggle,
@@ -2258,26 +2292,28 @@ export function createMessageProcessor(appContext) {
       panelTitle,
       panelChevron
     } = shell;
-
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
     const panelManualState = String(timelineRoot.dataset.panelManualState || '').trim().toLowerCase();
-    const panelLifecycleInitialized = timelineRoot.dataset.panelAutoLifecycleInitialized === 'true';
-    const panelAutoCollapsedAfterFinish = timelineRoot.dataset.panelAutoCollapsedAfterFinish === 'true';
-    let panelExpanded = timelineRoot.dataset.panelExpanded === 'true';
-    if (panelManualState === 'expanded' || panelManualState === 'collapsed') {
-      panelExpanded = panelManualState === 'expanded';
-    } else if (!panelLifecycleInitialized) {
-      timelineRoot.dataset.panelAutoLifecycleInitialized = 'true';
-      if (panelSummary.isInProgress) {
-        panelExpanded = true;
-        delete timelineRoot.dataset.panelAutoCollapsedAfterFinish;
-      } else {
-        panelExpanded = false;
-        timelineRoot.dataset.panelAutoCollapsedAfterFinish = 'true';
-      }
-    } else if (!panelAutoCollapsedAfterFinish && !panelSummary.isInProgress) {
-      panelExpanded = false;
-      timelineRoot.dataset.panelAutoCollapsedAfterFinish = 'true';
+    const panelExpandedFromDataset = timelineRoot.dataset.panelExpanded === 'true';
+    const lifecycleState = resolveThoughtsPanelLifecycleState({
+      manualState: panelManualState,
+      lifecycleInitialized: timelineRoot.dataset.panelAutoLifecycleInitialized === 'true',
+      autoCollapsedAfterAnswerStart:
+        timelineRoot.dataset.panelAutoCollapsedAfterAnswerStart === 'true'
+        || timelineRoot.dataset.panelAutoCollapsedAfterFinish === 'true',
+      isUpdating: panelSummary.isInProgress,
+      hasVisibleAnswerStarted: normalizedOptions.hasVisibleAnswerStarted === true,
+      currentlyExpanded: panelExpandedFromDataset
+    });
+    let panelExpanded = lifecycleState.expanded;
+    timelineRoot.dataset.panelAutoLifecycleInitialized = lifecycleState.lifecycleInitialized ? 'true' : 'false';
+    if (lifecycleState.autoCollapsedAfterAnswerStart) {
+      timelineRoot.dataset.panelAutoCollapsedAfterAnswerStart = 'true';
+    } else {
+      delete timelineRoot.dataset.panelAutoCollapsedAfterAnswerStart;
     }
+    // 兼容旧数据位：本轮渲染统一迁移到 “正文开始后已自动收起” 的语义。
+    delete timelineRoot.dataset.panelAutoCollapsedAfterFinish;
 
     const applyPanelExpandedState = () => {
       timelineRoot.dataset.panelExpanded = panelExpanded ? 'true' : 'false';
@@ -2528,8 +2564,9 @@ export function createMessageProcessor(appContext) {
     resetAssistantSurfaceSnapshot(messageWrapperDiv, 'responseActivity');
   }
 
-  function setupResponseActivityTimelineDisplay(messageWrapperDiv, node, rawTimeline, processMathAndMarkdownFn) {
+  function setupResponseActivityTimelineDisplay(messageWrapperDiv, node, rawTimeline, processMathAndMarkdownFn, options = {}) {
     if (!messageWrapperDiv) return false;
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
     const timeline = Array.isArray(rawTimeline)
       ? rawTimeline.filter(entry => entry && typeof entry === 'object' && typeof entry.kind === 'string')
       : [];
@@ -2543,12 +2580,18 @@ export function createMessageProcessor(appContext) {
     }
 
     const isTurnRuntimeActive = isResponseActivityTurnRuntimeActive(messageWrapperDiv);
+    const hasVisibleAnswerStarted = hasRuntimeVisibleAnswerStarted(
+      normalizedOptions.runtimeSnapshot || null,
+      messageWrapperDiv
+    );
     const nextSnapshot = buildResponseActivitySnapshot(node, timeline, processMathAndMarkdownFn, isTurnRuntimeActive);
     const shell = ensureResponseActivityPanelShell(messageWrapperDiv);
     timelineRoot = shell.timelineRoot;
     const previousUiState = captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot);
     restoreResponseActivityDatasetState(messageWrapperDiv, timelineRoot);
-    reconcileResponseActivityPanelHeader(shell, nextSnapshot.panelSummary);
+    reconcileResponseActivityPanelHeader(shell, nextSnapshot.panelSummary, {
+      hasVisibleAnswerStarted
+    });
 
     const manualExpandedToolKeys = readManuallyExpandedResponseActivityToolKeys(timelineRoot);
     const manualCollapsedToolKeys = readManuallyCollapsedResponseActivityToolKeys(timelineRoot);
@@ -2898,6 +2941,7 @@ export function createMessageProcessor(appContext) {
     const node = (nodeLike && typeof nodeLike === 'object')
       ? nodeLike
       : (messageId ? chatHistoryManager.chatHistory.messages.find(msg => msg.id === messageId) : null);
+    const runtimeSnapshot = options?.runtimeSnapshot || null;
     if (!messageWrapperDiv || !node) return false;
     const role = String(node.role || '').toLowerCase();
     if (role !== 'assistant' && role !== 'ai') return false;
@@ -2907,7 +2951,13 @@ export function createMessageProcessor(appContext) {
     if (responseTimeline.length > 0) {
       setupThoughtsDisplay(messageWrapperDiv, null, processMathAndMarkdown);
       setupResponseToolCallsDisplay(messageWrapperDiv, null);
-      setupResponseActivityTimelineDisplay(messageWrapperDiv, node, responseTimeline, processMathAndMarkdown);
+      setupResponseActivityTimelineDisplay(
+        messageWrapperDiv,
+        node,
+        responseTimeline,
+        processMathAndMarkdown,
+        { runtimeSnapshot }
+      );
     } else {
       removeResponseActivityTimelineDisplay(messageWrapperDiv);
       const responseThoughts = node.thoughtsRaw || node.response_reasoning_summary || null;
@@ -2944,6 +2994,7 @@ export function createMessageProcessor(appContext) {
       ? normalizedOptions.node
       : (messageId ? chatHistoryManager.chatHistory.messages.find(msg => msg.id === messageId) : null);
     const fallbackElement = normalizedOptions.fallbackElement || null;
+    const runtimeSnapshot = normalizedOptions.runtimeSnapshot || null;
 
     if (Object.prototype.hasOwnProperty.call(normalizedOptions, 'content')) {
       updateAIMessage(
@@ -2971,7 +3022,10 @@ export function createMessageProcessor(appContext) {
 
     let syncedAny = false;
     if (messageWrapperDiv && node) {
-      syncedAny = syncAssistantMessageMetadata(messageId, node, { fallbackElement: messageWrapperDiv }) || syncedAny;
+      syncedAny = syncAssistantMessageMetadata(messageId, node, {
+        fallbackElement: messageWrapperDiv,
+        runtimeSnapshot
+      }) || syncedAny;
       syncedAny = renderAssistantApiFooter(messageWrapperDiv, node) || syncedAny;
     }
     return syncedAny;
