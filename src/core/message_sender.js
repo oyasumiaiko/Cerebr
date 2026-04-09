@@ -48,16 +48,16 @@ import {
   buildResponsesAskOtherAiToolOutputContentItems,
   buildResponsesRequestUserInputToolOutputContentItems,
   buildResponsesGenericXmlToolOutputContentItems
-} from '../utils/responses_tool_output.js';
+} from '../agent_tools/responses_tool_output.js';
 import {
   ensureResponsesReplayOutputItemsIncludeFunctionCalls
 } from '../utils/responses_follow_up.js';
-import { buildPageContentReadResult } from '../utils/page_content_read_tool.js';
+import { buildPageContentReadResult } from '../agent_tools/page_content_read_tool.js';
 import {
   buildConversationReferenceSnapshot,
   executeHistoryReadTool,
   executeHistorySearchTool
-} from '../utils/chat_history_tool.js';
+} from '../agent_tools/chat_history_tool.js';
 import {
   ASK_OTHER_AI_TOOL_NAME,
   LIST_ASKABLE_MODELS_TOOL_NAME,
@@ -66,18 +66,18 @@ import {
   buildAskOtherAiUserMessage,
   buildListAskableModelsFunctionToolDefinition,
   normalizeAskOtherAiArguments
-} from '../utils/ask_other_ai_tool.js';
+} from '../agent_tools/ask_other_ai_tool.js';
 import {
   REQUEST_USER_INPUT_TOOL_NAME,
   buildRequestUserInputFunctionToolDefinition,
   buildRequestUserInputResult,
   normalizeRequestUserInputArguments
-} from '../utils/request_user_input_tool.js';
+} from '../agent_tools/request_user_input_tool.js';
 import {
   JS_RUNTIME_ENV_BOUND_HOST_PAGE,
   JS_RUNTIME_ENV_ISOLATED_SANDBOX,
   resolvePageToolEnvironment
-} from '../utils/page_tool_environment.js';
+} from '../agent_tools/page_tool_environment.js';
 import { deriveResponsesSseLoadingStatus } from '../utils/responses_stream_status.js';
 import {
   buildPageRuntimeContextPayload,

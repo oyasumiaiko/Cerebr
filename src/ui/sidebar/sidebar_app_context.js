@@ -7,7 +7,7 @@ import { createSidebarJsSandboxRuntime } from './js_sandbox_runtime.js';
 import {
   JS_RUNTIME_ENV_BOUND_HOST_PAGE,
   resolvePageToolEnvironment
-} from '../../utils/page_tool_environment.js';
+} from '../../agent_tools/page_tool_environment.js';
 
 /**
  * 创建侧边栏 appContext 基础结构。

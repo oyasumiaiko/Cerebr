@@ -20,7 +20,7 @@ import { resolveThoughtsPanelLifecycleState } from '../utils/thoughts_panel_life
 import {
   formatResponsesToolOutputForDisplay,
   hasResponsesToolOutputBody
-} from '../utils/responses_tool_output.js';
+} from '../agent_tools/responses_tool_output.js';
 import {
   computeContiguousDiffWindow,
   resolveRenderedSurfaceDiffBaseSignatures,

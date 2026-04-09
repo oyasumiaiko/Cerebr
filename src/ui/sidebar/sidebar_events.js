@@ -5,7 +5,7 @@ import { generateCandidateUrls } from '../../utils/url_candidates.js';
 import {
   buildPageToolModeStatusTitle,
   resolvePageToolEnvironment
-} from '../../utils/page_tool_environment.js';
+} from '../../agent_tools/page_tool_environment.js';
 
 // 全屏状态不再写入 sessionStorage，改由父页面在内存里同步，避免 F5 刷新仍保留旧布局。
 

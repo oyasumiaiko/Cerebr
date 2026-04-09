@@ -7,7 +7,7 @@ import {
   extractMessagePlainText,
   isThreadMessageLike,
   scanConversationMessagesForSearch
-} from './chat_history_search_shared.js';
+} from '../utils/chat_history_search_shared.js';
 
 export const HISTORY_SEARCH_TOOL_DEFAULT_MAX_RESULTS = 20;
 export const HISTORY_SEARCH_TOOL_MAX_RESULTS = 100;
