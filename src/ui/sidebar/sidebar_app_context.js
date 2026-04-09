@@ -247,7 +247,87 @@ export function registerSidebarUtilities(appContext) {
     });
   };
 
+  const REQUEST_USER_INPUT_DRAFT_SESSION_KEY = '__draft__';
   let activeRequestUserInputSession = null;
+  const requestUserInputSessionsByConversationKey = new Map();
+
+  function normalizeRequestUserInputConversationKey(value) {
+    const normalized = (typeof value === 'string') ? value.trim() : '';
+    return normalized || REQUEST_USER_INPUT_DRAFT_SESSION_KEY;
+  }
+
+  function resolveCurrentRequestUserInputConversationKey() {
+    const conversationId = appContext.services.chatHistoryUI?.getCurrentConversationId?.()
+      || appContext.services.messageSender?.getCurrentConversationId?.()
+      || '';
+    return normalizeRequestUserInputConversationKey(conversationId);
+  }
+
+  function removeConversationScopedComposerPreviewDom() {
+    document.querySelectorAll('.conversation-send-queue-preview').forEach((node) => node.remove());
+  }
+
+  function unmountRequestUserInputSession(session) {
+    if (!session || typeof session !== 'object') return;
+    if (activeRequestUserInputSession === session) {
+      activeRequestUserInputSession = null;
+    }
+    if (session.panel?.isConnected) {
+      session.panel.remove();
+    }
+  }
+
+  function mountRequestUserInputSession(session) {
+    const host = getComposerAccessoryRegion();
+    if (!host || !session?.panel) return false;
+
+    document.querySelectorAll('.composer-request-panel').forEach((node) => {
+      if (node !== session.panel) node.remove();
+    });
+
+    if (session.panel.parentElement !== host) {
+      host.insertBefore(session.panel, host.firstChild || null);
+    } else if (host.firstChild !== session.panel) {
+      host.insertBefore(session.panel, host.firstChild || null);
+    }
+
+    activeRequestUserInputSession = session;
+    refreshComposerAccessoryLayout();
+    if (typeof session.focusCurrentQuestionControl === 'function') {
+      session.focusCurrentQuestionControl();
+    } else {
+      window.requestAnimationFrame(() => session.panel.focus({ preventScroll: true }));
+    }
+    session.panel.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    return true;
+  }
+
+  /**
+   * 清理“仅属于当前显示会话”的 composer 辅助区 UI。
+   *
+   * 说明：
+   * - 切换到别的会话时，旧会话的提问抽屉和 queue / steer 预览不应继续挂在当前输入框上；
+   * - 但未回答的 request_user_input 默认只做“卸载 UI”，不自动 skip，这样回到原会话还能恢复；
+   * - queue / steer 预览属于可重绘 UI，切换后直接删 DOM，交给新会话上下文重新渲染即可。
+   */
+  appContext.utils.resetConversationScopedComposerState = (options = {}) => {
+    const preservePendingRequestUserInput = options?.preservePendingRequestUserInput !== false;
+
+    if (activeRequestUserInputSession) {
+      if (preservePendingRequestUserInput) {
+        unmountRequestUserInputSession(activeRequestUserInputSession);
+      } else {
+        activeRequestUserInputSession.finish?.({ cancelled: true, answers: {} });
+      }
+    }
+
+    document.querySelectorAll('.composer-request-panel').forEach((node) => {
+      if (activeRequestUserInputSession?.panel === node) return;
+      node.remove();
+    });
+    removeConversationScopedComposerPreviewDom();
+    refreshComposerAccessoryLayout();
+  };
 
   // 统一生成输入框 placeholder 文案，避免各处硬编码导致切换覆盖不一致。
   appContext.utils.buildMessageInputPlaceholder = (currentConfig, options = {}) => {
@@ -393,18 +473,24 @@ export function registerSidebarUtilities(appContext) {
   appContext.utils.showRequestUserInput = (options = {}) => {
     const questions = Array.isArray(options.questions) ? options.questions : [];
     const host = getComposerAccessoryRegion();
+    const conversationKey = resolveCurrentRequestUserInputConversationKey();
+    const existingSession = requestUserInputSessionsByConversationKey.get(conversationKey) || null;
 
     if (!host) {
       return Promise.reject(new Error('当前界面尚未初始化输入框辅助区。'));
     }
 
-    if (activeRequestUserInputSession?.finish) {
-      activeRequestUserInputSession.finish({ cancelled: true, answers: {} });
+    if (activeRequestUserInputSession && activeRequestUserInputSession !== existingSession) {
+      unmountRequestUserInputSession(activeRequestUserInputSession);
     }
 
-    document.querySelectorAll('.composer-request-panel').forEach((node) => node.remove());
+    if (existingSession) {
+      mountRequestUserInputSession(existingSession);
+      return existingSession.promise;
+    }
 
-    return new Promise((resolve) => {
+    let session = null;
+    const promise = new Promise((resolve) => {
       const panel = document.createElement('section');
       panel.className = 'composer-request-panel';
       panel.setAttribute('role', 'group');
@@ -691,31 +777,54 @@ export function registerSidebarUtilities(appContext) {
       }
 
       let settled = false;
+      session = {
+        conversationKey,
+        panel,
+        questions,
+        focusCurrentQuestionControl,
+        finish: null,
+        promise: null
+      };
 
       const finish = (payload) => {
         if (settled) return;
         settled = true;
-        if (activeRequestUserInputSession?.panel === panel) {
+        requestUserInputSessionsByConversationKey.delete(conversationKey);
+        if (activeRequestUserInputSession === session) {
           activeRequestUserInputSession = null;
         }
-        panel.classList.add('is-closing');
         const finalize = () => {
           panel.remove();
           refreshComposerAccessoryLayout();
           resolve(payload);
         };
+        if (!panel.isConnected) {
+          finalize();
+          return;
+        }
+        panel.classList.add('is-closing');
         window.setTimeout(finalize, 150);
       };
+      session.finish = finish;
 
       const onSkip = () => finish(buildRequestUserInputSkipPayload());
 
-      activeRequestUserInputSession = { panel, finish };
+      requestUserInputSessionsByConversationKey.set(conversationKey, session);
+      activeRequestUserInputSession = session;
       host.insertBefore(panel, host.firstChild || null);
+      document.querySelectorAll('.composer-request-panel').forEach((node) => {
+        if (node !== panel) node.remove();
+      });
       refreshComposerAccessoryLayout();
       renderCurrentQuestion();
       window.requestAnimationFrame(() => panel.focus({ preventScroll: true }));
       panel.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     });
+
+    if (session) {
+      session.promise = promise;
+    }
+    return promise;
   };
 
   // 多步骤进度条工具：等分整体进度，支持每步子进度

@@ -3308,6 +3308,7 @@ export function createChatHistoryUI(appContext) {
     const normalizedOptions = (options && typeof options === 'object') ? options : {};
     const skipMessageAnimation = !!normalizedOptions.skipMessageAnimation;
     const skipScrollToBottom = !!normalizedOptions.skipScrollToBottom;
+    utils.resetConversationScopedComposerState?.({ preservePendingRequestUserInput: true });
     // 切换/打开会话时确保线程状态同步关闭，避免残留线程面板。
     services.selectionThreadManager?.resetForClearChat?.();
     // 如果传入的是简化版会话对象（可能只有id），则加载完整版
@@ -3657,6 +3658,7 @@ export function createChatHistoryUI(appContext) {
     if (abortActiveRequests) {
       services.messageSender.abortCurrentRequest();
     }
+    utils.resetConversationScopedComposerState?.({ preservePendingRequestUserInput: true });
     // Keep clear-chat lightweight: do not trigger an extra save here.
     services.selectionThreadManager?.resetForClearChat?.();
     // 清空聊天容器和内存中的聊天记录
