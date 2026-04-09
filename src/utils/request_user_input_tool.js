@@ -1,24 +1,21 @@
 /**
  * request_user_input 工具的纯函数辅助模块。
  *
- * 设计目标：
- * - 把参数校验、问题结构规范化、答案结果整理从 sender / UI 层里拆出来；
- * - 尽量贴近 Codex 当前 `request_user_input` 的参数契约，避免同类工具出现两套语义；
- * - 让后续 UI 或输出格式继续迭代时，工具协议本身仍有稳定单测兜底。
+ * 这里刻意参考了最新 `openai/codex` Rust 源码里的拆分方式：
+ * - tool 描述 / schema 由独立模块统一生成；
+ * - 参数规范化做“最小必要修正”，而不是把描述层建议一股脑做成强校验；
+ * - 结果对象保留一个极小、稳定、便于直接 JSON 序列化的核心结构。
+ *
+ * 参考入口：
+ * - `codex-rs/tools/src/request_user_input_tool.rs`
+ * - `codex-rs/core/src/tools/handlers/request_user_input.rs`
+ * - `codex-rs/core/tests/suite/request_user_input.rs`
  */
 
-export const REQUEST_USER_INPUT_MIN_QUESTIONS = 1;
-export const REQUEST_USER_INPUT_MAX_QUESTIONS = 3;
-export const REQUEST_USER_INPUT_MIN_OPTIONS = 2;
-export const REQUEST_USER_INPUT_MAX_OPTIONS = 3;
-export const REQUEST_USER_INPUT_HEADER_MAX_CHARS = 12;
+export const REQUEST_USER_INPUT_TOOL_NAME = 'request_user_input';
 
 function normalizeString(value) {
   return (typeof value === 'string') ? value.trim() : '';
-}
-
-function countTextChars(text) {
-  return Array.from(String(text ?? '')).length;
 }
 
 function normalizeAnswerList(rawValue) {
@@ -44,9 +41,6 @@ function normalizeQuestionOption(rawOption, questionIndex, optionIndex) {
   if (!description) {
     throw new Error(`request_user_input 参数错误：第 ${questionIndex + 1} 个问题的第 ${optionIndex + 1} 个选项缺少非空 description。`);
   }
-  if (/^(other|其他)$/i.test(label)) {
-    throw new Error(`request_user_input 参数错误：第 ${questionIndex + 1} 个问题不要显式提供 Other/其他 选项，客户端会自动追加。`);
-  }
 
   return { label, description };
 }
@@ -63,36 +57,23 @@ function normalizeQuestion(rawQuestion, questionIndex) {
   if (!header) {
     throw new Error(`request_user_input 参数错误：第 ${questionIndex + 1} 个问题缺少非空 header。`);
   }
-  if (countTextChars(header) > REQUEST_USER_INPUT_HEADER_MAX_CHARS) {
-    throw new Error(`request_user_input 参数错误：问题 ${header} 的 header 不能超过 ${REQUEST_USER_INPUT_HEADER_MAX_CHARS} 个字符。`);
-  }
   if (!id) {
     throw new Error(`request_user_input 参数错误：第 ${questionIndex + 1} 个问题缺少非空 id。`);
-  }
-  if (!/^[a-z][a-z0-9_]*$/.test(id)) {
-    throw new Error(`request_user_input 参数错误：问题 ${header} 的 id 必须使用 snake_case。`);
   }
   if (!prompt) {
     throw new Error(`request_user_input 参数错误：问题 ${header} 缺少非空 question。`);
   }
-  if (rawOptions.length < REQUEST_USER_INPUT_MIN_OPTIONS || rawOptions.length > REQUEST_USER_INPUT_MAX_OPTIONS) {
-    throw new Error(`request_user_input 参数错误：问题 ${header} 需要提供 ${REQUEST_USER_INPUT_MIN_OPTIONS} 到 ${REQUEST_USER_INPUT_MAX_OPTIONS} 个选项。`);
+  if (rawOptions.length <= 0) {
+    throw new Error(`request_user_input 参数错误：问题 ${header} 需要提供非空 options。`);
   }
 
   const options = rawOptions.map((option, optionIndex) => normalizeQuestionOption(option, questionIndex, optionIndex));
-  const optionLabels = options.map(option => option.label);
-  if (new Set(optionLabels).size !== optionLabels.length) {
-    throw new Error(`request_user_input 参数错误：问题 ${header} 的 options.label 不能重复。`);
-  }
-  const recommendedIndex = options.findIndex(option => /\(Recommended\)$/i.test(option.label));
-  if (recommendedIndex > 0) {
-    throw new Error(`request_user_input 参数错误：问题 ${header} 中带有 "(Recommended)" 的选项必须放在第一位。`);
-  }
 
   return {
     header,
     id,
     question: prompt,
+    is_other: true,
     options
   };
 }
@@ -103,17 +84,78 @@ export function normalizeRequestUserInputArguments(rawArgs) {
     : {};
   const rawQuestions = Array.isArray(args.questions) ? args.questions : [];
 
-  if (rawQuestions.length < REQUEST_USER_INPUT_MIN_QUESTIONS || rawQuestions.length > REQUEST_USER_INPUT_MAX_QUESTIONS) {
-    throw new Error(`request_user_input 参数错误：questions 需要提供 ${REQUEST_USER_INPUT_MIN_QUESTIONS} 到 ${REQUEST_USER_INPUT_MAX_QUESTIONS} 个问题。`);
+  if (rawQuestions.length <= 0) {
+    throw new Error('request_user_input 参数错误：questions 需要至少提供 1 个问题。');
   }
 
   const questions = rawQuestions.map((question, index) => normalizeQuestion(question, index));
-  const ids = questions.map(question => question.id);
-  if (new Set(ids).size !== ids.length) {
-    throw new Error('request_user_input 参数错误：questions.id 不能重复。');
-  }
 
   return { questions };
+}
+
+export function buildRequestUserInputToolDescription() {
+  return 'Request user input for one to three short questions and wait for the response. This tool is only available in Default or Plan mode.';
+}
+
+export function buildRequestUserInputFunctionToolDefinition() {
+  const optionProperties = {
+    label: {
+      type: 'string',
+      description: 'User-facing label (1-5 words).'
+    },
+    description: {
+      type: 'string',
+      description: 'One short sentence explaining impact/tradeoff if selected.'
+    }
+  };
+  const questionProperties = {
+    id: {
+      type: 'string',
+      description: 'Stable identifier for mapping answers (snake_case).'
+    },
+    header: {
+      type: 'string',
+      description: 'Short header label shown in the UI (12 or fewer chars).'
+    },
+    question: {
+      type: 'string',
+      description: 'Single-sentence prompt shown to the user.'
+    },
+    options: {
+      type: 'array',
+      description: 'Provide 2-3 mutually exclusive choices. Put the recommended option first and suffix its label with "(Recommended)". Do not include an "Other" option in this list; the client will add a free-form "Other" option automatically.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: optionProperties,
+        required: Object.keys(optionProperties)
+      }
+    }
+  };
+
+  return {
+    type: 'function',
+    name: REQUEST_USER_INPUT_TOOL_NAME,
+    description: buildRequestUserInputToolDescription(),
+    strict: false,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        questions: {
+          type: 'array',
+          description: 'Questions to show the user. Prefer 1 and do not exceed 3',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: questionProperties,
+            required: Object.keys(questionProperties)
+          }
+        }
+      },
+      required: ['questions']
+    }
+  };
 }
 
 /**
@@ -127,12 +169,12 @@ export function normalizeRequestUserInputArguments(rawArgs) {
  * @param {Record<string, any>} rawAnswersById
  * @param {{cancelled?:boolean}} [options]
  * @returns {{
+ *   answers:Record<string, {answers:string[]}>
  *   ok:boolean,
  *   cancelled:boolean,
  *   question_count:number,
  *   answered_count:number,
- *   questions:Array<{id:string,header:string,question:string,answers:string[]}>,
- *   answers:Record<string, {answers:string[]}>
+ *   questions:Array<{id:string,header:string,question:string,answers:string[]}>
  * }}
  */
 export function buildRequestUserInputResult(questions, rawAnswersById, options = {}) {

@@ -59,11 +59,17 @@ import {
   executeHistorySearchTool
 } from '../utils/chat_history_tool.js';
 import {
+  ASK_OTHER_AI_TOOL_NAME,
+  LIST_ASKABLE_MODELS_TOOL_NAME,
   buildAskOtherAiCatalog,
+  buildAskOtherAiFunctionToolDefinition,
   buildAskOtherAiUserMessage,
+  buildListAskableModelsFunctionToolDefinition,
   normalizeAskOtherAiArguments
 } from '../utils/ask_other_ai_tool.js';
 import {
+  REQUEST_USER_INPUT_TOOL_NAME,
+  buildRequestUserInputFunctionToolDefinition,
   buildRequestUserInputResult,
   normalizeRequestUserInputArguments
 } from '../utils/request_user_input_tool.js';
@@ -95,9 +101,9 @@ const RESPONSES_JS_RUNTIME_TOOL_NAME = 'js_runtime_execute';
 const RESPONSES_PAGE_CONTENT_TOOL_NAME = 'page_content_read';
 const RESPONSES_HISTORY_SEARCH_TOOL_NAME = 'history_search';
 const RESPONSES_HISTORY_READ_TOOL_NAME = 'history_read';
-const RESPONSES_REQUEST_USER_INPUT_TOOL_NAME = 'request_user_input';
-const RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME = 'list_askable_models';
-const RESPONSES_ASK_OTHER_AI_TOOL_NAME = 'ask_other_ai';
+const RESPONSES_REQUEST_USER_INPUT_TOOL_NAME = REQUEST_USER_INPUT_TOOL_NAME;
+const RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME = LIST_ASKABLE_MODELS_TOOL_NAME;
+const RESPONSES_ASK_OTHER_AI_TOOL_NAME = ASK_OTHER_AI_TOOL_NAME;
 
 /**
  * 创建消息发送器
@@ -6746,81 +6752,6 @@ export function createMessageSender(appContext) {
   }
 
   /**
-   * 构造给 Responses API 使用的 request_user_input 自定义函数工具定义。
-   *
-   * 这把工具的语义尽量贴近 Codex 当前的交互式提问能力：
-   * - 一次调用可提交 1 到 3 个问题；
-   * - 每个问题提供 2 到 3 个互斥选项；
-   * - 推荐项应放在第一位，并在 label 末尾带上 `(Recommended)`；
-   * - 不要显式提供 Other，客户端会自动补一个可自由输入的 Other 选项。
-   *
-   * @returns {Object}
-   */
-  function buildResponsesRequestUserInputFunctionToolDefinition() {
-    const optionProperties = {
-      label: {
-        type: 'string',
-        description: '用户可见的短标签。推荐项请放在第一位，并在标签末尾追加 "(Recommended)"。'
-      },
-      description: {
-        type: 'string',
-        description: '对该选项影响或取舍的一句话说明。'
-      }
-    };
-    const questionProperties = {
-      header: {
-        type: 'string',
-        description: '显示在 UI 顶部的短标题，建议 12 个字符以内。'
-      },
-      id: {
-        type: 'string',
-        description: '稳定的 snake_case 标识符，用于在答案结果里映射该问题。'
-      },
-      question: {
-        type: 'string',
-        description: '展示给用户的单句问题。'
-      },
-      options: {
-        type: 'array',
-        description: '提供 2 到 3 个互斥选项。推荐项请放在第一位并带 "(Recommended)"；不要显式包含 Other，客户端会自动追加可自由输入的 Other。',
-        items: {
-          type: 'object',
-          additionalProperties: false,
-          properties: optionProperties,
-          required: Object.keys(optionProperties)
-        }
-      }
-    };
-    return {
-      type: 'function',
-      name: RESPONSES_REQUEST_USER_INPUT_TOOL_NAME,
-      description: [
-        '向用户发起 1 到 3 个简短问题，并等待用户回答。',
-        '仅在下一步确实依赖用户拍板，且无法从当前上下文自行发现答案时使用。',
-        '每个问题都应带 2 到 3 个互斥选项；推荐项放第一位，并在 label 末尾加上 "(Recommended)"；不要显式提供 Other，客户端会自动补一个可自由输入的 Other。'
-      ].join(' '),
-      strict: true,
-      parameters: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          questions: {
-            type: 'array',
-            description: '必填。要展示给用户的一组简短问题，数量为 1 到 3 个。',
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              properties: questionProperties,
-              required: Object.keys(questionProperties)
-            }
-          }
-        },
-        required: ['questions']
-      }
-    };
-  }
-
-  /**
    * 列出当前允许被“向其他 AI 提问”工具使用的目标模型目录。
    *
    * 这把工具只做目录发现与使用须知说明：
@@ -6830,80 +6761,6 @@ export function createMessageSender(appContext) {
    *
    * @returns {Object}
    */
-  function buildResponsesListAskableModelsFunctionToolDefinition() {
-    return {
-      type: 'function',
-      name: RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME,
-      description: [
-        '列出当前可通过“向其他AI提问”工具访问的目标模型配置。',
-        '结果会返回每个目标的 config_id、显示名、模型名与连接信息，并附带使用须知。',
-        '若后续要发起提问，请先调用这把工具，再把返回的 config_id 用于 ask_other_ai。'
-      ].join(' '),
-      strict: true,
-      parameters: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {},
-        required: []
-      }
-    };
-  }
-
-  /**
-   * 向一个或多个已启用的“其他模型配置”发起独立提问。
-   *
-   * 参数设计：
-   * - requests 是显式结构化数组；
-   * - 每条 request 都明确给出目标 config_id 与问题文本；
-   * - context 为可选补充材料，避免模型误以为它天然继承当前对话的隐藏上下文。
-   *
-   * @returns {Object}
-   */
-  function buildResponsesAskOtherAiFunctionToolDefinition() {
-    const requestItemProperties = {
-      config_id: {
-        type: 'string',
-        description: '必填。目标模型配置的 config_id，请先通过 list_askable_models 获取。'
-      },
-      question: {
-        type: 'string',
-        description: '必填。要向该目标模型提问的具体问题。'
-      },
-      context: {
-        type: ['string', 'null'],
-        description: '可选。要额外提供给目标模型的补充上下文。若当前对话、页面内容或工具结果很重要，请自行整理后放进这里。'
-      }
-    };
-
-    return {
-      type: 'function',
-      name: RESPONSES_ASK_OTHER_AI_TOOL_NAME,
-      description: [
-        '向一个或多个已启用的其他模型配置提问，以获取独立观点、复核分析或比较不同模型结论。',
-        '每条 request 都需要显式给出 config_id 与 question；同一次调用里可以向相同或不同模型发送多条问题。',
-        '目标模型只会看到你提供的 question 与 context，不会自动继承当前对话、隐藏上下文、本地工具结果或页面状态。'
-      ].join(' '),
-      strict: true,
-      parameters: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          requests: {
-            type: 'array',
-            description: '必填。要执行的一组提问请求；每条 request 都是一次独立提问。',
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              properties: requestItemProperties,
-              required: Object.keys(requestItemProperties)
-            }
-          }
-        },
-        required: ['requests']
-      }
-    };
-  }
-
   /**
    * 构造给 Responses API 使用的 history_search 自定义函数工具定义。
    *
@@ -7881,18 +7738,6 @@ export function createMessageSender(appContext) {
         interactionResult?.answers || {},
         { cancelled: interactionResult?.cancelled === true }
       );
-
-      if (interactionResult?.cancelled === true) {
-        return {
-          ...result,
-          error: {
-            message: '用户取消了 request_user_input。',
-            name: 'UserCancelledError',
-            stack: ''
-          }
-        };
-      }
-
       return result;
     } catch (error) {
       return {

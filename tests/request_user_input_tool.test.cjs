@@ -10,7 +10,7 @@ async function loadRequestUserInputToolModule() {
   return import(dataUrl);
 }
 
-test('normalizeRequestUserInputArguments 会规范化问题结构并保留推荐项顺序', async () => {
+test('normalizeRequestUserInputArguments 会保留问题结构并自动标记 is_other', async () => {
   const { normalizeRequestUserInputArguments } = await loadRequestUserInputToolModule();
   const normalized = normalizeRequestUserInputArguments({
     questions: [
@@ -33,6 +33,7 @@ test('normalizeRequestUserInputArguments 会规范化问题结构并保留推荐
         header: '输出方式',
         id: 'output_mode',
         question: '这次你更希望我怎么落地？',
+        is_other: true,
         options: [
           { label: '并行出V2 (Recommended)', description: '保留旧版，再新增 v2。' },
           { label: '直接覆盖旧版', description: '复用现有文件名。' },
@@ -43,15 +44,15 @@ test('normalizeRequestUserInputArguments 会规范化问题结构并保留推荐
   });
 });
 
-test('normalizeRequestUserInputArguments 会拒绝超范围问题数、非法 id 与显式 Other 选项', async () => {
+test('normalizeRequestUserInputArguments 只对空 questions 或空 options 做必要校验', async () => {
   const { normalizeRequestUserInputArguments } = await loadRequestUserInputToolModule();
 
-  assert.throws(() => normalizeRequestUserInputArguments({ questions: [] }), /1 到 3 个问题/);
-  assert.throws(() => normalizeRequestUserInputArguments({
+  assert.throws(() => normalizeRequestUserInputArguments({ questions: [] }), /至少提供 1 个问题/);
+  const relaxed = normalizeRequestUserInputArguments({
     questions: [
       {
         header: 'A',
-        id: 'bad-id',
+        id: 'not_snake_case-but-still-accepted',
         question: 'x',
         options: [
           { label: 'One', description: '1' },
@@ -59,33 +60,34 @@ test('normalizeRequestUserInputArguments 会拒绝超范围问题数、非法 id
         ]
       }
     ]
-  }), /snake_case/);
+  });
+  assert.equal(relaxed.questions[0].id, 'not_snake_case-but-still-accepted');
   assert.throws(() => normalizeRequestUserInputArguments({
     questions: [
       {
         header: '输出方式',
         id: 'output_mode',
         question: 'x',
-        options: [
-          { label: 'Other', description: '客户端不该看到这个' },
-          { label: '直接覆盖旧版', description: '复用现有文件名。' }
-        ]
+        options: []
       }
     ]
-  }), /Other\/其他/);
-  assert.throws(() => normalizeRequestUserInputArguments({
-    questions: [
-      {
-        header: '输出方式',
-        id: 'output_mode',
-        question: 'x',
-        options: [
-          { label: '直接覆盖旧版', description: '复用现有文件名。' },
-          { label: '并行出V2 (Recommended)', description: '保留旧版，再新增 v2。' }
-        ]
-      }
-    ]
-  }), /\(Recommended\)/);
+  }), /非空 options/);
+});
+
+test('buildRequestUserInputFunctionToolDefinition 与 Codex 风格保持一致', async () => {
+  const {
+    REQUEST_USER_INPUT_TOOL_NAME,
+    buildRequestUserInputFunctionToolDefinition,
+    buildRequestUserInputToolDescription
+  } = await loadRequestUserInputToolModule();
+
+  const spec = buildRequestUserInputFunctionToolDefinition();
+  assert.equal(spec.type, 'function');
+  assert.equal(spec.name, REQUEST_USER_INPUT_TOOL_NAME);
+  assert.equal(spec.strict, false);
+  assert.equal(spec.description, buildRequestUserInputToolDescription());
+  assert.match(spec.parameters.properties.questions.description, /Prefer 1 and do not exceed 3/);
+  assert.match(spec.parameters.properties.questions.items.properties.options.description, /Do not include an "Other" option/);
 });
 
 test('buildRequestUserInputResult 会整理答案映射并保留取消态', async () => {

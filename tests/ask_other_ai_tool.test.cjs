@@ -50,6 +50,25 @@ test('buildAskOtherAiCatalog 只返回启用且配置完整的候选模型', asy
   assert.match(result.guidance, /list_askable_models/);
 });
 
+test('buildAskOtherAiFunctionToolDefinition 包含更明确的使用边界说明', async () => {
+  const {
+    ASK_OTHER_AI_TOOL_NAME,
+    LIST_ASKABLE_MODELS_TOOL_NAME,
+    buildAskOtherAiFunctionToolDefinition,
+    buildListAskableModelsFunctionToolDefinition
+  } = await loadAskOtherAiToolModule();
+
+  const askSpec = buildAskOtherAiFunctionToolDefinition();
+  assert.equal(askSpec.type, 'function');
+  assert.equal(askSpec.name, ASK_OTHER_AI_TOOL_NAME);
+  assert.match(askSpec.description, /何时使用/);
+  assert.match(askSpec.description, /不该怎么用/);
+
+  const listSpec = buildListAskableModelsFunctionToolDefinition();
+  assert.equal(listSpec.name, LIST_ASKABLE_MODELS_TOOL_NAME);
+  assert.equal(listSpec.parameters.required.length, 0);
+});
+
 test('normalizeAskOtherAiArguments 支持多 request 且严格校验必填字段', async () => {
   const { normalizeAskOtherAiArguments } = await loadAskOtherAiToolModule();
   const normalized = normalizeAskOtherAiArguments({
@@ -71,11 +90,12 @@ test('normalizeAskOtherAiArguments 支持多 request 且严格校验必填字段
   assert.throws(() => normalizeAskOtherAiArguments({ requests: [{ config_id: 'cfg', question: '   ', context: null }] }), /question/);
 });
 
-test('buildAskOtherAiUserMessage 使用隐藏 XML 块组织 context 与 question', async () => {
+test('buildAskOtherAiUserMessage 使用显式文本区块而不是 XML 包裹', async () => {
   const { buildAskOtherAiUserMessage } = await loadAskOtherAiToolModule();
   const text = buildAskOtherAiUserMessage('帮我反驳一下这个结论', '当前模型认为图表可能是 Vega-Lite。');
-  assert.match(text, /<context>/);
+  assert.match(text, /Additional context:/);
   assert.match(text, /当前模型认为图表可能是 Vega-Lite/);
-  assert.match(text, /<question>/);
+  assert.match(text, /Question:/);
   assert.match(text, /帮我反驳一下这个结论/);
+  assert.doesNotMatch(text, /<question>/);
 });

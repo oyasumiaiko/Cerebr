@@ -321,7 +321,7 @@ test('buildResponsesAskOtherAiToolOutputContentItems 使用 responses XML 分块
   assert.doesNotMatch(text, /<target>/);
 });
 
-test('buildResponsesRequestUserInputToolOutputContentItems 使用 questions XML 分块', async () => {
+test('buildResponsesRequestUserInputToolOutputContentItems 使用紧凑 JSON 返回 answers', async () => {
   const { buildResponsesRequestUserInputToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesRequestUserInputToolOutputContentItems({
     ok: true,
@@ -344,11 +344,9 @@ test('buildResponsesRequestUserInputToolOutputContentItems 使用 questions XML 
     ]
   });
   const text = formatResponsesToolOutputForDisplay(items);
-  assert.match(text, /<request_user_input_result>/);
-  assert.match(text, /<questions>/);
-  assert.match(text, /<question rank="1" id="output_mode" header="输出方式" status="answered">/);
-  assert.match(text, /<prompt>/);
-  assert.match(text, /新版宏观报告你希望怎么落地/);
-  assert.match(text, /<answer rank="1">/);
+  assert.match(text, /"answers": \{/);
+  assert.match(text, /"output_mode": \{/);
+  assert.match(text, /"window_scope": \{/);
   assert.match(text, /并行出V2 \(Recommended\)/);
+  assert.doesNotMatch(text, /<request_user_input_result>/);
 });

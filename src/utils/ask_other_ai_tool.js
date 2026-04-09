@@ -4,8 +4,13 @@
  * 设计目标：
  * - 把“哪些 API 配置允许暴露给 ask 工具”与 sender 执行链路解耦；
  * - 把参数校验做成纯函数，便于单元测试；
- * - 让工具描述、目录结果、请求归一化都能稳定复用，而不是散落在 sender 大文件里。
+ * - 把工具描述、使用边界、请求文本模板集中收口，避免继续散落在 sender 大文件里；
+ * - 参考 Codex Rust 工具注释里对 `spawn_agent` 的写法，把“什么时候该用 / 不该用”直接写进工具描述，
+ *   避免 ask_other_ai 退化成一个只会“多问几个模型”的空壳。
  */
+
+export const LIST_ASKABLE_MODELS_TOOL_NAME = 'list_askable_models';
+export const ASK_OTHER_AI_TOOL_NAME = 'ask_other_ai';
 
 function normalizeString(value) {
   return (typeof value === 'string') ? value.trim() : '';
@@ -45,8 +50,91 @@ export function buildAskOtherAiToolGuidance() {
     '先调用 list_askable_models 查看当前可用目标，并从结果里复制 config_id。',
     'ask_other_ai 支持一次提交多条 requests；每条 request 都可以指定不同的 config_id。',
     '目标模型只会看到你显式提供的 question 与 context，不会自动继承当前对话、隐藏上下文、本地工具结果或页面状态。',
-    '它适合获取第二意见、交叉验证分析、比较不同模型视角；不适合代替当前模型继续执行本地工具链。'
+    '它适合获取第二意见、交叉验证分析、比较不同模型视角；不适合代替当前模型继续执行本地工具链。',
+    '优先把问题写得具体、边界清晰，并只附上当前这次判断真正依赖的上下文。'
   ].join('\n');
+}
+
+export function buildListAskableModelsToolDescription() {
+  return [
+    '列出当前可通过 ask_other_ai 访问的目标模型配置。',
+    '结果会返回每个目标的 config_id、显示名、模型名与连接信息，并附带使用须知。',
+    '若后续要发起提问，请先调用这把工具，再把返回的 config_id 用于 ask_other_ai。'
+  ].join(' ');
+}
+
+export function buildAskOtherAiToolDescription() {
+  return [
+    '向一个或多个已启用的其他模型配置提问，以获取独立观点、复核分析或比较不同模型结论。',
+    '每条 request 都需要显式给出 config_id 与 question；同一次调用里可以向相同或不同模型发送多条问题。',
+    '目标模型只会看到你提供的 question 与 context，不会自动继承当前对话、隐藏上下文、本地工具结果或页面状态。',
+    '',
+    '### 何时使用',
+    '- 当你需要独立第二意见、交叉验证、对比不同模型结论时使用。',
+    '- 优先把问题压成具体、边界清晰、可独立回答的子问题。',
+    '- 如果当前判断强依赖本轮页面内容、工具结果或对话上下文，请先自行整理后放进 context。',
+    '',
+    '### 不该怎么用',
+    '- 不要把 ask_other_ai 当成“偷偷续写当前主模型思路”的隐式上下文继承器。',
+    '- 不要把它当成当前模型继续执行本地工具链的替代品。',
+    '- 不要一次性发很多模糊、重复、彼此高度重叠的问题。'
+  ].join('\n');
+}
+
+export function buildListAskableModelsFunctionToolDefinition() {
+  return {
+    type: 'function',
+    name: LIST_ASKABLE_MODELS_TOOL_NAME,
+    description: buildListAskableModelsToolDescription(),
+    strict: true,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {},
+      required: []
+    }
+  };
+}
+
+export function buildAskOtherAiFunctionToolDefinition() {
+  const requestItemProperties = {
+    config_id: {
+      type: 'string',
+      description: '必填。目标模型配置的 config_id，请先通过 list_askable_models 获取。'
+    },
+    question: {
+      type: 'string',
+      description: '必填。要向该目标模型提问的具体问题。'
+    },
+    context: {
+      type: ['string', 'null'],
+      description: '可选。要额外提供给目标模型的补充上下文。若当前对话、页面内容或工具结果很重要，请自行整理后放进这里。'
+    }
+  };
+
+  return {
+    type: 'function',
+    name: ASK_OTHER_AI_TOOL_NAME,
+    description: buildAskOtherAiToolDescription(),
+    strict: true,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        requests: {
+          type: 'array',
+          description: '必填。要执行的一组提问请求；每条 request 都是一次独立提问。',
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: requestItemProperties,
+            required: Object.keys(requestItemProperties)
+          }
+        }
+      },
+      required: ['requests']
+    }
+  };
 }
 
 export function buildAskOtherAiCatalog(configs, options = {}) {
@@ -109,11 +197,14 @@ export function buildAskOtherAiUserMessage(question, context = null) {
     throw new Error('ask_other_ai 生成提问消息失败：question 不能为空。');
   }
 
-  const blocks = [];
+  const blocks = [
+    '你正在提供一次独立的第二意见。',
+    '请仅基于下面显式提供的问题和上下文作答，不要假装看到了未提供的隐藏对话状态。'
+  ];
   if (normalizedContext) {
-    blocks.push(`<context>\n${normalizedContext}\n</context>`);
+    blocks.push(`Additional context:\n${normalizedContext}`);
   }
-  blocks.push(`<question>\n${normalizedQuestion}\n</question>`);
-  blocks.push('请直接给出你的独立分析与判断。若信息不足，请明确说明缺口，不要假装看到了未提供的上下文。');
+  blocks.push(`Question:\n${normalizedQuestion}`);
+  blocks.push('请直接给出你的独立分析与判断。若信息不足，请明确说明缺口。');
   return blocks.join('\n\n');
 }
