@@ -63,7 +63,12 @@ function createMessageItem(messageId, text) {
 
 async function runMockResponsesServer() {
   const finalAnswerText = 'AUTO_COLLAPSE_BODY_ANSWER_20260410';
-  const reasoningText = '先分析页面结构，再给出结论。';
+  const reasoningChunks = Array.from({ length: 10 }, (_, index) => (
+    `第${index + 1}步：为了验证思考窗口只在内部滚动，这里持续追加一段足够长的推理文本，`
+    + '确保 peek 窗口会出现真实的内部溢出与内部滚动，而不是依赖外层聊天容器补偿。'
+    + '我们要观察最新 assistant 消息的顶部锚点在整个流式阶段保持稳定。\n'
+  ));
+  const reasoningText = reasoningChunks.join('');
   const requestLog = [];
 
   const server = http.createServer(async (req, res) => {
@@ -98,12 +103,15 @@ async function runMockResponsesServer() {
       writeSseEvent(res, { type: 'response.created', response: { id: 'resp_auto_collapse' } });
       writeSseEvent(res, { type: 'response.in_progress', response: { id: 'resp_auto_collapse' } });
       await sleep(120);
-      writeSseEvent(res, {
-        type: 'response.reasoning_summary_text.delta',
-        item_id: 'reasoning_auto_collapse',
-        delta: reasoningText
-      });
-      await sleep(1200);
+      for (const chunk of reasoningChunks) {
+        writeSseEvent(res, {
+          type: 'response.reasoning_summary_text.delta',
+          item_id: 'reasoning_auto_collapse',
+          delta: chunk
+        });
+        await sleep(120);
+      }
+      await sleep(600);
       writeSseEvent(res, { type: 'response.output_item.added', item: messageItem });
       writeSseEvent(res, {
         type: 'response.output_text.delta',
@@ -313,39 +321,45 @@ async function main() {
     ), { timeoutMs: 10_000, intervalMs: 100, label: 'mock request observed' });
     result.steps.push('mock_request_observed');
 
-    try {
-      result.reasoningState = await waitFor(async () => {
-        return await sidebarFrame.evaluate(() => {
-          const chatContainer = document.querySelector('#chat-container');
-          const aiMessages = Array.from(document.querySelectorAll('.message.ai-message'));
-          const latest = aiMessages[aiMessages.length - 1];
-          if (!latest) return null;
-          const timeline = latest.querySelector('.response-activity-timeline');
-          const statusText = latest.querySelector('.text-content')?.innerText || '';
-          if (!timeline || /AUTO_COLLAPSE_BODY_ANSWER_20260410/.test(statusText)) {
-            return null;
-          }
-          return {
-            statusText,
-            panelExpanded: timeline.classList.contains('is-expanded'),
-            isUpdating: latest.classList.contains('updating'),
-            timelineClassName: timeline.className || '',
-            panelBodyHeight: timeline.querySelector('.response-activity-panel-body')?.getBoundingClientRect?.().height || 0,
-            panelScrollTop: timeline.querySelector('.response-activity-panel-body-inner')?.scrollTop || 0,
-            panelScrollHeight: timeline.querySelector('.response-activity-panel-body-inner')?.scrollHeight || 0,
-            panelClientHeight: timeline.querySelector('.response-activity-panel-body-inner')?.clientHeight || 0,
-            distanceToBottom: chatContainer
-              ? Math.max(0, (chatContainer.scrollHeight || 0) - (chatContainer.scrollTop || 0) - (chatContainer.clientHeight || 0))
-              : null
-          };
-        });
-      }, { timeoutMs: 20_000, intervalMs: 100, label: 'reasoning state visible' });
-      result.steps.push('reasoning_state_captured');
-    } catch (error) {
-      // 某些运行环境里 reasoning-only 窗口极短，偶发抓不到；
-      // 这里保留为诊断信息，不阻断真正的“正文开始即收起”主断言。
-      result.reasoningStateError = String(error && (error.stack || error.message || error));
-    }
+    result.reasoningState = await waitFor(async () => {
+      return await sidebarFrame.evaluate(() => {
+        const chatContainer = document.querySelector('#chat-container');
+        const aiMessages = Array.from(document.querySelectorAll('.message.ai-message'));
+        const latest = aiMessages[aiMessages.length - 1];
+        if (!latest || !chatContainer) return null;
+        const timeline = latest.querySelector('.response-activity-timeline');
+        const statusText = latest.querySelector('.text-content')?.innerText || '';
+        const panelBodyInner = timeline?.querySelector('.response-activity-panel-body-inner') || null;
+        const chatRect = chatContainer.getBoundingClientRect();
+        const latestRect = latest.getBoundingClientRect();
+        const panelScrollHeight = panelBodyInner?.scrollHeight || 0;
+        const panelClientHeight = panelBodyInner?.clientHeight || 0;
+        const panelScrollTop = panelBodyInner?.scrollTop || 0;
+        if (!timeline || /AUTO_COLLAPSE_BODY_ANSWER_20260410/.test(statusText)) {
+          return null;
+        }
+        if (panelScrollHeight <= panelClientHeight + 16 || panelScrollTop <= 0) {
+          return null;
+        }
+        return {
+          statusText,
+          panelExpanded: timeline.classList.contains('is-expanded'),
+          isUpdating: latest.classList.contains('updating'),
+          timelineClassName: timeline.className || '',
+          panelBodyHeight: timeline.querySelector('.response-activity-panel-body')?.getBoundingClientRect?.().height || 0,
+          panelScrollTop,
+          panelScrollHeight,
+          panelClientHeight,
+          chatScrollTop: chatContainer.scrollTop || 0,
+          latestTopInContainer: latestRect.top - chatRect.top,
+          distanceToBottom: Math.max(
+            0,
+            (chatContainer.scrollHeight || 0) - (chatContainer.scrollTop || 0) - (chatContainer.clientHeight || 0)
+          )
+        };
+      });
+    }, { timeoutMs: 20_000, intervalMs: 100, label: 'reasoning state with inner overflow visible' });
+    result.steps.push('reasoning_state_captured');
 
     const answerStartedStatePromise = sidebarFrame.evaluate((expectedText) => {
       return new Promise((resolve) => {
@@ -368,6 +382,8 @@ async function main() {
             panelScrollTop: timeline.querySelector('.response-activity-panel-body-inner')?.scrollTop || 0,
             panelScrollHeight: timeline.querySelector('.response-activity-panel-body-inner')?.scrollHeight || 0,
             panelClientHeight: timeline.querySelector('.response-activity-panel-body-inner')?.clientHeight || 0,
+            chatScrollTop: chatContainer.scrollTop || 0,
+            latestTopInContainer: latest.getBoundingClientRect().top - chatContainer.getBoundingClientRect().top,
             distanceToBottom: chatContainer
               ? Math.max(0, (chatContainer.scrollHeight || 0) - (chatContainer.scrollTop || 0) - (chatContainer.clientHeight || 0))
               : null
@@ -409,21 +425,6 @@ async function main() {
     }
     result.steps.push('answer_started_state_captured');
 
-    result.answerStartedScrollState = await waitFor(async () => {
-      return await sidebarFrame.evaluate(() => {
-        const chatContainer = document.querySelector('#chat-container');
-        if (!chatContainer) return null;
-        const distanceToBottom = Math.max(
-          0,
-          (chatContainer.scrollHeight || 0) - (chatContainer.scrollTop || 0) - (chatContainer.clientHeight || 0)
-        );
-        return distanceToBottom <= 96
-          ? { distanceToBottom }
-          : null;
-      });
-    }, { timeoutMs: 4000, intervalMs: 50, label: 'answer-start autoscroll settled' });
-    result.steps.push('answer_started_scroll_captured');
-
     result.finalState = await waitFor(async () => {
       return await sidebarFrame.evaluate((expectedText) => {
         const chatContainer = document.querySelector('#chat-container');
@@ -433,12 +434,19 @@ async function main() {
         const timeline = latest.querySelector('.response-activity-timeline');
         const statusText = latest.querySelector('.text-content')?.innerText || '';
         if (!statusText.includes(expectedText)) return null;
+        const timelineClassName = timeline?.className || '';
+        const panelBodyHeight = timeline?.querySelector('.response-activity-panel-body')?.getBoundingClientRect?.().height || 0;
+        if (/\bis-peek\b/.test(timelineClassName) || /\bis-streaming\b/.test(timelineClassName) || panelBodyHeight > 1) {
+          return null;
+        }
         return {
           statusText,
           panelExpanded: timeline ? timeline.classList.contains('is-expanded') : null,
           isUpdating: latest.classList.contains('updating'),
-          timelineClassName: timeline?.className || '',
-          panelBodyHeight: timeline?.querySelector('.response-activity-panel-body')?.getBoundingClientRect?.().height || 0,
+          timelineClassName,
+          panelBodyHeight,
+          chatScrollTop: chatContainer.scrollTop || 0,
+          latestTopInContainer: latest.getBoundingClientRect().top - chatContainer.getBoundingClientRect().top,
           distanceToBottom: chatContainer
             ? Math.max(0, (chatContainer.scrollHeight || 0) - (chatContainer.scrollTop || 0) - (chatContainer.clientHeight || 0))
             : null
@@ -447,20 +455,24 @@ async function main() {
     }, { timeoutMs: 20_000, intervalMs: 100, label: 'final settled state visible' });
     result.steps.push('final_state_captured');
 
-    result.finalScrollState = await waitFor(async () => {
-      return await sidebarFrame.evaluate(() => {
-        const chatContainer = document.querySelector('#chat-container');
-        if (!chatContainer) return null;
-        const distanceToBottom = Math.max(
-          0,
-          (chatContainer.scrollHeight || 0) - (chatContainer.scrollTop || 0) - (chatContainer.clientHeight || 0)
-        );
-        return distanceToBottom <= 96
-          ? { distanceToBottom }
-          : null;
-      });
-    }, { timeoutMs: 4000, intervalMs: 50, label: 'final autoscroll settled' });
-    result.steps.push('final_scroll_captured');
+    result.anchorDrift = {
+      reasoningToAnswerPx: Math.abs(
+        Number(result.answerStartedState?.latestTopInContainer || 0)
+        - Number(result.reasoningState?.latestTopInContainer || 0)
+      ),
+      reasoningToFinalPx: Math.abs(
+        Number(result.finalState?.latestTopInContainer || 0)
+        - Number(result.reasoningState?.latestTopInContainer || 0)
+      ),
+      reasoningToAnswerScrollPx: Math.abs(
+        Number(result.answerStartedState?.chatScrollTop || 0)
+        - Number(result.reasoningState?.chatScrollTop || 0)
+      ),
+      reasoningToFinalScrollPx: Math.abs(
+        Number(result.finalState?.chatScrollTop || 0)
+        - Number(result.reasoningState?.chatScrollTop || 0)
+      )
+    };
 
     await sidebarFrame.locator('body').screenshot({
       path: path.join(outputDir, 'sidebar-body-final.png')
@@ -470,42 +482,50 @@ async function main() {
       fullPage: true
     });
 
-    if (result.reasoningState) {
-      if (!result.reasoningState.isUpdating) {
-        throw new Error('Expected reasoning state to still be updating');
-      }
-      if (result.reasoningState.panelExpanded) {
-        throw new Error('Expected response activity panel to stay in peek mode while reasoning is visible');
-      }
+    if (!result.reasoningState.isUpdating) {
+      throw new Error('Expected reasoning state to still be updating');
+    }
+    if (result.reasoningState.panelExpanded) {
+      throw new Error('Expected response activity panel to stay in peek mode while reasoning is visible');
+    }
+    if ((result.reasoningState.panelScrollHeight ?? 0) <= (result.reasoningState.panelClientHeight ?? 0) + 16) {
+      throw new Error('Expected peek thought window to overflow internally during reasoning');
+    }
+    if ((result.reasoningState.panelScrollTop ?? 0) <= 0) {
+      throw new Error('Expected peek thought window to scroll internally during reasoning');
     }
     if (result.answerStartedState.panelExpanded) {
-      throw new Error('Response activity panel stayed expanded after answer text started');
+      throw new Error('Response activity panel should not fully expand when answer text starts');
     }
-    if (/\\bis-peek\\b/.test(result.answerStartedState.timelineClassName || '')) {
-      result.peekWindowObserved = true;
-      if ((result.answerStartedState.panelBodyHeight ?? 0) <= 0) {
-        throw new Error('Expected peek thought window body to stay visible during thinking');
-      }
-    } else {
-      result.peekWindowObserved = false;
+    if (!/\bis-peek\b/.test(result.answerStartedState.timelineClassName || '')) {
+      throw new Error(`Expected thought window to stay in peek mode while turn is still streaming: ${result.answerStartedState.timelineClassName}`);
     }
-    if ((result.answerStartedScrollState?.distanceToBottom ?? Infinity) > 96) {
-      throw new Error(`Autoscroll did not stay near bottom after answer started: ${result.answerStartedScrollState?.distanceToBottom}`);
+    if ((result.answerStartedState.panelBodyHeight ?? 0) <= 0) {
+      throw new Error('Expected peek thought window body to stay visible while turn is still streaming');
+    }
+    if ((result.anchorDrift?.reasoningToAnswerPx ?? Infinity) > 12) {
+      throw new Error(`Latest assistant top anchor drifted during answer start: ${result.anchorDrift?.reasoningToAnswerPx}px`);
+    }
+    if ((result.anchorDrift?.reasoningToAnswerScrollPx ?? Infinity) > 12) {
+      throw new Error(`Outer chat scrollTop drifted during answer start: ${result.anchorDrift?.reasoningToAnswerScrollPx}px`);
     }
     if (result.finalState.panelExpanded) {
       throw new Error('Response activity panel re-expanded after completion');
     }
-    if (/\\bis-peek\\b/.test(result.finalState.timelineClassName || '')) {
+    if (/\bis-peek\b/.test(result.finalState.timelineClassName || '')) {
       throw new Error(`Expected peek thought window to auto-collapse after thinking completed: ${result.finalState.timelineClassName}`);
     }
-    if (/\\bis-streaming\\b/.test(result.finalState.timelineClassName || '')) {
+    if (/\bis-streaming\b/.test(result.finalState.timelineClassName || '')) {
       throw new Error(`Expected response activity timeline to leave streaming state after completion: ${result.finalState.timelineClassName}`);
     }
     if ((result.finalState.panelBodyHeight ?? 0) > 1) {
       throw new Error(`Expected thought window body to collapse after completion, got height ${result.finalState.panelBodyHeight}`);
     }
-    if ((result.finalScrollState?.distanceToBottom ?? Infinity) > 96) {
-      throw new Error(`Autoscroll did not stay near bottom after completion: ${result.finalScrollState?.distanceToBottom}`);
+    if ((result.anchorDrift?.reasoningToFinalPx ?? Infinity) > 12) {
+      throw new Error(`Latest assistant top anchor drifted by completion: ${result.anchorDrift?.reasoningToFinalPx}px`);
+    }
+    if ((result.anchorDrift?.reasoningToFinalScrollPx ?? Infinity) > 12) {
+      throw new Error(`Outer chat scrollTop drifted by completion: ${result.anchorDrift?.reasoningToFinalScrollPx}px`);
     }
     if (mockServer.requestLog.length !== 1) {
       throw new Error(`Expected exactly 1 mock request, got ${mockServer.requestLog.length}`);

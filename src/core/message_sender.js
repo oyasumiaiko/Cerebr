@@ -9009,6 +9009,18 @@ export function createMessageSender(appContext) {
         attempt.loadingMessage = loadingMessage;
       }
 
+      if (!regenerateMode && loadingMessage && loadingMessage.parentNode) {
+        const loadingScrollContainer = activeThreadContext
+          ? resolveThreadUiContainer(activeThreadContext)
+          : (isAttemptMainConversationActive(attempt) ? chatContainer : null);
+        if (loadingScrollContainer) {
+          // 外层聊天容器只在“新 assistant 占位消息进入视口”这一刻触发一次自动滚动：
+          // - 默认 stopAtTop=true 时，这里会把最新消息顶边锚到可视区上沿附近；
+          // - 随后的思考/工具/正文增量更新都不再反复推动外层列表滚动。
+          scrollToBottom(loadingScrollContainer);
+        }
+      }
+
       // 更新加载状态：正在构建消息
       syncAttemptLoadingStatus(loadingMessage, attempt, '正在构建消息...', { stage: 'compose_messages' });
 

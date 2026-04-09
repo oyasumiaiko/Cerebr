@@ -1071,11 +1071,11 @@ export function createMessageProcessor(appContext) {
           toggleButton.setAttribute('aria-expanded', lifecycleState.expanded ? 'true' : 'false');
         }
       };
-      if (thoughtsContentDiv.classList.contains('expanded') !== lifecycleState.expanded) {
-        runWithStableToggleScroll(thoughtsContentDiv, applyExpandedState);
-      } else {
-        applyExpandedState();
-      }
+      // 生命周期驱动的自动展开/收起只允许改变思考块自身布局：
+      // - 不补偿外层 chatContainer 的 scrollTop；
+      // - 否则思考流每次刷新都会把整条会话错误地“推着走”，
+      //   破坏“最新消息顶部锚点保持稳定”的阅读体验。
+      applyExpandedState();
     } else if (thoughtsContentDiv) {
       thoughtsContentDiv.remove();
       surfaceSnapshots.thoughts = null;
@@ -2375,14 +2375,10 @@ export function createMessageProcessor(appContext) {
       timelineRoot.classList.toggle('is-streaming', !!panelSummary.isInProgress);
       panelToggle.setAttribute('aria-expanded', panelExpanded ? 'true' : 'false');
     };
-    if (
-      timelineRoot.classList.contains('is-expanded') !== panelExpanded
-      || timelineRoot.classList.contains('is-peek') !== panelPeek
-    ) {
-      runWithStableToggleScroll(timelineRoot, applyPanelExpandedState);
-    } else {
-      applyPanelExpandedState();
-    }
+    // 这里只同步自动生命周期状态，不介入外层聊天容器的滚动补偿。
+    // 用户手动点击标题栏时，点击处理器已经单独做了稳定锚点保护；
+    // 自动的 peek / collapse 变化若再去改外层 scrollTop，会把整条消息带着漂移。
+    applyPanelExpandedState();
 
     if (panelTitle.textContent !== panelSummary.title) {
       panelTitle.textContent = panelSummary.title;
@@ -2575,11 +2571,10 @@ export function createMessageProcessor(appContext) {
     const applyExpandedState = () => {
       item.classList.toggle('is-expanded', snapshot.expanded);
     };
-    if (item.classList.contains('is-expanded') !== snapshot.expanded) {
-      runWithStableToggleScroll(item, applyExpandedState);
-    } else {
-      applyExpandedState();
-    }
+    // 工具详情的自动展开/自动收起只改工具项自身状态。
+    // 外层聊天滚动应只由“新 assistant 消息进入视口”驱动，
+    // 不能被工具详情块的内部生命周期牵着走。
+    applyExpandedState();
 
     const summary = ensureResponseActivityToolSummary(item, snapshot, timelineRoot);
     if (!previousSnapshot || previousSnapshot.summarySignature !== snapshot.summarySignature || previousSnapshot.hasDetails !== snapshot.hasDetails || previousSnapshot.expanded !== snapshot.expanded) {
@@ -3030,10 +3025,6 @@ export function createMessageProcessor(appContext) {
     if (!messageWrapperDiv || !node) return false;
     const role = String(node.role || '').toLowerCase();
     if (role !== 'assistant' && role !== 'ai') return false;
-    const scrollContainer = resolveScrollContainerForMessage(messageWrapperDiv);
-    // 统一面板后，response-activity / tool detail 的高度变化大量发生在 metadata reconcile 阶段，
-    // 如果这里只 scheduleUpdate 而不继续“粘底”，用户明明停在底部也会看起来像自动滚动完全失效。
-    const shouldStickToBottom = isScrollContainerNearBottom(scrollContainer);
     try { messageWrapperDiv.removeAttribute('title'); } catch (_) {}
 
     const responseTimeline = getAssistantActivityTimeline(node);
@@ -3053,9 +3044,9 @@ export function createMessageProcessor(appContext) {
       setupResponseToolCallsDisplay(messageWrapperDiv, null);
     }
     enhanceMarkdownContent(messageWrapperDiv);
-    if (shouldStickToBottom && scrollContainer) {
-      scrollToBottom(scrollContainer);
-    }
+    // metadata 同步阶段只允许刷新 assistant 自身附加展示，
+    // 绝不能顺手改外层聊天容器的 scrollTop。
+    // 否则 reasoning / tool timeline 的高度波动会把整个对话列表错误地滚动到旧消息。
     messageVirtualizer.scheduleUpdate(resolveMessageListContainer(messageWrapperDiv));
     return true;
   }

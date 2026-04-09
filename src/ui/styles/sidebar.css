@@ -8968,20 +8968,26 @@ body.chat-empty .empty-state-content {
 }
 
 .message .response-activity-panel-body {
-    display: grid;
-    grid-template-rows: 0fr;
+    max-height: 0;
+    min-height: 0;
     opacity: 0;
-    transition: grid-template-rows 180ms ease, opacity 180ms ease;
+    overflow: hidden;
+    transition: max-height 180ms ease, opacity 180ms ease;
 }
 
-.message .response-activity-timeline.is-expanded .response-activity-panel-body,
 .message .response-activity-timeline.is-peek .response-activity-panel-body {
-    grid-template-rows: 1fr;
+    max-height: min(20vh, 220px);
+    opacity: 1;
+}
+
+.message .response-activity-timeline.is-expanded .response-activity-panel-body {
+    max-height: min(70vh, 560px);
     opacity: 1;
 }
 
 .message .response-activity-panel-body-inner {
     min-height: 0;
+    height: 100%;
     overflow: hidden;
     display: flex;
     flex-direction: column;
