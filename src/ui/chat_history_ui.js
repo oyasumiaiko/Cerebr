@@ -23,6 +23,7 @@ import { buildConversationSummaryFromMessages } from '../utils/conversation_titl
 import { normalizeStoredMessageContent, splitStoredMessageContent } from '../utils/message_content.js';
 import { buildApiFooterRenderData } from '../utils/api_footer_template.js';
 import { normalizeResponsesPromptCacheKey } from '../utils/responses_prompt_cache.js';
+import { findPendingRequestUserInputFromConversationMessages } from '../utils/request_user_input_resume.js';
 import {
   buildChatHistorySearchPlan as buildChatHistorySearchPlanShared,
   buildChatHistoryTextPlan as buildChatHistoryTextPlanShared,
@@ -3469,6 +3470,15 @@ export function createChatHistoryUI(appContext) {
           }
         });
       }
+    }
+
+    const pendingRequestUserInput = findPendingRequestUserInputFromConversationMessages(fullConversation.messages);
+    if (pendingRequestUserInput?.questions?.length > 0 && typeof utils.showRequestUserInput === 'function') {
+      window.requestAnimationFrame(() => {
+        utils.showRequestUserInput({ questions: pendingRequestUserInput.questions }).catch((error) => {
+          console.warn('恢复未完成 request_user_input 面板失败:', error);
+        });
+      });
     }
   }
 
