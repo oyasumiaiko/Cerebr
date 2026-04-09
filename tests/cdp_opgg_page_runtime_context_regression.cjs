@@ -30,6 +30,10 @@ const JS_RUNTIME_LIST_FRAMES_TIMEOUT_MS = 15_000;
 const SEND_PROGRESS_TIMEOUT_MS = 25_000;
 const runHeadless = String(process.env.CEREBR_PW_HEADLESS || 'true').trim().toLowerCase() !== 'false';
 const forceHangGetJsRuntimeFrames = String(process.env.CEREBR_FORCE_HANG_GET_JS_RUNTIME_FRAMES || '').trim().toLowerCase() === 'true';
+const externalChromePath = (typeof process.env.CEREBR_EXTERNAL_CHROME_PATH === 'string')
+  ? process.env.CEREBR_EXTERNAL_CHROME_PATH.trim()
+  : '';
+const skipLoadExtensionArgs = String(process.env.CEREBR_SKIP_LOAD_EXTENSION_ARGS || '').trim().toLowerCase() === 'true';
 
 function loadPlaywright() {
   const candidateBases = [
@@ -218,6 +222,25 @@ function resolvePersistentProfileDir(repoRootPath) {
   return path.join(repoRootPath, 'output', 'playwright', '_profiles', 'cdp_opgg_page_runtime_context');
 }
 
+function buildBrowserLaunchArgs(repoRootPath) {
+  const args = [
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-search-engine-choice-screen',
+    ...(runHeadless ? [] : ['--window-position=-2400,-2400', '--window-size=1440,960', '--start-minimized'])
+  ];
+
+  if (!skipLoadExtensionArgs) {
+    args.unshift(
+      '--enable-unsafe-extension-debugging',
+      `--load-extension=${repoRootPath}`,
+      `--disable-extensions-except=${repoRootPath}`
+    );
+  }
+
+  return args;
+}
+
 async function readSidebarSnapshot(sidebarFrame) {
   return await sidebarFrame.evaluate(() => {
     const input = document.querySelector('#message-input');
@@ -253,9 +276,10 @@ async function main() {
     startedAt: new Date().toISOString(),
     outputDir,
     pageUrl,
-    browserBinary: chromium.executablePath(),
+    browserBinary: externalChromePath || chromium.executablePath(),
     headless: runHeadless,
     forceHangGetJsRuntimeFrames,
+    skipLoadExtensionArgs,
     fixedConfig: {
       responsesBaseUrl: fixedEnv.responsesBaseUrl,
       geminiBaseUrl: fixedEnv.geminiBaseUrl,
@@ -275,16 +299,9 @@ async function main() {
   try {
     context = await chromium.launchPersistentContext(profileDir, {
       headless: runHeadless,
+      ...(externalChromePath ? { executablePath: externalChromePath } : {}),
       ignoreDefaultArgs: ['--disable-extensions'],
-      args: [
-        `--disable-extensions-except=${repoRoot}`,
-        `--load-extension=${repoRoot}`,
-        '--enable-unsafe-extension-debugging',
-        '--no-first-run',
-        '--no-default-browser-check',
-        '--disable-search-engine-choice-screen',
-        ...(runHeadless ? [] : ['--window-position=-2400,-2400', '--window-size=1440,960', '--start-minimized'])
-      ]
+      args: buildBrowserLaunchArgs(repoRoot)
     });
     result.steps.push('browser_ready');
 
@@ -293,6 +310,24 @@ async function main() {
     ), { timeoutMs: 30_000, intervalMs: 300, label: 'extension service worker' });
     const extensionId = new URL(extensionWorker.url()).host;
     result.extensionId = extensionId;
+    result.extensionWorkerUserScripts = await extensionWorker.evaluate(async () => {
+      const summary = {
+        hasUserScriptsApi: !!chrome.userScripts,
+        hasExecute: typeof chrome?.userScripts?.execute === 'function',
+        getScripts: null
+      };
+      try {
+        if (chrome?.userScripts?.getScripts) {
+          const scripts = await chrome.userScripts.getScripts();
+          summary.getScripts = Array.isArray(scripts) ? `ok:${scripts.length}` : 'ok';
+        } else {
+          summary.getScripts = 'missing';
+        }
+      } catch (error) {
+        summary.getScripts = error?.message || String(error);
+      }
+      return summary;
+    });
     result.steps.push('background_ready');
 
     await extensionWorker.evaluate(async (seed) => {

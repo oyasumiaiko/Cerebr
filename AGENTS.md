@@ -32,6 +32,14 @@
 ### Browser / CDP regression notes for this repo
 - **不要默认用 standalone sidebar 做最终验证**。这个仓库的大多数真实问题都发生在**宿主页内嵌侧栏**路径；优先用 `https://example.com/` 之类简单宿主页加载扩展，再在页面里打开嵌入式 sidebar。
 - **本机稳定版 Chrome 往往不会真正加载 unpacked extension**。需要真实扩展验证时，优先用本机已验证可加载扩展的 **Chrome for Testing / Puppeteer 缓存 Chrome**，不要在稳定版上反复踩坑。
+- 如果用户已经在**稳定版 Chrome 固定 profile**里手动装好了 `Cerebr` unpacked 扩展，并且已经打开 **Allow User Scripts**，后续回归应**优先复用那个 profile**，不要再新建 profile 反复装扩展。
+  - 当前固定 profile 路径：`output/playwright/_profiles/chrome_stable_manual_extension_profile`
+  - 复用这个 profile 时，**不要**再传 `--load-extension` / `--disable-extensions-except`，否则会重新走“稳定版不真正加载 unpacked 扩展”的旧坑；应直接启动稳定版 Chrome 并复用该 profile 里已安装好的扩展。
+  - 对应 `tests/cdp_opgg_page_runtime_context_regression.cjs` 可通过环境变量切到这条模式：
+    - `CEREBR_EXTERNAL_CHROME_PATH=C:\Program Files\Google\Chrome\Application\chrome.exe`
+    - `CEREBR_CDP_PROFILE_DIR=<repoRoot>\output\playwright\_profiles\chrome_stable_manual_extension_profile`
+    - `CEREBR_SKIP_LOAD_EXTENSION_ARGS=true`
+    - `CEREBR_PW_HEADLESS=false`（稳定版 + 已装扩展 profile 目前优先走有头但移出屏幕的模式）
 - 用 Playwright 跑扩展时，优先：
   - `chromium.launchPersistentContext(...)`
   - `ignoreDefaultArgs: ['--disable-extensions']`
