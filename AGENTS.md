@@ -50,6 +50,8 @@
   - `window.apiConfigs.length > 0`
   - 目标 `baseUrl` 已正确写入
 - **发消息优先直接对 sidebar iframe 里的 `#message-input` 执行 `fill(...)` + `press('Enter')`**。不要只依赖宿主页键盘事件，否则容易出现“只输入了换行/文本留在输入框里没有真正发送”的假阳性。
+- **做嵌入式 sidebar 的视觉截图时，优先直接对 `sidebarFrame.locator('body')` 截图**。这条是已经被 session 历史证明过的有效路径；`page.screenshot(...)`、活动窗口截图、桌面区域截图都可能漏掉扩展 iframe，或者截到错误窗口。
+- 如果 `locator('body').screenshot(...)` 因为 Playwright 的“等待稳定”卡住，优先先保留 DOM 状态断言与 `result.json`，然后再单独处理截图，不要把宿主页整页截图误当成 sidebar 视觉证据。
 - 跑浏览器回归时，优先把结果落到 `output/playwright/<case>/result.json` 和截图里，确保失败时能直接看：
   - 是否真正发出请求
   - 当前使用的扩展 `extensionId`
