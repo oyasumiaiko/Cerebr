@@ -489,6 +489,94 @@ function buildResponsesPageContentToolOutputText(result) {
   return buildXmlToolResultText('page_content_read_result', metadata, blocks);
 }
 
+function sanitizePdfOutlineInlineText(value) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim();
+}
+
+function formatPdfOutlineForToolOutput(outline) {
+  const items = Array.isArray(outline) ? outline : [];
+  return items
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null;
+      const parts = [
+        `chapter_id=${sanitizePdfOutlineInlineText(item.chapter_id || '')}`,
+        item.parent_chapter_id ? `parent=${sanitizePdfOutlineInlineText(item.parent_chapter_id)}` : null,
+        Number.isFinite(Number(item.level)) ? `level=${Number(item.level)}` : null,
+        Number.isFinite(Number(item.page_number)) ? `page=${Number(item.page_number)}` : 'page=?',
+        Number.isFinite(Number(item.char_count)) ? `chars=${Number(item.char_count)}` : null,
+        Number.isFinite(Number(item.chunk_count)) ? `chunks=${Number(item.chunk_count)}` : null,
+        Number.isFinite(Number(item.child_count)) ? `children=${Number(item.child_count)}` : null,
+        `title=${sanitizePdfOutlineInlineText(item.title || '(untitled)')}`
+      ].filter(Boolean);
+      return parts.join(' | ');
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function buildResponsesPdfContentToolOutputText(result) {
+  const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
+  const selection = (normalized.selection && typeof normalized.selection === 'object' && !Array.isArray(normalized.selection))
+    ? normalized.selection
+    : null;
+  const metadata = {
+    ok: normalized.ok === true,
+    mode: typeof normalized.mode === 'string' ? normalized.mode : null,
+    title: typeof normalized.title === 'string' ? normalized.title : '',
+    url: typeof normalized.url === 'string' ? normalized.url : '',
+    is_pdf: normalized.is_pdf === true,
+    total_chars: Number.isFinite(Number(normalized.total_chars)) ? Number(normalized.total_chars) : null,
+    total_chapters: Number.isFinite(Number(normalized.total_chapters)) ? Number(normalized.total_chapters) : null,
+    root_chapter_count: Number.isFinite(Number(normalized.root_chapter_count)) ? Number(normalized.root_chapter_count) : null,
+    default_max_chars: Number.isFinite(Number(normalized.default_max_chars)) ? Number(normalized.default_max_chars) : null,
+    outline_chunk_chars: Number.isFinite(Number(normalized.outline_chunk_chars)) ? Number(normalized.outline_chunk_chars) : null,
+    max_chars_limit: Number.isFinite(Number(normalized.max_chars_limit)) ? Number(normalized.max_chars_limit) : null,
+    document_chunk_count_default: Number.isFinite(Number(normalized.document_chunk_count_default)) ? Number(normalized.document_chunk_count_default) : null,
+    chapter_id: typeof selection?.chapter_id === 'string' ? selection.chapter_id : null,
+    chunk_index: Number.isFinite(Number(normalized.chunk_index)) ? Number(normalized.chunk_index) : null,
+    max_chars: Number.isFinite(Number(normalized.max_chars)) ? Number(normalized.max_chars) : null,
+    returned_chars: Number.isFinite(Number(normalized.returned_chars)) ? Number(normalized.returned_chars) : null,
+    total_chunks: Number.isFinite(Number(normalized.total_chunks)) ? Number(normalized.total_chunks) : null,
+    has_prev_chunk: normalized.has_prev_chunk === true,
+    has_next_chunk: normalized.has_next_chunk === true,
+    prev_chunk_index: Number.isFinite(Number(normalized.prev_chunk_index)) ? Number(normalized.prev_chunk_index) : null,
+    next_chunk_index: Number.isFinite(Number(normalized.next_chunk_index)) ? Number(normalized.next_chunk_index) : null
+  };
+
+  const blocks = [];
+  if (Array.isArray(normalized.outline) && normalized.outline.length > 0) {
+    blocks.push({
+      tag: 'outline',
+      text: formatPdfOutlineForToolOutput(normalized.outline)
+    });
+  }
+  if (selection) {
+    blocks.push({
+      tag: 'selection',
+      text: stringifyResponsesToolOutputValue(selection)
+    });
+  }
+  if (typeof normalized.guidance === 'string' && normalized.guidance.trim()) {
+    blocks.push({
+      tag: 'guidance',
+      text: normalized.guidance
+    });
+  }
+  if (typeof normalized.content === 'string' && normalized.content.trim()) {
+    blocks.push({
+      tag: 'content',
+      text: normalized.content
+    });
+  }
+  if (normalized.error) {
+    blocks.push({
+      tag: 'error',
+      text: formatResponsesJsRuntimeErrorText(normalized.error)
+    });
+  }
+  return buildXmlToolResultText('pdf_content_read_result', metadata, blocks);
+}
+
 function buildHistorySearchResultMetadata(result) {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return {};
   const metadata = { ...result };
@@ -671,6 +759,13 @@ function buildResponsesAskOtherAiToolOutputText(result) {
 export function buildResponsesPageContentToolOutputContentItems(result, options = {}) {
   return buildResponsesXmlToolOutputContentItems(
     buildResponsesPageContentToolOutputText(result),
+    options
+  );
+}
+
+export function buildResponsesPdfContentToolOutputContentItems(result, options = {}) {
+  return buildResponsesXmlToolOutputContentItems(
+    buildResponsesPdfContentToolOutputText(result),
     options
   );
 }

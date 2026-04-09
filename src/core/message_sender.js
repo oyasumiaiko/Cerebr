@@ -42,6 +42,7 @@ import {
 import {
   buildResponsesJsRuntimeToolOutputContentItems,
   buildResponsesPageContentToolOutputContentItems,
+  buildResponsesPdfContentToolOutputContentItems,
   buildResponsesHistorySearchToolOutputContentItems,
   buildResponsesHistoryReadToolOutputContentItems,
   buildResponsesAskableModelsToolOutputContentItems,
@@ -53,6 +54,11 @@ import {
   ensureResponsesReplayOutputItemsIncludeFunctionCalls
 } from '../utils/responses_follow_up.js';
 import { buildPageContentReadResult } from '../agent_tools/page_content_read_tool.js';
+import {
+  PDF_CONTENT_READ_TOOL_NAME,
+  buildPdfContentReadFunctionToolDefinition,
+  buildPdfContentReadResult
+} from '../agent_tools/pdf_content_read_tool.js';
 import {
   buildConversationReferenceSnapshot,
   executeHistoryReadTool,
@@ -99,6 +105,7 @@ import {
 
 const RESPONSES_JS_RUNTIME_TOOL_NAME = 'js_runtime_execute';
 const RESPONSES_PAGE_CONTENT_TOOL_NAME = 'page_content_read';
+const RESPONSES_PDF_CONTENT_TOOL_NAME = PDF_CONTENT_READ_TOOL_NAME;
 const RESPONSES_HISTORY_SEARCH_TOOL_NAME = 'history_search';
 const RESPONSES_HISTORY_READ_TOOL_NAME = 'history_read';
 const RESPONSES_REQUEST_USER_INPUT_TOOL_NAME = REQUEST_USER_INPUT_TOOL_NAME;
@@ -6728,7 +6735,8 @@ export function createMessageSender(appContext) {
    * - 只返回“当前网页 + 可访问 iframe”的预提取纯文本；
    * - 文本会做逐行 trim 与空白折叠，更适合快速通读；
    * - 不承诺 DOM 级结构、选择器级定位或属性提取；
-   * - 若模型需要结构化读取，请优先改用 js_runtime_execute。
+   * - 若当前页面是 PDF 且需要按章节 / 片段读取，请优先改用 pdf_content_read；
+   * - 若模型需要 DOM 级结构化读取，请优先改用 js_runtime_execute。
    *
    * @returns {Object}
    */
@@ -6749,7 +6757,7 @@ export function createMessageSender(appContext) {
       description: [
         '快速读取当前侧栏绑定网页标签页的预提取文本内容。',
         '它会返回页面正文与可访问 iframe 文本的预包装读取结果，并对多行做 trim 与空白折叠，更适合一次快速通读页面内容。',
-        '这不是 DOM 结构化提取工具；若需要按元素、选择器、属性进行结构化定位与提取，请优先使用 js_runtime_execute。',
+        '这不是 DOM 结构化提取工具；若当前页面是 PDF 且需要按章节 / 片段读取，请优先使用 pdf_content_read；若需要按元素、选择器、属性进行结构化定位与提取，请优先使用 js_runtime_execute。',
         '默认返回中间截断预览；也可通过 skip_chars 与 max_chars 读取指定连续片段。'
       ].join(' '),
       strict: true,
@@ -6925,6 +6933,7 @@ export function createMessageSender(appContext) {
       buildResponsesHistoryReadFunctionToolDefinition()
     ];
     if (pageToolEnvironment?.exposePageContentTool) {
+      tools.push(buildPdfContentReadFunctionToolDefinition());
       tools.push(buildResponsesPageContentFunctionToolDefinition());
     }
     if (typeof utils?.executeJsRuntime === 'function') {
@@ -7082,6 +7091,17 @@ export function createMessageSender(appContext) {
       return buildResponsesPageContentToolOutputContentItems(value);
     } catch (error) {
       return buildResponsesGenericXmlToolOutputContentItems('page_content_read_result', {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      });
+    }
+  }
+
+  function serializeResponsesPdfContentFunctionToolOutput(value) {
+    try {
+      return buildResponsesPdfContentToolOutputContentItems(value);
+    } catch (error) {
+      return buildResponsesGenericXmlToolOutputContentItems('pdf_content_read_result', {
         ok: false,
         error: normalizeResponsesCustomToolError(error)
       });
@@ -7269,6 +7289,29 @@ export function createMessageSender(appContext) {
     try {
       const pageContent = await getPageContent();
       return buildPageContentReadResult(pageContent, rawArgs);
+    } catch (error) {
+      return {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      };
+    }
+  }
+
+  /**
+   * 执行 pdf_content_read 并返回结构化 PDF 读取结果。
+   *
+   * 说明：
+   * - 默认返回章节索引；
+   * - 支持按章节分片或按整篇顺序分片；
+   * - 若当前页面不是 PDF，会返回明确错误，避免模型误把 HTML 当 PDF 读。
+   *
+   * @param {any} rawArgs
+   * @returns {Promise<Object>}
+   */
+  async function executeResponsesPdfContentFunction(rawArgs) {
+    try {
+      const pageContent = await getPageContent();
+      return buildPdfContentReadResult(pageContent, rawArgs);
     } catch (error) {
       return {
         ok: false,
@@ -7814,6 +7857,8 @@ export function createMessageSender(appContext) {
       outputPayload = await executeResponsesAskOtherAiFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_PAGE_CONTENT_TOOL_NAME) {
       outputPayload = await executeResponsesPageContentFunction(parsedArgs);
+    } else if (functionName === RESPONSES_PDF_CONTENT_TOOL_NAME) {
+      outputPayload = await executeResponsesPdfContentFunction(parsedArgs);
     } else if (functionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME) {
       outputPayload = await executeResponsesHistorySearchFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_HISTORY_READ_TOOL_NAME) {
@@ -7845,6 +7890,8 @@ export function createMessageSender(appContext) {
               ? serializeResponsesAskOtherAiFunctionToolOutput(outputPayload)
           : functionName === RESPONSES_PAGE_CONTENT_TOOL_NAME
             ? serializeResponsesPageContentFunctionToolOutput(outputPayload)
+            : functionName === RESPONSES_PDF_CONTENT_TOOL_NAME
+              ? serializeResponsesPdfContentFunctionToolOutput(outputPayload)
             : functionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME
               ? serializeResponsesHistorySearchFunctionToolOutput(outputPayload)
               : functionName === RESPONSES_HISTORY_READ_TOOL_NAME

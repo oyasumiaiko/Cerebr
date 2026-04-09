@@ -171,6 +171,48 @@ test('buildResponsesPageContentToolOutputContentItems 对长页面内容使用�
   assert.match(text, /\[\.\.\. truncated \d+ chars out of 12000 total chars \([\d.]+%\); omitted range \[\d+, \d+\) \.\.\.\]/);
 });
 
+test('buildResponsesPdfContentToolOutputContentItems 使用 overview / selection / content XML 分块', async () => {
+  const { buildResponsesPdfContentToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesPdfContentToolOutputContentItems({
+    ok: true,
+    mode: 'chapter_chunk',
+    title: 'PDF',
+    url: 'https://example.com/a.pdf',
+    is_pdf: true,
+    total_chars: 9000,
+    chunk_index: 1,
+    max_chars: 2000,
+    returned_chars: 2000,
+    total_chunks: 3,
+    has_next_chunk: true,
+    outline: [
+      {
+        chapter_id: '1',
+        parent_chapter_id: null,
+        level: 1,
+        title: '第一章',
+        page_number: 1,
+        char_count: 4500,
+        chunk_count: 2,
+        child_count: 0
+      }
+    ],
+    selection: {
+      chapter_id: '1',
+      title: '第一章',
+      level: 1
+    },
+    content: 'Alpha\nBeta'
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<pdf_content_read_result>/);
+  assert.match(text, /<outline>/);
+  assert.match(text, /chapter_id=1/);
+  assert.match(text, /<selection>/);
+  assert.match(text, /"chapter_id": "1"/);
+  assert.match(text, /<content>\s*Alpha/);
+});
+
 test('buildResponsesHistorySearchToolOutputContentItems 使用 conversation XML 分块', async () => {
   const { buildResponsesHistorySearchToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesHistorySearchToolOutputContentItems({
