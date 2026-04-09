@@ -3022,6 +3022,10 @@ export function createMessageProcessor(appContext) {
     if (!messageWrapperDiv || !node) return false;
     const role = String(node.role || '').toLowerCase();
     if (role !== 'assistant' && role !== 'ai') return false;
+    const scrollContainer = resolveScrollContainerForMessage(messageWrapperDiv);
+    // 统一面板后，response-activity / tool detail 的高度变化大量发生在 metadata reconcile 阶段，
+    // 如果这里只 scheduleUpdate 而不继续“粘底”，用户明明停在底部也会看起来像自动滚动完全失效。
+    const shouldStickToBottom = isScrollContainerNearBottom(scrollContainer);
     try { messageWrapperDiv.removeAttribute('title'); } catch (_) {}
 
     const responseTimeline = getAssistantActivityTimeline(node);
@@ -3041,6 +3045,9 @@ export function createMessageProcessor(appContext) {
       setupResponseToolCallsDisplay(messageWrapperDiv, null);
     }
     enhanceMarkdownContent(messageWrapperDiv);
+    if (shouldStickToBottom && scrollContainer) {
+      scrollToBottom(scrollContainer);
+    }
     messageVirtualizer.scheduleUpdate(resolveMessageListContainer(messageWrapperDiv));
     return true;
   }

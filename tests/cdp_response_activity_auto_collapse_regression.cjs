@@ -316,6 +316,7 @@ async function main() {
     try {
       result.reasoningState = await waitFor(async () => {
         return await sidebarFrame.evaluate(() => {
+          const chatContainer = document.querySelector('#chat-container');
           const aiMessages = Array.from(document.querySelectorAll('.message.ai-message'));
           const latest = aiMessages[aiMessages.length - 1];
           if (!latest) return null;
@@ -327,7 +328,10 @@ async function main() {
           return {
             statusText,
             panelExpanded: timeline.classList.contains('is-expanded'),
-            isUpdating: latest.classList.contains('updating')
+            isUpdating: latest.classList.contains('updating'),
+            distanceToBottom: chatContainer
+              ? Math.max(0, (chatContainer.scrollHeight || 0) - (chatContainer.scrollTop || 0) - (chatContainer.clientHeight || 0))
+              : null
           };
         });
       }, { timeoutMs: 20_000, intervalMs: 100, label: 'reasoning state visible' });
@@ -340,6 +344,7 @@ async function main() {
 
     result.answerStartedState = await waitFor(async () => {
       return await sidebarFrame.evaluate((expectedText) => {
+        const chatContainer = document.querySelector('#chat-container');
         const aiMessages = Array.from(document.querySelectorAll('.message.ai-message'));
         const latest = aiMessages[aiMessages.length - 1];
         if (!latest) return null;
@@ -352,14 +357,33 @@ async function main() {
           statusText,
           panelExpanded: timeline.classList.contains('is-expanded'),
           isUpdating: latest.classList.contains('updating'),
-          timelineClassName: timeline.className || ''
+          timelineClassName: timeline.className || '',
+          distanceToBottom: chatContainer
+            ? Math.max(0, (chatContainer.scrollHeight || 0) - (chatContainer.scrollTop || 0) - (chatContainer.clientHeight || 0))
+            : null
         };
       }, mockServer.finalAnswerText);
     }, { timeoutMs: 20_000, intervalMs: 50, label: 'answer-start state visible' });
     result.steps.push('answer_started_state_captured');
 
+    result.answerStartedScrollState = await waitFor(async () => {
+      return await sidebarFrame.evaluate(() => {
+        const chatContainer = document.querySelector('#chat-container');
+        if (!chatContainer) return null;
+        const distanceToBottom = Math.max(
+          0,
+          (chatContainer.scrollHeight || 0) - (chatContainer.scrollTop || 0) - (chatContainer.clientHeight || 0)
+        );
+        return distanceToBottom <= 96
+          ? { distanceToBottom }
+          : null;
+      });
+    }, { timeoutMs: 4000, intervalMs: 50, label: 'answer-start autoscroll settled' });
+    result.steps.push('answer_started_scroll_captured');
+
     result.finalState = await waitFor(async () => {
       return await sidebarFrame.evaluate((expectedText) => {
+        const chatContainer = document.querySelector('#chat-container');
         const aiMessages = Array.from(document.querySelectorAll('.message.ai-message'));
         const latest = aiMessages[aiMessages.length - 1];
         if (!latest || latest.classList.contains('updating')) return null;
@@ -370,11 +394,29 @@ async function main() {
           statusText,
           panelExpanded: timeline ? timeline.classList.contains('is-expanded') : null,
           isUpdating: latest.classList.contains('updating'),
-          timelineClassName: timeline?.className || ''
+          timelineClassName: timeline?.className || '',
+          distanceToBottom: chatContainer
+            ? Math.max(0, (chatContainer.scrollHeight || 0) - (chatContainer.scrollTop || 0) - (chatContainer.clientHeight || 0))
+            : null
         };
       }, mockServer.finalAnswerText);
     }, { timeoutMs: 20_000, intervalMs: 100, label: 'final settled state visible' });
     result.steps.push('final_state_captured');
+
+    result.finalScrollState = await waitFor(async () => {
+      return await sidebarFrame.evaluate(() => {
+        const chatContainer = document.querySelector('#chat-container');
+        if (!chatContainer) return null;
+        const distanceToBottom = Math.max(
+          0,
+          (chatContainer.scrollHeight || 0) - (chatContainer.scrollTop || 0) - (chatContainer.clientHeight || 0)
+        );
+        return distanceToBottom <= 96
+          ? { distanceToBottom }
+          : null;
+      });
+    }, { timeoutMs: 4000, intervalMs: 50, label: 'final autoscroll settled' });
+    result.steps.push('final_scroll_captured');
 
     await sidebarFrame.locator('body').screenshot({
       path: path.join(outputDir, 'sidebar-body-final.png')
@@ -395,8 +437,14 @@ async function main() {
     if (result.answerStartedState.panelExpanded) {
       throw new Error('Response activity panel stayed expanded after answer text started');
     }
+    if ((result.answerStartedScrollState?.distanceToBottom ?? Infinity) > 96) {
+      throw new Error(`Autoscroll did not stay near bottom after answer started: ${result.answerStartedScrollState?.distanceToBottom}`);
+    }
     if (result.finalState.panelExpanded) {
       throw new Error('Response activity panel re-expanded after completion');
+    }
+    if ((result.finalScrollState?.distanceToBottom ?? Infinity) > 96) {
+      throw new Error(`Autoscroll did not stay near bottom after completion: ${result.finalScrollState?.distanceToBottom}`);
     }
     if (mockServer.requestLog.length !== 1) {
       throw new Error(`Expected exactly 1 mock request, got ${mockServer.requestLog.length}`);
@@ -409,6 +457,7 @@ async function main() {
             const aiMessages = Array.from(document.querySelectorAll('.message.ai-message'));
             const latest = aiMessages[aiMessages.length - 1] || null;
             const timeline = latest?.querySelector?.('.response-activity-timeline') || null;
+            const chatContainer = document.querySelector('#chat-container');
             return {
               aiCount: aiMessages.length,
               latestClassName: latest?.className || '',
@@ -416,6 +465,9 @@ async function main() {
               hasTimeline: !!timeline,
               panelExpanded: !!timeline?.classList?.contains?.('is-expanded'),
               timelineClassName: timeline?.className || '',
+              distanceToBottom: chatContainer
+                ? Math.max(0, (chatContainer.scrollHeight || 0) - (chatContainer.scrollTop || 0) - (chatContainer.clientHeight || 0))
+                : null,
               latestHtml: latest?.innerHTML || ''
             };
           });
