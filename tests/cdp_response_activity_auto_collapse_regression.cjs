@@ -123,8 +123,8 @@ async function runMockResponsesServer() {
       });
       writeSseEvent(res, { type: 'response.output_item.done', item: messageItem });
       // 刻意保留“正文已经可见但请求尚未 completed”的观察窗口，
-      // 用来验证思考面板会不会在正文开始时立刻收起。
-      await sleep(450);
+      // 让浏览器回归能稳定采到 thinking 中的 peek 窗口。
+      await sleep(1800);
       writeSseEvent(res, {
         type: 'response.completed',
         response: {
@@ -329,6 +329,11 @@ async function main() {
             statusText,
             panelExpanded: timeline.classList.contains('is-expanded'),
             isUpdating: latest.classList.contains('updating'),
+            timelineClassName: timeline.className || '',
+            panelBodyHeight: timeline.querySelector('.response-activity-panel-body')?.getBoundingClientRect?.().height || 0,
+            panelScrollTop: timeline.querySelector('.response-activity-panel-body-inner')?.scrollTop || 0,
+            panelScrollHeight: timeline.querySelector('.response-activity-panel-body-inner')?.scrollHeight || 0,
+            panelClientHeight: timeline.querySelector('.response-activity-panel-body-inner')?.clientHeight || 0,
             distanceToBottom: chatContainer
               ? Math.max(0, (chatContainer.scrollHeight || 0) - (chatContainer.scrollTop || 0) - (chatContainer.clientHeight || 0))
               : null
@@ -342,28 +347,66 @@ async function main() {
       result.reasoningStateError = String(error && (error.stack || error.message || error));
     }
 
-    result.answerStartedState = await waitFor(async () => {
-      return await sidebarFrame.evaluate((expectedText) => {
-        const chatContainer = document.querySelector('#chat-container');
-        const aiMessages = Array.from(document.querySelectorAll('.message.ai-message'));
-        const latest = aiMessages[aiMessages.length - 1];
-        if (!latest) return null;
-        const timeline = latest.querySelector('.response-activity-timeline');
-        const statusText = latest.querySelector('.text-content')?.innerText || '';
-        if (!timeline || !statusText.includes(expectedText)) {
-          return null;
-        }
-        return {
-          statusText,
-          panelExpanded: timeline.classList.contains('is-expanded'),
-          isUpdating: latest.classList.contains('updating'),
-          timelineClassName: timeline.className || '',
-          distanceToBottom: chatContainer
-            ? Math.max(0, (chatContainer.scrollHeight || 0) - (chatContainer.scrollTop || 0) - (chatContainer.clientHeight || 0))
-            : null
+    const answerStartedStatePromise = sidebarFrame.evaluate((expectedText) => {
+      return new Promise((resolve) => {
+        const readSnapshot = () => {
+          const chatContainer = document.querySelector('#chat-container');
+          const aiMessages = Array.from(document.querySelectorAll('.message.ai-message'));
+          const latest = aiMessages[aiMessages.length - 1];
+          if (!latest) return null;
+          const timeline = latest.querySelector('.response-activity-timeline');
+          const statusText = latest.querySelector('.text-content')?.innerText || '';
+          if (!timeline || !statusText.includes(expectedText)) {
+            return null;
+          }
+          return {
+            statusText,
+            panelExpanded: timeline.classList.contains('is-expanded'),
+            isUpdating: latest.classList.contains('updating'),
+            timelineClassName: timeline.className || '',
+            panelBodyHeight: timeline.querySelector('.response-activity-panel-body')?.getBoundingClientRect?.().height || 0,
+            panelScrollTop: timeline.querySelector('.response-activity-panel-body-inner')?.scrollTop || 0,
+            panelScrollHeight: timeline.querySelector('.response-activity-panel-body-inner')?.scrollHeight || 0,
+            panelClientHeight: timeline.querySelector('.response-activity-panel-body-inner')?.clientHeight || 0,
+            distanceToBottom: chatContainer
+              ? Math.max(0, (chatContainer.scrollHeight || 0) - (chatContainer.scrollTop || 0) - (chatContainer.clientHeight || 0))
+              : null
+          };
         };
-      }, mockServer.finalAnswerText);
-    }, { timeoutMs: 20_000, intervalMs: 50, label: 'answer-start state visible' });
+        const maybeResolve = () => {
+          const snapshot = readSnapshot();
+          if (!snapshot) return;
+          cleanup();
+          resolve(snapshot);
+        };
+        const observer = new MutationObserver(() => {
+          maybeResolve();
+        });
+        const cleanup = () => {
+          try { observer.disconnect(); } catch (_) {}
+          try { clearTimeout(timeoutId); } catch (_) {}
+        };
+        const timeoutId = setTimeout(() => {
+          const snapshot = readSnapshot();
+          cleanup();
+          resolve(snapshot);
+        }, 4000);
+        const chatRoot = document.querySelector('#chat-container') || document.body;
+        observer.observe(chatRoot, {
+          subtree: true,
+          childList: true,
+          characterData: true,
+          attributes: true,
+          attributeFilter: ['class']
+        });
+        maybeResolve();
+      });
+    }, mockServer.finalAnswerText);
+
+    result.answerStartedState = await answerStartedStatePromise;
+    if (!result.answerStartedState) {
+      throw new Error('Timed out waiting for answer-start state visible');
+    }
     result.steps.push('answer_started_state_captured');
 
     result.answerStartedScrollState = await waitFor(async () => {
@@ -395,6 +438,7 @@ async function main() {
           panelExpanded: timeline ? timeline.classList.contains('is-expanded') : null,
           isUpdating: latest.classList.contains('updating'),
           timelineClassName: timeline?.className || '',
+          panelBodyHeight: timeline?.querySelector('.response-activity-panel-body')?.getBoundingClientRect?.().height || 0,
           distanceToBottom: chatContainer
             ? Math.max(0, (chatContainer.scrollHeight || 0) - (chatContainer.scrollTop || 0) - (chatContainer.clientHeight || 0))
             : null
@@ -430,18 +474,35 @@ async function main() {
       if (!result.reasoningState.isUpdating) {
         throw new Error('Expected reasoning state to still be updating');
       }
-      if (!result.reasoningState.panelExpanded) {
-        throw new Error('Expected response activity panel to be expanded while only reasoning is visible');
+      if (result.reasoningState.panelExpanded) {
+        throw new Error('Expected response activity panel to stay in peek mode while reasoning is visible');
       }
     }
     if (result.answerStartedState.panelExpanded) {
       throw new Error('Response activity panel stayed expanded after answer text started');
+    }
+    if (/\\bis-peek\\b/.test(result.answerStartedState.timelineClassName || '')) {
+      result.peekWindowObserved = true;
+      if ((result.answerStartedState.panelBodyHeight ?? 0) <= 0) {
+        throw new Error('Expected peek thought window body to stay visible during thinking');
+      }
+    } else {
+      result.peekWindowObserved = false;
     }
     if ((result.answerStartedScrollState?.distanceToBottom ?? Infinity) > 96) {
       throw new Error(`Autoscroll did not stay near bottom after answer started: ${result.answerStartedScrollState?.distanceToBottom}`);
     }
     if (result.finalState.panelExpanded) {
       throw new Error('Response activity panel re-expanded after completion');
+    }
+    if (/\\bis-peek\\b/.test(result.finalState.timelineClassName || '')) {
+      throw new Error(`Expected peek thought window to auto-collapse after thinking completed: ${result.finalState.timelineClassName}`);
+    }
+    if (/\\bis-streaming\\b/.test(result.finalState.timelineClassName || '')) {
+      throw new Error(`Expected response activity timeline to leave streaming state after completion: ${result.finalState.timelineClassName}`);
+    }
+    if ((result.finalState.panelBodyHeight ?? 0) > 1) {
+      throw new Error(`Expected thought window body to collapse after completion, got height ${result.finalState.panelBodyHeight}`);
     }
     if ((result.finalScrollState?.distanceToBottom ?? Infinity) > 96) {
       throw new Error(`Autoscroll did not stay near bottom after completion: ${result.finalScrollState?.distanceToBottom}`);

@@ -5849,6 +5849,7 @@ export function createMessageSender(appContext) {
     delete timelineRoot.dataset.panelUserToggled;
     delete timelineRoot.dataset.panelManualState;
     delete timelineRoot.dataset.panelExpanded;
+    delete timelineRoot.dataset.panelPeek;
     delete timelineRoot.dataset.panelAutoLifecycleInitialized;
     delete timelineRoot.dataset.panelAutoCollapsedAfterAnswerStart;
     delete timelineRoot.dataset.panelAutoCollapsedAfterFinish;
@@ -10307,6 +10308,32 @@ export function createMessageSender(appContext) {
       );
     }
 
+    function syncResponsesActivityPreviewToLoadingMessage() {
+      if (!isOpenAIResponsesStream || currentAiMessageId) return;
+      const previewTarget = resolveLoadingStatusTarget() || loadingMessage || null;
+      if (!previewTarget || typeof messageProcessor?.syncAssistantMessageMetadata !== 'function') return;
+      if (!Array.isArray(latestResponsesActivityTimeline) || latestResponsesActivityTimeline.length <= 0) return;
+
+      try {
+        messageProcessor.syncAssistantMessageMetadata(
+          null,
+          {
+            role: 'assistant',
+            timestamp: Number.isFinite(Number(attemptState?.startedAt))
+              ? Number(attemptState.startedAt)
+              : Date.now(),
+            response_activity_timeline: cloneResponsesActivityTimeline(latestResponsesActivityTimeline)
+          },
+          {
+            fallbackElement: previewTarget,
+            runtimeSnapshot: getAttemptRuntimeSnapshot(attemptState) || null
+          }
+        );
+      } catch (error) {
+        console.warn('预渲染 Responses 思考活动到 loadingMessage 失败:', error);
+      }
+    }
+
     /**
      * 首帧落地副作用：
      * - 优先原地替换；
@@ -11212,6 +11239,8 @@ export function createMessageSender(appContext) {
 
         const hasAnyDelta = !!(shouldRebuildResponsesVisibleAnswer || currentEventAnswerDelta || currentEventReasoningDelta || hasToolCallsDelta);
         if (!hasAnyDelta) return;
+
+        syncResponsesActivityPreviewToLoadingMessage();
 
         if (!shouldRebuildResponsesVisibleAnswer) {
           const split = splitDeltaByThinkTags(String(currentEventAnswerDelta || ''), false);

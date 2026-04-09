@@ -8974,7 +8974,8 @@ body.chat-empty .empty-state-content {
     transition: grid-template-rows 180ms ease, opacity 180ms ease;
 }
 
-.message .response-activity-timeline.is-expanded .response-activity-panel-body {
+.message .response-activity-timeline.is-expanded .response-activity-panel-body,
+.message .response-activity-timeline.is-peek .response-activity-panel-body {
     grid-template-rows: 1fr;
     opacity: 1;
 }
@@ -8985,7 +8986,20 @@ body.chat-empty .empty-state-content {
     display: flex;
     flex-direction: column;
     gap: var(--response-activity-stack-gap);
-    padding: 0 10px 4px 10px;
+    padding: 0 10px 0 10px;
+    overscroll-behavior: contain;
+}
+
+.message .response-activity-timeline.is-peek .response-activity-panel-body-inner {
+    max-height: min(20vh, 220px);
+    overflow-y: auto;
+    padding-bottom: 4px;
+}
+
+.message .response-activity-timeline.is-expanded .response-activity-panel-body-inner {
+    max-height: min(70vh, 560px);
+    overflow-y: auto;
+    padding-bottom: 4px;
 }
 
 .message .response-activity-entry {

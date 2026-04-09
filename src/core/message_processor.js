@@ -18,6 +18,7 @@ import { normalizeResponsesReasoningText } from '../utils/responses_activity_rea
 import { buildApiFooterRenderData } from '../utils/api_footer_template.js';
 import { resolveThoughtsPanelLifecycleState } from '../utils/thoughts_panel_lifecycle.js';
 import { getAssistantActivityTimeline } from '../utils/assistant_activity_timeline.js';
+import { resolveResponseActivityPanelModeState } from '../utils/response_activity_panel_mode.js';
 import { resolveResponseActivityToolExpansionState } from '../utils/response_activity_tool_auto_collapse.js';
 import {
   formatResponsesToolOutputForDisplay,
@@ -1335,8 +1336,9 @@ export function createMessageProcessor(appContext) {
     return messageDiv;
   }
 
-  function renderAiMessageDom(messageDiv, node, safeAnswerContent, resolvedThoughts) {
+  function renderAiMessageDom(messageDiv, node, safeAnswerContent, resolvedThoughts, options = {}) {
     if (!messageDiv) return false;
+    const runtimeSnapshot = options?.runtimeSnapshot || null;
     const surfaceSnapshots = getAssistantSurfaceSnapshots(messageDiv);
     const scrollContainer = resolveScrollContainerForMessage(messageDiv);
     // 只在用户原本就接近底部时继续“粘底”滚动。
@@ -1376,7 +1378,10 @@ export function createMessageProcessor(appContext) {
       surfaceSnapshots.text
     );
 
-    syncAssistantMessageMetadata(node?.id || null, node, { fallbackElement: messageDiv });
+    syncAssistantMessageMetadata(node?.id || null, node, {
+      fallbackElement: messageDiv,
+      runtimeSnapshot
+    });
 
     try {
       services.selectionThreadManager?.decorateMessageElement?.(messageDiv, node);
@@ -1733,36 +1738,6 @@ export function createMessageProcessor(appContext) {
     return !['idle', 'completed', 'aborted', 'error'].includes(runtimeStatus);
   }
 
-  /**
-   * 判断当前 runtime 快照是否已经明确记录“正文 answer 已开始可见”。
-   *
-   * 这里故意不看 `.text-content` / `data-original-text` 是否非空：
-   * - 在 Responses 流式阶段，状态占位文案（例如“模型正在思考...”）也会暂时写进同一个 assistant 气泡；
-   * - 若直接把“文本非空”当成正文开始，就会在 reasoning/commentary 阶段过早收起思考面板；
-   * - 因此只认 sender 在 answer 首次出现时显式写入的窄信号。
-   *
-   * @param {Object|null} runtimeSnapshot
-   * @param {HTMLElement|null} messageWrapperDiv
-   * @returns {boolean}
-   */
-  function hasRuntimeVisibleAnswerStarted(runtimeSnapshot, messageWrapperDiv) {
-    const activeTurn = runtimeSnapshot?.activeTurn;
-    if (!activeTurn || typeof activeTurn !== 'object') return false;
-    if (activeTurn.hasVisibleAnswerStarted !== true) return false;
-
-    const boundAssistantMessageId = String(activeTurn.boundAssistantMessageId || '').trim();
-    const currentMessageId = String(
-      messageWrapperDiv?.getAttribute?.('data-message-id')
-      || messageWrapperDiv?.dataset?.messageId
-      || ''
-    ).trim();
-
-    if (!boundAssistantMessageId || !currentMessageId) {
-      return true;
-    }
-    return boundAssistantMessageId === currentMessageId;
-  }
-
   function getResponseActivityDurationMs(node, timeline, isInProgress = false) {
     const storedDuration = Number(node?.response_activity_duration_ms);
     if (!isInProgress && Number.isFinite(storedDuration) && storedDuration >= 0) {
@@ -1781,8 +1756,10 @@ export function createMessageProcessor(appContext) {
       return kind === 'reasoning_summary' || kind === 'commentary';
     }).length;
     const toolCount = timeline.filter(entry => entry?.kind === 'tool_call').length;
-    const isInProgress = options.isInProgress === true
-      || timeline.some(entry => isResponseActivityEntryInProgress(entry));
+    // 面板级“是否仍在思考中”优先跟随当前 turn 的 runtime：
+    // - Responses 的 reasoning/commentary 并不总会显式补一条 `.done`；
+    // - 若继续依赖 entry.status，面板可能在请求结束后永远停留在 `is-streaming`。
+    const isInProgress = options.isInProgress === true;
     const durationMs = getResponseActivityDurationMs(node, timeline, isInProgress);
     const durationLabel = formatResponseActivityElapsedDuration(durationMs);
     const metaParts = [];
@@ -1890,10 +1867,11 @@ export function createMessageProcessor(appContext) {
     const nextState = {
       panelManualState: String(root.dataset?.panelManualState || '').trim(),
       panelExpanded: String(root.dataset?.panelExpanded || '').trim(),
+      panelPeek: String(root.dataset?.panelPeek || '').trim(),
       panelAutoLifecycleInitialized: String(root.dataset?.panelAutoLifecycleInitialized || '').trim(),
-      panelAutoCollapsedAfterAnswerStart: String(
-        root.dataset?.panelAutoCollapsedAfterAnswerStart
-        || root.dataset?.panelAutoCollapsedAfterFinish
+      panelAutoCollapsedAfterFinish: String(
+        root.dataset?.panelAutoCollapsedAfterFinish
+        || root.dataset?.panelAutoCollapsedAfterAnswerStart
         || ''
       ).trim(),
       manualExpandedToolKeys: Array.from(readManuallyExpandedResponseActivityToolKeys(root)),
@@ -1917,6 +1895,17 @@ export function createMessageProcessor(appContext) {
     if (!messageWrapperDiv || typeof messageWrapperDiv !== 'object') return;
     clearAllResponseActivityToolAutoCollapseSchedules(messageWrapperDiv);
     responseActivityUiStateByMessage.delete(messageWrapperDiv);
+  }
+
+  function isScrollableElementNearBottom(element, threshold = 24) {
+    if (!element) return true;
+    const distance = Math.max(0, (element.scrollHeight || 0) - (element.scrollTop || 0) - (element.clientHeight || 0));
+    return distance <= threshold;
+  }
+
+  function scrollScrollableElementToBottom(element) {
+    if (!element) return;
+    element.scrollTop = Math.max(0, element.scrollHeight || 0);
   }
 
   function getResponseActivityAutoCollapseScheduleMap(messageWrapperDiv, create = false) {
@@ -2019,11 +2008,14 @@ export function createMessageProcessor(appContext) {
     if (!String(timelineRoot.dataset.panelExpanded || '').trim() && stored.panelExpanded) {
       timelineRoot.dataset.panelExpanded = stored.panelExpanded;
     }
+    if (!String(timelineRoot.dataset.panelPeek || '').trim() && stored.panelPeek) {
+      timelineRoot.dataset.panelPeek = stored.panelPeek;
+    }
     if (!String(timelineRoot.dataset.panelAutoLifecycleInitialized || '').trim() && stored.panelAutoLifecycleInitialized) {
       timelineRoot.dataset.panelAutoLifecycleInitialized = stored.panelAutoLifecycleInitialized;
     }
-    if (!String(timelineRoot.dataset.panelAutoCollapsedAfterAnswerStart || '').trim() && stored.panelAutoCollapsedAfterAnswerStart) {
-      timelineRoot.dataset.panelAutoCollapsedAfterAnswerStart = stored.panelAutoCollapsedAfterAnswerStart;
+    if (!String(timelineRoot.dataset.panelAutoCollapsedAfterFinish || '').trim() && stored.panelAutoCollapsedAfterFinish) {
+      timelineRoot.dataset.panelAutoCollapsedAfterFinish = stored.panelAutoCollapsedAfterFinish;
     }
     if (readManuallyExpandedResponseActivityToolKeys(timelineRoot).size <= 0 && stored.manualExpandedToolKeys.length > 0) {
       writeManuallyExpandedResponseActivityToolKeys(timelineRoot, new Set(stored.manualExpandedToolKeys));
@@ -2162,7 +2154,7 @@ export function createMessageProcessor(appContext) {
     const renderSearchQueriesInline = isResponseActivitySearchQueryEntry(entry);
     const searchQueryLines = renderSearchQueriesInline ? getResponseActivityToolQueryLines(entry) : [];
     const hasDetails = hasResponseActivityToolDetails(entry);
-    const isInProgress = isResponseActivityEntryInProgress(entry);
+    const isInProgress = isTurnRuntimeActive && isResponseActivityEntryInProgress(entry);
     const hasOutput = hasResponsesToolOutputBody(entry?.output);
     const shouldAutoRemainExpanded = isInProgress || (!hasOutput && isTurnRuntimeActive);
     const primaryParts = renderSearchQueriesInline ? null : buildResponseToolCallPrimaryParts(entry);
@@ -2306,10 +2298,13 @@ export function createMessageProcessor(appContext) {
     if (!panelToggle.dataset.listenerAdded) {
       panelToggle.addEventListener('click', () => {
         runWithStableToggleScroll(timelineRoot, () => {
+          const isInProgress = timelineRoot.classList.contains('is-streaming');
           const nextExpanded = timelineRoot.dataset.panelExpanded !== 'true';
           timelineRoot.dataset.panelManualState = nextExpanded ? 'expanded' : 'collapsed';
           timelineRoot.dataset.panelExpanded = nextExpanded ? 'true' : 'false';
           timelineRoot.classList.toggle('is-expanded', nextExpanded);
+          timelineRoot.dataset.panelPeek = (isInProgress && !nextExpanded) ? 'true' : 'false';
+          timelineRoot.classList.toggle('is-peek', isInProgress && !nextExpanded);
           panelToggle.setAttribute('aria-expanded', nextExpanded ? 'true' : 'false');
         });
       });
@@ -2350,36 +2345,40 @@ export function createMessageProcessor(appContext) {
       panelTitle,
       panelChevron
     } = shell;
-    const normalizedOptions = (options && typeof options === 'object') ? options : {};
     const panelManualState = String(timelineRoot.dataset.panelManualState || '').trim().toLowerCase();
-    const panelExpandedFromDataset = timelineRoot.dataset.panelExpanded === 'true';
-    const lifecycleState = resolveThoughtsPanelLifecycleState({
+    const panelModeState = resolveResponseActivityPanelModeState({
       manualState: panelManualState,
       lifecycleInitialized: timelineRoot.dataset.panelAutoLifecycleInitialized === 'true',
-      autoCollapsedAfterAnswerStart:
-        timelineRoot.dataset.panelAutoCollapsedAfterAnswerStart === 'true'
-        || timelineRoot.dataset.panelAutoCollapsedAfterFinish === 'true',
-      isUpdating: panelSummary.isInProgress,
-      hasVisibleAnswerStarted: normalizedOptions.hasVisibleAnswerStarted === true,
-      currentlyExpanded: panelExpandedFromDataset
+      autoCollapsedAfterFinish:
+        timelineRoot.dataset.panelAutoCollapsedAfterFinish === 'true'
+        || timelineRoot.dataset.panelAutoCollapsedAfterAnswerStart === 'true',
+      isInProgress: panelSummary.isInProgress
     });
-    let panelExpanded = lifecycleState.expanded;
-    timelineRoot.dataset.panelAutoLifecycleInitialized = lifecycleState.lifecycleInitialized ? 'true' : 'false';
-    if (lifecycleState.autoCollapsedAfterAnswerStart) {
-      timelineRoot.dataset.panelAutoCollapsedAfterAnswerStart = 'true';
+    let panelExpanded = panelModeState.expanded;
+    const panelPeek = panelModeState.peek;
+    timelineRoot.dataset.panelAutoLifecycleInitialized = panelModeState.lifecycleInitialized ? 'true' : 'false';
+    if (panelModeState.autoCollapsedAfterFinish) {
+      timelineRoot.dataset.panelAutoCollapsedAfterFinish = 'true';
     } else {
-      delete timelineRoot.dataset.panelAutoCollapsedAfterAnswerStart;
+      delete timelineRoot.dataset.panelAutoCollapsedAfterFinish;
     }
-    // 兼容旧数据位：本轮渲染统一迁移到 “正文开始后已自动收起” 的语义。
-    delete timelineRoot.dataset.panelAutoCollapsedAfterFinish;
+    if (panelModeState.clearManualState) {
+      delete timelineRoot.dataset.panelManualState;
+    }
+    delete timelineRoot.dataset.panelAutoCollapsedAfterAnswerStart;
 
     const applyPanelExpandedState = () => {
       timelineRoot.dataset.panelExpanded = panelExpanded ? 'true' : 'false';
+      timelineRoot.dataset.panelPeek = panelPeek ? 'true' : 'false';
       timelineRoot.classList.toggle('is-expanded', panelExpanded);
+      timelineRoot.classList.toggle('is-peek', panelPeek);
       timelineRoot.classList.toggle('is-streaming', !!panelSummary.isInProgress);
       panelToggle.setAttribute('aria-expanded', panelExpanded ? 'true' : 'false');
     };
-    if (timelineRoot.classList.contains('is-expanded') !== panelExpanded) {
+    if (
+      timelineRoot.classList.contains('is-expanded') !== panelExpanded
+      || timelineRoot.classList.contains('is-peek') !== panelPeek
+    ) {
       runWithStableToggleScroll(timelineRoot, applyPanelExpandedState);
     } else {
       applyPanelExpandedState();
@@ -2408,6 +2407,11 @@ export function createMessageProcessor(appContext) {
     if (!panelChevron.parentNode) {
       panelToggle.appendChild(panelChevron);
     }
+
+    return {
+      expanded: panelExpanded,
+      peek: panelPeek
+    };
   }
 
   function renderResponseActivityToolSummaryChildren(summary, snapshot) {
@@ -2642,18 +2646,13 @@ export function createMessageProcessor(appContext) {
     }
 
     const isTurnRuntimeActive = isResponseActivityTurnRuntimeActive(messageWrapperDiv);
-    const hasVisibleAnswerStarted = hasRuntimeVisibleAnswerStarted(
-      normalizedOptions.runtimeSnapshot || null,
-      messageWrapperDiv
-    );
     const nextSnapshot = buildResponseActivitySnapshot(node, timeline, processMathAndMarkdownFn, isTurnRuntimeActive);
     const shell = ensureResponseActivityPanelShell(messageWrapperDiv);
     timelineRoot = shell.timelineRoot;
+    const shouldStickPanelBodyToBottom = isTurnRuntimeActive && isScrollableElementNearBottom(shell.panelBodyInner);
     const previousUiState = captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot);
     restoreResponseActivityDatasetState(messageWrapperDiv, timelineRoot);
-    reconcileResponseActivityPanelHeader(shell, nextSnapshot.panelSummary, {
-      hasVisibleAnswerStarted
-    });
+    const panelMode = reconcileResponseActivityPanelHeader(shell, nextSnapshot.panelSummary);
 
     const manualExpandedToolKeys = readManuallyExpandedResponseActivityToolKeys(timelineRoot);
     const manualCollapsedToolKeys = readManuallyCollapsedResponseActivityToolKeys(timelineRoot);
@@ -2760,6 +2759,15 @@ export function createMessageProcessor(appContext) {
     writeAutoCollapsedResponseActivityToolKeys(timelineRoot, autoCollapsedToolKeys);
     captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot);
     surfaceSnapshots.responseActivity = nextSnapshot;
+
+    if (isTurnRuntimeActive && (panelMode?.peek || shouldStickPanelBodyToBottom)) {
+      requestAnimationFrame(() => {
+        const livePanelBodyInner = shell.panelBodyInner;
+        if (!livePanelBodyInner || !messageWrapperDiv.isConnected) return;
+        if (!timelineRoot.classList.contains('is-streaming')) return;
+        scrollScrollableElementToBottom(livePanelBodyInner);
+      });
+    }
 
     return true;
   }
@@ -3086,6 +3094,7 @@ export function createMessageProcessor(appContext) {
         normalizedOptions.thoughtsRaw,
         {
           fallbackNode: node || null,
+          runtimeSnapshot,
           suppressMissingNodeWarning: normalizedOptions.suppressMissingNodeWarning === true
         }
       );
@@ -3183,7 +3192,9 @@ export function createMessageProcessor(appContext) {
       return true;
     }
 
-    return renderAiMessageDom(messageDiv, node, safeAnswerContent, resolvedThoughts);
+    return renderAiMessageDom(messageDiv, node, safeAnswerContent, resolvedThoughts, {
+      runtimeSnapshot: updateOptions.runtimeSnapshot || null
+    });
   }
 
   function bindInlineImagePreviews(container) {
