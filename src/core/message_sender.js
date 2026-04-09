@@ -6757,6 +6757,7 @@ export function createMessageSender(appContext) {
       description: [
         '快速读取当前侧栏绑定网页标签页的预提取文本内容。',
         '它会返回页面正文与可访问 iframe 文本的预包装读取结果，并对多行做 trim 与空白折叠，更适合一次快速通读页面内容。',
+        '若用户在对话开头说“这个”或未明确指代对象，默认指当前网页环境上下文，请先调用本工具读取页面再回答。',
         '这不是 DOM 结构化提取工具；若当前页面是 PDF 且需要按章节 / 片段读取，请优先使用 pdf_content_read；若需要按元素、选择器、属性进行结构化定位与提取，请优先使用 js_runtime_execute。',
         '默认返回中间截断预览；也可通过 skip_chars 与 max_chars 读取指定连续片段。'
       ].join(' '),
@@ -7639,7 +7640,7 @@ export function createMessageSender(appContext) {
 
     // 明确丢弃这些“会改变 ask_other_ai 语义”的字段：
     // - customParams: 可能带入额外 provider 特性 / headers / tool 配置；
-    // - 自定义系统提示词与用户预处理：ask_other_ai 应只发送显式的 question/context；
+    // - 自定义系统提示词与用户预处理：ask_other_ai 应只发送显式的 question；
     // - Responses / Gemini 的额外工具与结构化输出配置：避免把一个 search/schema/tool 配置误当成纯问答配置。
     return nextConfig;
   }
@@ -7696,7 +7697,7 @@ export function createMessageSender(appContext) {
         }
 
         try {
-          const messageContent = buildAskOtherAiUserMessage(request.question, request.context);
+          const messageContent = buildAskOtherAiUserMessage(request.question);
           const subrequestConfig = buildAskOtherAiSubrequestConfig(targetConfig);
           const targetUseStreaming = subrequestConfig.useStreaming !== false;
           const requestBody = sanitizeAskOtherAiRequestBody(await apiManager.buildRequest({
@@ -7731,7 +7732,6 @@ export function createMessageSender(appContext) {
             config_id: configId,
             status: 'ok',
             question: request.question,
-            context_supplied: !!request.context,
             target: {
               display_name: catalogEntry?.display_name || subrequestConfig.displayName || subrequestConfig.modelName || configId,
               model_name: subrequestConfig.modelName || null,

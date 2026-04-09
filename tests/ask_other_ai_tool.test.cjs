@@ -73,29 +73,28 @@ test('normalizeAskOtherAiArguments 支持多 request 且严格校验必填字段
   const { normalizeAskOtherAiArguments } = await loadAskOtherAiToolModule();
   const normalized = normalizeAskOtherAiArguments({
     requests: [
-      { config_id: 'cfg-a', question: '  first?  ', context: '  alpha  ' },
-      { config_id: 'cfg-b', question: 'second?', context: null }
+      { config_id: 'cfg-a', question: '  first?  ' },
+      { config_id: 'cfg-b', question: 'second?' }
     ]
   });
 
   assert.deepEqual(normalized, {
     requests: [
-      { config_id: 'cfg-a', question: 'first?', context: 'alpha' },
-      { config_id: 'cfg-b', question: 'second?', context: null }
+      { config_id: 'cfg-a', question: 'first?' },
+      { config_id: 'cfg-b', question: 'second?' }
     ]
   });
 
   assert.throws(() => normalizeAskOtherAiArguments({ requests: [] }), /至少需要 1 条/);
-  assert.throws(() => normalizeAskOtherAiArguments({ requests: [{ config_id: '', question: 'x', context: null }] }), /config_id/);
-  assert.throws(() => normalizeAskOtherAiArguments({ requests: [{ config_id: 'cfg', question: '   ', context: null }] }), /question/);
+  assert.throws(() => normalizeAskOtherAiArguments({ requests: [{ config_id: '', question: 'x' }] }), /config_id/);
+  assert.throws(() => normalizeAskOtherAiArguments({ requests: [{ config_id: 'cfg', question: '   ' }] }), /question/);
 });
 
 test('buildAskOtherAiUserMessage 使用显式文本区块而不是 XML 包裹', async () => {
   const { buildAskOtherAiUserMessage } = await loadAskOtherAiToolModule();
-  const text = buildAskOtherAiUserMessage('帮我反驳一下这个结论', '当前模型认为图表可能是 Vega-Lite。');
-  assert.match(text, /Additional context:/);
-  assert.match(text, /当前模型认为图表可能是 Vega-Lite/);
+  const text = buildAskOtherAiUserMessage('帮我反驳一下这个结论');
   assert.match(text, /Question:/);
   assert.match(text, /帮我反驳一下这个结论/);
+  assert.doesNotMatch(text, /Additional context:/);
   assert.doesNotMatch(text, /<question>/);
 });

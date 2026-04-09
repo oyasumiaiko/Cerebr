@@ -31,7 +31,6 @@ function normalizeAskRequest(rawItem) {
     : {};
   const configId = normalizeString(item.config_id);
   const question = normalizeString(item.question);
-  const context = normalizeNullableString(item.context);
   if (!configId) {
     throw new Error('ask_other_ai 参数错误：每条 request 都必须提供非空 config_id。');
   }
@@ -40,8 +39,7 @@ function normalizeAskRequest(rawItem) {
   }
   return {
     config_id: configId,
-    question,
-    context
+    question
   };
 }
 
@@ -49,9 +47,8 @@ export function buildAskOtherAiToolGuidance() {
   return [
     '先调用 list_askable_models 查看当前可用目标，并从结果里复制 config_id。',
     'ask_other_ai 支持一次提交多条 requests；每条 request 都可以指定不同的 config_id。',
-    '目标模型只会看到你显式提供的 question 与 context，不会自动继承当前对话、隐藏上下文、本地工具结果或页面状态。',
-    '它适合获取第二意见、交叉验证分析、比较不同模型视角；不适合代替当前模型继续执行本地工具链。',
-    '优先把问题写得具体、边界清晰，并只附上当前这次判断真正依赖的上下文。'
+    '目标模型只会看到你显式提供的 question，不会自动继承当前对话、隐藏上下文、本地工具结果或页面状态。',
+    '它适合获取第二意见、交叉验证分析、比较不同模型视角；不适合代替当前模型继续执行本地工具链。'
   ].join('\n');
 }
 
@@ -67,17 +64,14 @@ export function buildAskOtherAiToolDescription() {
   return [
     '向一个或多个已启用的其他模型配置提问，以获取独立观点、复核分析或比较不同模型结论。',
     '每条 request 都需要显式给出 config_id 与 question；同一次调用里可以向相同或不同模型发送多条问题。',
-    '目标模型只会看到你提供的 question 与 context，不会自动继承当前对话、隐藏上下文、本地工具结果或页面状态。',
+    '目标模型只会看到你提供的 question，不会自动继承当前对话、隐藏上下文、本地工具结果或页面状态。',
     '',
     '### 何时使用',
     '- 当你需要独立第二意见、交叉验证、对比不同模型结论时使用。',
     '- 优先把问题压成具体、边界清晰、可独立回答的子问题。',
-    '- 如果当前判断强依赖本轮页面内容、工具结果或对话上下文，请先自行整理后放进 context。',
     '',
     '### 不该怎么用',
-    '- 不要把 ask_other_ai 当成“偷偷续写当前主模型思路”的隐式上下文继承器。',
-    '- 不要把它当成当前模型继续执行本地工具链的替代品。',
-    '- 不要一次性发很多模糊、重复、彼此高度重叠的问题。'
+    '- 不要把 ask_other_ai 当成隐式继承当前上下文的续写器；若问题不完整，应先在当前线程里整理后再提问。'
   ].join('\n');
 }
 
@@ -105,10 +99,6 @@ export function buildAskOtherAiFunctionToolDefinition() {
     question: {
       type: 'string',
       description: '必填。要向该目标模型提问的具体问题。'
-    },
-    context: {
-      type: ['string', 'null'],
-      description: '可选。要额外提供给目标模型的补充上下文。若当前对话、页面内容或工具结果很重要，请自行整理后放进这里。'
     }
   };
 
@@ -190,20 +180,16 @@ export function normalizeAskOtherAiArguments(rawArgs) {
   return { requests };
 }
 
-export function buildAskOtherAiUserMessage(question, context = null) {
+export function buildAskOtherAiUserMessage(question) {
   const normalizedQuestion = normalizeString(question);
-  const normalizedContext = normalizeNullableString(context);
   if (!normalizedQuestion) {
     throw new Error('ask_other_ai 生成提问消息失败：question 不能为空。');
   }
 
   const blocks = [
     '你正在提供一次独立的第二意见。',
-    '请仅基于下面显式提供的问题和上下文作答，不要假装看到了未提供的隐藏对话状态。'
+    '请仅基于下面显式提供的问题作答。'
   ];
-  if (normalizedContext) {
-    blocks.push(`Additional context:\n${normalizedContext}`);
-  }
   blocks.push(`Question:\n${normalizedQuestion}`);
   blocks.push('请直接给出你的独立分析与判断。若信息不足，请明确说明缺口。');
   return blocks.join('\n\n');
