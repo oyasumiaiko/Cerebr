@@ -392,3 +392,15 @@ test('buildResponsesRequestUserInputToolOutputContentItems 使用紧凑 JSON 返
   assert.match(text, /并行出V2 \(Recommended\)/);
   assert.doesNotMatch(text, /<request_user_input_result>/);
 });
+
+test('buildResponsesRequestUserInputToolOutputContentItems 会透出 skip note', async () => {
+  const { buildResponsesRequestUserInputToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesRequestUserInputToolOutputContentItems({
+    ok: false,
+    cancelled: true,
+    note: 'User chose to skip these questions.',
+    answers: {}
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /"note": "User chose to skip these questions\."/);
+});

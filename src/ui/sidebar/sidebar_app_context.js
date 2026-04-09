@@ -8,6 +8,12 @@ import {
   JS_RUNTIME_ENV_BOUND_HOST_PAGE,
   resolvePageToolEnvironment
 } from '../../agent_tools/page_tool_environment.js';
+import {
+  REQUEST_USER_INPUT_OTHER_OPTION_VALUE,
+  buildRequestUserInputAnswerMap,
+  buildRequestUserInputSkipPayload,
+  shouldAutoCompleteRequestUserInput
+} from '../../utils/request_user_input_interaction.js';
 
 const JS_RUNTIME_STATUS_TIMEOUT_MS = 5000;
 const JS_RUNTIME_FRAME_SNAPSHOT_TIMEOUT_MS = 5000;
@@ -374,7 +380,7 @@ export function registerSidebarUtilities(appContext) {
   };
 
   /**
-   * 在输入框上方的统一辅助区内展示 request_user_input 面板，并等待用户选择“继续”或“跳过”。
+   * 在输入框上方的统一辅助区内展示 request_user_input 面板，并等待用户回答或跳过。
    *
    * 设计取向：
    * - 不再使用全屏 modal，避免把本来只是“补充信息”的动作放大成强制阻塞交互；
@@ -405,49 +411,13 @@ export function registerSidebarUtilities(appContext) {
       panel.setAttribute('aria-label', '模型补充提问');
       panel.tabIndex = -1;
 
-      const header = document.createElement('div');
-      header.className = 'composer-request-header';
-
-      const headerMain = document.createElement('div');
-      headerMain.className = 'composer-request-header-main';
-
-      const badge = document.createElement('span');
-      badge.className = 'composer-request-badge';
-      badge.textContent = 'request_user_input';
-      headerMain.appendChild(badge);
-
-      const headerCopy = document.createElement('div');
-      headerCopy.className = 'composer-request-header-copy';
-
-      const titleEl = document.createElement('div');
-      titleEl.className = 'composer-request-title';
-      titleEl.textContent = '模型想补充确认一点信息';
-      headerCopy.appendChild(titleEl);
-
-      const descEl = document.createElement('div');
-      descEl.className = 'composer-request-subtitle';
-      descEl.textContent = '你可以直接回答，也可以跳过；这轮生成会在你决定后继续。';
-      headerCopy.appendChild(descEl);
-
-      headerMain.appendChild(headerCopy);
-      header.appendChild(headerMain);
-
-      const dismissBtn = document.createElement('button');
-      dismissBtn.type = 'button';
-      dismissBtn.className = 'composer-request-dismiss';
-      dismissBtn.textContent = '跳过';
-      dismissBtn.setAttribute('aria-label', '跳过本次补充提问');
-      header.appendChild(dismissBtn);
-
-      panel.appendChild(header);
-
       const stageEl = document.createElement('div');
       stageEl.className = 'composer-request-stage';
       panel.appendChild(stageEl);
 
       /**
        * 每个问题只维护一个极小状态：
-       * - `selectedOptionValue`：普通选项直接保存 label；Other 用 `__other__` 作为标记；
+       * - `selectedOptionValue`：普通选项直接保存 label；Other 用保留常量作为标记；
        * - `freeformText`：只在选择 Other 时真正参与结果生成，但切回普通选项后仍保留，便于来回修改。
        */
       const questionStates = questions.map(() => ({
@@ -495,16 +465,7 @@ export function registerSidebarUtilities(appContext) {
       };
 
       const buildAnswerMap = () => {
-        const answers = {};
-        questions.forEach((question, index) => {
-          const state = getQuestionState(index);
-          const answer = state.selectedOptionValue === '__other__'
-            ? state.freeformText.trim()
-            : String(state.selectedOptionValue || '').trim();
-          if (!answer) return;
-          answers[question.id] = { answers: [answer] };
-        });
-        return answers;
+        return buildRequestUserInputAnswerMap(questions, questionStates);
       };
 
       const focusCurrentQuestionControl = () => {
@@ -513,10 +474,6 @@ export function registerSidebarUtilities(appContext) {
           if (pendingFocusTarget === 'other-input' && currentOtherInput) {
             currentOtherInput.focus();
             currentOtherInput.select();
-            return;
-          }
-          if (pendingFocusTarget === 'submit-button') {
-            submitBtn.focus();
             return;
           }
           if (currentRegularOptionButtons[0]) {
@@ -531,25 +488,6 @@ export function registerSidebarUtilities(appContext) {
         });
       };
 
-      const updatePanelState = () => {
-        const answerMap = buildAnswerMap();
-        const answeredCount = Object.keys(answerMap).length;
-        const unansweredCount = Math.max(questions.length - answeredCount, 0);
-        const isLastQuestion = questionIndex >= questions.length - 1;
-
-        submitBtn.textContent = isLastQuestion ? '继续生成' : '下一题';
-        submitBtn.setAttribute('aria-label', submitBtn.textContent);
-
-        statusEl.dataset.state = answeredCount > 0 ? 'ready' : 'idle';
-        if (answeredCount <= 0) {
-          statusEl.textContent = '不想回答也没关系，可以直接跳题或继续生成。';
-        } else if (unansweredCount > 0) {
-          statusEl.textContent = `已回答 ${answeredCount}/${questions.length} 个问题；其余未回答项会按跳过处理。`;
-        } else {
-          statusEl.textContent = '答案会作为本地工具结果回传给模型，并继续当前生成。';
-        }
-      };
-
       const goToQuestion = (nextIndex, focusTarget = 'first-option') => {
         questionIndex = clampQuestionIndex(nextIndex);
         pendingFocusTarget = focusTarget;
@@ -557,18 +495,25 @@ export function registerSidebarUtilities(appContext) {
       };
 
       const setCurrentQuestionToOtherMode = ({ focusInput = true } = {}) => {
-        patchQuestionState(questionIndex, { selectedOptionValue: '__other__' });
+        patchQuestionState(questionIndex, { selectedOptionValue: REQUEST_USER_INPUT_OTHER_OPTION_VALUE });
         pendingFocusTarget = focusInput ? 'other-input' : 'panel';
         renderCurrentQuestion();
       };
 
       const handleRegularOptionSelection = (optionValue) => {
         patchQuestionState(questionIndex, { selectedOptionValue: String(optionValue || '') });
+        if (shouldAutoCompleteRequestUserInput(questionIndex, questions, questionStates)) {
+          finish({
+            cancelled: false,
+            answers: buildAnswerMap()
+          });
+          return;
+        }
         if (questionIndex < questions.length - 1) {
           goToQuestion(questionIndex + 1, 'first-option');
           return;
         }
-        pendingFocusTarget = 'submit-button';
+        pendingFocusTarget = 'panel';
         renderCurrentQuestion();
       };
 
@@ -588,7 +533,6 @@ export function registerSidebarUtilities(appContext) {
         const currentQuestion = questions[questionIndex] || questions[0] || null;
         if (!currentQuestion) {
           stageEl.textContent = '';
-          updatePanelState();
           return;
         }
 
@@ -636,6 +580,14 @@ export function registerSidebarUtilities(appContext) {
         nextBtn.setAttribute('aria-label', '下一题');
         nextBtn.addEventListener('click', () => goToQuestion(questionIndex + 1, 'first-option'));
         questionNav.appendChild(nextBtn);
+
+        const dismissBtn = document.createElement('button');
+        dismissBtn.type = 'button';
+        dismissBtn.className = 'composer-request-dismiss';
+        dismissBtn.textContent = '跳过';
+        dismissBtn.setAttribute('aria-label', '跳过本次补充提问');
+        dismissBtn.addEventListener('click', onSkip);
+        questionNav.appendChild(dismissBtn);
 
         questionHeader.appendChild(questionNav);
         questionEl.appendChild(questionHeader);
@@ -687,7 +639,7 @@ export function registerSidebarUtilities(appContext) {
 
         const otherRow = document.createElement('label');
         otherRow.className = 'composer-request-inline-freeform';
-        const otherSelected = currentState.selectedOptionValue === '__other__';
+        const otherSelected = currentState.selectedOptionValue === REQUEST_USER_INPUT_OTHER_OPTION_VALUE;
         if (otherSelected) {
           otherRow.classList.add('composer-request-inline-freeform--selected');
         }
@@ -708,20 +660,19 @@ export function registerSidebarUtilities(appContext) {
         otherInput.placeholder = otherPlaceholder;
         otherInput.value = currentState.freeformText || '';
         otherInput.addEventListener('focus', () => {
-          if (getQuestionState(questionIndex).selectedOptionValue !== '__other__') {
+          if (getQuestionState(questionIndex).selectedOptionValue !== REQUEST_USER_INPUT_OTHER_OPTION_VALUE) {
             setCurrentQuestionToOtherMode({ focusInput: true });
             return;
           }
         });
         otherInput.addEventListener('input', () => {
           patchQuestionState(questionIndex, {
-            selectedOptionValue: '__other__',
+            selectedOptionValue: REQUEST_USER_INPUT_OTHER_OPTION_VALUE,
             freeformText: otherInput.value
           });
           if (!otherRow.classList.contains('composer-request-inline-freeform--selected')) {
             otherRow.classList.add('composer-request-inline-freeform--selected');
           }
-          updatePanelState();
         });
         otherInput.addEventListener('keydown', (event) => {
           if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
@@ -735,45 +686,8 @@ export function registerSidebarUtilities(appContext) {
 
         questionEl.appendChild(optionsEl);
         stageEl.appendChild(questionEl);
-
-        updatePanelState();
         focusCurrentQuestionControl();
       }
-
-      const footer = document.createElement('div');
-      footer.className = 'composer-request-footer';
-
-      const statusWrap = document.createElement('div');
-      statusWrap.className = 'composer-request-status-wrap';
-
-      const statusEl = document.createElement('div');
-      statusEl.className = 'composer-request-status';
-      statusWrap.appendChild(statusEl);
-
-      const shortcutEl = document.createElement('div');
-      shortcutEl.className = 'composer-request-shortcut';
-      shortcutEl.textContent = 'Esc 跳过，Ctrl/Cmd + Enter 继续。';
-      statusWrap.appendChild(shortcutEl);
-
-      footer.appendChild(statusWrap);
-
-      const actions = document.createElement('div');
-      actions.className = 'composer-request-actions';
-
-      const skipBtn = document.createElement('button');
-      skipBtn.type = 'button';
-      skipBtn.className = 'composer-request-button composer-request-button--ghost';
-      skipBtn.textContent = '先跳过';
-      actions.appendChild(skipBtn);
-
-      const submitBtn = document.createElement('button');
-      submitBtn.type = 'button';
-      submitBtn.className = 'composer-request-button composer-request-button--primary';
-      submitBtn.textContent = '继续生成';
-      actions.appendChild(submitBtn);
-
-      footer.appendChild(actions);
-      panel.appendChild(footer);
 
       let settled = false;
       let removeKeyListener = null;
@@ -788,17 +702,17 @@ export function registerSidebarUtilities(appContext) {
           removeKeyListener();
           removeKeyListener = null;
         }
-        panel.remove();
-        refreshComposerAccessoryLayout();
-        resolve(payload);
+        panel.classList.add('is-closing');
+        const finalize = () => {
+          panel.remove();
+          refreshComposerAccessoryLayout();
+          resolve(payload);
+        };
+        window.setTimeout(finalize, 150);
       };
 
-      const onSkip = () => finish({ cancelled: true, answers: {} });
+      const onSkip = () => finish(buildRequestUserInputSkipPayload());
       const onSubmit = () => handlePrimaryAction();
-
-      dismissBtn.addEventListener('click', onSkip);
-      skipBtn.addEventListener('click', onSkip);
-      submitBtn.addEventListener('click', onSubmit);
 
       const onKeyDown = (event) => {
         if (!panel.isConnected) return;
@@ -808,13 +722,6 @@ export function registerSidebarUtilities(appContext) {
           onSkip();
           return;
         }
-        if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
-          event.preventDefault();
-          event.stopPropagation();
-          onSubmit();
-          return;
-        }
-
         const target = event.target;
         if (isEditableElement(target)) return;
 

@@ -124,4 +124,5 @@ test('buildRequestUserInputResult 会整理答案映射并保留取消态', asyn
   assert.equal(cancelled.ok, false);
   assert.equal(cancelled.cancelled, true);
   assert.equal(cancelled.answered_count, 1);
+  assert.equal(cancelled.note, 'User chose to skip these questions.');
 });

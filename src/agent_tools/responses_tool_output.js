@@ -816,6 +816,9 @@ export function buildResponsesRequestUserInputToolOutputContentItems(result, opt
       ? normalized.answers
       : fallbackAnswers
   };
+  if (typeof normalized.note === 'string' && normalized.note.trim()) {
+    payload.note = normalized.note.trim();
+  }
   if (normalized.error) {
     payload.error = normalized.error;
   }

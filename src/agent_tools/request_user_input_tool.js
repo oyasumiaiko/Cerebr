@@ -172,6 +172,7 @@ export function buildRequestUserInputFunctionToolDefinition() {
  *   answers:Record<string, {answers:string[]}>
  *   ok:boolean,
  *   cancelled:boolean,
+ *   note?:string,
  *   question_count:number,
  *   answered_count:number,
  *   questions:Array<{id:string,header:string,question:string,answers:string[]}>
@@ -213,7 +214,7 @@ export function buildRequestUserInputResult(questions, rawAnswersById, options =
   const answeredCount = questionItems.filter(item => item.answers.length > 0).length;
   const cancelled = options?.cancelled === true;
 
-  return {
+  const result = {
     ok: !cancelled && normalizedQuestions.length > 0 && answeredCount === normalizedQuestions.length,
     cancelled,
     question_count: normalizedQuestions.length,
@@ -221,4 +222,8 @@ export function buildRequestUserInputResult(questions, rawAnswersById, options =
     questions: questionItems,
     answers
   };
+  if (cancelled) {
+    result.note = 'User chose to skip these questions.';
+  }
+  return result;
 }
