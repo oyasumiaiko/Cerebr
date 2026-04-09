@@ -94,7 +94,7 @@ export function normalizeRequestUserInputArguments(rawArgs) {
 }
 
 export function buildRequestUserInputToolDescription() {
-  return 'Request user input for short questions and wait for the response.';
+  return 'Request user input for questions and wait for the response.';
 }
 
 export function buildRequestUserInputFunctionToolDefinition() {
@@ -123,7 +123,7 @@ export function buildRequestUserInputFunctionToolDefinition() {
     },
     options: {
       type: 'array',
-      description: 'Provide choices. Do not include an "Other" option in this list; the client will add a free-form "Other" option automatically.',
+      description: 'Provide 2-3 mutually exclusive choices. Do not include an "Other" option in this list; the client will add a free-form "Other" option automatically.',
       items: {
         type: 'object',
         additionalProperties: false,

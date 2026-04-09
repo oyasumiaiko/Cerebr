@@ -8,6 +8,14 @@ input, textarea, select {
   outline: none;
 }
 
+button:focus-visible,
+[role="button"]:focus-visible,
+[contenteditable="plaintext-only"]:focus-visible,
+[contenteditable="true"]:focus-visible {
+  outline: var(--cerebr-subtle-focus-outline);
+  outline-offset: var(--cerebr-subtle-focus-outline-offset);
+}
+
 /* --- End Global Unified Basic Styles --- */
 
 /* 根变量（默认浅色主题） */
@@ -119,6 +127,8 @@ input, textarea, select {
     --cerebr-control-padding: 4px 8px;
     --cerebr-control-inset-shadow: inset 0 1px 2px rgba(15, 15, 15, 0.08);
     --cerebr-control-focus-ring: 0 0 0 3px color-mix(in srgb, var(--cerebr-highlight) 25%, transparent);
+    --cerebr-subtle-focus-outline: 1px solid color-mix(in srgb, var(--cerebr-highlight) 38%, transparent);
+    --cerebr-subtle-focus-outline-offset: 1px;
     /* UI 语义色：用于控件与状态，不再复用“用户消息气泡色”。 */
     --cerebr-ui-hover-bg: var(--cerebr-control-bg-hover);
     --cerebr-ui-hover-bg-strong: var(--cerebr-control-bg-active);
@@ -166,6 +176,7 @@ input, textarea, select {
     --cerebr-control-border-hover: color-mix(in srgb, var(--cerebr-border-color) 95%, transparent);
     --cerebr-control-inset-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
     --cerebr-control-focus-ring: 0 0 0 3px color-mix(in srgb, var(--cerebr-highlight) 30%, transparent);
+    --cerebr-subtle-focus-outline: 1px solid color-mix(in srgb, var(--cerebr-highlight) 46%, transparent);
     --cerebr-scroll-minimap-track-bg: color-mix(in srgb, var(--cerebr-bg-color) 88%, #000000 12%);
     --cerebr-scroll-minimap-track-border: color-mix(in srgb, var(--cerebr-border-color) 72%, transparent);
     --cerebr-scroll-minimap-track-opacity: clamp(0.06, calc(var(--cerebr-scroll-minimap-opacity, 0.94) * 0.22), 0.22);

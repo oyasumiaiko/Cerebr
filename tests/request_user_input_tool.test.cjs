@@ -86,9 +86,9 @@ test('buildRequestUserInputFunctionToolDefinition 与 Codex 风格保持一致',
   assert.equal(spec.name, REQUEST_USER_INPUT_TOOL_NAME);
   assert.equal(spec.strict, false);
   assert.equal(spec.description, buildRequestUserInputToolDescription());
-  assert.equal(spec.description, 'Request user input for short questions and wait for the response.');
+  assert.equal(spec.description, 'Request user input for questions and wait for the response.');
   assert.equal(spec.parameters.properties.questions.description, 'Questions to show the user.');
-  assert.match(spec.parameters.properties.questions.items.properties.options.description, /Provide choices/);
+  assert.match(spec.parameters.properties.questions.items.properties.options.description, /Provide 2-3 mutually exclusive choices/);
   assert.match(spec.parameters.properties.questions.items.properties.options.description, /Do not include an "Other" option/);
 });
 
