@@ -16,6 +16,7 @@
     "scripting",
     "userScripts",
     "tabs",
+    "webNavigation",
     "webRequest",
     "contextMenus",
     "downloads"

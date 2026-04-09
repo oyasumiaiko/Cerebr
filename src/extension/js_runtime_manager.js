@@ -84,6 +84,62 @@ function normalizeFrameSnapshotItem(item) {
 }
 
 /**
+ * 将 webNavigation 返回的 frame 元数据压成稳定快照。
+ *
+ * 为什么这里不再用 `userScripts.execute({ allFrames: true })` 做 frame 发现：
+ * - frame 枚举本质上是“导航树元数据”问题，不应该依赖“每个 frame 都能成功执行一段 JS”；
+ * - 在 `op.gg` 这类会快速创建/销毁空白 iframe 的页面里，allFrames 批量执行会把“发现 frame”与“在 frame 里跑代码”绑定在一起，
+ *   一旦某个子 frame 处于不稳定状态，整次枚举就可能被拖挂；
+ * - `chrome.webNavigation.getAllFrames()` 正是为“列出当前 tab 的 frame 树”准备的原语，更符合这里的需求。
+ *
+ * @param {any} item
+ * @returns {{frameId:number|null, documentId:string|null, url:string, title:string, isTop:boolean, error:any}}
+ */
+function normalizeNavigationFrameSnapshotItem(item) {
+  const frameId = Number.isFinite(Number(item?.frameId)) ? Number(item.frameId) : null;
+  const url = (typeof item?.url === 'string') ? item.url : '';
+  return {
+    frameId,
+    documentId: (typeof item?.documentId === 'string' && item.documentId) ? item.documentId : null,
+    url,
+    title: '',
+    isTop: frameId === 0,
+    error: item?.errorOccurred === true
+      ? {
+          message: '该 frame 最近一次导航以错误结束。',
+          name: 'FrameNavigationError',
+          stack: ''
+        }
+      : null
+  };
+}
+
+/**
+ * 判断某个 frame URL 是否值得暴露给模型作为可选目标。
+ *
+ * 说明：
+ * - 保留顶层 frame（frameId=0）以便始终有一个稳定默认目标；
+ * - 过滤扩展自身 / 浏览器内部页，避免把不可能作为宿主页执行目标的 frame 暴露给模型；
+ * - 其余普通网页 frame（包括 about:blank / data: 等）先保留，让导航层枚举尽量忠实反映当前结构。
+ *
+ * @param {{frameId:number|null,url:string}} frame
+ * @returns {boolean}
+ */
+function shouldExposeNavigationFrameSnapshot(frame) {
+  if (!frame || !Number.isFinite(frame.frameId)) return false;
+  if (frame.frameId === 0) return true;
+  const url = (typeof frame.url === 'string') ? frame.url.trim() : '';
+  if (!url) return true;
+  return !(
+    url.startsWith('chrome-extension://')
+    || url.startsWith('chrome://')
+    || url.startsWith('devtools://')
+    || url.startsWith('edge://')
+    || url.startsWith('about:srcdoc')
+  );
+}
+
+/**
  * 构造注入到 userScripts world 里的代码。
  *
  * 实现方式：
@@ -349,36 +405,41 @@ export function createJsRuntimeManager() {
       throw new Error('获取 JS Runtime frame 快照失败：缺少有效 tabId。');
     }
 
-    const probeResult = await execute({
-      tabId,
-      allFrames: true,
-      code: `
-        let isTop = false;
-        try {
-          isTop = globalThis === globalThis.top;
-        } catch (_) {
-          isTop = false;
-        }
-        return {
-          url: location.href,
-          title: document.title || '',
-          isTop
-        };
-      `
-    });
+    if (typeof chrome?.webNavigation?.getAllFrames !== 'function') {
+      throw new Error('获取 JS Runtime frame 快照失败：当前扩展未启用 webNavigation 能力，请重载扩展后重试。');
+    }
 
-    const frames = Array.isArray(probeResult?.items)
-      ? probeResult.items
-        .map(normalizeFrameSnapshotItem)
-        .filter(item => !item.error && Number.isFinite(item.frameId))
+    const rawFrames = await chrome.webNavigation.getAllFrames({ tabId });
+    const frames = Array.isArray(rawFrames)
+      ? rawFrames
+        .map(normalizeNavigationFrameSnapshotItem)
+        .filter((item) => !item.error && shouldExposeNavigationFrameSnapshot(item))
         .sort((a, b) => {
           if (a.isTop !== b.isTop) return a.isTop ? -1 : 1;
           return (a.frameId ?? Number.MAX_SAFE_INTEGER) - (b.frameId ?? Number.MAX_SAFE_INTEGER);
         })
       : [];
 
+    if (frames.length > 0) {
+      try {
+        const tab = await chrome.tabs.get(tabId);
+        const topFrame = frames.find(item => item.isTop) || null;
+        if (topFrame) {
+          const topTitle = (typeof tab?.title === 'string') ? tab.title.trim() : '';
+          if (topTitle) {
+            topFrame.title = topTitle;
+          }
+          if (!topFrame.url && typeof tab?.url === 'string') {
+            topFrame.url = tab.url;
+          }
+        }
+      } catch (_) {
+        // 标签页标题只用于补足展示信息，不应影响 frame 枚举主流程。
+      }
+    }
+
     return {
-      ok: probeResult?.ok === true,
+      ok: true,
       frames
     };
   }
