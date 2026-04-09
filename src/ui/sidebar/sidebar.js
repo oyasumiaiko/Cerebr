@@ -144,6 +144,33 @@ function exposeGlobals(appContext, isStandalone) {
     }
   };
 
+  // 暴露一个 request_user_input 内联卡片演示，便于后续 UI 回归时直接在真实 sidebar 里触发。
+  window.cerebr.showRequestUserInputDemo = async () => {
+    try {
+      const result = await appContext.utils.showRequestUserInput({
+        questions: [
+          {
+            header: '落地方式',
+            id: 'delivery_mode',
+            question: '这次修改你更希望我怎么继续？',
+            options: [
+              { label: '直接实现 (Recommended)', description: '按当前理解继续往前做。' },
+              { label: '先给草图', description: '先展示结构，再决定细节。' },
+              { label: '只做样式', description: '先把界面走通，逻辑稍后补。' }
+            ]
+          }
+        ]
+      });
+      window.cerebr.debug = window.cerebr.debug || {};
+      window.cerebr.debug.lastRequestUserInputDemoResult = result;
+      return result;
+    } catch (error) {
+      console.error('request_user_input 演示失败:', error);
+      appContext.utils.showNotification({ message: 'request_user_input 演示失败', type: 'error' });
+      throw error;
+    }
+  };
+
   document.addEventListener('promptSettingsUpdated', () => {
     if (appContext.services.promptSettingsManager) {
       window.cerebr.settings.prompts = appContext.services.promptSettingsManager.getPrompts();

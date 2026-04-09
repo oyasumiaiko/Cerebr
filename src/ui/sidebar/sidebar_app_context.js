@@ -73,6 +73,7 @@ export function createSidebarAppContext(isStandalone) {
     preferencesSettingsToggle,
     promptSettingsPanel: document.getElementById('prompt-settings'),
     inputContainer: document.getElementById('input-container'),
+    composerAccessoryRegion: document.getElementById('composer-accessory-region'),
     regenerateButton: document.getElementById('regenerate-message'),
     autoScrollSwitch: document.getElementById('auto-scroll-switch'),
     autoRetrySwitch: document.getElementById('auto-retry-switch'),
@@ -219,6 +220,29 @@ export function registerSidebarUtilities(appContext) {
 
   appContext.utils.updateInputContainerHeightVar = updateInputContainerHeightVar;
 
+  /**
+   * 统一获取“输入框上方辅助区”节点。
+   *
+   * 设计约束：
+   * - queue / steer / request_user_input 都应挂到这里；
+   * - 这样输入区的辅助信息有固定视线落点，不会再散落到页面顶部或全屏 modal；
+   * - 若极端情况下该节点尚未挂好，则退回整个 input container，至少保证功能不中断。
+   */
+  const getComposerAccessoryRegion = () => {
+    return appContext.dom.composerAccessoryRegion
+      || document.getElementById('composer-accessory-region')
+      || appContext.dom.inputContainer
+      || null;
+  };
+
+  const refreshComposerAccessoryLayout = () => {
+    window.requestAnimationFrame(() => {
+      appContext.utils.updateInputContainerHeightVar?.();
+    });
+  };
+
+  let activeRequestUserInputSession = null;
+
   // 统一生成输入框 placeholder 文案，避免各处硬编码导致切换覆盖不一致。
   appContext.utils.buildMessageInputPlaceholder = (currentConfig, options = {}) => {
     const rawName = currentConfig?.displayName || currentConfig?.modelName || currentConfig?.baseUrl || '';
@@ -350,42 +374,75 @@ export function registerSidebarUtilities(appContext) {
   };
 
   /**
-   * 展示一个结构化的“向用户提问”对话框，并等待用户回答后再继续。
+   * 在输入框上方的统一辅助区内展示 request_user_input 面板，并等待用户选择“继续”或“跳过”。
    *
    * 设计取向：
-   * - 尽量贴近 Codex `request_user_input` 的交互语义：模型给出问题与选项，客户端补一个自由输入的 Other；
-   * - 这里不自行校验 schema，只负责展示与收集答案；schema 约束由 sender + 纯函数模块负责；
-   * - 返回值保持极小，只返回 `cancelled` 与 `answers`，避免 UI 层与工具协议耦得过深。
+   * - 不再使用全屏 modal，避免把本来只是“补充信息”的动作放大成强制阻塞交互；
+   * - 与 queue / steer 预览共用同一块 composer 上方辅助区，形成稳定的视线落点；
+   * - “继续生成”允许带着部分答案甚至空答案继续，真正的“强制回答”交给模型自行决定，不由 UI 粗暴代劳。
    *
    * @param {{questions?: Array<{id:string, header:string, question:string, options?: Array<{label:string, description:string}>}>}} [options]
    * @returns {Promise<{cancelled:boolean, answers:Record<string, {answers:string[]}>}>}
    */
   appContext.utils.showRequestUserInput = (options = {}) => {
     const questions = Array.isArray(options.questions) ? options.questions : [];
+    const host = getComposerAccessoryRegion();
+
+    if (!host) {
+      return Promise.reject(new Error('当前界面尚未初始化输入框辅助区。'));
+    }
+
+    if (activeRequestUserInputSession?.finish) {
+      activeRequestUserInputSession.finish({ cancelled: true, answers: {} });
+    }
+
+    document.querySelectorAll('.composer-request-panel').forEach((node) => node.remove());
 
     return new Promise((resolve) => {
-      const overlay = document.createElement('div');
-      overlay.className = 'confirm-overlay user-question-overlay';
-      overlay.setAttribute('role', 'presentation');
+      const panel = document.createElement('section');
+      panel.className = 'composer-request-panel';
+      panel.setAttribute('role', 'group');
+      panel.setAttribute('aria-label', '模型补充提问');
 
-      const dialog = document.createElement('div');
-      dialog.className = 'confirm-dialog user-question-dialog';
-      dialog.setAttribute('role', 'dialog');
-      dialog.setAttribute('aria-modal', 'true');
+      const header = document.createElement('div');
+      header.className = 'composer-request-header';
+
+      const headerMain = document.createElement('div');
+      headerMain.className = 'composer-request-header-main';
+
+      const badge = document.createElement('span');
+      badge.className = 'composer-request-badge';
+      badge.textContent = 'request_user_input';
+      headerMain.appendChild(badge);
+
+      const headerCopy = document.createElement('div');
+      headerCopy.className = 'composer-request-header-copy';
 
       const titleEl = document.createElement('div');
-      titleEl.className = 'confirm-title';
-      titleEl.textContent = '请回答以下问题';
-      dialog.appendChild(titleEl);
+      titleEl.className = 'composer-request-title';
+      titleEl.textContent = '模型想补充确认一点信息';
+      headerCopy.appendChild(titleEl);
 
       const descEl = document.createElement('div');
-      descEl.className = 'confirm-desc user-question-subtitle';
-      descEl.textContent = '模型调用了 request_user_input；你回答后，本轮生成会继续往下走。';
-      dialog.appendChild(descEl);
+      descEl.className = 'composer-request-subtitle';
+      descEl.textContent = '你可以直接回答，也可以跳过；这轮生成会在你决定后继续。';
+      headerCopy.appendChild(descEl);
+
+      headerMain.appendChild(headerCopy);
+      header.appendChild(headerMain);
+
+      const dismissBtn = document.createElement('button');
+      dismissBtn.type = 'button';
+      dismissBtn.className = 'composer-request-dismiss';
+      dismissBtn.textContent = '跳过';
+      dismissBtn.setAttribute('aria-label', '跳过本次补充提问');
+      header.appendChild(dismissBtn);
+
+      panel.appendChild(header);
 
       const questionsEl = document.createElement('div');
-      questionsEl.className = 'user-question-list';
-      dialog.appendChild(questionsEl);
+      questionsEl.className = 'composer-request-list';
+      panel.appendChild(questionsEl);
 
       const controlEntries = [];
 
@@ -399,66 +456,77 @@ export function registerSidebarUtilities(appContext) {
         return answers;
       }
 
-      function getPendingQuestionHeaders() {
-        return controlEntries
-          .filter(entry => !entry.getAnswer())
-          .map(entry => entry.question.header || entry.question.id)
-          .filter(Boolean);
+      function updatePanelState() {
+        const answerMap = buildAnswerMap();
+        const answeredCount = Object.keys(answerMap).length;
+        const unansweredCount = Math.max(questions.length - answeredCount, 0);
+
+        statusEl.dataset.state = answeredCount > 0 ? 'ready' : 'idle';
+        if (answeredCount <= 0) {
+          statusEl.textContent = '不想回答也没关系，可以直接继续或跳过。';
+        } else if (unansweredCount > 0) {
+          statusEl.textContent = `已回答 ${answeredCount}/${questions.length} 个问题；未回答的问题会被视为跳过。`;
+        } else {
+          statusEl.textContent = '答案会作为本地工具结果回传给模型，并继续当前生成。';
+        }
       }
 
-      questions.forEach((question, index) => {
+      questions.forEach((question, questionIndex) => {
         const itemEl = document.createElement('section');
-        itemEl.className = 'user-question-item';
+        itemEl.className = 'composer-request-question';
 
-        const headerRow = document.createElement('div');
-        headerRow.className = 'user-question-header';
+        const itemHeader = document.createElement('div');
+        itemHeader.className = 'composer-request-question-header';
 
-        const badgeEl = document.createElement('span');
-        badgeEl.className = 'user-question-badge';
-        badgeEl.textContent = question.header || `问题 ${index + 1}`;
-        headerRow.appendChild(badgeEl);
+        const itemBadge = document.createElement('span');
+        itemBadge.className = 'composer-request-question-badge';
+        itemBadge.textContent = question.header || `问题 ${questionIndex + 1}`;
+        itemHeader.appendChild(itemBadge);
 
-        const indexEl = document.createElement('span');
-        indexEl.className = 'user-question-index';
-        indexEl.textContent = `${index + 1}/${questions.length}`;
-        headerRow.appendChild(indexEl);
+        const itemIndex = document.createElement('span');
+        itemIndex.className = 'composer-request-question-index';
+        itemIndex.textContent = `${questionIndex + 1}/${questions.length}`;
+        itemHeader.appendChild(itemIndex);
 
-        itemEl.appendChild(headerRow);
+        itemEl.appendChild(itemHeader);
 
         const promptEl = document.createElement('div');
-        promptEl.className = 'user-question-prompt';
+        promptEl.className = 'composer-request-question-prompt';
         promptEl.textContent = question.question || '';
         itemEl.appendChild(promptEl);
 
         const optionsEl = document.createElement('div');
-        optionsEl.className = 'user-question-options';
+        optionsEl.className = 'composer-request-options';
         itemEl.appendChild(optionsEl);
 
-        const groupName = `user-question-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`;
+        const groupName = `composer-request-${Date.now()}-${questionIndex}-${Math.random().toString(36).slice(2, 8)}`;
         const optionList = [
           ...(Array.isArray(question.options) ? question.options : []),
           {
-            label: 'Other',
-            description: '如果以上都不合适，可自行输入答案。',
+            label: '其他',
+            description: '如果这些都不合适，可以自己补充答案。',
             __other: true
           }
         ];
 
-        let otherRadio = null;
         let firstRadio = null;
+        let otherRadio = null;
+
+        const otherWrap = document.createElement('div');
+        otherWrap.className = 'composer-request-other-wrap';
+
         const otherInput = document.createElement('input');
         otherInput.type = 'text';
-        otherInput.className = 'settings-text-input user-question-other-input';
-        otherInput.placeholder = '填写其他答案';
+        otherInput.className = 'settings-text-input composer-request-other-input';
+        otherInput.placeholder = '补充你自己的答案';
         otherInput.disabled = true;
+        otherWrap.appendChild(otherInput);
 
-        const getSelectedRadio = () => {
-          return optionsEl.querySelector(`input[name="${groupName}"]:checked`);
-        };
-
+        const getSelectedRadio = () => optionsEl.querySelector(`input[name="${groupName}"]:checked`);
         const syncOtherInputState = () => {
           const isOtherSelected = otherRadio?.checked === true;
           otherInput.disabled = !isOtherSelected;
+          otherWrap.classList.toggle('is-active', isOtherSelected);
           if (!isOtherSelected) return;
           requestAnimationFrame(() => {
             otherInput.focus();
@@ -466,13 +534,13 @@ export function registerSidebarUtilities(appContext) {
           });
         };
 
-        optionList.forEach((option) => {
+        optionList.forEach((option, optionIndex) => {
           const optionLabel = document.createElement('label');
-          optionLabel.className = 'user-question-option';
+          optionLabel.className = 'composer-request-option';
 
           const radio = document.createElement('input');
           radio.type = 'radio';
-          radio.className = 'user-question-option-input';
+          radio.className = 'composer-request-option-input';
           radio.name = groupName;
           radio.value = option.__other ? '__other__' : (option.label || '');
 
@@ -481,33 +549,34 @@ export function registerSidebarUtilities(appContext) {
 
           radio.addEventListener('change', () => {
             syncOtherInputState();
-            updateSubmitState();
+            updatePanelState();
           });
 
+          const optionIndexEl = document.createElement('span');
+          optionIndexEl.className = 'composer-request-option-index';
+          optionIndexEl.textContent = `${optionIndex + 1}.`;
+
           const body = document.createElement('div');
-          body.className = 'user-question-option-body';
+          body.className = 'composer-request-option-body';
 
           const optionTitle = document.createElement('div');
-          optionTitle.className = 'user-question-option-title';
+          optionTitle.className = 'composer-request-option-title';
           optionTitle.textContent = option.label || '';
           body.appendChild(optionTitle);
 
           const optionDesc = document.createElement('div');
-          optionDesc.className = 'user-question-option-desc';
+          optionDesc.className = 'composer-request-option-desc';
           optionDesc.textContent = option.description || '';
           body.appendChild(optionDesc);
 
           optionLabel.appendChild(radio);
+          optionLabel.appendChild(optionIndexEl);
           optionLabel.appendChild(body);
           optionsEl.appendChild(optionLabel);
         });
 
-        otherInput.addEventListener('input', () => updateSubmitState());
-
-        const otherWrap = document.createElement('div');
-        otherWrap.className = 'user-question-other-wrap';
-        otherWrap.appendChild(otherInput);
-        optionsEl.appendChild(otherWrap);
+        otherInput.addEventListener('input', () => updatePanelState());
+        itemEl.appendChild(otherWrap);
 
         questionsEl.appendChild(itemEl);
 
@@ -527,88 +596,78 @@ export function registerSidebarUtilities(appContext) {
         });
       });
 
+      const footer = document.createElement('div');
+      footer.className = 'composer-request-footer';
+
+      const statusWrap = document.createElement('div');
+      statusWrap.className = 'composer-request-status-wrap';
+
       const statusEl = document.createElement('div');
-      statusEl.className = 'confirm-desc user-question-status';
-      dialog.appendChild(statusEl);
+      statusEl.className = 'composer-request-status';
+      statusWrap.appendChild(statusEl);
 
       const shortcutEl = document.createElement('div');
-      shortcutEl.className = 'confirm-desc user-question-shortcut';
-      shortcutEl.textContent = '可用 Ctrl/Cmd + Enter 直接提交。';
-      dialog.appendChild(shortcutEl);
+      shortcutEl.className = 'composer-request-shortcut';
+      shortcutEl.textContent = 'Esc 跳过，Ctrl/Cmd + Enter 继续。';
+      statusWrap.appendChild(shortcutEl);
+
+      footer.appendChild(statusWrap);
 
       const actions = document.createElement('div');
-      actions.className = 'confirm-actions';
+      actions.className = 'composer-request-actions';
 
-      const cancelBtn = document.createElement('button');
-      cancelBtn.className = 'btn btn-secondary';
-      cancelBtn.textContent = '取消';
+      const skipBtn = document.createElement('button');
+      skipBtn.type = 'button';
+      skipBtn.className = 'composer-request-button composer-request-button--ghost';
+      skipBtn.textContent = '先跳过';
+      actions.appendChild(skipBtn);
 
       const submitBtn = document.createElement('button');
-      submitBtn.className = 'btn btn-primary';
+      submitBtn.type = 'button';
+      submitBtn.className = 'composer-request-button composer-request-button--primary';
       submitBtn.textContent = '继续生成';
-
-      actions.appendChild(cancelBtn);
       actions.appendChild(submitBtn);
-      dialog.appendChild(actions);
 
-      overlay.appendChild(dialog);
-      document.body.appendChild(overlay);
+      footer.appendChild(actions);
+      panel.appendChild(footer);
 
       let settled = false;
       let removeKeyListener = null;
 
-      const cleanUp = () => {
+      const finish = (payload) => {
+        if (settled) return;
+        settled = true;
+        if (activeRequestUserInputSession?.panel === panel) {
+          activeRequestUserInputSession = null;
+        }
         if (typeof removeKeyListener === 'function') {
           removeKeyListener();
           removeKeyListener = null;
         }
-        overlay.classList.add('fade-out');
-        setTimeout(() => overlay.remove(), 200);
-      };
-
-      const finish = (payload) => {
-        if (settled) return;
-        settled = true;
-        cleanUp();
+        panel.remove();
+        refreshComposerAccessoryLayout();
         resolve(payload);
       };
 
-      const onCancel = () => finish({ cancelled: true, answers: {} });
+      const onSkip = () => finish({ cancelled: true, answers: {} });
       const onSubmit = () => {
-        if (submitBtn.disabled) {
-          updateSubmitState();
-          return;
-        }
+        const answers = buildAnswerMap();
         finish({
-          cancelled: false,
-          answers: buildAnswerMap()
+          cancelled: Object.keys(answers).length <= 0,
+          answers
         });
       };
 
-      function updateSubmitState() {
-        const pendingHeaders = getPendingQuestionHeaders();
-        submitBtn.disabled = pendingHeaders.length > 0;
-        if (pendingHeaders.length > 0) {
-          statusEl.textContent = `请先回答：${pendingHeaders.join('、')}。`;
-          statusEl.dataset.state = 'pending';
-          return;
-        }
-        statusEl.textContent = '答案会作为本地工具结果回传给模型，并继续当前生成。';
-        statusEl.dataset.state = 'ready';
-      }
-
-      cancelBtn.addEventListener('click', onCancel);
+      dismissBtn.addEventListener('click', onSkip);
+      skipBtn.addEventListener('click', onSkip);
       submitBtn.addEventListener('click', onSubmit);
-      overlay.addEventListener('click', (event) => {
-        if (event.target === overlay) onCancel();
-      });
 
       const onKeyDown = (event) => {
-        if (!document.body.contains(overlay)) return;
+        if (!panel.isConnected) return;
         if (event.key === 'Escape') {
           event.preventDefault();
           event.stopPropagation();
-          onCancel();
+          onSkip();
           return;
         }
         if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
@@ -620,8 +679,12 @@ export function registerSidebarUtilities(appContext) {
       document.addEventListener('keydown', onKeyDown, true);
       removeKeyListener = () => document.removeEventListener('keydown', onKeyDown, true);
 
-      updateSubmitState();
+      activeRequestUserInputSession = { panel, finish };
+      host.insertBefore(panel, host.firstChild || null);
+      refreshComposerAccessoryLayout();
+      updatePanelState();
       controlEntries[0]?.focusFirst?.();
+      panel.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     });
   };
 

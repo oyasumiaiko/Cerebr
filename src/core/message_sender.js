@@ -2760,6 +2760,15 @@ export function createMessageSender(appContext) {
   }
 
   function getConversationQueuedSendPreviewMountPoint() {
+    const composerAccessoryRegion = document.getElementById('composer-accessory-region');
+    if (composerAccessoryRegion) {
+      return {
+        host: composerAccessoryRegion,
+        // 辅助区内部采用自然堆叠顺序：request_user_input 在前，queue / steer 预览追加到后面。
+        anchor: null
+      };
+    }
+
     if (inputContainer) {
       return {
         host: inputContainer,

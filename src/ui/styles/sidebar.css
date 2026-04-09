@@ -539,13 +539,23 @@ body.standalone-mode #empty-state-repomix {
 .conversation-send-queue-preview {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 8px;
     flex-shrink: 0;
-    padding: 6px 10px 4px;
-    background: color-mix(in srgb, var(--cerebr-input-bg) 96%, transparent);
-    border-bottom: 1px solid color-mix(in srgb, var(--cerebr-border-color) 45%, transparent);
+    padding: 10px 12px;
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--cerebr-panel-surface-bg, var(--cerebr-input-bg)) 90%, transparent),
+        color-mix(in srgb, var(--cerebr-input-bg) 82%, var(--cerebr-bg-color) 18%)
+      );
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 48%, transparent);
+    border-radius: 18px;
+    box-shadow:
+      0 10px 24px rgba(15, 23, 42, 0.12),
+      inset 0 0 0 1px color-mix(in srgb, #ffffff 10%, transparent);
     position: relative;
-    z-index: 2;
+    overflow: hidden;
+    z-index: 1;
 }
 
 .conversation-send-queue-preview[hidden] {
@@ -555,8 +565,8 @@ body.standalone-mode #empty-state-repomix {
 .conversation-send-queue-preview__list {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    max-height: min(28vh, 220px);
+    gap: 6px;
+    max-height: min(28vh, 240px);
     overflow-y: auto;
     padding-right: 2px;
 }
@@ -571,10 +581,9 @@ body.standalone-mode #empty-state-repomix {
     gap: 8px;
     width: 100%;
     min-width: 0;
-    padding: 6px 8px;
-    border-radius: 10px;
-    border-bottom-right-radius: 4px;
-    background: color-mix(in srgb, var(--cerebr-message-user-bg) 92%, var(--cerebr-bg-color) 8%);
+    padding: 8px 10px;
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--cerebr-message-user-bg) 86%, var(--cerebr-panel-surface-bg, var(--cerebr-input-bg)) 14%);
     border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 55%, transparent);
 }
 
@@ -703,13 +712,13 @@ body.standalone-mode #empty-state-repomix {
 }
 
 .conversation-send-queue-preview__pending-mutation {
-    padding: 6px 8px;
-    border-radius: 8px;
+    padding: 8px 10px;
+    border-radius: 12px;
     font-size: 12px;
     line-height: 1.4;
     color: var(--cerebr-text-color);
-    background: color-mix(in srgb, var(--cerebr-highlight) 8%, var(--cerebr-bg-color) 92%);
-    border: 1px solid color-mix(in srgb, var(--cerebr-highlight) 16%, transparent);
+    background: color-mix(in srgb, var(--cerebr-highlight) 10%, var(--cerebr-panel-surface-bg, var(--cerebr-input-bg)) 90%);
+    border: 1px solid color-mix(in srgb, var(--cerebr-highlight) 20%, transparent);
 }
 
 .conversation-send-queue-preview__text {
@@ -1639,6 +1648,29 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     flex-shrink: 0;
     box-shadow: 0 -1px 0 rgba(0, 0, 0, 0.1);
     z-index: 1000; /* 始终浮于设置面板之上 */
+}
+
+#composer-accessory-region {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    width: 100%;
+    box-sizing: border-box;
+    padding: 12px 12px 8px;
+    border-bottom: 1px solid color-mix(in srgb, var(--cerebr-border-color) 30%, transparent);
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--cerebr-input-bg) 98%, transparent),
+        color-mix(in srgb, var(--cerebr-input-bg) 88%, var(--cerebr-bg-color) 12%)
+      );
+}
+
+#composer-accessory-region:empty {
+    display: none;
+    padding: 0;
+    border-bottom: none;
+    background: transparent;
 }
 
 /* 顶部同心小圆点状态指示（对话框左上角） */
@@ -8262,163 +8294,333 @@ body.chat-history-panel-resizing {
 .confirm-actions .btn.btn-primary { background: var(--cerebr-highlight, #2ecc71); color: #fff; border-color: transparent; }
 .confirm-actions .btn.btn-secondary { background: color-mix(in srgb, var(--cerebr-surface, #ffffff) 88%, transparent); }
 
-.user-question-dialog {
-  width: min(760px, calc(100vw - 32px));
-  max-height: min(760px, calc(100vh - 32px));
-  overflow: auto;
-}
-
-.user-question-subtitle {
-  margin-bottom: 14px;
-}
-
-.user-question-list {
+.composer-request-panel {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  padding: 12px 14px;
+  border-radius: 20px;
+  border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 48%, transparent);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--cerebr-panel-surface-bg, var(--cerebr-input-bg)) 92%, transparent),
+      color-mix(in srgb, var(--cerebr-message-ai-bg) 76%, var(--cerebr-input-bg) 24%)
+    );
+  box-shadow:
+    0 12px 28px rgba(15, 23, 42, 0.14),
+    inset 0 0 0 1px color-mix(in srgb, #ffffff 10%, transparent);
+  color: var(--cerebr-text-color);
 }
 
-.user-question-item {
-  border-radius: 14px;
-  padding: 12px;
-  background: color-mix(in srgb, var(--cerebr-message-ai-bg) 72%, transparent);
-  border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 58%, transparent);
-}
-
-.user-question-header {
+.composer-request-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 8px;
 }
 
-.user-question-badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  padding: 0 10px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--cerebr-highlight, #2ecc71) 16%, transparent);
-  color: var(--cerebr-text-color);
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
-
-.user-question-index {
-  font-size: 12px;
-  color: color-mix(in srgb, var(--cerebr-text-color) 70%, transparent);
-}
-
-.user-question-prompt {
-  font-size: 14px;
-  line-height: 1.55;
-  color: var(--cerebr-text-color);
-  margin-bottom: 10px;
-}
-
-.user-question-options {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.user-question-option {
+.composer-request-header-main {
   display: flex;
   align-items: flex-start;
   gap: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  cursor: pointer;
-  background: color-mix(in srgb, var(--cerebr-surface, #ffffff) 88%, transparent);
-  border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 58%, transparent);
-  transition: border-color 0.16s ease, transform 0.16s ease, background 0.16s ease;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
-.user-question-option:hover {
-  transform: translateY(-1px);
-  border-color: color-mix(in srgb, var(--cerebr-highlight, #2ecc71) 42%, transparent);
-}
-
-.user-question-option:has(.user-question-option-input:checked) {
-  background: color-mix(in srgb, var(--cerebr-highlight, #2ecc71) 12%, transparent);
-  border-color: color-mix(in srgb, var(--cerebr-highlight, #2ecc71) 58%, transparent);
-}
-
-.user-question-option-input {
-  margin-top: 2px;
-  accent-color: var(--cerebr-highlight, #2ecc71);
-}
-
-.user-question-option-body {
+.composer-request-header-copy {
   display: flex;
   flex-direction: column;
   gap: 4px;
   min-width: 0;
 }
 
-.user-question-option-title {
-  font-size: 13px;
-  font-weight: 600;
+.composer-request-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cerebr-highlight) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cerebr-highlight) 24%, transparent);
+  color: var(--cerebr-text-color);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+}
+
+.composer-request-title {
+  font-size: 14px;
+  line-height: 1.35;
+  font-weight: 700;
   color: var(--cerebr-text-color);
 }
 
-.user-question-option-desc {
+.composer-request-subtitle {
+  font-size: 12px;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--cerebr-text-color) 82%, transparent);
+}
+
+.composer-request-dismiss {
+  flex: 0 0 auto;
+  padding: 5px 10px;
+  border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 46%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cerebr-bg-color) 26%, transparent);
+  color: color-mix(in srgb, var(--cerebr-text-color) 82%, transparent);
+  cursor: pointer;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+}
+
+.composer-request-dismiss:hover {
+  background: color-mix(in srgb, var(--cerebr-bg-color) 40%, transparent);
+  border-color: color-mix(in srgb, var(--cerebr-border-color) 66%, transparent);
+  color: var(--cerebr-text-color);
+}
+
+.composer-request-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: min(34vh, 360px);
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.composer-request-question {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--cerebr-bg-color) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 42%, transparent);
+}
+
+.composer-request-question-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.composer-request-question-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--cerebr-message-user-bg) 72%, var(--cerebr-bg-color) 28%);
+  color: var(--cerebr-text-color);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.composer-request-question-index {
+  font-size: 11px;
+  color: color-mix(in srgb, var(--cerebr-text-color) 64%, transparent);
+}
+
+.composer-request-question-prompt {
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--cerebr-text-color);
+}
+
+.composer-request-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.composer-request-option {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  cursor: pointer;
+  background: color-mix(in srgb, var(--cerebr-panel-inline-bg, var(--cerebr-input-bg)) 84%, transparent);
+  border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 44%, transparent);
+  transition: border-color 0.16s ease, transform 0.16s ease, background-color 0.16s ease, box-shadow 0.16s ease;
+}
+
+.composer-request-option:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--cerebr-highlight) 42%, transparent);
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+}
+
+.composer-request-option:has(.composer-request-option-input:checked) {
+  background: color-mix(in srgb, var(--cerebr-highlight) 12%, var(--cerebr-panel-inline-bg, var(--cerebr-input-bg)) 88%);
+  border-color: color-mix(in srgb, var(--cerebr-highlight) 58%, transparent);
+}
+
+.composer-request-option-input {
+  margin-top: 2px;
+  accent-color: var(--cerebr-highlight);
+}
+
+.composer-request-option-index {
+  font-size: 12px;
+  line-height: 1.5;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--cerebr-text-color) 58%, transparent);
+}
+
+.composer-request-option-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.composer-request-option-title {
+  font-size: 13px;
+  line-height: 1.4;
+  font-weight: 700;
+  color: var(--cerebr-text-color);
+}
+
+.composer-request-option-desc {
   font-size: 12px;
   line-height: 1.45;
-  color: color-mix(in srgb, var(--cerebr-text-color) 78%, transparent);
+  color: color-mix(in srgb, var(--cerebr-text-color) 76%, transparent);
 }
 
-.user-question-other-wrap {
-  padding-left: 34px;
+.composer-request-other-wrap {
+  margin-left: 32px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px dashed color-mix(in srgb, var(--cerebr-border-color) 44%, transparent);
+  background: color-mix(in srgb, var(--cerebr-bg-color) 14%, transparent);
+  transition: border-color 0.16s ease, background-color 0.16s ease;
 }
 
-.user-question-other-input {
+.composer-request-other-wrap.is-active {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--cerebr-highlight) 44%, transparent);
+  background: color-mix(in srgb, var(--cerebr-highlight) 8%, var(--cerebr-bg-color) 92%);
+}
+
+.composer-request-other-input {
   width: 100%;
 }
 
-.user-question-other-input:disabled {
-  opacity: 0.55;
+.composer-request-other-input:disabled {
+  opacity: 0.52;
   cursor: not-allowed;
 }
 
-.user-question-status {
-  margin-top: 12px;
+.composer-request-footer {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.user-question-status[data-state="pending"] {
-  color: color-mix(in srgb, var(--cerebr-warning-text, #b45309) 88%, var(--cerebr-text-color));
+.composer-request-status-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
-.user-question-status[data-state="ready"] {
-  color: color-mix(in srgb, var(--cerebr-highlight, #2ecc71) 84%, var(--cerebr-text-color));
+.composer-request-status {
+  font-size: 12px;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--cerebr-text-color) 86%, transparent);
 }
 
-.user-question-shortcut {
-  margin-top: 6px;
+.composer-request-status[data-state="ready"] {
+  color: color-mix(in srgb, var(--cerebr-highlight) 82%, var(--cerebr-text-color) 18%);
+}
+
+.composer-request-shortcut {
+  font-size: 11px;
+  line-height: 1.35;
+  color: color-mix(in srgb, var(--cerebr-text-color) 60%, transparent);
+}
+
+.composer-request-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.composer-request-button {
+  border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 52%, transparent);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background-color 0.16s ease, border-color 0.16s ease, color 0.16s ease, transform 0.16s ease;
+}
+
+.composer-request-button:hover {
+  transform: translateY(-1px);
+}
+
+.composer-request-button--ghost {
+  background: color-mix(in srgb, var(--cerebr-bg-color) 26%, transparent);
+  color: var(--cerebr-text-color);
+}
+
+.composer-request-button--ghost:hover {
+  background: color-mix(in srgb, var(--cerebr-bg-color) 40%, transparent);
+}
+
+.composer-request-button--primary {
+  background: color-mix(in srgb, var(--cerebr-highlight) 88%, #ffffff 12%);
+  border-color: color-mix(in srgb, var(--cerebr-highlight) 70%, transparent);
+  color: #ffffff;
+  box-shadow: 0 10px 20px color-mix(in srgb, var(--cerebr-highlight) 20%, transparent);
+}
+
+.composer-request-button--primary:hover {
+  background: color-mix(in srgb, var(--cerebr-highlight) 94%, #ffffff 6%);
 }
 
 @media (max-width: 640px) {
-  .user-question-dialog {
-    width: min(100vw, calc(100vw - 16px));
-    max-height: calc(100vh - 16px);
-    padding: 14px 14px 12px;
+  #composer-accessory-region {
+    padding: 10px 10px 8px;
   }
 
-  .user-question-item {
-    padding: 10px;
+  .composer-request-panel {
+    padding: 11px 12px;
   }
 
-  .user-question-other-wrap {
-    padding-left: 0;
+  .composer-request-header {
+    flex-direction: column;
+    align-items: stretch;
   }
 
-  .confirm-actions {
-    flex-wrap: wrap;
+  .composer-request-dismiss {
+    align-self: flex-start;
   }
 
-  .confirm-actions .btn {
+  .composer-request-other-wrap {
+    margin-left: 0;
+  }
+
+  .composer-request-footer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .composer-request-actions {
+    width: 100%;
+  }
+
+  .composer-request-button {
     flex: 1 1 0;
   }
 }
