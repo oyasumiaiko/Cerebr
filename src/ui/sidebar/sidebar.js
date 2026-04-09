@@ -158,6 +158,16 @@ function exposeGlobals(appContext, isStandalone) {
               { label: '先给草图', description: '先展示结构，再决定细节。' },
               { label: '只做样式', description: '先把界面走通，逻辑稍后补。' }
             ]
+          },
+          {
+            header: '验证方式',
+            id: 'verification_mode',
+            question: '这轮改完后你更希望我怎么验证？',
+            options: [
+              { label: '直接跑 smoke (Recommended)', description: '先看真实 UI 与交互是否正常。' },
+              { label: '只跑单测', description: '先做逻辑验证，不立即开浏览器。' },
+              { label: '先给截图', description: '先确认视觉，再继续交互验证。' }
+            ]
           }
         ]
       });

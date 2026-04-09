@@ -403,6 +403,7 @@ export function registerSidebarUtilities(appContext) {
       panel.className = 'composer-request-panel';
       panel.setAttribute('role', 'group');
       panel.setAttribute('aria-label', '模型补充提问');
+      panel.tabIndex = -1;
 
       const header = document.createElement('div');
       header.className = 'composer-request-header';
@@ -440,161 +441,304 @@ export function registerSidebarUtilities(appContext) {
 
       panel.appendChild(header);
 
-      const questionsEl = document.createElement('div');
-      questionsEl.className = 'composer-request-list';
-      panel.appendChild(questionsEl);
+      const stageEl = document.createElement('div');
+      stageEl.className = 'composer-request-stage';
+      panel.appendChild(stageEl);
 
-      const controlEntries = [];
+      /**
+       * 每个问题只维护一个极小状态：
+       * - `selectedOptionValue`：普通选项直接保存 label；Other 用 `__other__` 作为标记；
+       * - `freeformText`：只在选择 Other 时真正参与结果生成，但切回普通选项后仍保留，便于来回修改。
+       */
+      const questionStates = questions.map(() => ({
+        selectedOptionValue: '',
+        freeformText: ''
+      }));
+      let questionIndex = 0;
+      let currentRegularOptionButtons = [];
+      let currentOtherInput = null;
+      let pendingFocusTarget = 'first-option';
 
-      function buildAnswerMap() {
+      const clampQuestionIndex = (value) => {
+        const numeric = Number.isFinite(Number(value)) ? Math.trunc(Number(value)) : 0;
+        return Math.min(Math.max(numeric, 0), Math.max(questions.length - 1, 0));
+      };
+
+      const isEditableElement = (target) => {
+        if (!target) return false;
+        if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return true;
+        return target instanceof HTMLElement && target.isContentEditable === true;
+      };
+
+      const getQuestionState = (index) => {
+        const normalizedIndex = clampQuestionIndex(index);
+        const existing = questionStates[normalizedIndex] || { selectedOptionValue: '', freeformText: '' };
+        const normalized = {
+          selectedOptionValue: typeof existing.selectedOptionValue === 'string' ? existing.selectedOptionValue : '',
+          freeformText: typeof existing.freeformText === 'string' ? existing.freeformText : ''
+        };
+        questionStates[normalizedIndex] = normalized;
+        return normalized;
+      };
+
+      const patchQuestionState = (index, patch = {}) => {
+        const current = getQuestionState(index);
+        questionStates[clampQuestionIndex(index)] = {
+          selectedOptionValue: typeof patch.selectedOptionValue === 'string'
+            ? patch.selectedOptionValue
+            : current.selectedOptionValue,
+          freeformText: typeof patch.freeformText === 'string'
+            ? patch.freeformText
+            : current.freeformText
+        };
+        return questionStates[clampQuestionIndex(index)];
+      };
+
+      const buildAnswerMap = () => {
         const answers = {};
-        controlEntries.forEach((entry) => {
-          const answer = entry.getAnswer();
+        questions.forEach((question, index) => {
+          const state = getQuestionState(index);
+          const answer = state.selectedOptionValue === '__other__'
+            ? state.freeformText.trim()
+            : String(state.selectedOptionValue || '').trim();
           if (!answer) return;
-          answers[entry.question.id] = { answers: [answer] };
+          answers[question.id] = { answers: [answer] };
         });
         return answers;
-      }
+      };
 
-      function updatePanelState() {
+      const focusCurrentQuestionControl = () => {
+        window.requestAnimationFrame(() => {
+          if (!panel.isConnected) return;
+          if (pendingFocusTarget === 'other-input' && currentOtherInput) {
+            currentOtherInput.focus();
+            currentOtherInput.select();
+            return;
+          }
+          if (pendingFocusTarget === 'submit-button') {
+            submitBtn.focus();
+            return;
+          }
+          if (currentRegularOptionButtons[0]) {
+            currentRegularOptionButtons[0].focus();
+            return;
+          }
+          if (currentOtherInput) {
+            currentOtherInput.focus();
+            return;
+          }
+          panel.focus();
+        });
+      };
+
+      const updatePanelState = () => {
         const answerMap = buildAnswerMap();
         const answeredCount = Object.keys(answerMap).length;
         const unansweredCount = Math.max(questions.length - answeredCount, 0);
+        const isLastQuestion = questionIndex >= questions.length - 1;
+
+        submitBtn.textContent = isLastQuestion ? '继续生成' : '下一题';
+        submitBtn.setAttribute('aria-label', submitBtn.textContent);
 
         statusEl.dataset.state = answeredCount > 0 ? 'ready' : 'idle';
         if (answeredCount <= 0) {
-          statusEl.textContent = '不想回答也没关系，可以直接继续或跳过。';
+          statusEl.textContent = '不想回答也没关系，可以直接跳题或继续生成。';
         } else if (unansweredCount > 0) {
-          statusEl.textContent = `已回答 ${answeredCount}/${questions.length} 个问题；未回答的问题会被视为跳过。`;
+          statusEl.textContent = `已回答 ${answeredCount}/${questions.length} 个问题；其余未回答项会按跳过处理。`;
         } else {
           statusEl.textContent = '答案会作为本地工具结果回传给模型，并继续当前生成。';
         }
-      }
+      };
 
-      questions.forEach((question, questionIndex) => {
-        const itemEl = document.createElement('section');
-        itemEl.className = 'composer-request-question';
+      const goToQuestion = (nextIndex, focusTarget = 'first-option') => {
+        questionIndex = clampQuestionIndex(nextIndex);
+        pendingFocusTarget = focusTarget;
+        renderCurrentQuestion();
+      };
 
-        const itemHeader = document.createElement('div');
-        itemHeader.className = 'composer-request-question-header';
+      const setCurrentQuestionToOtherMode = ({ focusInput = true } = {}) => {
+        patchQuestionState(questionIndex, { selectedOptionValue: '__other__' });
+        pendingFocusTarget = focusInput ? 'other-input' : 'panel';
+        renderCurrentQuestion();
+      };
 
-        const itemBadge = document.createElement('span');
-        itemBadge.className = 'composer-request-question-badge';
-        itemBadge.textContent = question.header || `问题 ${questionIndex + 1}`;
-        itemHeader.appendChild(itemBadge);
+      const handleRegularOptionSelection = (optionValue) => {
+        patchQuestionState(questionIndex, { selectedOptionValue: String(optionValue || '') });
+        if (questionIndex < questions.length - 1) {
+          goToQuestion(questionIndex + 1, 'first-option');
+          return;
+        }
+        pendingFocusTarget = 'submit-button';
+        renderCurrentQuestion();
+      };
 
-        const itemIndex = document.createElement('span');
-        itemIndex.className = 'composer-request-question-index';
-        itemIndex.textContent = `${questionIndex + 1}/${questions.length}`;
-        itemHeader.appendChild(itemIndex);
+      const handlePrimaryAction = () => {
+        if (questionIndex < questions.length - 1) {
+          goToQuestion(questionIndex + 1, 'first-option');
+          return;
+        }
+        const answers = buildAnswerMap();
+        finish({
+          cancelled: Object.keys(answers).length <= 0,
+          answers
+        });
+      };
 
-        itemEl.appendChild(itemHeader);
+      function renderCurrentQuestion() {
+        const currentQuestion = questions[questionIndex] || questions[0] || null;
+        if (!currentQuestion) {
+          stageEl.textContent = '';
+          updatePanelState();
+          return;
+        }
+
+        const currentState = getQuestionState(questionIndex);
+        const regularOptions = Array.isArray(currentQuestion.options) ? currentQuestion.options : [];
+        const otherPlaceholder = '其他';
+
+        stageEl.textContent = '';
+        currentRegularOptionButtons = [];
+        currentOtherInput = null;
+
+        const questionEl = document.createElement('section');
+        questionEl.className = 'composer-request-question';
+
+        const questionHeader = document.createElement('div');
+        questionHeader.className = 'composer-request-question-header';
+
+        const questionBadge = document.createElement('span');
+        questionBadge.className = 'composer-request-question-badge';
+        questionBadge.textContent = currentQuestion.header || `问题 ${questionIndex + 1}`;
+        questionHeader.appendChild(questionBadge);
+
+        const questionNav = document.createElement('div');
+        questionNav.className = 'composer-request-question-nav';
+
+        const prevBtn = document.createElement('button');
+        prevBtn.type = 'button';
+        prevBtn.className = 'composer-request-nav-button';
+        prevBtn.textContent = '‹';
+        prevBtn.disabled = questionIndex <= 0;
+        prevBtn.setAttribute('aria-label', '上一题');
+        prevBtn.addEventListener('click', () => goToQuestion(questionIndex - 1, 'first-option'));
+        questionNav.appendChild(prevBtn);
+
+        const progressEl = document.createElement('span');
+        progressEl.className = 'composer-request-nav-progress';
+        progressEl.textContent = `${questionIndex + 1}/${questions.length}`;
+        questionNav.appendChild(progressEl);
+
+        const nextBtn = document.createElement('button');
+        nextBtn.type = 'button';
+        nextBtn.className = 'composer-request-nav-button';
+        nextBtn.textContent = '›';
+        nextBtn.disabled = questionIndex >= questions.length - 1;
+        nextBtn.setAttribute('aria-label', '下一题');
+        nextBtn.addEventListener('click', () => goToQuestion(questionIndex + 1, 'first-option'));
+        questionNav.appendChild(nextBtn);
+
+        questionHeader.appendChild(questionNav);
+        questionEl.appendChild(questionHeader);
 
         const promptEl = document.createElement('div');
         promptEl.className = 'composer-request-question-prompt';
-        promptEl.textContent = question.question || '';
-        itemEl.appendChild(promptEl);
+        promptEl.textContent = currentQuestion.question || '';
+        questionEl.appendChild(promptEl);
 
         const optionsEl = document.createElement('div');
         optionsEl.className = 'composer-request-options';
-        itemEl.appendChild(optionsEl);
 
-        const groupName = `composer-request-${Date.now()}-${questionIndex}-${Math.random().toString(36).slice(2, 8)}`;
-        const optionList = [
-          ...(Array.isArray(question.options) ? question.options : []),
-          {
-            label: '其他',
-            description: '如果这些都不合适，可以自己补充答案。',
-            __other: true
+        regularOptions.forEach((option, optionIndex) => {
+          const optionButton = document.createElement('button');
+          optionButton.type = 'button';
+          optionButton.className = 'composer-request-option';
+          optionButton.setAttribute('aria-label', option.label || '');
+          if (currentState.selectedOptionValue === option.label) {
+            optionButton.classList.add('composer-request-option--selected');
           }
-        ];
-
-        let firstRadio = null;
-        let otherRadio = null;
-
-        const otherWrap = document.createElement('div');
-        otherWrap.className = 'composer-request-other-wrap';
-
-        const otherInput = document.createElement('input');
-        otherInput.type = 'text';
-        otherInput.className = 'settings-text-input composer-request-other-input';
-        otherInput.placeholder = '补充你自己的答案';
-        otherInput.disabled = true;
-        otherWrap.appendChild(otherInput);
-
-        const getSelectedRadio = () => optionsEl.querySelector(`input[name="${groupName}"]:checked`);
-        const syncOtherInputState = () => {
-          const isOtherSelected = otherRadio?.checked === true;
-          otherInput.disabled = !isOtherSelected;
-          otherWrap.classList.toggle('is-active', isOtherSelected);
-          if (!isOtherSelected) return;
-          requestAnimationFrame(() => {
-            otherInput.focus();
-            otherInput.select();
-          });
-        };
-
-        optionList.forEach((option, optionIndex) => {
-          const optionLabel = document.createElement('label');
-          optionLabel.className = 'composer-request-option';
-
-          const radio = document.createElement('input');
-          radio.type = 'radio';
-          radio.className = 'composer-request-option-input';
-          radio.name = groupName;
-          radio.value = option.__other ? '__other__' : (option.label || '');
-
-          if (!firstRadio) firstRadio = radio;
-          if (option.__other) otherRadio = radio;
-
-          radio.addEventListener('change', () => {
-            syncOtherInputState();
-            updatePanelState();
+          optionButton.addEventListener('click', () => {
+            handleRegularOptionSelection(option.label || '');
           });
 
           const optionIndexEl = document.createElement('span');
           optionIndexEl.className = 'composer-request-option-index';
           optionIndexEl.textContent = `${optionIndex + 1}.`;
+          optionButton.appendChild(optionIndexEl);
 
-          const body = document.createElement('div');
-          body.className = 'composer-request-option-body';
+          const optionBody = document.createElement('div');
+          optionBody.className = 'composer-request-option-body';
 
           const optionTitle = document.createElement('div');
           optionTitle.className = 'composer-request-option-title';
           optionTitle.textContent = option.label || '';
-          body.appendChild(optionTitle);
+          optionBody.appendChild(optionTitle);
 
-          const optionDesc = document.createElement('div');
-          optionDesc.className = 'composer-request-option-desc';
-          optionDesc.textContent = option.description || '';
-          body.appendChild(optionDesc);
+          if (option.description) {
+            const optionDesc = document.createElement('div');
+            optionDesc.className = 'composer-request-option-desc';
+            optionDesc.textContent = option.description;
+            optionBody.appendChild(optionDesc);
+          }
 
-          optionLabel.appendChild(radio);
-          optionLabel.appendChild(optionIndexEl);
-          optionLabel.appendChild(body);
-          optionsEl.appendChild(optionLabel);
+          optionButton.appendChild(optionBody);
+          optionsEl.appendChild(optionButton);
+          currentRegularOptionButtons.push(optionButton);
         });
 
-        otherInput.addEventListener('input', () => updatePanelState());
-        itemEl.appendChild(otherWrap);
+        const otherRow = document.createElement('label');
+        otherRow.className = 'composer-request-inline-freeform';
+        const otherSelected = currentState.selectedOptionValue === '__other__';
+        if (otherSelected) {
+          otherRow.classList.add('composer-request-inline-freeform--selected');
+        }
+        otherRow.addEventListener('mousedown', (event) => {
+          if (event.target === currentOtherInput) return;
+          event.preventDefault();
+          setCurrentQuestionToOtherMode({ focusInput: true });
+        });
 
-        questionsEl.appendChild(itemEl);
+        const otherIndexEl = document.createElement('span');
+        otherIndexEl.className = 'composer-request-inline-freeform-index';
+        otherIndexEl.textContent = `${regularOptions.length + 1}.`;
+        otherRow.appendChild(otherIndexEl);
 
-        controlEntries.push({
-          question,
-          focusFirst() {
-            firstRadio?.focus();
-          },
-          getAnswer() {
-            const selectedRadio = getSelectedRadio();
-            if (!selectedRadio) return '';
-            if (selectedRadio.value === '__other__') {
-              return otherInput.value.trim();
-            }
-            return String(selectedRadio.value || '').trim();
+        const otherInput = document.createElement('input');
+        otherInput.type = 'text';
+        otherInput.className = 'settings-text-input composer-request-inline-freeform-input';
+        otherInput.placeholder = otherPlaceholder;
+        otherInput.value = currentState.freeformText || '';
+        otherInput.addEventListener('focus', () => {
+          if (getQuestionState(questionIndex).selectedOptionValue !== '__other__') {
+            setCurrentQuestionToOtherMode({ focusInput: true });
+            return;
           }
         });
-      });
+        otherInput.addEventListener('input', () => {
+          patchQuestionState(questionIndex, {
+            selectedOptionValue: '__other__',
+            freeformText: otherInput.value
+          });
+          if (!otherRow.classList.contains('composer-request-inline-freeform--selected')) {
+            otherRow.classList.add('composer-request-inline-freeform--selected');
+          }
+          updatePanelState();
+        });
+        otherInput.addEventListener('keydown', (event) => {
+          if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+            event.preventDefault();
+            handlePrimaryAction();
+          }
+        });
+        otherRow.appendChild(otherInput);
+        currentOtherInput = otherInput;
+        optionsEl.appendChild(otherRow);
+
+        questionEl.appendChild(optionsEl);
+        stageEl.appendChild(questionEl);
+
+        updatePanelState();
+        focusCurrentQuestionControl();
+      }
 
       const footer = document.createElement('div');
       footer.className = 'composer-request-footer';
@@ -650,13 +794,7 @@ export function registerSidebarUtilities(appContext) {
       };
 
       const onSkip = () => finish({ cancelled: true, answers: {} });
-      const onSubmit = () => {
-        const answers = buildAnswerMap();
-        finish({
-          cancelled: Object.keys(answers).length <= 0,
-          answers
-        });
-      };
+      const onSubmit = () => handlePrimaryAction();
 
       dismissBtn.addEventListener('click', onSkip);
       skipBtn.addEventListener('click', onSkip);
@@ -674,6 +812,49 @@ export function registerSidebarUtilities(appContext) {
           event.preventDefault();
           event.stopPropagation();
           onSubmit();
+          return;
+        }
+
+        const target = event.target;
+        if (isEditableElement(target)) return;
+
+        if (/^[1-9]$/.test(event.key)) {
+          const optionIndex = Number(event.key) - 1;
+          const currentQuestion = questions[questionIndex] || null;
+          const regularOptions = Array.isArray(currentQuestion?.options) ? currentQuestion.options : [];
+          const matchedOption = regularOptions[optionIndex];
+          if (matchedOption) {
+            event.preventDefault();
+            event.stopPropagation();
+            handleRegularOptionSelection(matchedOption.label || '');
+            return;
+          }
+          if (optionIndex === regularOptions.length) {
+            event.preventDefault();
+            event.stopPropagation();
+            setCurrentQuestionToOtherMode({ focusInput: true });
+            return;
+          }
+        }
+
+        if (event.key === 'ArrowLeft') {
+          event.preventDefault();
+          event.stopPropagation();
+          goToQuestion(questionIndex - 1, 'first-option');
+          return;
+        }
+
+        if (event.key === 'ArrowRight') {
+          event.preventDefault();
+          event.stopPropagation();
+          goToQuestion(questionIndex + 1, 'first-option');
+          return;
+        }
+
+        if (event.key === 'Enter' && !event.shiftKey && !event.altKey) {
+          event.preventDefault();
+          event.stopPropagation();
+          onSubmit();
         }
       };
       document.addEventListener('keydown', onKeyDown, true);
@@ -682,8 +863,8 @@ export function registerSidebarUtilities(appContext) {
       activeRequestUserInputSession = { panel, finish };
       host.insertBefore(panel, host.firstChild || null);
       refreshComposerAccessoryLayout();
-      updatePanelState();
-      controlEntries[0]?.focusFirst?.();
+      renderCurrentQuestion();
+      window.requestAnimationFrame(() => panel.focus({ preventScroll: true }));
       panel.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     });
   };
