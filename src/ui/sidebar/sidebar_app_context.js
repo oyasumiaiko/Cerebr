@@ -434,12 +434,6 @@ export function registerSidebarUtilities(appContext) {
         return Math.min(Math.max(numeric, 0), Math.max(questions.length - 1, 0));
       };
 
-      const isEditableElement = (target) => {
-        if (!target) return false;
-        if (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) return true;
-        return target instanceof HTMLElement && target.isContentEditable === true;
-      };
-
       const getQuestionState = (index) => {
         const normalizedIndex = clampQuestionIndex(index);
         const existing = questionStates[normalizedIndex] || { selectedOptionValue: '', freeformText: '' };
@@ -654,11 +648,16 @@ export function registerSidebarUtilities(appContext) {
         otherIndexEl.textContent = `${regularOptions.length + 1}.`;
         otherRow.appendChild(otherIndexEl);
 
-        const otherInput = document.createElement('input');
-        otherInput.type = 'text';
+        const otherInput = document.createElement('textarea');
         otherInput.className = 'settings-text-input composer-request-inline-freeform-input';
         otherInput.placeholder = otherPlaceholder;
+        otherInput.rows = 1;
         otherInput.value = currentState.freeformText || '';
+        const syncOtherInputHeight = () => {
+          // 允许 Shift+Enter 多行输入，同时把高度自动贴合内容，避免出现局促的内部滚动条。
+          otherInput.style.height = 'auto';
+          otherInput.style.height = `${Math.max(otherInput.scrollHeight, 0)}px`;
+        };
         otherInput.addEventListener('focus', () => {
           if (getQuestionState(questionIndex).selectedOptionValue !== REQUEST_USER_INPUT_OTHER_OPTION_VALUE) {
             setCurrentQuestionToOtherMode({ focusInput: true });
@@ -673,6 +672,7 @@ export function registerSidebarUtilities(appContext) {
           if (!otherRow.classList.contains('composer-request-inline-freeform--selected')) {
             otherRow.classList.add('composer-request-inline-freeform--selected');
           }
+          syncOtherInputHeight();
         });
         otherInput.addEventListener('keydown', (event) => {
           if (event.key === 'Enter' && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
@@ -681,6 +681,7 @@ export function registerSidebarUtilities(appContext) {
           }
         });
         otherRow.appendChild(otherInput);
+        syncOtherInputHeight();
         currentOtherInput = otherInput;
         optionsEl.appendChild(otherRow);
 
@@ -690,17 +691,12 @@ export function registerSidebarUtilities(appContext) {
       }
 
       let settled = false;
-      let removeKeyListener = null;
 
       const finish = (payload) => {
         if (settled) return;
         settled = true;
         if (activeRequestUserInputSession?.panel === panel) {
           activeRequestUserInputSession = null;
-        }
-        if (typeof removeKeyListener === 'function') {
-          removeKeyListener();
-          removeKeyListener = null;
         }
         panel.classList.add('is-closing');
         const finalize = () => {
@@ -712,60 +708,6 @@ export function registerSidebarUtilities(appContext) {
       };
 
       const onSkip = () => finish(buildRequestUserInputSkipPayload());
-      const onSubmit = () => handlePrimaryAction();
-
-      const onKeyDown = (event) => {
-        if (!panel.isConnected) return;
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          event.stopPropagation();
-          onSkip();
-          return;
-        }
-        const target = event.target;
-        if (isEditableElement(target)) return;
-
-        if (/^[1-9]$/.test(event.key)) {
-          const optionIndex = Number(event.key) - 1;
-          const currentQuestion = questions[questionIndex] || null;
-          const regularOptions = Array.isArray(currentQuestion?.options) ? currentQuestion.options : [];
-          const matchedOption = regularOptions[optionIndex];
-          if (matchedOption) {
-            event.preventDefault();
-            event.stopPropagation();
-            handleRegularOptionSelection(matchedOption.label || '');
-            return;
-          }
-          if (optionIndex === regularOptions.length) {
-            event.preventDefault();
-            event.stopPropagation();
-            setCurrentQuestionToOtherMode({ focusInput: true });
-            return;
-          }
-        }
-
-        if (event.key === 'ArrowLeft') {
-          event.preventDefault();
-          event.stopPropagation();
-          goToQuestion(questionIndex - 1, 'first-option');
-          return;
-        }
-
-        if (event.key === 'ArrowRight') {
-          event.preventDefault();
-          event.stopPropagation();
-          goToQuestion(questionIndex + 1, 'first-option');
-          return;
-        }
-
-        if (event.key === 'Enter' && !event.shiftKey && !event.altKey) {
-          event.preventDefault();
-          event.stopPropagation();
-          onSubmit();
-        }
-      };
-      document.addEventListener('keydown', onKeyDown, true);
-      removeKeyListener = () => document.removeEventListener('keydown', onKeyDown, true);
 
       activeRequestUserInputSession = { panel, finish };
       host.insertBefore(panel, host.firstChild || null);
