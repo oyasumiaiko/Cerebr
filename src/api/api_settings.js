@@ -18,6 +18,10 @@ import {
   getChunksFromSync
 } from '../utils/sync_chunk.js';
 import { cloneResponsesInputItems } from '../utils/responses_input_items.js';
+import {
+  RESPONSES_BUILTIN_TOOL_SPECS,
+  buildResponsesBuiltinToolOverrides as buildResponsesBuiltinToolOverridesFromRegistry
+} from './responses_builtin_tools.js';
 
 // 用户消息预处理模板的说明与示例，用于“？”提示与“复制角色块”按钮。
 const USER_MESSAGE_TEMPLATE_HELP_TEXT = [
@@ -57,25 +61,6 @@ const RESPONSES_PROMPT_CACHE_RETENTION_OPTIONS = Object.freeze(['in-memory', '24
 const RESPONSES_SERVICE_TIER_OPTIONS = Object.freeze(['auto', 'default', 'flex', 'scale', 'priority']);
 const RESPONSES_TRUNCATION_OPTIONS = Object.freeze(['auto', 'disabled']);
 const RESPONSES_TEXT_VERBOSITY_OPTIONS = Object.freeze(['low', 'medium', 'high']);
-const RESPONSES_WEB_SEARCH_SOURCE_INCLUDE = 'web_search_call.action.sources';
-const RESPONSES_SEARCH_TOOL_SECTION_TOGGLE_SPEC = Object.freeze({
-  path: ['builtin_tools', 'web_search', 'enabled'],
-  key: 'builtin_tools.web_search.enabled',
-  label: '启用搜索工具',
-  help: '启用后自动在 /responses 的 tools 中附加 { type: "web_search" }，由 OpenAI 服务端执行搜索。'
-});
-const RESPONSES_CODE_INTERPRETER_TOOL_SECTION_TOGGLE_SPEC = Object.freeze({
-  path: ['builtin_tools', 'code_interpreter', 'enabled'],
-  key: 'builtin_tools.code_interpreter.enabled',
-  label: '启用代码解释器',
-  help: '启用后自动在 /responses 的 tools 中附加 { type: "code_interpreter", container: { type: "auto" } }，由 OpenAI 服务端沙箱执行 Python。'
-});
-const RESPONSES_TOOL_SEARCH_TOOL_SECTION_TOGGLE_SPEC = Object.freeze({
-  path: ['builtin_tools', 'tool_search', 'enabled'],
-  key: 'builtin_tools.tool_search.enabled',
-  label: '启用工具搜索',
-  help: '启用后自动在 /responses 的 tools 中附加 { type: "tool_search" }。仅负责 hosted 模式入口；带 defer_loading 的 function / namespace / MCP server 仍需在 Tools JSON 中声明。'
-});
 const RESPONSES_MAIN_FIELD_SPECS = Object.freeze([
   {
     path: ['reasoning', 'effort'],
@@ -324,44 +309,6 @@ const RESPONSES_ADVANCED_FIELD_SPECS = Object.freeze([
     help: '填写 JSON 数组。若启用 hosted tool_search，需要在这里声明带 defer_loading 的 function / namespace / MCP server。'
   }
 ]);
-const RESPONSES_SEARCH_TOOL_FIELD_SPECS = Object.freeze([
-  {
-    path: ['builtin_tools', 'web_search', 'external_web_access'],
-    key: 'builtin_tools.web_search.external_web_access',
-    label: '实时外网搜索',
-    kind: 'boolean',
-    help: '显式控制 web_search 是否允许实时访问外部网页；未启用时沿用 OpenAI 默认策略。'
-  },
-  {
-    path: ['builtin_tools', 'web_search', 'include_sources'],
-    key: 'builtin_tools.web_search.include_sources',
-    label: '返回搜索来源',
-    kind: 'boolean',
-    help: '启用后会自动在 include 中附加 web_search_call.action.sources，便于展示与存档来源。'
-  },
-  {
-    path: ['builtin_tools', 'web_search', 'filters', 'allowed_domains'],
-    key: 'builtin_tools.web_search.filters.allowed_domains',
-    label: '搜索域名白名单',
-    kind: 'json',
-    jsonMode: 'array',
-    rows: 4,
-    placeholder: '[\n  \"openai.com\"\n]',
-    help: '仅允许搜索指定域名；填写 JSON 数组。'
-  },
-  {
-    path: ['builtin_tools', 'web_search', 'user_location'],
-    key: 'builtin_tools.web_search.user_location',
-    label: '搜索用户位置',
-    kind: 'json',
-    jsonMode: 'object',
-    rows: 6,
-    placeholder: '{\n  \"type\": \"approximate\",\n  \"country\": \"US\",\n  \"city\": \"San Francisco\",\n  \"region\": \"California\",\n  \"timezone\": \"America/Los_Angeles\"\n}',
-    help: '传给 web_search 的 user_location 对象。'
-  }
-]);
-const RESPONSES_TOOL_SEARCH_TOOL_FIELD_SPECS = Object.freeze([]);
-const RESPONSES_CODE_INTERPRETER_TOOL_FIELD_SPECS = Object.freeze([]);
 const GEMINI_THINKING_LEVEL_OPTIONS = Object.freeze(['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']);
 const GEMINI_RESPONSE_MIME_TYPE_OPTIONS = Object.freeze(['text/plain', 'application/json']);
 const GEMINI_MEDIA_RESOLUTION_OPTIONS = Object.freeze([
@@ -810,77 +757,17 @@ export function createApiManager(appContext) {
 
   /**
    * 把“专门的内置工具开关”翻译为真正的 Responses API tools/include 字段。
-   * 当前覆盖 web_search / code_interpreter / tool_search；后续若要扩展 file_search，也只需在这里追加。
+   * 具体的内置工具注册表与请求体翻译逻辑统一收敛在 `responses_builtin_tools.js`，
+   * 这里仅负责把当前模块已有的裁剪/规范化 helper 传进去，确保最终行为与 sync storage
+   * 的稀疏持久化规则保持一致。
    * @param {Object} settings
    * @returns {{tools: Array<Object>, include: Array<string>}}
    */
   function buildResponsesBuiltinToolOverrides(settings) {
-    const builtinTools = (settings?.builtin_tools && typeof settings.builtin_tools === 'object' && !Array.isArray(settings.builtin_tools))
-      ? settings.builtin_tools
-      : null;
-    if (!builtinTools) {
-      return { tools: [], include: [] };
-    }
-
-    const tools = [];
-    const include = [];
-    const webSearch = (builtinTools.web_search && typeof builtinTools.web_search === 'object' && !Array.isArray(builtinTools.web_search))
-      ? builtinTools.web_search
-      : null;
-    const toolSearch = (builtinTools.tool_search && typeof builtinTools.tool_search === 'object' && !Array.isArray(builtinTools.tool_search))
-      ? builtinTools.tool_search
-      : null;
-    const codeInterpreter = (builtinTools.code_interpreter && typeof builtinTools.code_interpreter === 'object' && !Array.isArray(builtinTools.code_interpreter))
-      ? builtinTools.code_interpreter
-      : null;
-
-    if (webSearch?.enabled === true) {
-      const tool = { type: 'web_search' };
-
-      if (typeof webSearch.external_web_access === 'boolean') {
-        tool.external_web_access = webSearch.external_web_access;
-      }
-
-      const allowedDomains = normalizeResponsesStringArray(webSearch?.filters?.allowed_domains);
-      if (allowedDomains) {
-        tool.filters = { allowed_domains: allowedDomains };
-      }
-
-      const userLocation = compactResponsesApiSettingValue(webSearch?.user_location);
-      if (userLocation && typeof userLocation === 'object' && !Array.isArray(userLocation)) {
-        tool.user_location = userLocation;
-      }
-
-      const compactedTool = compactResponsesApiSettingValue(tool);
-      if (compactedTool && typeof compactedTool === 'object' && !Array.isArray(compactedTool)) {
-        tools.push(compactedTool);
-      }
-
-      if (webSearch.include_sources === true) {
-        include.push(RESPONSES_WEB_SEARCH_SOURCE_INCLUDE);
-      }
-    }
-
-    if (codeInterpreter?.enabled === true) {
-      const tool = {
-        type: 'code_interpreter',
-        container: { type: 'auto' }
-      };
-      const compactedTool = compactResponsesApiSettingValue(tool);
-      if (compactedTool && typeof compactedTool === 'object' && !Array.isArray(compactedTool)) {
-        tools.push(compactedTool);
-      }
-    }
-
-    if (toolSearch?.enabled === true) {
-      const tool = { type: 'tool_search' };
-      const compactedTool = compactResponsesApiSettingValue(tool);
-      if (compactedTool && typeof compactedTool === 'object' && !Array.isArray(compactedTool)) {
-        tools.push(compactedTool);
-      }
-    }
-
-    return { tools, include };
+    return buildResponsesBuiltinToolOverridesFromRegistry(settings, {
+      compactValue: compactResponsesApiSettingValue,
+      normalizeStringArray: normalizeResponsesStringArray
+    });
   }
 
   /**
@@ -3765,30 +3652,12 @@ export function createApiManager(appContext) {
       getSettingsSnapshot: getResponsesSettingsSnapshot,
       updateSettingAtPath: updateResponsesSettingAtPath
     });
-    const createResponsesSearchToolSection = () => createApiFieldSettingsSection({
-      title: '搜索工具',
-      description: '这里单独管理 Responses API 的 web_search 工具；关闭后不会往请求体附加该工具。',
+    const createResponsesBuiltinToolSection = (toolSpec) => createApiFieldSettingsSection({
+      title: toolSpec.title,
+      description: toolSpec.description,
       mainSpecs: [],
-      advancedSpecs: RESPONSES_SEARCH_TOOL_FIELD_SPECS,
-      sectionToggleSpec: RESPONSES_SEARCH_TOOL_SECTION_TOGGLE_SPEC,
-      getSettingsSnapshot: getResponsesSettingsSnapshot,
-      updateSettingAtPath: updateResponsesSettingAtPath
-    });
-    const createResponsesCodeInterpreterToolSection = () => createApiFieldSettingsSection({
-      title: '代码解释器工具',
-      description: '这里单独管理 Responses API 的 code_interpreter 工具；开启后会自动附加一个 `container.type=auto` 的托管 Python 沙箱。',
-      mainSpecs: [],
-      advancedSpecs: RESPONSES_CODE_INTERPRETER_TOOL_FIELD_SPECS,
-      sectionToggleSpec: RESPONSES_CODE_INTERPRETER_TOOL_SECTION_TOGGLE_SPEC,
-      getSettingsSnapshot: getResponsesSettingsSnapshot,
-      updateSettingAtPath: updateResponsesSettingAtPath
-    });
-    const createResponsesToolSearchSection = () => createApiFieldSettingsSection({
-      title: '工具搜索',
-      description: '这里单独管理 Responses API 的 hosted tool_search；开启后会自动附加 `{ type: "tool_search" }`。带 `defer_loading` 的具体工具定义仍需写在上面的 Tools 字段里。',
-      mainSpecs: [],
-      advancedSpecs: RESPONSES_TOOL_SEARCH_TOOL_FIELD_SPECS,
-      sectionToggleSpec: RESPONSES_TOOL_SEARCH_TOOL_SECTION_TOGGLE_SPEC,
+      advancedSpecs: Array.isArray(toolSpec.advancedSpecs) ? toolSpec.advancedSpecs : [],
+      sectionToggleSpec: toolSpec.sectionToggleSpec,
       getSettingsSnapshot: getResponsesSettingsSnapshot,
       updateSettingAtPath: updateResponsesSettingAtPath
     });
@@ -3928,9 +3797,9 @@ export function createApiManager(appContext) {
     }
 
     const responsesSettingsSection = createResponsesSettingsSection();
-    const responsesSearchToolSection = createResponsesSearchToolSection();
-    const responsesCodeInterpreterToolSection = createResponsesCodeInterpreterToolSection();
-    const responsesToolSearchSection = createResponsesToolSearchSection();
+    const responsesBuiltinToolSections = RESPONSES_BUILTIN_TOOL_SPECS
+      .map(spec => createResponsesBuiltinToolSection(spec))
+      .filter(Boolean);
     const geminiSettingsSection = createGeminiSettingsSection();
     const providerSettingsHost = document.createElement('div');
     providerSettingsHost.className = 'provider-settings-host';
@@ -3945,29 +3814,17 @@ export function createApiManager(appContext) {
       if (isResponsesConnectionSelected() && responsesSettingsSection) {
         responsesSettingsSection.hidden = false;
         nextSections.push(responsesSettingsSection);
-        if (responsesSearchToolSection) {
-          responsesSearchToolSection.hidden = false;
-          nextSections.push(responsesSearchToolSection);
-        }
-        if (responsesCodeInterpreterToolSection) {
-          responsesCodeInterpreterToolSection.hidden = false;
-          nextSections.push(responsesCodeInterpreterToolSection);
-        }
-        if (responsesToolSearchSection) {
-          responsesToolSearchSection.hidden = false;
-          nextSections.push(responsesToolSearchSection);
-        }
+        responsesBuiltinToolSections.forEach((section) => {
+          if (!section) return;
+          section.hidden = false;
+          nextSections.push(section);
+        });
       } else if (responsesSettingsSection) {
         responsesSettingsSection.hidden = true;
-        if (responsesSearchToolSection) {
-          responsesSearchToolSection.hidden = true;
-        }
-        if (responsesCodeInterpreterToolSection) {
-          responsesCodeInterpreterToolSection.hidden = true;
-        }
-        if (responsesToolSearchSection) {
-          responsesToolSearchSection.hidden = true;
-        }
+        responsesBuiltinToolSections.forEach((section) => {
+          if (!section) return;
+          section.hidden = true;
+        });
       }
       if (isGeminiConnectionSelected() && geminiSettingsSection) {
         geminiSettingsSection.hidden = false;
