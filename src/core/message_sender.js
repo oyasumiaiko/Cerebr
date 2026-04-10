@@ -9,6 +9,12 @@ import { renderUserMessageTemplateWithInjection, applyRenderedTextToMessageConte
 import { extractThinkingFromText, mergeStreamingThoughts, mergeThoughts } from '../utils/thoughts_parser.js';
 import { mergeResponsesReasoningText, normalizeResponsesReasoningText } from '../utils/responses_activity_reasoning.js';
 import { cloneResponsesInputItems, mergeResponsesInputItems } from '../utils/responses_input_items.js';
+import {
+  buildResponsesLocalCompactionMarker,
+  findLatestAssistantPromptTokenEntry,
+  normalizeResponsesLocalCompactionSettings,
+  resolveResponsesAutoCompactionDecision
+} from '../utils/responses_local_compaction.js';
 import { createAdaptiveUpdateThrottler } from '../utils/adaptive_update_throttler.js';
 import { extractPlainTextFromContent } from '../utils/conversation_title.js';
 import { deleteMessageFromChatHistory } from './chat_history_manager.js';
@@ -120,6 +126,7 @@ const RESPONSES_HISTORY_READ_TOOL_NAME = 'history_read';
 const RESPONSES_REQUEST_USER_INPUT_TOOL_NAME = REQUEST_USER_INPUT_TOOL_NAME;
 const RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME = LIST_ASKABLE_MODELS_TOOL_NAME;
 const RESPONSES_ASK_OTHER_AI_TOOL_NAME = ASK_OTHER_AI_TOOL_NAME;
+const RESPONSES_LOCAL_COMPACTION_MARKER_TEXT = '已压缩上下文（基于上一轮上下文大小）';
 
 /**
  * 创建消息发送器
@@ -3297,6 +3304,60 @@ export function createMessageSender(appContext) {
     return getLastMainConversationNode(historyMessagesRef)?.id || null;
   }
 
+  /**
+   * 统一解析本次发送/compact 看到的会话链。
+   *
+   * 这样可以让：
+   * - 正常发送；
+   * - 发送前 auto compact；
+   * - 手动 `/compact`
+   * 共享同一套“主链 / 线程链 / detached 快照”选择逻辑。
+   *
+   * @param {Object} options
+   * @returns {Array<Object>}
+   */
+  function resolveConversationChainForAttempt(options = {}) {
+    const {
+      attemptState = null,
+      conversationSnapshot = null,
+      activeThreadContext = null,
+      regenerateMode = false,
+      messageId = null,
+      sendChatHistoryFlag = shouldSendChatHistory
+    } = options;
+
+    let conversationChain = null;
+    if (Array.isArray(conversationSnapshot) && conversationSnapshot.length > 0) {
+      conversationChain = conversationSnapshot;
+    } else if (activeThreadContext) {
+      const threadChainOverride = (regenerateMode && messageId) ? messageId : null;
+      conversationChain = buildThreadConversationChain(activeThreadContext, threadChainOverride);
+    } else if (isAttemptUsingDetachedMainConversationHistory(attemptState)) {
+      conversationChain = buildMainConversationChainFromMessages(attemptState?.historyMessagesRef || []);
+    } else {
+      conversationChain = getCurrentConversationChain();
+    }
+
+    if (
+      !activeThreadContext
+      && sendChatHistoryFlag
+      && Array.isArray(conversationChain)
+      && conversationChain.length <= 1
+    ) {
+      const historyMessages = isAttemptUsingDetachedMainConversationHistory(attemptState)
+        ? (attemptState?.historyMessagesRef || [])
+        : (chatHistoryManager?.chatHistory?.messages || []);
+      if (historyMessages.length > conversationChain.length) {
+        const fallback = historyMessages.filter((node) => !node?.threadId && !node?.threadHiddenSelection);
+        if (fallback.length > conversationChain.length) {
+          conversationChain = fallback;
+        }
+      }
+    }
+
+    return Array.isArray(conversationChain) ? conversationChain : [];
+  }
+
   function moveConversationSendQueue(fromQueueKey, toQueueKey) {
     const normalizedFromKey = resolveConversationQueueKey(fromQueueKey);
     const normalizedToKey = resolveConversationQueueKey(toQueueKey);
@@ -4558,6 +4619,7 @@ export function createMessageSender(appContext) {
       contextual_input_items_before: null,
       pageRuntimeContextSignature: null,
       environmentContextSignature: null,
+      contextCompactionMarker: null,
       pageMeta: null
     };
 
@@ -4623,6 +4685,7 @@ export function createMessageSender(appContext) {
       contextual_input_items_before: null,
       pageRuntimeContextSignature: null,
       environmentContextSignature: null,
+      contextCompactionMarker: null,
       pageMeta: null
     };
 
@@ -4663,6 +4726,195 @@ export function createMessageSender(appContext) {
 
     node.hasInlineImages = Array.isArray(processedContent) && processedContent.some((part) => part?.type === 'image_url');
     return node;
+  }
+
+  function getResponsesLocalCompactionConfig(config) {
+    return normalizeResponsesLocalCompactionSettings(config?.responsesLocalCompaction) || null;
+  }
+
+  function buildResponsesLocalCompactionHistoryPatch(options = {}) {
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    return {
+      response_input_items: cloneResponsesInputItems(normalizedOptions.compactOutput || []),
+      contextCompactionMarker: buildResponsesLocalCompactionMarker({
+        sourceAssistantMessageId: normalizedOptions.sourceAssistantMessageId || null,
+        promptTokensBefore: normalizedOptions.promptTokensBefore,
+        thresholdPromptTokens: normalizedOptions.thresholdPromptTokens,
+        compactedAt: normalizedOptions.compactedAt
+      })
+    };
+  }
+
+  function appendResponsesLocalCompactionMarker(payload = {}) {
+    const normalizedPayload = (payload && typeof payload === 'object') ? payload : {};
+    const historyPatch = (normalizedPayload.historyPatch && typeof normalizedPayload.historyPatch === 'object')
+      ? normalizedPayload.historyPatch
+      : null;
+    if (!historyPatch) return { messageId: '', node: null, element: null };
+
+    const markerText = (typeof normalizedPayload.text === 'string' && normalizedPayload.text.trim())
+      ? normalizedPayload.text.trim()
+      : RESPONSES_LOCAL_COMPACTION_MARKER_TEXT;
+    const activeThreadContext = normalizedPayload.activeThreadContext || null;
+    const historyMessagesRef = Array.isArray(normalizedPayload.historyMessagesRef)
+      ? normalizedPayload.historyMessagesRef
+      : null;
+
+    if (activeThreadContext) {
+      const threadRootId = ensureThreadRootMessage(activeThreadContext);
+      const historyParentId = activeThreadContext.annotation?.lastMessageId || threadRootId || null;
+      const threadHistoryPatch = buildThreadHistoryPatch(activeThreadContext);
+      const mergedHistoryPatch = threadHistoryPatch
+        ? { ...threadHistoryPatch, ...historyPatch }
+        : historyPatch;
+      const markerDiv = messageProcessor.appendMessage(
+        markerText,
+        'ai',
+        false,
+        null,
+        null,
+        null,
+        null,
+        null,
+        {
+          container: activeThreadContext.container,
+          historyParentId,
+          preserveCurrentNode: true,
+          historyPatch: mergedHistoryPatch
+        }
+      );
+      const markerId = markerDiv?.getAttribute?.('data-message-id') || '';
+      if (markerId) {
+        updateThreadLastMessage(activeThreadContext, markerId);
+      }
+      return { messageId: markerId, node: null, element: markerDiv || null };
+    }
+
+    if (historyMessagesRef) {
+      const node = createAssistantHistoryNodeForDetachedList({
+        content: markerText,
+        thoughts: null,
+        historyParentId: getDetachedConversationParentMessageId(historyMessagesRef),
+        historyPatch,
+        historyMessagesRef
+      });
+      return { messageId: node?.id || '', node: node || null, element: null };
+    }
+
+    const markerDiv = messageProcessor.appendMessage(
+      markerText,
+      'ai',
+      false,
+      null,
+      null,
+      null,
+      null,
+      null,
+      { historyPatch }
+    );
+    return {
+      messageId: markerDiv?.getAttribute?.('data-message-id') || '',
+      node: null,
+      element: markerDiv || null
+    };
+  }
+
+  async function buildResponsesLocalCompactionRequestBody({
+    usedApiConfig,
+    conversationChain,
+    sendChatHistoryFlag
+  }) {
+    const compactMessages = composeMessages({
+      prompts: promptSettingsManager.getPrompts(),
+      injectedSystemMessages: [],
+      pageContent: null,
+      imageContainsScreenshot: false,
+      omitDefaultSystemPrompt: false,
+      currentPromptType: 'none',
+      regenerateMode: false,
+      messageId: null,
+      conversationChain: Array.isArray(conversationChain) ? conversationChain : [],
+      sendChatHistory: !!sendChatHistoryFlag,
+      maxHistory: usedApiConfig?.maxChatHistory ?? 500,
+      maxUserHistory: usedApiConfig?.maxChatHistoryUser,
+      maxAssistantHistory: usedApiConfig?.maxChatHistoryAssistant
+    });
+
+    const baseRequestBody = await apiManager.buildRequest({
+      messages: compactMessages,
+      config: usedApiConfig
+    });
+
+    return prepareResponsesRequestBodyForCustomTools(
+      baseRequestBody,
+      usedApiConfig,
+      resolveResponsesPageToolEnvironment()
+    );
+  }
+
+  async function executeResponsesLocalCompaction(payload = {}) {
+    const normalizedPayload = (payload && typeof payload === 'object') ? payload : {};
+    const usedApiConfig = normalizedPayload.usedApiConfig || null;
+    if (!isOpenAIResponsesApiConfig(usedApiConfig)) {
+      throw new Error('当前配置不是 Responses API，无法执行本地 compact。');
+    }
+
+    const conversationChain = Array.isArray(normalizedPayload.conversationChain)
+      ? normalizedPayload.conversationChain
+      : [];
+    const compactRequestBody = await buildResponsesLocalCompactionRequestBody({
+      usedApiConfig,
+      conversationChain,
+      sendChatHistoryFlag: normalizedPayload.sendChatHistoryFlag !== false
+    });
+    const compactResponse = await apiManager.sendResponsesCompactRequest({
+      requestBody: compactRequestBody,
+      config: usedApiConfig,
+      signal: normalizedPayload.signal
+    });
+    if (!compactResponse.ok) {
+      const errorText = await compactResponse.text().catch(() => '');
+      throw new Error(errorText || `Compact 请求失败 (${compactResponse.status})`);
+    }
+
+    let compactPayload = null;
+    try {
+      compactPayload = await compactResponse.json();
+    } catch (error) {
+      throw new Error(`Compact 响应解析失败：${error?.message || 'invalid json'}`);
+    }
+    if (compactPayload?.error) {
+      throw new Error(compactPayload.error?.message || 'Compact 接口返回错误');
+    }
+
+    const compactOutput = cloneResponsesInputItems(
+      Array.isArray(compactPayload?.output) ? compactPayload.output : []
+    );
+    if (compactOutput.length <= 0) {
+      throw new Error('Compact 响应未返回可重放的 output。');
+    }
+
+    const historyPatch = buildResponsesLocalCompactionHistoryPatch({
+      compactOutput,
+      sourceAssistantMessageId: normalizedPayload.sourceAssistantMessageId || null,
+      promptTokensBefore: normalizedPayload.promptTokensBefore,
+      thresholdPromptTokens: normalizedPayload.thresholdPromptTokens,
+      compactedAt: Date.now()
+    });
+    const markerResult = appendResponsesLocalCompactionMarker({
+      text: RESPONSES_LOCAL_COMPACTION_MARKER_TEXT,
+      historyPatch,
+      activeThreadContext: normalizedPayload.activeThreadContext || null,
+      historyMessagesRef: normalizedPayload.historyMessagesRef || null
+    });
+
+    return {
+      compactOutput,
+      historyPatch,
+      markerMessageId: markerResult.messageId || '',
+      markerNode: markerResult.node || null,
+      markerElement: markerResult.element || null
+    };
   }
 
   // 线程后台生成时仅写入历史（不渲染 DOM），避免与当前线程视图串线。
@@ -5186,6 +5438,68 @@ export function createMessageSender(appContext) {
         if (typeof showNotification === 'function') {
           showNotification(stopped ? '已停止生成' : '当前没有进行中的请求');
         }
+      },
+      requiresArgs: false
+    },
+    {
+      name: 'compact',
+      aliases: ['cmp'],
+      usage: '/compact',
+      description: '手动压缩当前 Responses 上下文',
+      handler: async () => {
+        if (activeAttempts.size > 0) {
+          if (typeof showNotification === 'function') {
+            showNotification({ message: '当前有进行中的请求，请等待结束后再执行 /compact', type: 'warning' });
+          }
+          return { ok: false, keepInput: true };
+        }
+
+        const conversationApiInfo = (typeof chatHistoryUI?.resolveActiveConversationApiConfig === 'function')
+          ? chatHistoryUI.resolveActiveConversationApiConfig()
+          : null;
+        const usedApiConfig = conversationApiInfo?.lockConfig || apiManager.getSelectedConfig();
+        if (!validateApiConfig(usedApiConfig)) {
+          return { ok: false, keepInput: true };
+        }
+        if (!isOpenAIResponsesApiConfig(usedApiConfig)) {
+          if (typeof showNotification === 'function') {
+            showNotification({ message: '当前配置不是 Responses API，无法执行 /compact', type: 'warning' });
+          }
+          return { ok: false, keepInput: true };
+        }
+
+        const activeThreadContext = resolveActiveThreadContext();
+        const conversationChain = resolveConversationChainForAttempt({
+          attemptState: null,
+          conversationSnapshot: null,
+          activeThreadContext,
+          regenerateMode: false,
+          messageId: null,
+          sendChatHistoryFlag: shouldSendChatHistory
+        });
+        const latestAssistantEntry = findLatestAssistantPromptTokenEntry(conversationChain);
+        await executeResponsesLocalCompaction({
+          usedApiConfig,
+          conversationChain,
+          sendChatHistoryFlag: true,
+          activeThreadContext,
+          historyMessagesRef: null,
+          sourceAssistantMessageId: latestAssistantEntry?.node?.id || null,
+          promptTokensBefore: latestAssistantEntry?.promptTokens ?? null,
+          thresholdPromptTokens: getResponsesLocalCompactionConfig(usedApiConfig)?.thresholdPromptTokens ?? null
+        });
+
+        const savedConversation = await chatHistoryUI?.saveCurrentConversation?.(true, {
+          preserveExistingApiLock: true
+        });
+        const savedConversationId = normalizeConversationId(savedConversation?.id);
+        if (savedConversationId) {
+          updateCurrentConversationContext(savedConversationId);
+        }
+        if (typeof showNotification === 'function') {
+          showNotification({ message: '已压缩当前上下文', type: 'success' });
+        }
+        return { ok: true };
       },
       requiresArgs: false
     },
@@ -8762,6 +9076,47 @@ export function createMessageSender(appContext) {
         }
       }
 
+      effectiveApiConfig = resolvedApiConfig
+        || preferredApiConfig
+        || lockConfig
+        || apiManager.getSelectedConfig();
+      const sendChatHistoryFlag = shouldSendChatHistory || forceSendFullHistory;
+      if (!regenerateMode && sendChatHistoryFlag && isOpenAIResponsesApiConfig(effectiveApiConfig)) {
+        const localCompactionConfig = getResponsesLocalCompactionConfig(effectiveApiConfig);
+        if (localCompactionConfig?.enabled) {
+          const compactConversationChain = resolveConversationChainForAttempt({
+            attemptState: attempt,
+            conversationSnapshot,
+            activeThreadContext,
+            regenerateMode,
+            messageId,
+            sendChatHistoryFlag
+          });
+          const autoCompactDecision = resolveResponsesAutoCompactionDecision(
+            compactConversationChain,
+            localCompactionConfig.thresholdPromptTokens
+          );
+          if (autoCompactDecision.shouldCompact) {
+            await executeResponsesLocalCompaction({
+              usedApiConfig: effectiveApiConfig,
+              conversationChain: compactConversationChain,
+              sendChatHistoryFlag,
+              signal,
+              activeThreadContext,
+              historyMessagesRef: isAttemptUsingDetachedMainConversationHistory(attempt)
+                ? (attempt?.historyMessagesRef || null)
+                : null,
+              sourceAssistantMessageId: autoCompactDecision.sourceAssistantMessageId,
+              promptTokensBefore: autoCompactDecision.promptTokensBefore,
+              thresholdPromptTokens: localCompactionConfig.thresholdPromptTokens
+            });
+            if (isAttemptMainConversationActive(attempt) && typeof showNotification === 'function') {
+              showNotification({ message: '已自动压缩上下文', type: 'info', duration: 1600 });
+            }
+          }
+        }
+      }
+
       // 在重新生成模式下，不添加新的用户消息
       let userMessageDiv;
       let detachedUserMessageNode = null;
@@ -9032,50 +9387,21 @@ export function createMessageSender(appContext) {
       syncAttemptPreResponseStatusFromLocalStage(loadingMessage, attempt, 'compose_messages');
 
       // 构建消息数组（改为纯函数 composer）
-      if (Array.isArray(conversationSnapshot) && conversationSnapshot.length > 0) {
-        conversationChain = conversationSnapshot;
-      } else if (activeThreadContext) {
-        const threadChainOverride = (regenerateMode && messageId) ? messageId : null;
-        conversationChain = buildThreadConversationChain(activeThreadContext, threadChainOverride);
-      } else if (isAttemptUsingDetachedMainConversationHistory(attempt)) {
-        conversationChain = buildMainConversationChainFromMessages(attempt?.historyMessagesRef || []);
-      } else {
-        conversationChain = getCurrentConversationChain();
-      }
-      const configForMaxHistory = resolvedApiConfig
-        || preferredApiConfig
-        || lockConfig
+      conversationChain = resolveConversationChainForAttempt({
+        attemptState: attempt,
+        conversationSnapshot,
+        activeThreadContext,
+        regenerateMode,
+        messageId,
+        sendChatHistoryFlag
+      });
+      const configForMaxHistory = effectiveApiConfig
         || apiManager.getSelectedConfig();
-      const sendChatHistoryFlag = shouldSendChatHistory || forceSendFullHistory;
-
-      // 兜底：若主链断裂导致上下文过短，回退到“按显示顺序的主聊天记录”。
-      // 典型症状：currentNode 正常，但 parentId 链缺失，getCurrentConversationChain 只返回 1 条。
-      if (!activeThreadContext && sendChatHistoryFlag && Array.isArray(conversationChain) && conversationChain.length <= 1) {
-        const historyMessages = isAttemptUsingDetachedMainConversationHistory(attempt)
-          ? (attempt?.historyMessagesRef || [])
-          : (chatHistoryManager?.chatHistory?.messages || []);
-        if (historyMessages.length > conversationChain.length) {
-          const fallback = historyMessages.filter((node) => !node?.threadId && !node?.threadHiddenSelection);
-          if (fallback.length > conversationChain.length) {
-            conversationChain = fallback;
-          }
-        }
-      }
-
       const filteredConversationChain = conversationChain;
       // 获取 API 配置：仅使用外部提供（resolvedApiConfig / api 解析）或当前选中。
       // 这里提前解析，是因为页面运行环境隐藏上下文需要在 composeMessages 之前写回历史节点，
       // 这样本轮请求就能直接使用独立 contextual item，而不是再通过 instructions 临时拼接。
-      let config;
-      if (resolvedApiConfig) {
-        config = resolvedApiConfig;
-      } else if (preferredApiConfig) {
-        config = preferredApiConfig;
-      } else if (lockConfig) {
-        config = lockConfig;
-      } else {
-        config = apiManager.getSelectedConfig();
-      }
+      const config = effectiveApiConfig || apiManager.getSelectedConfig();
       effectiveApiConfig = config;
       if (attempt) {
         attempt.supportsStandardSteer = isOpenAIResponsesApiConfig(config);

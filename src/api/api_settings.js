@@ -22,6 +22,12 @@ import {
   RESPONSES_BUILTIN_TOOL_SPECS,
   buildResponsesBuiltinToolOverrides as buildResponsesBuiltinToolOverridesFromRegistry
 } from './responses_builtin_tools.js';
+import {
+  RESPONSES_LOCAL_COMPACTION_DEFAULT_THRESHOLD,
+  buildResponsesCompactEndpointUrl,
+  buildResponsesCompactRequestBody,
+  normalizeResponsesLocalCompactionSettings
+} from '../utils/responses_local_compaction.js';
 
 // 用户消息预处理模板的说明与示例，用于“？”提示与“复制角色块”按钮。
 const USER_MESSAGE_TEMPLATE_HELP_TEXT = [
@@ -307,6 +313,19 @@ const RESPONSES_ADVANCED_FIELD_SPECS = Object.freeze([
     rows: 6,
     placeholder: '[\n  { \"type\": \"web_search\" }\n]',
     help: '填写 JSON 数组。若启用 hosted tool_search，需要在这里声明带 defer_loading 的 function / namespace / MCP server。'
+  }
+]);
+const RESPONSES_LOCAL_COMPACTION_FIELD_SPECS = Object.freeze([
+  {
+    path: ['thresholdPromptTokens'],
+    key: 'thresholdPromptTokens',
+    label: '自动压缩阈值（promptTokens）',
+    kind: 'number',
+    min: 1,
+    step: 1,
+    defaultValue: RESPONSES_LOCAL_COMPACTION_DEFAULT_THRESHOLD,
+    placeholder: String(RESPONSES_LOCAL_COMPACTION_DEFAULT_THRESHOLD),
+    help: '仅用于“发送新消息前”的自动 compact 判定；手动 /compact 不受此开关限制。'
   }
 ]);
 const GEMINI_THINKING_LEVEL_OPTIONS = Object.freeze(['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']);
@@ -686,6 +705,22 @@ export function createApiManager(appContext) {
       return undefined;
     }
     return compacted;
+  }
+
+  /**
+   * 规范化本地 Responses compact 设置。
+   *
+   * 说明：
+   * - 这不是 `/responses` 官方 request body 字段，因此单独挂在配置顶层；
+   * - `enabled` 仅控制发送前自动 compact；
+   * - 手动 `/compact` 命令始终可用。
+   *
+   * @param {any} settings
+   * @returns {Object|undefined}
+   */
+  function normalizeResponsesLocalCompactionConfig(settings) {
+    const normalized = normalizeResponsesLocalCompactionSettings(settings);
+    return normalized || undefined;
   }
 
   /**
@@ -1112,6 +1147,10 @@ export function createApiManager(appContext) {
       const compactedResponsesSettings = normalizeResponsesApiSettings(c.responsesApiSettings);
       if (compactedResponsesSettings) {
         compacted.responsesApiSettings = compactedResponsesSettings;
+      }
+      const compactedResponsesLocalCompaction = normalizeResponsesLocalCompactionConfig(c.responsesLocalCompaction);
+      if (compactedResponsesLocalCompaction) {
+        compacted.responsesLocalCompaction = compactedResponsesLocalCompaction;
       }
       const compactedGeminiSettings = normalizeGeminiApiSettings(c.geminiApiSettings);
       if (compactedGeminiSettings) {
@@ -1841,6 +1880,12 @@ export function createApiManager(appContext) {
         config.responsesApiSettings = normalizedResponsesApiSettings;
       } else {
         delete config.responsesApiSettings;
+      }
+      const normalizedResponsesLocalCompaction = normalizeResponsesLocalCompactionConfig(config.responsesLocalCompaction);
+      if (normalizedResponsesLocalCompaction) {
+        config.responsesLocalCompaction = normalizedResponsesLocalCompaction;
+      } else {
+        delete config.responsesLocalCompaction;
       }
       const normalizedGeminiApiSettings = normalizeGeminiApiSettings(config.geminiApiSettings);
       if (normalizedGeminiApiSettings) {
@@ -3120,6 +3165,27 @@ export function createApiManager(appContext) {
       }
       setResponsesSettingsSnapshot(draft, { persist });
     };
+    const getResponsesLocalCompactionSnapshot = () =>
+      normalizeResponsesLocalCompactionConfig(apiConfigs[index]?.responsesLocalCompaction)
+      || { thresholdPromptTokens: RESPONSES_LOCAL_COMPACTION_DEFAULT_THRESHOLD };
+    const setResponsesLocalCompactionSnapshot = (nextSettings, { persist = true } = {}) => {
+      const normalized = normalizeResponsesLocalCompactionConfig(nextSettings);
+      if (normalized) {
+        apiConfigs[index].responsesLocalCompaction = normalized;
+      } else {
+        delete apiConfigs[index].responsesLocalCompaction;
+      }
+      if (persist) saveAPIConfigs();
+    };
+    const updateResponsesLocalCompactionAtPath = (path, value, { persist = true } = {}) => {
+      const draft = cloneJsonCompatible(apiConfigs[index]?.responsesLocalCompaction || {}) || {};
+      if (typeof value === 'undefined') {
+        deleteNestedValue(draft, path);
+      } else {
+        setNestedValue(draft, path, value);
+      }
+      setResponsesLocalCompactionSnapshot(draft, { persist });
+    };
     const getGeminiSettingsSnapshot = () => normalizeGeminiApiSettings(apiConfigs[index]?.geminiApiSettings) || {};
     const setGeminiSettingsSnapshot = (nextSettings, { persist = true } = {}) => {
       const normalized = normalizeGeminiApiSettings(nextSettings);
@@ -3551,7 +3617,10 @@ export function createApiManager(appContext) {
             return;
           }
           if (spec.kind === 'number') {
-            control.value = (typeof storedValue === 'number') ? String(storedValue) : '';
+            const numericValue = (typeof storedValue === 'number')
+              ? storedValue
+              : ((typeof fallbackValue === 'number') ? fallbackValue : null);
+            control.value = (numericValue != null) ? String(numericValue) : '';
             return;
           }
           if (spec.kind === 'text' || spec.kind === 'textarea') {
@@ -3660,6 +3729,19 @@ export function createApiManager(appContext) {
       sectionToggleSpec: toolSpec.sectionToggleSpec,
       getSettingsSnapshot: getResponsesSettingsSnapshot,
       updateSettingAtPath: updateResponsesSettingAtPath
+    });
+    const createResponsesLocalCompactionSection = () => createApiFieldSettingsSection({
+      title: '本地上下文压缩',
+      description: '发送新消息前可按上一条 assistant 的 promptTokens 自动 compact；手动 `/compact` 始终可用。',
+      mainSpecs: RESPONSES_LOCAL_COMPACTION_FIELD_SPECS,
+      advancedSpecs: [],
+      sectionToggleSpec: {
+        path: ['enabled'],
+        label: '启用自动 compact',
+        help: '关闭时不自动 compact，但仍可手动输入 /compact。'
+      },
+      getSettingsSnapshot: getResponsesLocalCompactionSnapshot,
+      updateSettingAtPath: updateResponsesLocalCompactionAtPath
     });
     const createGeminiSettingsSection = () => createApiFieldSettingsSection({
       title: 'Gemini API 字段',
@@ -3797,6 +3879,7 @@ export function createApiManager(appContext) {
     }
 
     const responsesSettingsSection = createResponsesSettingsSection();
+    const responsesLocalCompactionSection = createResponsesLocalCompactionSection();
     const responsesBuiltinToolSections = RESPONSES_BUILTIN_TOOL_SPECS
       .map(spec => createResponsesBuiltinToolSection(spec))
       .filter(Boolean);
@@ -3814,6 +3897,10 @@ export function createApiManager(appContext) {
       if (isResponsesConnectionSelected() && responsesSettingsSection) {
         responsesSettingsSection.hidden = false;
         nextSections.push(responsesSettingsSection);
+        if (responsesLocalCompactionSection) {
+          responsesLocalCompactionSection.hidden = false;
+          nextSections.push(responsesLocalCompactionSection);
+        }
         responsesBuiltinToolSections.forEach((section) => {
           if (!section) return;
           section.hidden = false;
@@ -3821,6 +3908,9 @@ export function createApiManager(appContext) {
         });
       } else if (responsesSettingsSection) {
         responsesSettingsSection.hidden = true;
+        if (responsesLocalCompactionSection) {
+          responsesLocalCompactionSection.hidden = true;
+        }
         responsesBuiltinToolSections.forEach((section) => {
           if (!section) return;
           section.hidden = true;
@@ -5117,7 +5207,13 @@ export function createApiManager(appContext) {
    * @returns {Promise<Response>} Fetch 响应对象
    * @throws {Error} 如果鉴权信息无效（当未填写 key/文件路径时会走免 key 请求）
    */
-  async function sendRequest({ requestBody, config, signal, onStatus }) {
+  async function sendRequestWithResolvedEndpoint({
+    requestBody,
+    config,
+    signal,
+    onStatus,
+    endpointUrlOverride = ''
+  }) {
     config = resolveEffectiveConfig(config) || config;
     // 说明：Fetch API 无法精确提供“上传进度/已上传完毕”的事件。
     // 这里的阶段回调只基于我们能观测到的关键生命周期节点（开始发起请求/请求已发出/收到响应头/遇到限流切换 Key 等），
@@ -5135,7 +5231,10 @@ export function createApiManager(appContext) {
     const effectiveBaseUrl = isGeminiConnection
       ? normalizeConfigBaseUrlByConnection(CONNECTION_TYPE_GEMINI, normalizedBaseUrl)
       : normalizedBaseUrl;
-    const statusApiBase = effectiveBaseUrl || String(config?.baseUrl || '');
+    const normalizedEndpointOverride = (typeof endpointUrlOverride === 'string')
+      ? endpointUrlOverride.trim()
+      : '';
+    const statusApiBase = normalizedEndpointOverride || effectiveBaseUrl || String(config?.baseUrl || '');
     const statusModelName = normalizedModelName || String(config?.modelName || '');
     // 确保黑名单已加载（若未调用过 loadAPIConfigs）
     if (!apiKeyBlacklist || typeof apiKeyBlacklist !== 'object') {
@@ -5252,9 +5351,9 @@ export function createApiManager(appContext) {
       }
 
       // 组装请求
-      let endpointUrl = effectiveBaseUrl;
+      let endpointUrl = normalizedEndpointOverride || effectiveBaseUrl;
       const headers = { 'Content-Type': 'application/json' };
-      if (isGeminiConnection) {
+      if (isGeminiConnection && !normalizedEndpointOverride) {
         endpointUrl = buildGeminiEndpointUrl({
           baseUrl: effectiveBaseUrl,
           modelName: normalizedModelName,
@@ -5439,6 +5538,48 @@ export function createApiManager(appContext) {
       }
       return response;
     }
+  }
+
+  async function sendRequest({ requestBody, config, signal, onStatus }) {
+    return sendRequestWithResolvedEndpoint({
+      requestBody,
+      config,
+      signal,
+      onStatus
+    });
+  }
+
+  /**
+   * 发送 Responses compact 请求。
+   *
+   * 说明：
+   * - 直接基于当前 Responses endpoint 推导同路径 `/compact`；
+   * - 复用现有鉴权、key 轮换与免 key 请求逻辑；
+   * - 请求体会先投影为 compact 端点允许的字段子集。
+   *
+   * @param {Object} options
+   * @param {Object} options.requestBody
+   * @param {Object} options.config
+   * @param {AbortSignal} [options.signal]
+   * @param {(evt: {stage: string, [key: string]: any}) => void} [options.onStatus]
+   * @returns {Promise<Response>}
+   */
+  async function sendResponsesCompactRequest({ requestBody, config, signal, onStatus }) {
+    config = resolveEffectiveConfig(config) || config;
+    if (!isOpenAIResponsesConnectionConfig(config)) {
+      throw new Error('当前配置不是 Responses API，无法发送 compact 请求。');
+    }
+
+    const compactEndpointUrl = buildResponsesCompactEndpointUrl(config?.baseUrl);
+    const compactRequestBody = buildResponsesCompactRequestBody(requestBody);
+
+    return sendRequestWithResolvedEndpoint({
+      requestBody: compactRequestBody,
+      config,
+      signal,
+      onStatus,
+      endpointUrlOverride: compactEndpointUrl
+    });
   }
 
   /**
@@ -5703,6 +5844,10 @@ export function createApiManager(appContext) {
     if (transientResponsesApiSettings) {
       transientConfig.responsesApiSettings = transientResponsesApiSettings;
     }
+    const transientResponsesLocalCompaction = normalizeResponsesLocalCompactionConfig(partialConfig.responsesLocalCompaction);
+    if (transientResponsesLocalCompaction) {
+      transientConfig.responsesLocalCompaction = transientResponsesLocalCompaction;
+    }
     const transientGeminiApiSettings = normalizeGeminiApiSettings(partialConfig.geminiApiSettings);
     if (transientGeminiApiSettings) {
       transientConfig.geminiApiSettings = transientGeminiApiSettings;
@@ -5848,6 +5993,10 @@ export function createApiManager(appContext) {
     if (mergedResponsesApiSettings) {
       mergedConfig.responsesApiSettings = mergedResponsesApiSettings;
     }
+    const mergedResponsesLocalCompaction = normalizeResponsesLocalCompactionConfig(config.responsesLocalCompaction);
+    if (mergedResponsesLocalCompaction) {
+      mergedConfig.responsesLocalCompaction = mergedResponsesLocalCompaction;
+    }
     const mergedGeminiApiSettings = normalizeGeminiApiSettings(config.geminiApiSettings);
     if (mergedGeminiApiSettings) {
       mergedConfig.geminiApiSettings = mergedGeminiApiSettings;
@@ -5872,6 +6021,7 @@ export function createApiManager(appContext) {
     renderFavoriteApis,
     buildRequest,
     sendRequest,
+    sendResponsesCompactRequest,
     setupUIEventHandlers,
     getModelConfig,
     getApiConfigFromPartial,
