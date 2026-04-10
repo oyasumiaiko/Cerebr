@@ -42,7 +42,7 @@ import { normalizeResponsesPromptCacheKey } from '../utils/responses_prompt_cach
  * @property {string|null} [pageRuntimeContextSignature] - 页面运行环境隐藏上下文的稳定签名；为空表示沿用更早一次已生效的上下文（可选）
  * @property {string|null} [environmentContextSignature] - 通用 environment_context 的稳定签名；为空表示沿用更早一次已生效的上下文（可选）
  * @property {{source:string,sourceAssistantMessageId:string|null,promptTokensBefore:number|null,compactedAt:number|null}|null} [contextCompactionMarker] - 本地 Responses compact marker（可选）
- * @property {{state:string,phase:string,requestBytes:number|null,inputCount:number|null,toolCount:number|null,responseStatus:number|null,responseBytes:number|null,outputCount:number|null,errorMessage:string|null,updatedAt:number|null}|null} [responsesLocalCompactionStatus] - 本地 `/compact` UI 状态元信息，仅用于消息流展示与诊断（可选）
+ * @property {{state:string,phase:string,attempt:number|null,totalAttempts:number|null,requestBytes:number|null,inputCount:number|null,toolCount:number|null,responseStatus:number|null,responseBytes:number|null,outputCount:number|null,errorMessage:string|null,updatedAt:number|null}|null} [responsesLocalCompactionStatus] - 本地 `/compact` UI 状态元信息，仅用于消息流展示与诊断（可选）
  */
 
 /**

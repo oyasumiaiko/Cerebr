@@ -133,6 +133,8 @@ const RESPONSES_ASK_OTHER_AI_TOOL_NAME = ASK_OTHER_AI_TOOL_NAME;
 const RESPONSES_LOCAL_COMPACTION_MARKER_TEXT = '已压缩上下文（基于上一轮上下文大小）';
 const RESPONSES_LOCAL_COMPACTION_PENDING_TEXT = '上下文压缩中';
 const RESPONSES_LOCAL_COMPACTION_ERROR_TEXT = '上下文压缩失败';
+const RESPONSES_LOCAL_COMPACTION_TOTAL_ATTEMPTS = 3;
+const RESPONSES_LOCAL_COMPACTION_RETRY_DELAY_MS = 450;
 
 /**
  * 创建消息发送器
@@ -166,6 +168,7 @@ export function createMessageSender(appContext) {
   const settingsManager = services.settingsManager;
   const promptSettingsManager = services.promptSettingsManager;
   const showNotification = utils.showNotification;
+  const responsesLocalCompactionRuns = new Map();
 
   /**
    * 将 API 返回的 inlineData 图片保存到本地下载目录，并返回可用于 <img src> 的本地文件链接。
@@ -4747,6 +4750,8 @@ export function createMessageSender(appContext) {
       responsesLocalCompactionStatus: buildResponsesLocalCompactionStatus({
         state: 'success',
         phase: 'completed',
+        attempt: normalizedOptions.attempt,
+        totalAttempts: normalizedOptions.totalAttempts,
         requestBytes: normalizedOptions.requestBytes,
         inputCount: normalizedOptions.inputCount,
         toolCount: normalizedOptions.toolCount,
@@ -4788,6 +4793,8 @@ export function createMessageSender(appContext) {
     return {
       state: stateValue,
       phase: normalizePhase(normalizedOptions.phase, stateValue),
+      attempt: normalizeNullableInt(normalizedOptions.attempt),
+      totalAttempts: normalizeNullableInt(normalizedOptions.totalAttempts),
       requestBytes: normalizeNullableInt(normalizedOptions.requestBytes),
       inputCount: normalizeNullableInt(normalizedOptions.inputCount),
       toolCount: normalizeNullableInt(normalizedOptions.toolCount),
@@ -4803,6 +4810,64 @@ export function createMessageSender(appContext) {
     return {
       responsesLocalCompactionStatus: buildResponsesLocalCompactionStatus(options)
     };
+  }
+
+  function isResponsesLocalCompactionAbortError(error) {
+    if (!error) return false;
+    if (error?.name === 'AbortError') return true;
+    const message = String(error?.message || '').trim().toLowerCase();
+    return message.includes('aborted') || message.includes('中止');
+  }
+
+  function delayResponsesLocalCompactionRetry(signal, timeoutMs = RESPONSES_LOCAL_COMPACTION_RETRY_DELAY_MS) {
+    const waitMs = Number.isFinite(Number(timeoutMs)) ? Math.max(0, Math.trunc(Number(timeoutMs))) : 0;
+    if (!waitMs) return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const timerId = setTimeout(() => {
+        cleanup();
+        resolve();
+      }, waitMs);
+      const onAbort = () => {
+        cleanup();
+        const abortError = new Error('Compact 请求已取消');
+        abortError.name = 'AbortError';
+        reject(abortError);
+      };
+      const cleanup = () => {
+        clearTimeout(timerId);
+        try { signal?.removeEventListener?.('abort', onAbort); } catch (_) {}
+      };
+      if (signal?.aborted) {
+        onAbort();
+        return;
+      }
+      try { signal?.addEventListener?.('abort', onAbort, { once: true }); } catch (_) {}
+    });
+  }
+
+  function clearResponsesLocalCompactionRun(targetMessageId) {
+    const normalizedMessageId = (typeof targetMessageId === 'string' || typeof targetMessageId === 'number')
+      ? String(targetMessageId).trim()
+      : '';
+    if (!normalizedMessageId) return;
+    responsesLocalCompactionRuns.delete(normalizedMessageId);
+  }
+
+  function updateResponsesLocalCompactionStatusNode({
+    targetMessageId,
+    activeThreadContext = null,
+    historyMessagesRef = null,
+    text = RESPONSES_LOCAL_COMPACTION_PENDING_TEXT,
+    statusPatch = null
+  } = {}) {
+    if (!targetMessageId) return null;
+    return updateResponsesLocalCompactionMessage({
+      targetMessageId,
+      text,
+      historyPatch: statusPatch ? buildResponsesLocalCompactionStatusHistoryPatch(statusPatch) : null,
+      activeThreadContext,
+      historyMessagesRef
+    });
   }
 
   function findAssistantHistoryNodeForCompactionMessage(messageId, historyMessagesRef = null) {
@@ -5036,6 +5101,8 @@ export function createMessageSender(appContext) {
       sourceAssistantMessageId: normalizedPayload.sourceAssistantMessageId || null,
       promptTokensBefore: normalizedPayload.promptTokensBefore,
       compactedAt: Date.now(),
+      attempt: normalizedPayload.attempt,
+      totalAttempts: normalizedPayload.totalAttempts,
       requestBytes: compactRequestSummary?.serializedBytes,
       inputCount: compactRequestSummary?.inputCount,
       toolCount: compactRequestSummary?.toolCount,
@@ -5058,6 +5125,214 @@ export function createMessageSender(appContext) {
       markerNode: markerResult.node || null,
       markerElement: markerResult.element || null
     };
+  }
+
+  function resolveResponsesLocalCompactionInvocationContext() {
+    const conversationApiInfo = (typeof chatHistoryUI?.resolveActiveConversationApiConfig === 'function')
+      ? chatHistoryUI.resolveActiveConversationApiConfig()
+      : null;
+    const usedApiConfig = conversationApiInfo?.lockConfig || apiManager.getSelectedConfig();
+    if (!validateApiConfig(usedApiConfig)) {
+      throw new Error('当前没有可用的 API 配置。');
+    }
+    if (!isOpenAIResponsesApiConfig(usedApiConfig)) {
+      throw new Error('当前配置不是 Responses API，无法执行 /compact。');
+    }
+
+    const activeThreadContext = resolveActiveThreadContext();
+    const conversationChain = resolveConversationChainForAttempt({
+      attemptState: null,
+      conversationSnapshot: null,
+      activeThreadContext,
+      regenerateMode: false,
+      messageId: null,
+      sendChatHistoryFlag: shouldSendChatHistory
+    });
+    const latestAssistantEntry = findLatestAssistantPromptTokenEntry(conversationChain);
+
+    return {
+      usedApiConfig,
+      activeThreadContext,
+      conversationChain,
+      sourceAssistantMessageId: latestAssistantEntry?.node?.id || null,
+      promptTokensBefore: latestAssistantEntry?.promptTokens ?? null
+    };
+  }
+
+  async function persistResponsesLocalCompactionConversation() {
+    const savedConversation = await chatHistoryUI?.saveCurrentConversation?.(true, {
+      preserveExistingApiLock: true
+    });
+    const savedConversationId = normalizeConversationId(savedConversation?.id);
+    if (savedConversationId) {
+      updateCurrentConversationContext(savedConversationId);
+    }
+    return savedConversation || null;
+  }
+
+  async function dismissResponsesLocalCompaction(targetMessageId) {
+    const normalizedMessageId = normalizeConversationId(targetMessageId);
+    if (!normalizedMessageId) return false;
+    const existingRun = responsesLocalCompactionRuns.get(normalizedMessageId);
+    if (existingRun?.controller && existingRun.controller.signal.aborted !== true) {
+      try { existingRun.controller.abort(); } catch (_) {}
+    }
+    clearResponsesLocalCompactionRun(normalizedMessageId);
+    try {
+      await requestConversationMessageDeletion({ messageId: normalizedMessageId });
+      return true;
+    } catch (error) {
+      console.error('删除 compact 状态节点失败:', error);
+      return false;
+    }
+  }
+
+  async function cancelResponsesLocalCompaction(targetMessageId) {
+    const normalizedMessageId = normalizeConversationId(targetMessageId);
+    if (!normalizedMessageId) return false;
+    const run = responsesLocalCompactionRuns.get(normalizedMessageId);
+    if (run?.controller && run.controller.signal.aborted !== true) {
+      try { run.controller.abort(); } catch (_) {}
+    }
+    return dismissResponsesLocalCompaction(normalizedMessageId);
+  }
+
+  async function runResponsesLocalCompactionWithRetries({
+    targetMessageId,
+    clearComposer = false
+  } = {}) {
+    const normalizedTargetMessageId = normalizeConversationId(targetMessageId);
+    if (!normalizedTargetMessageId) {
+      return { ok: false, error: 'missing_target_message_id' };
+    }
+    if (responsesLocalCompactionRuns.has(normalizedTargetMessageId)) {
+      return { ok: false, error: 'already_running' };
+    }
+
+    const controller = new AbortController();
+    const runContext = {
+      controller,
+      totalAttempts: RESPONSES_LOCAL_COMPACTION_TOTAL_ATTEMPTS
+    };
+    responsesLocalCompactionRuns.set(normalizedTargetMessageId, runContext);
+
+    if (clearComposer) {
+      clearInputs();
+      inputController?.focusToEnd?.();
+    }
+
+    let lastError = null;
+
+    try {
+      for (let attempt = 1; attempt <= RESPONSES_LOCAL_COMPACTION_TOTAL_ATTEMPTS; attempt += 1) {
+        runContext.attempt = attempt;
+        const invocationContext = resolveResponsesLocalCompactionInvocationContext();
+        updateResponsesLocalCompactionStatusNode({
+          targetMessageId: normalizedTargetMessageId,
+          activeThreadContext: invocationContext.activeThreadContext,
+          text: RESPONSES_LOCAL_COMPACTION_PENDING_TEXT,
+          statusPatch: {
+            state: 'pending',
+            phase: attempt > 1 ? 'retrying' : 'preparing',
+            attempt,
+            totalAttempts: RESPONSES_LOCAL_COMPACTION_TOTAL_ATTEMPTS,
+            errorMessage: attempt > 1 ? (lastError?.message || '') : ''
+          }
+        });
+        scrollToBottom(invocationContext.activeThreadContext?.container || chatContainer);
+
+        try {
+          const result = await executeResponsesLocalCompaction({
+            usedApiConfig: invocationContext.usedApiConfig,
+            conversationChain: invocationContext.conversationChain,
+            sendChatHistoryFlag: true,
+            activeThreadContext: invocationContext.activeThreadContext,
+            historyMessagesRef: null,
+            sourceAssistantMessageId: invocationContext.sourceAssistantMessageId,
+            promptTokensBefore: invocationContext.promptTokensBefore,
+            targetMessageId: normalizedTargetMessageId,
+            signal: controller.signal,
+            attempt,
+            totalAttempts: RESPONSES_LOCAL_COMPACTION_TOTAL_ATTEMPTS,
+            onStatusUpdate: (statusPatch) => {
+              updateResponsesLocalCompactionStatusNode({
+                targetMessageId: normalizedTargetMessageId,
+                activeThreadContext: invocationContext.activeThreadContext,
+                text: RESPONSES_LOCAL_COMPACTION_PENDING_TEXT,
+                statusPatch: {
+                  ...statusPatch,
+                  state: 'pending',
+                  attempt,
+                  totalAttempts: RESPONSES_LOCAL_COMPACTION_TOTAL_ATTEMPTS,
+                  errorMessage: attempt > 1 ? (lastError?.message || '') : ''
+                }
+              });
+            }
+          });
+          await persistResponsesLocalCompactionConversation();
+          return { ok: true, result };
+        } catch (error) {
+          if (controller.signal.aborted || isResponsesLocalCompactionAbortError(error)) {
+            return { ok: false, cancelled: true };
+          }
+          lastError = error instanceof Error ? error : new Error(String(error || '上下文压缩失败'));
+
+          if (attempt < RESPONSES_LOCAL_COMPACTION_TOTAL_ATTEMPTS) {
+            updateResponsesLocalCompactionStatusNode({
+              targetMessageId: normalizedTargetMessageId,
+              activeThreadContext: invocationContext.activeThreadContext,
+              text: RESPONSES_LOCAL_COMPACTION_PENDING_TEXT,
+              statusPatch: {
+                state: 'pending',
+                phase: 'retrying',
+                attempt: attempt + 1,
+                totalAttempts: RESPONSES_LOCAL_COMPACTION_TOTAL_ATTEMPTS,
+                requestBytes: null,
+                inputCount: null,
+                toolCount: null,
+                responseStatus: null,
+                responseBytes: null,
+                outputCount: null,
+                errorMessage: lastError.message
+              }
+            });
+            await delayResponsesLocalCompactionRetry(controller.signal);
+            continue;
+          }
+
+          updateResponsesLocalCompactionStatusNode({
+            targetMessageId: normalizedTargetMessageId,
+            activeThreadContext: invocationContext.activeThreadContext,
+            text: RESPONSES_LOCAL_COMPACTION_ERROR_TEXT,
+            statusPatch: {
+              state: 'error',
+              phase: 'failed',
+              attempt,
+              totalAttempts: RESPONSES_LOCAL_COMPACTION_TOTAL_ATTEMPTS,
+              errorMessage: lastError.message
+            }
+          });
+          return { ok: false, error: lastError.message };
+        }
+      }
+    } finally {
+      clearResponsesLocalCompactionRun(normalizedTargetMessageId);
+    }
+
+    return { ok: false, error: lastError?.message || '上下文压缩失败' };
+  }
+
+  async function retryResponsesLocalCompaction(targetMessageId) {
+    const normalizedTargetMessageId = normalizeConversationId(targetMessageId);
+    if (!normalizedTargetMessageId) return { ok: false, error: 'missing_target_message_id' };
+    if (activeAttempts.size > 0) {
+      showNotification?.({ message: '当前有进行中的请求，请等待结束后再重试压缩', type: 'warning' });
+      return { ok: false, error: 'request_in_progress' };
+    }
+    return runResponsesLocalCompactionWithRetries({
+      targetMessageId: normalizedTargetMessageId,
+      clearComposer: false
+    });
   }
 
   // 线程后台生成时仅写入历史（不渲染 DOM），避免与当前线程视图串线。
@@ -5612,78 +5887,21 @@ export function createMessageSender(appContext) {
         }
 
         const activeThreadContext = resolveActiveThreadContext();
-        const conversationChain = resolveConversationChainForAttempt({
-          attemptState: null,
-          conversationSnapshot: null,
-          activeThreadContext,
-          regenerateMode: false,
-          messageId: null,
-          sendChatHistoryFlag: shouldSendChatHistory
-        });
-        const latestAssistantEntry = findLatestAssistantPromptTokenEntry(conversationChain);
         const pendingMarkerResult = appendResponsesLocalCompactionMarker({
           text: RESPONSES_LOCAL_COMPACTION_PENDING_TEXT,
           historyPatch: buildResponsesLocalCompactionStatusHistoryPatch({
             state: 'pending',
-            phase: 'preparing'
+            phase: 'preparing',
+            attempt: 1,
+            totalAttempts: RESPONSES_LOCAL_COMPACTION_TOTAL_ATTEMPTS
           }),
           activeThreadContext,
           historyMessagesRef: null
         });
-        clearInputs();
-        inputController?.focusToEnd?.();
-        scrollToBottom(activeThreadContext?.container || chatContainer);
-
-        try {
-          const compactionResult = await executeResponsesLocalCompaction({
-            usedApiConfig,
-            conversationChain,
-            sendChatHistoryFlag: true,
-            activeThreadContext,
-            historyMessagesRef: null,
-            sourceAssistantMessageId: latestAssistantEntry?.node?.id || null,
-            promptTokensBefore: latestAssistantEntry?.promptTokens ?? null,
-            targetMessageId: pendingMarkerResult?.messageId || '',
-            onStatusUpdate: (statusPatch) => {
-              updateResponsesLocalCompactionMessage({
-                targetMessageId: pendingMarkerResult?.messageId || '',
-                text: RESPONSES_LOCAL_COMPACTION_PENDING_TEXT,
-                historyPatch: buildResponsesLocalCompactionStatusHistoryPatch(statusPatch),
-                activeThreadContext,
-                historyMessagesRef: null
-              });
-            }
-          });
-
-          const savedConversation = await chatHistoryUI?.saveCurrentConversation?.(true, {
-            preserveExistingApiLock: true
-          });
-          const savedConversationId = normalizeConversationId(savedConversation?.id);
-          if (savedConversationId) {
-            updateCurrentConversationContext(savedConversationId);
-          }
-          return {
-            ok: true,
-            markerMessageId: compactionResult?.markerMessageId || pendingMarkerResult?.messageId || ''
-          };
-        } catch (error) {
-          updateResponsesLocalCompactionMessage({
-            targetMessageId: pendingMarkerResult?.messageId || '',
-            text: RESPONSES_LOCAL_COMPACTION_ERROR_TEXT,
-            historyPatch: buildResponsesLocalCompactionStatusHistoryPatch({
-              state: 'error',
-              phase: 'failed',
-              errorMessage: error?.message || '上下文压缩失败'
-            }),
-            activeThreadContext,
-            historyMessagesRef: null
-          });
-          console.error('执行 /compact 失败:', error);
-          return {
-            ok: false,
-            error: error?.message || '上下文压缩失败'
-          };
-        }
+        return runResponsesLocalCompactionWithRetries({
+          targetMessageId: pendingMarkerResult?.messageId || '',
+          clearComposer: true
+        });
       },
       requiresArgs: false
     },
@@ -12760,6 +12978,9 @@ export function createMessageSender(appContext) {
     requestConversationHistoryEdit,
     requestConversationMessageDeletion,
     requestRegenerateMessage,
+    cancelResponsesLocalCompaction,
+    retryResponsesLocalCompaction,
+    dismissResponsesLocalCompaction,
     getShouldAutoScroll,
     setShouldAutoScroll,
     getSlashCommandList,

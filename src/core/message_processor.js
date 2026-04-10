@@ -3274,6 +3274,8 @@ export function createMessageProcessor(appContext) {
     return {
       state,
       phase: String(status.phase || '').trim().toLowerCase(),
+      attempt: normalizeInt(status.attempt),
+      totalAttempts: normalizeInt(status.totalAttempts),
       requestBytes: normalizeInt(status.requestBytes),
       inputCount: normalizeInt(status.inputCount),
       toolCount: normalizeInt(status.toolCount),
@@ -3315,6 +3317,9 @@ export function createMessageProcessor(appContext) {
     if (!state) return null;
 
     const metaParts = [];
+    if (status?.attempt && status?.totalAttempts) {
+      metaParts.push(`第 ${status.attempt}/${status.totalAttempts} 次`);
+    }
     if (status?.requestBytes) metaParts.push(`载荷 ${formatCompactStatusBytes(status.requestBytes)}`);
     if (status?.inputCount) metaParts.push(`${status.inputCount} 条输入`);
     if (status?.responseBytes) metaParts.push(`响应 ${formatCompactStatusBytes(status.responseBytes)}`);
@@ -3328,20 +3333,24 @@ export function createMessageProcessor(appContext) {
     if (state === 'pending') {
       stateClass = 'pending';
       iconClass = 'fa-arrows-rotate';
-      title = status?.phase === 'sending'
-        ? '上下文压缩请求已发送'
-        : '上下文压缩中';
+      title = '正在压缩';
     } else if (state === 'error') {
       stateClass = 'error';
       iconClass = 'fa-circle-exclamation';
-      title = '上下文压缩失败';
+      title = '压缩请求失败';
     }
 
     const fallbackMeta = (() => {
       if (stateClass === 'pending') {
-        return status?.phase === 'sending'
-          ? '请求已发出，等待 compact 响应'
-          : '正在构建 compact 载荷';
+        if (status?.phase === 'retrying') {
+          return status?.errorMessage
+            ? `准备重试 · ${truncateCompactStatusText(status.errorMessage, 88)}`
+            : '准备重试';
+        }
+        if (status?.phase === 'sending') {
+          return '请求已发出，等待 compact 响应';
+        }
+        return '正在构建 compact 载荷';
       }
       if (stateClass === 'error') {
         return truncateCompactStatusText(status?.errorMessage || '未收到有效 compact 响应');
@@ -3363,6 +3372,7 @@ export function createMessageProcessor(appContext) {
     if (!messageWrapperDiv) return false;
     const presentation = buildResponsesLocalCompactionPresentation(node);
     const existingBanner = messageWrapperDiv.querySelector('.context-compaction-divider');
+    const messageId = messageWrapperDiv.getAttribute('data-message-id') || '';
 
     if (!presentation) {
       messageWrapperDiv.classList.remove('context-compaction-message');
@@ -3373,6 +3383,8 @@ export function createMessageProcessor(appContext) {
 
     messageWrapperDiv.classList.add('context-compaction-message');
     messageWrapperDiv.dataset.compactionState = presentation.state;
+    messageWrapperDiv.classList.remove('updating');
+    messageWrapperDiv.classList.remove('assistant-pre-response');
 
     let banner = existingBanner;
     if (!banner) {
@@ -3384,6 +3396,17 @@ export function createMessageProcessor(appContext) {
           <div class="context-compaction-divider__pill">
             <i class="context-compaction-divider__icon fa-solid" aria-hidden="true"></i>
             <span class="context-compaction-divider__label"></span>
+            <span class="context-compaction-divider__actions" hidden>
+              <button class="context-compaction-divider__action context-compaction-divider__action--cancel" type="button" title="取消压缩" aria-label="取消压缩">
+                <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+              </button>
+              <button class="context-compaction-divider__action context-compaction-divider__action--retry" type="button" title="重试压缩" aria-label="重试压缩">
+                <i class="fa-solid fa-rotate-right" aria-hidden="true"></i>
+              </button>
+              <button class="context-compaction-divider__action context-compaction-divider__action--confirm" type="button" title="确认并关闭" aria-label="确认并关闭">
+                <i class="fa-solid fa-check" aria-hidden="true"></i>
+              </button>
+            </span>
           </div>
           <span class="context-compaction-divider__line" aria-hidden="true"></span>
         </div>
@@ -3398,6 +3421,10 @@ export function createMessageProcessor(appContext) {
     }
 
     banner.className = `context-compaction-divider is-${presentation.state}`;
+    const actions = banner.querySelector('.context-compaction-divider__actions');
+    const cancelButton = banner.querySelector('.context-compaction-divider__action--cancel');
+    const retryButton = banner.querySelector('.context-compaction-divider__action--retry');
+    const confirmButton = banner.querySelector('.context-compaction-divider__action--confirm');
     const icon = banner.querySelector('.context-compaction-divider__icon');
     const label = banner.querySelector('.context-compaction-divider__label');
     const meta = banner.querySelector('.context-compaction-divider__meta');
@@ -3411,6 +3438,39 @@ export function createMessageProcessor(appContext) {
       meta.textContent = presentation.meta || '';
       meta.hidden = !presentation.meta;
     }
+    if (actions) {
+      const showCancel = presentation.state === 'pending';
+      const showFailureActions = presentation.state === 'error';
+      actions.hidden = !(showCancel || showFailureActions);
+      if (cancelButton) cancelButton.hidden = !showCancel;
+      if (retryButton) retryButton.hidden = !showFailureActions;
+      if (confirmButton) confirmButton.hidden = !showFailureActions;
+    }
+
+    const bindAction = (button, actionName, handler) => {
+      if (!button || button.dataset.boundAction === actionName) return;
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!messageId) return;
+        try {
+          handler(messageId);
+        } catch (error) {
+          console.warn(`compact 分隔线动作执行失败: ${actionName}`, error);
+        }
+      });
+      button.dataset.boundAction = actionName;
+    };
+
+    bindAction(cancelButton, 'cancel', (targetMessageId) => {
+      void services.messageSender?.cancelResponsesLocalCompaction?.(targetMessageId);
+    });
+    bindAction(retryButton, 'retry', (targetMessageId) => {
+      void services.messageSender?.retryResponsesLocalCompaction?.(targetMessageId);
+    });
+    bindAction(confirmButton, 'confirm', (targetMessageId) => {
+      void services.messageSender?.dismissResponsesLocalCompaction?.(targetMessageId);
+    });
     return true;
   }
 

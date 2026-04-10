@@ -33,7 +33,7 @@ const { chromium } = loadPlaywright(repoRoot);
 const FIRST_REPLY = 'STEP1_OK CODEWORD=BLUE-ELEPHANT-42';
 const SECOND_REPLY = 'STEP2_OK';
 const THIRD_REPLY = 'CODEWORD=BLUE-ELEPHANT-42';
-const COMPACTION_MARKER_TEXT = '已压缩上下文';
+const COMPACTION_MARKER_TEXT = '上下文已压缩';
 function buildStorageSeed(fixedEnv) {
   const responsesSourceId = 'src_fixed_responses_local_compaction';
   const responsesConfig = {
