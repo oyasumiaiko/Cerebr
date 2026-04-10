@@ -401,6 +401,80 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === 'EXECUTE_JS_REPL') {
+    (async () => {
+      try {
+        if (typeof sender?.url === 'string' && sender.url.includes('#standalone')) {
+          sendResponse({
+            success: false,
+            error: '独立聊天页面当前没有稳定的目标网页标签页，暂不支持执行宿主页 JS REPL。'
+          });
+          return;
+        }
+
+        const targetTabId = resolveSidebarRequestTargetTabId({
+          explicitTabId: message?.tabId,
+          senderTabId: sender?.tab?.id
+        });
+        if (!Number.isFinite(targetTabId)) {
+          sendResponse({ success: false, error: '未找到与当前侧栏实例绑定的目标标签页。' });
+          return;
+        }
+
+        const result = await jsRuntimeManager.executeRepl({
+          tabId: targetTabId,
+          code: message?.code || '',
+          frameIds: Array.isArray(message?.frameIds) ? message.frameIds : null,
+          injectImmediately: message?.injectImmediately === true
+        });
+        sendResponse({
+          success: true,
+          tabId: targetTabId,
+          ...result
+        });
+      } catch (error) {
+        sendResponse({ success: false, error: error?.message || '执行 JS REPL 失败' });
+      }
+    })();
+    return true;
+  }
+
+  if (message?.type === 'RESET_JS_REPL') {
+    (async () => {
+      try {
+        if (typeof sender?.url === 'string' && sender.url.includes('#standalone')) {
+          sendResponse({
+            success: false,
+            error: '独立聊天页面当前没有稳定的目标网页标签页，暂不支持重置宿主页 JS REPL。'
+          });
+          return;
+        }
+
+        const targetTabId = resolveSidebarRequestTargetTabId({
+          explicitTabId: message?.tabId,
+          senderTabId: sender?.tab?.id
+        });
+        if (!Number.isFinite(targetTabId)) {
+          sendResponse({ success: false, error: '未找到与当前侧栏实例绑定的目标标签页。' });
+          return;
+        }
+
+        const result = await jsRuntimeManager.resetRepl({
+          tabId: targetTabId,
+          frameIds: Array.isArray(message?.frameIds) ? message.frameIds : null
+        });
+        sendResponse({
+          success: true,
+          tabId: targetTabId,
+          ...result
+        });
+      } catch (error) {
+        sendResponse({ success: false, error: error?.message || '重置 JS REPL 失败' });
+      }
+    })();
+    return true;
+  }
+
   if (message?.type === 'GET_JS_RUNTIME_FRAMES') {
     (async () => {
       try {

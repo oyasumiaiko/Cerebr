@@ -1319,6 +1319,141 @@ export function registerSidebarUtilities(appContext) {
     }
   };
 
+  /**
+   * 在当前侧栏绑定环境中执行一段“持久化 JS REPL”代码。
+   *
+   * 语义说明：
+   * - 同一环境内的顶层绑定会保留到下一次 `js_repl` 调用；
+   * - `js_repl_reset` 会清空当前环境对应的 REPL 内核状态；
+   * - 为了让 reset 真正可用，这里的绑定不直接落到真实全局对象，而是落到 REPL 内核托管作用域。
+   *
+   * @param {string} code
+   * @param {Object} [options]
+   * @returns {Promise<Object>}
+   */
+  appContext.utils.executeJsRepl = async (code, options = {}) => {
+    const runtimeEnvironment = (typeof options?.runtimeEnvironment === 'string' && options.runtimeEnvironment)
+      ? options.runtimeEnvironment
+      : resolveCurrentPageToolEnvironment().jsRuntimeEnvironment;
+    const timeoutMs = Number.isFinite(Number(options?.timeoutMs))
+      ? Math.max(1, Math.trunc(Number(options.timeoutMs)))
+      : JS_RUNTIME_EXECUTION_TIMEOUT_MS;
+    if (runtimeEnvironment !== JS_RUNTIME_ENV_BOUND_HOST_PAGE) {
+      try {
+        const result = await raceWithTimeout(
+          jsSandboxRuntime.executeRepl({
+            code: (typeof code === 'string') ? code : ''
+          }),
+          timeoutMs,
+          '执行 JS REPL 超时'
+        );
+        return {
+          success: true,
+          tabId: null,
+          ...result
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: error?.message || '执行隔离 JS REPL 失败'
+        };
+      }
+    }
+    if (!chrome?.runtime?.sendMessage) {
+      return {
+        success: false,
+        error: '当前环境不支持 chrome.runtime.sendMessage'
+      };
+    }
+    try {
+      const targetTabId = await resolveBoundSidebarTargetTabId();
+      if (!Number.isFinite(targetTabId)) {
+        return {
+          success: false,
+          error: '当前侧栏尚未解析出稳定的宿主标签页，暂时无法执行 JS REPL。'
+        };
+      }
+      return await raceWithTimeout(
+        chrome.runtime.sendMessage({
+          type: 'EXECUTE_JS_REPL',
+          tabId: targetTabId,
+          code: (typeof code === 'string') ? code : '',
+          frameIds: Array.isArray(options?.frameIds) ? options.frameIds : null
+        }),
+        timeoutMs,
+        '执行 JS REPL 超时'
+      );
+    } catch (error) {
+      return {
+        success: false,
+        error: error?.message || '执行 JS REPL 失败'
+      };
+    }
+  };
+
+  /**
+   * 重置当前环境对应的 JS REPL 内核。
+   *
+   * @param {Object} [options]
+   * @returns {Promise<Object>}
+   */
+  appContext.utils.resetJsRepl = async (options = {}) => {
+    const runtimeEnvironment = (typeof options?.runtimeEnvironment === 'string' && options.runtimeEnvironment)
+      ? options.runtimeEnvironment
+      : resolveCurrentPageToolEnvironment().jsRuntimeEnvironment;
+    const timeoutMs = Number.isFinite(Number(options?.timeoutMs))
+      ? Math.max(1, Math.trunc(Number(options.timeoutMs)))
+      : JS_RUNTIME_EXECUTION_TIMEOUT_MS;
+    if (runtimeEnvironment !== JS_RUNTIME_ENV_BOUND_HOST_PAGE) {
+      try {
+        const result = await raceWithTimeout(
+          jsSandboxRuntime.resetRepl(),
+          timeoutMs,
+          '重置 JS REPL 超时'
+        );
+        return {
+          success: true,
+          tabId: null,
+          ...result
+        };
+      } catch (error) {
+        return {
+          success: false,
+          error: error?.message || '重置隔离 JS REPL 失败'
+        };
+      }
+    }
+    if (!chrome?.runtime?.sendMessage) {
+      return {
+        success: false,
+        error: '当前环境不支持 chrome.runtime.sendMessage'
+      };
+    }
+    try {
+      const targetTabId = await resolveBoundSidebarTargetTabId();
+      if (!Number.isFinite(targetTabId)) {
+        return {
+          success: false,
+          error: '当前侧栏尚未解析出稳定的宿主标签页，暂时无法重置 JS REPL。'
+        };
+      }
+      return await raceWithTimeout(
+        chrome.runtime.sendMessage({
+          type: 'RESET_JS_REPL',
+          tabId: targetTabId,
+          frameIds: Array.isArray(options?.frameIds) ? options.frameIds : null
+        }),
+        timeoutMs,
+        '重置 JS REPL 超时'
+      );
+    } catch (error) {
+      return {
+        success: false,
+        error: error?.message || '重置 JS REPL 失败'
+      };
+    }
+  };
+
   appContext.utils.addImageToContainer = (imageData, fileName) => {
     const imageTag = appContext.services.imageHandler.createImageTag(imageData, fileName);
     appContext.dom.imageContainer.appendChild(imageTag);

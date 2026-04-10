@@ -41,6 +41,7 @@ import {
 } from '../utils/regenerate_retry_target.js';
 import {
   buildResponsesJsRuntimeToolOutputContentItems,
+  buildResponsesJsReplToolOutputContentItems,
   buildResponsesPageContentToolOutputContentItems,
   buildResponsesPdfContentToolOutputContentItems,
   buildResponsesHistorySearchToolOutputContentItems,
@@ -82,6 +83,7 @@ import {
   JS_RUNTIME_ENV_ISOLATED_SANDBOX,
   resolvePageToolEnvironment
 } from '../agent_tools/page_tool_environment.js';
+import { parseBrowserJsReplInput } from '../utils/browser_js_repl.js';
 import {
   createAssistantPreResponseStatus,
   deriveAssistantPreResponseStatusFromLocalStage,
@@ -108,6 +110,8 @@ import {
 } from '../storage/indexeddb_helper.js';
 
 const RESPONSES_JS_RUNTIME_TOOL_NAME = 'js_runtime_execute';
+const RESPONSES_JS_REPL_TOOL_NAME = 'js_repl';
+const RESPONSES_JS_REPL_RESET_TOOL_NAME = 'js_repl_reset';
 const RESPONSES_PAGE_CONTENT_TOOL_NAME = 'page_content_read';
 const RESPONSES_PDF_CONTENT_TOOL_NAME = PDF_CONTENT_READ_TOOL_NAME;
 const RESPONSES_HISTORY_SEARCH_TOOL_NAME = 'history_search';
@@ -6643,6 +6647,87 @@ export function createMessageSender(appContext) {
   }
 
   /**
+   * 构造给 Responses API 使用的 js_repl 自定义函数工具定义。
+   *
+   * 设计说明：
+   * - 这是对现有一次性 `js_runtime_execute` 的补充，而不是替代；
+   * - 目标是让模型能像 Codex 的 js_repl 一样，在同一页面环境里分多次累积顶层绑定；
+   * - 为了让 `js_repl_reset` 真正生效，绑定会落到 REPL 内核托管作用域，而不是直接污染真实全局对象。
+   *
+   * @param {ReturnType<typeof resolvePageToolEnvironment>} pageToolEnvironment
+   * @returns {Object}
+   */
+  function buildResponsesJsReplFunctionToolDefinition(pageToolEnvironment = resolveResponsesPageToolEnvironment()) {
+    const descriptionLines = [
+      '在浏览器脚本环境中执行带持久化状态的 JavaScript REPL 单元。',
+      '同一环境里，前一个 js_repl 单元里定义的顶层绑定可在后续 js_repl 单元继续使用，直到调用 js_repl_reset、页面刷新或宿主环境重建。',
+      'code 字段应直接提供原始 JavaScript 源码字符串，不要包 JSON、引号或 markdown 代码块。',
+      '支持可选首行 pragma：// js-repl: timeout_ms=15000。',
+      '支持顶层 await、显式 return、console.log/info/warn/error/debug。',
+      '如需稳定回传最终结果，推荐显式使用 return；console 输出也会被捕获并一并回传。',
+      '为了让顶层声明稳定改写，请尽量让顶层 const/let/var 声明以分号结束。',
+      '可访问当前执行环境的 DOM / Web API；若只需要一次性执行，优先使用 js_runtime_execute。'
+    ];
+    const frameDescription = '可选的 frame ID 数组。省略、传空数组或 null 时，默认在顶层 frame 维护该 REPL 会话；不同 frame 的 REPL 状态彼此隔离。';
+    return {
+      type: 'function',
+      name: RESPONSES_JS_REPL_TOOL_NAME,
+      description: descriptionLines.join(' '),
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          code: {
+            type: 'string',
+            description: '要执行的原始 JavaScript 源码。支持顶层 await、return 与可选首行 `// js-repl: timeout_ms=...` pragma。不要包 markdown 代码块或 JSON。'
+          },
+          frame_ids: {
+            type: ['array', 'null'],
+            description: frameDescription,
+            items: {
+              type: 'integer'
+            }
+          }
+        },
+        required: ['code', 'frame_ids']
+      }
+    };
+  }
+
+  /**
+   * 构造给 Responses API 使用的 js_repl_reset 自定义函数工具定义。
+   *
+   * @returns {Object}
+   */
+  function buildResponsesJsReplResetFunctionToolDefinition() {
+    return {
+      type: 'function',
+      name: RESPONSES_JS_REPL_RESET_TOOL_NAME,
+      description: [
+        '重置当前浏览器脚本环境对应的 js_repl 内核状态。',
+        '调用后，之前通过 js_repl 累积的顶层绑定会被清空。',
+        '省略 frame_ids、传空数组或 null 时，默认重置顶层 frame 对应的 REPL 会话。'
+      ].join(' '),
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          frame_ids: {
+            type: ['array', 'null'],
+            description: '可选的 frame ID 数组。不同 frame 的 REPL 状态彼此隔离；省略或 null 时默认重置顶层 frame。',
+            items: {
+              type: 'integer'
+            }
+          }
+        },
+        required: ['frame_ids']
+      }
+    };
+  }
+
+  /**
    * 构造给 Responses API 使用的 page_content_read 自定义函数工具定义。
    *
    * 这个工具的定位非常克制：
@@ -6853,6 +6938,8 @@ export function createMessageSender(appContext) {
     }
     if (typeof utils?.executeJsRuntime === 'function') {
       tools.unshift(buildResponsesJsRuntimeFunctionToolDefinition(pageToolEnvironment));
+      tools.unshift(buildResponsesJsReplResetFunctionToolDefinition());
+      tools.unshift(buildResponsesJsReplFunctionToolDefinition(pageToolEnvironment));
     }
     return tools;
   }
@@ -7012,6 +7099,17 @@ export function createMessageSender(appContext) {
     }
   }
 
+  function serializeResponsesJsReplFunctionToolOutput(value) {
+    try {
+      return buildResponsesJsReplToolOutputContentItems(value);
+    } catch (error) {
+      return buildResponsesGenericXmlToolOutputContentItems('js_repl_result', {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      });
+    }
+  }
+
   function serializeResponsesPdfContentFunctionToolOutput(value) {
     try {
       return buildResponsesPdfContentToolOutputContentItems(value);
@@ -7096,6 +7194,10 @@ export function createMessageSender(appContext) {
     };
   }
 
+  function compactResponsesJsReplResult(rawResult) {
+    return compactResponsesJsRuntimeResult(rawResult);
+  }
+
   /**
    * 规范化 js_runtime_execute 的参数。
    *
@@ -7120,6 +7222,51 @@ export function createMessageSender(appContext) {
 
     return {
       code,
+      frameIds: (Array.isArray(frameIds) && frameIds.length > 0) ? frameIds : null
+    };
+  }
+
+  /**
+   * 规范化 js_repl 的参数。
+   *
+   * @param {any} rawArgs
+   * @returns {{code:string, timeoutMs:number|null, frameIds:number[]|null}}
+   */
+  function normalizeResponsesJsReplToolArguments(rawArgs) {
+    const args = (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs))
+      ? rawArgs
+      : {};
+    const parsed = parseBrowserJsReplInput((typeof args.code === 'string') ? args.code : '');
+    const frameIds = Array.isArray(args.frame_ids)
+      ? args.frame_ids
+        .map(value => Number(value))
+        .filter(value => Number.isFinite(value))
+        .map(value => Math.trunc(value))
+      : null;
+    return {
+      code: parsed.code,
+      timeoutMs: Number.isFinite(Number(parsed.timeoutMs)) ? Number(parsed.timeoutMs) : null,
+      frameIds: (Array.isArray(frameIds) && frameIds.length > 0) ? frameIds : null
+    };
+  }
+
+  /**
+   * 规范化 js_repl_reset 的参数。
+   *
+   * @param {any} rawArgs
+   * @returns {{frameIds:number[]|null}}
+   */
+  function normalizeResponsesJsReplResetToolArguments(rawArgs) {
+    const args = (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs))
+      ? rawArgs
+      : {};
+    const frameIds = Array.isArray(args.frame_ids)
+      ? args.frame_ids
+        .map(value => Number(value))
+        .filter(value => Number.isFinite(value))
+        .map(value => Math.trunc(value))
+      : null;
+    return {
       frameIds: (Array.isArray(frameIds) && frameIds.length > 0) ? frameIds : null
     };
   }
@@ -7181,6 +7328,149 @@ export function createMessageSender(appContext) {
       });
     } catch (error) {
       return compactResponsesJsRuntimeResult({
+        ok: false,
+        value: null,
+        items: [],
+        error: normalizeResponsesCustomToolError(error)
+      });
+    }
+  }
+
+  async function executeResponsesJsReplResetFunction(rawArgs, options = {}) {
+    if (typeof utils?.resetJsRepl !== 'function') {
+      return compactResponsesJsReplResult({
+        ok: false,
+        value: null,
+        items: [],
+        error: {
+          message: '当前客户端没有可用的 JS REPL reset 入口。',
+          name: 'UnavailableError',
+          stack: ''
+        }
+      });
+    }
+
+    try {
+      const normalizedArgs = normalizeResponsesJsReplResetToolArguments(rawArgs);
+      const runtimeEnvironment = (typeof options?.runtimeEnvironment === 'string' && options.runtimeEnvironment)
+        ? options.runtimeEnvironment
+        : resolveResponsesPageToolEnvironment(options?.attemptState).jsRuntimeEnvironment;
+      const result = await utils.resetJsRepl({
+        frameIds: normalizedArgs.frameIds,
+        runtimeEnvironment
+      });
+
+      if (!result || result.success !== true) {
+        return compactResponsesJsReplResult({
+          ok: false,
+          tabId: Number.isFinite(Number(result?.tabId)) ? Number(result.tabId) : null,
+          value: null,
+          logs: Array.isArray(result?.logs) ? cloneDataSafely(result.logs) : [],
+          items: Array.isArray(result?.items) ? cloneDataSafely(result.items) : [],
+          error: {
+            message: (typeof result?.error === 'string' && result.error.trim())
+              ? result.error.trim()
+              : 'JS REPL reset 失败',
+            name: 'JsReplResetError',
+            stack: ''
+          }
+        });
+      }
+
+      return compactResponsesJsReplResult({
+        ok: result.ok === true,
+        tabId: Number.isFinite(Number(result?.tabId)) ? Number(result.tabId) : null,
+        value: result?.value ?? 'js_repl kernel reset',
+        logs: Array.isArray(result?.logs) ? cloneDataSafely(result.logs) : [],
+        items: Array.isArray(result?.items) ? cloneDataSafely(result.items) : [],
+        error: null
+      });
+    } catch (error) {
+      return compactResponsesJsReplResult({
+        ok: false,
+        value: null,
+        items: [],
+        error: normalizeResponsesCustomToolError(error)
+      });
+    }
+  }
+
+  async function executeResponsesJsReplFunction(rawArgs, options = {}) {
+    if (typeof utils?.executeJsRepl !== 'function') {
+      return compactResponsesJsReplResult({
+        ok: false,
+        value: null,
+        items: [],
+        error: {
+          message: '当前客户端没有可用的 JS REPL 执行入口。',
+          name: 'UnavailableError',
+          stack: ''
+        }
+      });
+    }
+
+    let normalizedArgs = null;
+    let runtimeEnvironment = null;
+    try {
+      normalizedArgs = normalizeResponsesJsReplToolArguments(rawArgs);
+      runtimeEnvironment = (typeof options?.runtimeEnvironment === 'string' && options.runtimeEnvironment)
+        ? options.runtimeEnvironment
+        : resolveResponsesPageToolEnvironment(options?.attemptState).jsRuntimeEnvironment;
+      const result = await utils.executeJsRepl(normalizedArgs.code, {
+        frameIds: normalizedArgs.frameIds,
+        timeoutMs: normalizedArgs.timeoutMs,
+        runtimeEnvironment
+      });
+
+      if (!result || result.success !== true) {
+        const message = (typeof result?.error === 'string' && result.error.trim())
+          ? result.error.trim()
+          : 'JS REPL 执行失败';
+        if (message.includes('超时') && typeof utils?.resetJsRepl === 'function') {
+          try {
+            await utils.resetJsRepl({
+              frameIds: normalizedArgs.frameIds,
+              runtimeEnvironment
+            });
+          } catch (_) {
+            // 超时后的 reset 只是 best effort，不应覆盖主错误。
+          }
+        }
+        return compactResponsesJsReplResult({
+          ok: false,
+          tabId: Number.isFinite(Number(result?.tabId)) ? Number(result.tabId) : null,
+          value: null,
+          logs: Array.isArray(result?.logs) ? cloneDataSafely(result.logs) : [],
+          items: Array.isArray(result?.items) ? cloneDataSafely(result.items) : [],
+          error: {
+            message,
+            name: 'JsReplExecutionError',
+            stack: ''
+          }
+        });
+      }
+
+      return compactResponsesJsReplResult({
+        ok: result.ok === true,
+        tabId: Number.isFinite(Number(result?.tabId)) ? Number(result.tabId) : null,
+        value: result?.value ?? null,
+        logs: Array.isArray(result?.logs) ? cloneDataSafely(result.logs) : [],
+        items: Array.isArray(result?.items) ? cloneDataSafely(result.items) : [],
+        error: null
+      });
+    } catch (error) {
+      if (normalizedArgs && runtimeEnvironment && typeof utils?.resetJsRepl === 'function') {
+        const message = (typeof error?.message === 'string' && error.message.trim()) ? error.message.trim() : '';
+        if (message.includes('超时')) {
+          try {
+            await utils.resetJsRepl({
+              frameIds: normalizedArgs.frameIds,
+              runtimeEnvironment
+            });
+          } catch (_) {}
+        }
+      }
+      return compactResponsesJsReplResult({
         ok: false,
         value: null,
         items: [],
@@ -7775,6 +8065,10 @@ export function createMessageSender(appContext) {
     let outputPayload = null;
     if (functionName === RESPONSES_JS_RUNTIME_TOOL_NAME) {
       outputPayload = await executeResponsesJsRuntimeFunction(parsedArgs, options);
+    } else if (functionName === RESPONSES_JS_REPL_TOOL_NAME) {
+      outputPayload = await executeResponsesJsReplFunction(parsedArgs, options);
+    } else if (functionName === RESPONSES_JS_REPL_RESET_TOOL_NAME) {
+      outputPayload = await executeResponsesJsReplResetFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME) {
       outputPayload = await executeResponsesRequestUserInputFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME) {
@@ -7808,6 +8102,8 @@ export function createMessageSender(appContext) {
       output:
         functionName === RESPONSES_JS_RUNTIME_TOOL_NAME
           ? serializeResponsesJsRuntimeFunctionToolOutput(outputPayload)
+          : functionName === RESPONSES_JS_REPL_TOOL_NAME || functionName === RESPONSES_JS_REPL_RESET_TOOL_NAME
+            ? serializeResponsesJsReplFunctionToolOutput(outputPayload)
           : functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME
             ? serializeResponsesRequestUserInputFunctionToolOutput(outputPayload)
           : functionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME

@@ -1,12 +1,17 @@
+import { createBrowserJsReplKernel } from '../utils/browser_js_repl.js';
+
 /**
  * 基于 chrome.userScripts 的最小可用 JS Runtime。
  *
- * 设计目标（Phase 1）：
- * 1. 只做一次性执行，不做长期会话态 REPL 管理；
+ * 设计目标：
+ * 1. 保留一次性执行能力；
+ * 2. 新增可 reset 的持久化 JS REPL；
  * 2. 默认运行在 USER_SCRIPT world，而不是 MAIN world；
  * 3. 不向页面注入任何宿主扩展桥，执行环境保持为“纯页面 JS”；
  * 4. 遇到 Chrome 版本 / 用户侧开关不满足时，返回明确错误，而不是偷偷 fallback。
  */
+
+const JS_REPL_KERNEL_GLOBAL_KEY = '__cerebrJsReplKernelV1__';
 
 /**
  * 将错误对象压缩成适合 UI 展示的轻量结构。
@@ -271,6 +276,62 @@ ${body}
 `.trim();
 }
 
+function buildUserScriptReplExecuteSource(userCode) {
+  const code = (typeof userCode === 'string') ? userCode : '';
+  const createKernelSource = createBrowserJsReplKernel.toString();
+  return `
+  (async () => {
+    const __cerebrKernelKey = ${JSON.stringify(JS_REPL_KERNEL_GLOBAL_KEY)};
+    const __cerebrCreateKernel = ${createKernelSource};
+    if (
+      !globalThis[__cerebrKernelKey]
+      || typeof globalThis[__cerebrKernelKey].execute !== 'function'
+      || typeof globalThis[__cerebrKernelKey].reset !== 'function'
+    ) {
+      globalThis[__cerebrKernelKey] = __cerebrCreateKernel(globalThis);
+    }
+    const __cerebrKernel = globalThis[__cerebrKernelKey];
+    const __cerebrResult = await __cerebrKernel.execute(${JSON.stringify(code)});
+    return {
+      __cerebrJsRuntimeEnvelope: true,
+      ok: __cerebrResult?.ok === true,
+      value: __cerebrResult?.ok === true ? (__cerebrResult?.value ?? null) : null,
+      logs: Array.isArray(__cerebrResult?.logs) ? __cerebrResult.logs : [],
+      error: __cerebrResult?.ok === true
+        ? null
+        : (__cerebrResult?.error || {
+            name: 'JsReplExecutionError',
+            message: 'JS REPL 执行失败。',
+            stack: ''
+          })
+    };
+  })();
+`.trim();
+}
+
+function buildUserScriptReplResetSource() {
+  const createKernelSource = createBrowserJsReplKernel.toString();
+  return `
+  (() => {
+    const __cerebrKernelKey = ${JSON.stringify(JS_REPL_KERNEL_GLOBAL_KEY)};
+    const __cerebrCreateKernel = ${createKernelSource};
+    try {
+      delete globalThis[__cerebrKernelKey];
+    } catch (_) {
+      globalThis[__cerebrKernelKey] = null;
+    }
+    globalThis[__cerebrKernelKey] = __cerebrCreateKernel(globalThis);
+    return {
+      __cerebrJsRuntimeEnvelope: true,
+      ok: true,
+      value: 'js_repl kernel reset',
+      logs: [],
+      error: null
+    };
+  })();
+`.trim();
+}
+
 /**
  * 构造一个最小 JS Runtime manager。
  *
@@ -389,6 +450,123 @@ export function createJsRuntimeManager() {
   }
 
   /**
+   * 执行持久化 JS REPL 单元。
+   *
+   * @param {Object} request
+   * @param {number} request.tabId
+   * @param {string} request.code
+   * @param {number[]|null} [request.frameIds]
+   * @returns {Promise<{ok:boolean, items:Array<Object>, value:any, logs:Array<Object>}>}
+   */
+  async function executeRepl(request = {}) {
+    const tabId = Number(request?.tabId);
+    const code = (typeof request?.code === 'string') ? request.code : '';
+    if (!Number.isFinite(tabId)) {
+      throw new Error('执行 JS REPL 失败：缺少有效 tabId。');
+    }
+    if (!code.trim()) {
+      throw new Error('执行 JS REPL 失败：代码内容为空。');
+    }
+
+    const availability = await getAvailability();
+    if (!availability.available) {
+      throw new Error(availability.reason || 'JS REPL 当前不可用');
+    }
+
+    /** @type {chrome.userScripts.UserScriptInjectionTarget} */
+    const target = { tabId };
+    if (Array.isArray(request?.frameIds) && request.frameIds.length > 0) {
+      target.frameIds = request.frameIds
+        .map(value => Number(value))
+        .filter(value => Number.isFinite(value));
+    }
+
+    const rawItems = await chrome.userScripts.execute({
+      target,
+      injectImmediately: request?.injectImmediately === true,
+      js: [
+        {
+          code: buildUserScriptReplExecuteSource(code)
+        }
+      ]
+    });
+
+    const items = Array.isArray(rawItems)
+      ? rawItems.map(normalizeExecuteResultItem)
+      : [];
+    const successfulItems = items.filter(item => !item.error);
+    const logs = items.flatMap((item) => {
+      if (!Array.isArray(item?.logs)) return [];
+      return item.logs.map((log) => normalizeJsRuntimeLogEntry(log, item.frameId));
+    });
+
+    return {
+      ok: items.every(item => !item.error),
+      items,
+      logs,
+      value: successfulItems.length === 1
+        ? successfulItems[0].result
+        : successfulItems.map(item => item.result)
+    };
+  }
+
+  /**
+   * 重置持久化 JS REPL 内核。
+   *
+   * @param {Object} request
+   * @param {number} request.tabId
+   * @param {number[]|null} [request.frameIds]
+   * @returns {Promise<{ok:boolean, items:Array<Object>, value:any, logs:Array<Object>}>}
+   */
+  async function resetRepl(request = {}) {
+    const tabId = Number(request?.tabId);
+    if (!Number.isFinite(tabId)) {
+      throw new Error('重置 JS REPL 失败：缺少有效 tabId。');
+    }
+
+    const availability = await getAvailability();
+    if (!availability.available) {
+      throw new Error(availability.reason || 'JS REPL 当前不可用');
+    }
+
+    /** @type {chrome.userScripts.UserScriptInjectionTarget} */
+    const target = { tabId };
+    if (Array.isArray(request?.frameIds) && request.frameIds.length > 0) {
+      target.frameIds = request.frameIds
+        .map(value => Number(value))
+        .filter(value => Number.isFinite(value));
+    }
+
+    const rawItems = await chrome.userScripts.execute({
+      target,
+      injectImmediately: true,
+      js: [
+        {
+          code: buildUserScriptReplResetSource()
+        }
+      ]
+    });
+
+    const items = Array.isArray(rawItems)
+      ? rawItems.map(normalizeExecuteResultItem)
+      : [];
+    const successfulItems = items.filter(item => !item.error);
+    const logs = items.flatMap((item) => {
+      if (!Array.isArray(item?.logs)) return [];
+      return item.logs.map((log) => normalizeJsRuntimeLogEntry(log, item.frameId));
+    });
+
+    return {
+      ok: items.every(item => !item.error),
+      items,
+      logs,
+      value: successfulItems.length === 1
+        ? successfulItems[0].result
+        : successfulItems.map(item => item.result)
+    };
+  }
+
+  /**
    * 枚举当前标签页所有可注入 frame 的快照。
    *
    * 说明：
@@ -447,6 +625,8 @@ export function createJsRuntimeManager() {
   return {
     getAvailability,
     listFrames,
-    execute
+    execute,
+    executeRepl,
+    resetRepl
   };
 }

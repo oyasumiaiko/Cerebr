@@ -10,6 +10,10 @@ export const RESPONSES_TOOL_OUTPUT_MAX_CHARS = 10_000;
 export const RESPONSES_TOOL_OUTPUT_CHUNK_CHARS = 3_000;
 export const RESPONSES_TOOL_OUTPUT_PRETTY_JSON_MAX_CHARS = 1_000;
 
+function isPlainObjectLike(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
 function trimTrailingWhitespace(text) {
   return String(text ?? '').replace(/[ \t]+\n/g, '\n').trim();
 }
@@ -287,7 +291,7 @@ function formatResponsesJsRuntimeLogText(log, fallbackFrameId = null) {
   return `${prefix} ${text}`.trim();
 }
 
-export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
+function buildResponsesJsRuntimeLikeToolOutputText(result, options = {}) {
   const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
   const items = Array.isArray(normalized.items) ? normalized.items : [];
   const topLevelLogs = Array.isArray(normalized.logs) ? normalized.logs : [];
@@ -311,6 +315,9 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
       ? effectiveTopLevelLogs.length
       : items.reduce((sum, item) => sum + (Array.isArray(item?.logs) ? item.logs.length : 0), 0)
   };
+  if (isPlainObjectLike(options?.extraMetadata)) {
+    Object.assign(metadata, options.extraMetadata);
+  }
 
   const blocks = [];
   const metadataText = truncateResponsesToolOutputText(
@@ -401,11 +408,46 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
   }
 
   const body = blocks.filter(Boolean).join('\n\n');
-  return `<js_runtime_result>\n${body}\n</js_runtime_result>`;
+  const rootTag = (typeof options?.rootTag === 'string' && options.rootTag.trim())
+    ? options.rootTag.trim()
+    : 'js_runtime_result';
+  return `<${rootTag}>\n${body}\n</${rootTag}>`;
+}
+
+export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
+  return buildResponsesJsRuntimeLikeToolOutputText(result, {
+    ...options,
+    rootTag: 'js_runtime_result'
+  });
 }
 
 export function buildResponsesJsRuntimeToolOutputContentItems(result, options = {}) {
   const text = buildResponsesJsRuntimeToolOutputText(result, options);
+  const chunks = chunkTextByChars(
+    text,
+    Number.isFinite(Number(options?.chunkChars))
+      ? Number(options.chunkChars)
+      : RESPONSES_TOOL_OUTPUT_CHUNK_CHARS
+  );
+  return chunks.map((chunk) => ({
+    type: 'input_text',
+    text: chunk
+  }));
+}
+
+export function buildResponsesJsReplToolOutputText(result, options = {}) {
+  return buildResponsesJsRuntimeLikeToolOutputText(result, {
+    ...options,
+    rootTag: 'js_repl_result',
+    extraMetadata: {
+      tool: 'js_repl',
+      ...(isPlainObjectLike(options?.extraMetadata) ? options.extraMetadata : {})
+    }
+  });
+}
+
+export function buildResponsesJsReplToolOutputContentItems(result, options = {}) {
+  const text = buildResponsesJsReplToolOutputText(result, options);
   const chunks = chunkTextByChars(
     text,
     Number.isFinite(Number(options?.chunkChars))

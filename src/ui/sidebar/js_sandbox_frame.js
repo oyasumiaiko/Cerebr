@@ -2,9 +2,11 @@ import {
   buildJsSandboxSuccessEnvelope,
   buildJsSandboxErrorEnvelope
 } from '../../utils/js_sandbox_transport.js';
+import { createBrowserJsReplKernel } from '../../utils/browser_js_repl.js';
 
 const SANDBOX_MESSAGE_FLAG = '__cerebrJsSandbox';
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+let jsReplKernel = createBrowserJsReplKernel(globalThis);
 
 function postSandboxMessage(type, payload = {}) {
   try {
@@ -107,11 +109,26 @@ async function executeUserCodeWithCapturedConsole(code) {
 window.addEventListener('message', async (event) => {
   const data = event.data || {};
   if (data?.[SANDBOX_MESSAGE_FLAG] !== true) return;
-  if (data.type !== 'execute') return;
+  if (data.type === 'reset_repl') {
+    jsReplKernel = createBrowserJsReplKernel(globalThis);
+    postSandboxMessage('reset_repl_result', {
+      requestId: (typeof data.requestId === 'string') ? data.requestId : '',
+      payload: {
+        ok: true,
+        value: 'js_repl kernel reset',
+        logs: [],
+        error: null
+      }
+    });
+    return;
+  }
+  if (data.type !== 'execute' && data.type !== 'execute_repl') return;
 
   const requestId = (typeof data.requestId === 'string') ? data.requestId : '';
   try {
-    const execution = await executeUserCodeWithCapturedConsole(data.code);
+    const execution = data.type === 'execute_repl'
+      ? await jsReplKernel.execute(data.code)
+      : await executeUserCodeWithCapturedConsole(data.code);
     if (execution.ok !== true) {
       postSandboxMessage('execute_result', {
         requestId,

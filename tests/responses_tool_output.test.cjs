@@ -92,6 +92,25 @@ test('buildResponsesJsRuntimeToolOutputText 使用 XML 分块且避免大 JSON �
   assert.doesNotMatch(text, /"items":/);
 });
 
+test('buildResponsesJsReplToolOutputContentItems 使用 js_repl_result root tag 并附带 tool 元数据', async () => {
+  const {
+    buildResponsesJsReplToolOutputContentItems,
+    formatResponsesToolOutputForDisplay
+  } = await loadResponsesToolOutputModule();
+  const items = buildResponsesJsReplToolOutputContentItems({
+    ok: true,
+    tabId: 77,
+    value: 42,
+    logs: [{ level: 'log', text: 'repl ok' }],
+    items: [{ frameId: 0, documentId: 'doc-1', result: 42, logs: [], error: null }],
+    error: null
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<js_repl_result>/);
+  assert.match(text, /"tool": "js_repl"/);
+  assert.match(text, /<return_value>\s*42\s*<\/return_value>/);
+});
+
 test('buildResponsesJsRuntimeToolOutputText 会在单 frame 且仅 item.logs 存在时仍显示 console_logs', async () => {
   const { buildResponsesJsRuntimeToolOutputText } = await loadResponsesToolOutputModule();
   const text = buildResponsesJsRuntimeToolOutputText({

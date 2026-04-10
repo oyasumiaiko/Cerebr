@@ -20,7 +20,9 @@ const SANDBOX_READY_TIMEOUT_MS = 10000;
  * @returns {{
  *   getAvailability: () => Promise<Object>,
  *   listFrames: () => Promise<{ok:boolean, frames:Array<Object>}>,
- *   execute: (request?: {code?:string}) => Promise<Object>
+ *   execute: (request?: {code?:string}) => Promise<Object>,
+ *   executeRepl: (request?: {code?:string}) => Promise<Object>,
+ *   resetRepl: () => Promise<Object>
  * }}
  */
 export function createSidebarJsSandboxRuntime(options = {}) {
@@ -74,7 +76,7 @@ export function createSidebarJsSandboxRuntime(options = {}) {
         return;
       }
 
-      if (data.type === 'execute_result') {
+      if (data.type === 'execute_result' || data.type === 'reset_repl_result') {
         const requestId = (typeof data.requestId === 'string') ? data.requestId : '';
         const pending = pendingRequests.get(requestId);
         if (!pending) return;
@@ -194,9 +196,67 @@ export function createSidebarJsSandboxRuntime(options = {}) {
     });
   }
 
+  async function executeRepl(request = {}) {
+    const code = (typeof request?.code === 'string') ? request.code : '';
+    if (!code.trim()) {
+      throw new Error('执行隔离 JS REPL 失败：代码内容为空。');
+    }
+
+    const iframe = await ensureSandboxReady();
+    const targetWindow = iframe?.contentWindow || null;
+    if (!targetWindow) {
+      throw new Error('执行隔离 JS REPL 失败：未获取到 sandbox 窗口。');
+    }
+
+    requestSeq += 1;
+    const requestId = `sandbox_repl_${Date.now()}_${requestSeq}`;
+
+    return await new Promise((resolve, reject) => {
+      pendingRequests.set(requestId, { resolve, reject });
+      try {
+        targetWindow.postMessage({
+          [SANDBOX_MESSAGE_FLAG]: true,
+          type: 'execute_repl',
+          requestId,
+          code
+        }, '*');
+      } catch (error) {
+        pendingRequests.delete(requestId);
+        reject(error);
+      }
+    });
+  }
+
+  async function resetRepl() {
+    const iframe = await ensureSandboxReady();
+    const targetWindow = iframe?.contentWindow || null;
+    if (!targetWindow) {
+      throw new Error('重置隔离 JS REPL 失败：未获取到 sandbox 窗口。');
+    }
+
+    requestSeq += 1;
+    const requestId = `sandbox_repl_reset_${Date.now()}_${requestSeq}`;
+
+    return await new Promise((resolve, reject) => {
+      pendingRequests.set(requestId, { resolve, reject });
+      try {
+        targetWindow.postMessage({
+          [SANDBOX_MESSAGE_FLAG]: true,
+          type: 'reset_repl',
+          requestId
+        }, '*');
+      } catch (error) {
+        pendingRequests.delete(requestId);
+        reject(error);
+      }
+    });
+  }
+
   return {
     getAvailability,
     listFrames,
-    execute
+    execute,
+    executeRepl,
+    resetRepl
   };
 }
