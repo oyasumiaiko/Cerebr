@@ -1,5 +1,9 @@
 import { createJsRuntimeManager } from './js_runtime_manager.js';
+import { buildPromptImageResultFromScreenshotDataUrl } from './prompt_image_capture.js';
 import { resolveSidebarRequestTargetTabId } from '../utils/sidebar_target_tab.js';
+import {
+  normalizeWebpageScreenshotArguments
+} from '../agent_tools/webpage_screenshot_tool.js';
 
 // 确保 Service Worker 立即激活
 self.addEventListener('install', (event) => {
@@ -507,6 +511,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'GET_WEBPAGE_SCREENSHOT_RESULT_FROM_SIDEBAR') {
+    (async () => {
+      const result = await relaySidebarContentRequestToTab({
+        message,
+        sender,
+        logLabel: '获取网页截图工具结果失败',
+        contentMessage: {
+          type: 'GET_WEBPAGE_SCREENSHOT_RESULT_INTERNAL',
+          args: message?.args ?? null
+        }
+      });
+      sendResponse(result);
+    })();
+    return true;
+  }
+
   // 处理PDF下载请求
   if (message.action === 'downloadPDF') {
     (async () => {
@@ -540,6 +560,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse(result);
     })();
     return true; // 指明 sendResponse 将异步调用
+  }
+
+  if (message.action === 'capture_visible_tab_for_prompt') {
+    (async () => {
+      const result = await captureVisibleTabForPrompt(sender?.tab?.windowId ?? null, message?.args);
+      sendResponse(result);
+    })();
+    return true;
   }
 
   return false;
@@ -697,16 +725,74 @@ async function relaySidebarContentRequestToTab({
  * @param {number|null} windowId
  * @returns {Promise<{success:boolean, dataURL?:string, error?:string}>}
  */
-async function captureVisibleTab(windowId = null) {
+async function captureVisibleTab(windowId = null, options = null) {
     try {
         const normalizedWindowId = Number.isFinite(Number(windowId)) ? Number(windowId) : undefined;
-        const dataURL = await chrome.tabs.captureVisibleTab(normalizedWindowId, { format: 'png', quality: 100 });
+        const requestedFormat = String(options?.format || 'png').trim().toLowerCase();
+        const captureOptions = {
+            format: requestedFormat === 'jpeg' ? 'jpeg' : 'png'
+        };
+        if (captureOptions.format === 'jpeg') {
+            const numericQuality = Number(options?.quality);
+            captureOptions.quality = Number.isFinite(numericQuality)
+                ? Math.max(0, Math.min(100, Math.trunc(numericQuality)))
+                : 85;
+        }
+        const dataURL = await chrome.tabs.captureVisibleTab(normalizedWindowId, captureOptions);
         return { success: true, dataURL };
     } catch (error) {
         const message = (typeof error?.message === 'string' && error.message.trim())
             ? error.message.trim()
             : (chrome.runtime.lastError?.message || 'captureVisibleTab 失败');
         return { success: false, error: message };
+    }
+}
+
+/**
+ * 为 agent 工具捕获一张“适合 prompt”的网页截图。
+ *
+ * 这里分两段：
+ * 1. 先沿用现有后台截图入口拿到原始可见区域截图；
+ * 2. 再按工具参数转成更适合传给模型的图片结果。
+ *
+ * @param {number|null} windowId
+ * @param {any} rawArgs
+ * @returns {Promise<Object>}
+ */
+async function captureVisibleTabForPrompt(windowId = null, rawArgs = null) {
+    try {
+        const { detail } = normalizeWebpageScreenshotArguments(rawArgs);
+        const captured = await captureVisibleTab(windowId, { format: 'png' });
+        if (!captured?.success || typeof captured?.dataURL !== 'string' || !captured.dataURL.trim()) {
+            return {
+                ok: false,
+                error: {
+                    message: captured?.error || '网页截图捕获失败。',
+                    name: 'WebpageScreenshotCaptureError'
+                }
+            };
+        }
+
+        const promptImage = await buildPromptImageResultFromScreenshotDataUrl({
+            dataUrl: captured.dataURL,
+            detail
+        });
+        return {
+            ok: true,
+            ...promptImage
+        };
+    } catch (error) {
+        return {
+            ok: false,
+            error: {
+                message: (typeof error?.message === 'string' && error.message.trim())
+                    ? error.message.trim()
+                    : '网页截图工具处理失败。',
+                name: (typeof error?.name === 'string' && error.name.trim())
+                    ? error.name.trim()
+                    : 'WebpageScreenshotToolError'
+            }
+        };
     }
 }
 
