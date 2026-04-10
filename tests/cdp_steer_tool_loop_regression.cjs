@@ -6,6 +6,7 @@ const {
   buildSendContentMessageExpression,
   launchFixedSidebarContext,
   loadPlaywright,
+  resolveFixedSidebarProfileDir,
   sleep,
   shouldRunHeadless,
   waitFor,
@@ -351,7 +352,7 @@ async function main() {
   const mockServer = await runMockResponsesServer();
   result.mockOrigin = mockServer.origin;
   const profileDir = path.join(outputDir, 'profile');
-  const seedProfileDir = path.join(repoRoot, 'output', 'playwright', '_profiles', 'cdp_sidebar_smoke');
+  const seedProfileDir = resolveFixedSidebarProfileDir(repoRoot);
   if (await fsp.stat(seedProfileDir).then(() => true).catch(() => false)) {
     await fsp.cp(seedProfileDir, profileDir, { recursive: true, force: true });
     result.seedProfileDir = seedProfileDir;
@@ -370,17 +371,6 @@ async function main() {
       headless: runHeadless
     });
     result.steps.push('browser_ready');
-
-    const hostPage = await waitFor(async () => {
-      return context.pages().find((page) => page.url().startsWith('https://example.com/')) || null;
-    }, { timeoutMs: 30000, intervalMs: 200, label: 'example host page' });
-    hostPage.on('console', (msg) => {
-      result.console.push({ type: msg.type(), text: msg.text() });
-    });
-    hostPage.on('pageerror', (error) => {
-      result.console.push({ type: 'pageerror', text: String(error && (error.stack || error.message || error)) });
-    });
-    result.steps.push('host_page_ready');
 
     extensionWorker = await waitForExtensionWorker(context, { timeoutMs: 30_000 });
     const extensionId = new URL(extensionWorker.url()).host;
@@ -403,6 +393,17 @@ async function main() {
       };
     })()`);
     result.steps.push('background_storage_checked');
+
+    const hostPage = context.pages().find((page) => page.url().startsWith('https://example.com/')) || await context.newPage();
+    hostPage.on('console', (msg) => {
+      result.console.push({ type: msg.type(), text: msg.text() });
+    });
+    hostPage.on('pageerror', (error) => {
+      result.console.push({ type: 'pageerror', text: String(error && (error.stack || error.message || error)) });
+    });
+    await hostPage.goto('https://example.com/', { waitUntil: 'domcontentloaded' });
+    await hostPage.bringToFront();
+    result.steps.push('host_page_ready');
 
     const openSidebarResponse = await extensionWorker.evaluate(
       buildSendContentMessageExpression(JSON.stringify({ type: 'OPEN_SIDEBAR' }))
@@ -447,6 +448,41 @@ async function main() {
     });
     result.steps.push('second_request_observed');
 
+    result.toolStateBeforeWrapperReplace = await waitFor(async () => {
+      return await sidebarFrame.evaluate(() => {
+        const aiMessages = Array.from(document.querySelectorAll('.message.ai-message[data-message-id]'));
+        const latest = aiMessages[aiMessages.length - 1] || null;
+        if (!latest) return null;
+        const toolEntries = Array.from(latest.querySelectorAll('.response-activity-entry--tool.is-expanded'));
+        if (toolEntries.length <= 0) return null;
+        return {
+          messageId: latest.getAttribute('data-message-id') || '',
+          expandedToolCount: toolEntries.length,
+          timelineClassName: latest.querySelector('.response-activity-timeline')?.className || ''
+        };
+      });
+    }, { timeoutMs: 30000, intervalMs: 100, label: 'expanded tool entry visible' });
+    result.steps.push('tool_entry_visible');
+
+    result.wrapperReplaceResult = await sidebarFrame.evaluate((targetMessageId) => {
+      const aiMessages = Array.from(document.querySelectorAll('.message.ai-message[data-message-id]'));
+      const target = aiMessages.find((el) => (el.getAttribute('data-message-id') || '') === targetMessageId) || null;
+      if (!target) {
+        return {
+          replaced: false,
+          messageId: targetMessageId || ''
+        };
+      }
+      const clone = target.cloneNode(true);
+      target.replaceWith(clone);
+      return {
+        replaced: true,
+        messageId: clone.getAttribute('data-message-id') || '',
+        toolCount: clone.querySelectorAll('.response-activity-entry--tool').length
+      };
+    }, result.toolStateBeforeWrapperReplace.messageId);
+    result.steps.push('assistant_wrapper_replaced');
+
     await sleep(300);
     await sendSidebarMessage('STEER_TOOL_HOP_OK_20260408', 'Control+Enter');
     result.steps.push('steer_sent');
@@ -470,6 +506,29 @@ async function main() {
       });
     }, { timeoutMs: 30000, intervalMs: 250, label: 'final steer result' });
     result.finalAssistantText = settled;
+    await sleep(2600);
+    result.finalToolTimelineState = await sidebarFrame.evaluate((targetMessageId) => {
+      const aiMessages = Array.from(document.querySelectorAll('.message.ai-message[data-message-id]'));
+      const target = aiMessages.find((el) => (el.getAttribute('data-message-id') || '') === targetMessageId)
+        || aiMessages[aiMessages.length - 1]
+        || null;
+      if (!target) return null;
+      const timeline = target.querySelector('.response-activity-timeline');
+      const toolEntries = Array.from(target.querySelectorAll('.response-activity-entry--tool'));
+      return {
+        messageId: target.getAttribute('data-message-id') || '',
+        toolCount: toolEntries.length,
+        expandedToolCount: toolEntries.filter((el) => el.classList.contains('is-expanded')).length,
+        timelineClassName: timeline?.className || '',
+        timelineDataset: timeline ? { ...timeline.dataset } : null,
+        toolClassNames: toolEntries.map((el) => el.className || ''),
+        toolStates: toolEntries.map((el) => ({
+          key: el.dataset.responseActivityToolKey || '',
+          className: el.className || '',
+          summaryExpanded: el.querySelector('.response-activity-tool-summary')?.getAttribute?.('aria-expanded') || ''
+        }))
+      };
+    }, result.toolStateBeforeWrapperReplace.messageId);
     result.requestLog = mockServer.requestLog;
     result.thirdRequestInputTexts = (Array.isArray(mockServer.requestLog?.[2]?.input) ? mockServer.requestLog[2].input : []).flatMap((item) => {
       if (!item || typeof item !== 'object') return [];
@@ -488,6 +547,15 @@ async function main() {
     }
     if (!String(settled || '').includes('STEER_APPLIED_20260408')) {
       throw new Error(`final assistant text did not confirm steer application: ${settled}`);
+    }
+    if (!result.wrapperReplaceResult?.replaced) {
+      throw new Error(`failed to replace assistant wrapper for regression probe: ${JSON.stringify(result.wrapperReplaceResult)}`);
+    }
+    if ((result.finalToolTimelineState?.toolCount || 0) <= 0) {
+      throw new Error(`expected tool entries to remain visible for auto-collapse verification: ${JSON.stringify(result.finalToolTimelineState)}`);
+    }
+    if ((result.finalToolTimelineState?.expandedToolCount || 0) > 0) {
+      throw new Error(`tool entries stayed expanded after wrapper replacement and auto-collapse window: ${JSON.stringify(result.finalToolTimelineState)}`);
     }
   } finally {
     result.finishedAt = new Date().toISOString();

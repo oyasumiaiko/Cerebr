@@ -274,9 +274,16 @@ export function createMessageProcessor(appContext) {
     markdownLinkInterceptorInstalled = true;
   }
 
+  function normalizeMessageId(messageId) {
+    return (typeof messageId === 'string' || typeof messageId === 'number')
+      ? String(messageId).trim()
+      : '';
+  }
+
   function resolveMessageElement(messageId) {
-    if (!messageId) return null;
-    const selector = buildMessageSelector(messageId);
+    const normalizedMessageId = normalizeMessageId(messageId);
+    if (!normalizedMessageId) return null;
+    const selector = buildMessageSelector(normalizedMessageId);
     if (!selector) return null;
     let element = chatContainer?.querySelector(selector) || null;
     if (element) return element;
@@ -286,6 +293,25 @@ export function createMessageProcessor(appContext) {
       element = threadContainer.querySelector(selector) || null;
     }
     return element;
+  }
+
+  /**
+   * 优先按稳定 message-id 回查当前 live DOM。
+   *
+   * 这样做是为了兜住“旧 wrapper 已被虚拟列表/局部重建替换”的场景：
+   * - 若 message-id 还能在当前界面找到，就永远信任这份 live 节点；
+   * - 只有在根本找不到 live 节点时，才退回调用方传进来的 fallback。
+   *
+   * @param {string|null|undefined} messageId
+   * @param {HTMLElement|null|undefined} fallbackElement
+   * @returns {HTMLElement|null}
+   */
+  function resolveLiveMessageElement(messageId, fallbackElement = null) {
+    const liveElement = resolveMessageElement(messageId);
+    if (liveElement) return liveElement;
+    if (!fallbackElement || typeof fallbackElement !== 'object') return null;
+    if (fallbackElement.isConnected === false && !fallbackElement.parentNode) return null;
+    return fallbackElement;
   }
 
   function resolveScrollContainerForMessage(messageElement) {
@@ -464,11 +490,16 @@ export function createMessageProcessor(appContext) {
   // 之所以挂在 messageWrapperDiv 上，而不是 timelineRoot 上，是因为
   // timelineRoot 在某些清理/重建路径里会被整个 remove；message wrapper 更稳定。
   const responseActivityUiStateByMessage = new WeakMap();
-  // 工具详情块“完成后延迟自动收起”的定时器也挂在 message-wrapper 上：
-  // - 同一条消息里的多个工具块彼此独立计时；
-  // - DOM 局部重绘时不需要重新从零等待；
-  // - 一旦消息 wrapper 被释放，WeakMap 内的定时器元数据也可一并回收。
+  // 工具详情块“完成后延迟自动收起”的计时元数据分两层保存：
+  // - 优先按稳定 message-id 存到普通 Map，避免消息 DOM 被重建后 deadline 丢失；
+  // - message-id 尚未落定时，再退回到 wrapper 级 WeakMap。
+  //
+  // 这是这次 bug 的关键修复点：
+  // - 之前只按旧 wrapper 记 timer，一旦虚拟列表/重绘把节点替换掉，
+  //   2 秒后的自动收起就会打到失效节点上；
+  // - 现在只要消息有稳定 id，后续重绘拿到的新 wrapper 仍能读到同一份 deadline。
   const responseActivityAutoCollapseTimersByMessage = new WeakMap();
+  const responseActivityAutoCollapseTimersByMessageId = new Map();
 
   function getAssistantSurfaceSnapshots(messageElement) {
     if (!messageElement || typeof messageElement !== 'object') return null;
@@ -1846,6 +1877,67 @@ export function createMessageProcessor(appContext) {
     writeResponseActivityToolKeySet(timelineRoot, 'autoCollapsedToolKeys', keys);
   }
 
+  function findResponseActivityToolItemByKey(timelineRoot, toolKey) {
+    const normalizedToolKey = String(toolKey || '').trim();
+    if (!timelineRoot || !normalizedToolKey) return null;
+    return Array.from(timelineRoot.querySelectorAll('.response-activity-entry--tool'))
+      .find((item) => String(item?.dataset?.responseActivityToolKey || '').trim() === normalizedToolKey) || null;
+  }
+
+  function readResponseActivityToolAutoCollapseDeadlineFromItem(toolItem) {
+    const raw = String(toolItem?.dataset?.responseActivityToolAutoCollapseDeadlineAt || '').trim();
+    if (!raw) return null;
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= 0 ? value : null;
+  }
+
+  function writeResponseActivityToolAutoCollapseDeadlineToItem(toolItem, deadlineAtMs) {
+    if (!toolItem?.dataset) return;
+    const normalizedDeadlineAtMs = Number(deadlineAtMs);
+    if (!Number.isFinite(normalizedDeadlineAtMs) || normalizedDeadlineAtMs < 0) {
+      delete toolItem.dataset.responseActivityToolAutoCollapseDeadlineAt;
+      return;
+    }
+    toolItem.dataset.responseActivityToolAutoCollapseDeadlineAt = String(normalizedDeadlineAtMs);
+  }
+
+  /**
+   * 当自动收起定时器到点时，先直接把 live DOM 上的工具条目标记为已自动收起。
+   *
+   * 这样做的目的不是绕开 renderer，而是给它一个“当前已收起”的稳定前态：
+   * - 若后续 metadata 重绘顺利执行，这个 dataset 会继续被 renderer 读取并保留；
+   * - 若某次重绘入口因为旧 wrapper 失效、消息暂不可见等原因没跑起来，
+   *   用户也不会继续看到工具条目卡死在展开态。
+   *
+   * @param {HTMLElement|null} messageWrapperDiv
+   * @param {string} toolKey
+   * @returns {boolean}
+   */
+  function markResponseActivityToolAutoCollapsedInDom(messageWrapperDiv, toolKey) {
+    const timelineRoot = messageWrapperDiv?.querySelector?.('.response-activity-timeline') || null;
+    const normalizedToolKey = String(toolKey || '').trim();
+    if (!timelineRoot || !normalizedToolKey) return false;
+
+    const manualExpandedToolKeys = readManuallyExpandedResponseActivityToolKeys(timelineRoot);
+    if (manualExpandedToolKeys.has(normalizedToolKey)) {
+      return false;
+    }
+
+    const autoCollapsedToolKeys = readAutoCollapsedResponseActivityToolKeys(timelineRoot);
+    autoCollapsedToolKeys.add(normalizedToolKey);
+    writeAutoCollapsedResponseActivityToolKeys(timelineRoot, autoCollapsedToolKeys);
+
+    const toolItem = findResponseActivityToolItemByKey(timelineRoot, normalizedToolKey);
+    if (toolItem) {
+      toolItem.classList.remove('is-expanded');
+      writeResponseActivityToolAutoCollapseDeadlineToItem(toolItem, null);
+      const summary = toolItem.querySelector(':scope > .response-activity-tool-summary');
+      summary?.setAttribute?.('aria-expanded', 'false');
+    }
+    captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot);
+    return true;
+  }
+
   function getResponseActivityStoredUiState(messageWrapperDiv) {
     if (!messageWrapperDiv || typeof messageWrapperDiv !== 'object') return null;
     return responseActivityUiStateByMessage.get(messageWrapperDiv) || null;
@@ -1913,29 +2005,66 @@ export function createMessageProcessor(appContext) {
     element.scrollTop = Math.max(0, element.scrollHeight || 0);
   }
 
-  function getResponseActivityAutoCollapseScheduleMap(messageWrapperDiv, create = false) {
-    if (!messageWrapperDiv || typeof messageWrapperDiv !== 'object') return null;
-    let scheduleMap = responseActivityAutoCollapseTimersByMessage.get(messageWrapperDiv) || null;
-    if (!scheduleMap && create) {
-      scheduleMap = new Map();
-      responseActivityAutoCollapseTimersByMessage.set(messageWrapperDiv, scheduleMap);
+  function resolveResponseActivityAutoCollapseOwner(messageWrapperDiv, messageId = null) {
+    const normalizedMessageId = normalizeMessageId(
+      messageId
+      || messageWrapperDiv?.getAttribute?.('data-message-id')
+      || ''
+    );
+    if (normalizedMessageId) {
+      return {
+        kind: 'messageId',
+        key: normalizedMessageId,
+        messageId: normalizedMessageId
+      };
     }
-    return scheduleMap;
+    if (!messageWrapperDiv || typeof messageWrapperDiv !== 'object') return null;
+    return {
+      kind: 'element',
+      key: messageWrapperDiv,
+      messageId: ''
+    };
   }
 
-  function readResponseActivityToolAutoCollapseDeadline(messageWrapperDiv, toolKey) {
+  function getResponseActivityAutoCollapseScheduleContext(messageWrapperDiv, create = false, options = {}) {
+    const owner = resolveResponseActivityAutoCollapseOwner(messageWrapperDiv, options?.messageId || null);
+    if (!owner) return { owner: null, scheduleMap: null };
+    let scheduleMap = owner.kind === 'messageId'
+      ? (responseActivityAutoCollapseTimersByMessageId.get(owner.key) || null)
+      : (responseActivityAutoCollapseTimersByMessage.get(owner.key) || null);
+    if (!scheduleMap && create) {
+      scheduleMap = new Map();
+      if (owner.kind === 'messageId') {
+        responseActivityAutoCollapseTimersByMessageId.set(owner.key, scheduleMap);
+      } else {
+        responseActivityAutoCollapseTimersByMessage.set(owner.key, scheduleMap);
+      }
+    }
+    return { owner, scheduleMap };
+  }
+
+  function deleteResponseActivityAutoCollapseScheduleOwner(owner) {
+    if (!owner) return;
+    if (owner.kind === 'messageId') {
+      responseActivityAutoCollapseTimersByMessageId.delete(owner.key);
+      return;
+    }
+    responseActivityAutoCollapseTimersByMessage.delete(owner.key);
+  }
+
+  function readResponseActivityToolAutoCollapseDeadline(messageWrapperDiv, toolKey, options = {}) {
     const normalizedToolKey = String(toolKey || '').trim();
     if (!normalizedToolKey) return null;
-    const scheduleMap = getResponseActivityAutoCollapseScheduleMap(messageWrapperDiv, false);
+    const { scheduleMap } = getResponseActivityAutoCollapseScheduleContext(messageWrapperDiv, false, options);
     const record = scheduleMap?.get(normalizedToolKey) || null;
     const deadlineAtMs = Number(record?.deadlineAtMs);
     return Number.isFinite(deadlineAtMs) && deadlineAtMs >= 0 ? deadlineAtMs : null;
   }
 
-  function clearResponseActivityToolAutoCollapseSchedule(messageWrapperDiv, toolKey) {
+  function clearResponseActivityToolAutoCollapseSchedule(messageWrapperDiv, toolKey, options = {}) {
     const normalizedToolKey = String(toolKey || '').trim();
     if (!normalizedToolKey) return;
-    const scheduleMap = getResponseActivityAutoCollapseScheduleMap(messageWrapperDiv, false);
+    const { owner, scheduleMap } = getResponseActivityAutoCollapseScheduleContext(messageWrapperDiv, false, options);
     if (!scheduleMap) return;
     const record = scheduleMap.get(normalizedToolKey) || null;
     const timerId = Number(record?.timerId);
@@ -1944,12 +2073,12 @@ export function createMessageProcessor(appContext) {
     }
     scheduleMap.delete(normalizedToolKey);
     if (scheduleMap.size <= 0) {
-      responseActivityAutoCollapseTimersByMessage.delete(messageWrapperDiv);
+      deleteResponseActivityAutoCollapseScheduleOwner(owner);
     }
   }
 
-  function clearAllResponseActivityToolAutoCollapseSchedules(messageWrapperDiv) {
-    const scheduleMap = getResponseActivityAutoCollapseScheduleMap(messageWrapperDiv, false);
+  function clearAllResponseActivityToolAutoCollapseSchedules(messageWrapperDiv, options = {}) {
+    const { owner, scheduleMap } = getResponseActivityAutoCollapseScheduleContext(messageWrapperDiv, false, options);
     if (!scheduleMap) return;
     scheduleMap.forEach((record) => {
       const timerId = Number(record?.timerId);
@@ -1958,42 +2087,66 @@ export function createMessageProcessor(appContext) {
       }
     });
     scheduleMap.clear();
-    responseActivityAutoCollapseTimersByMessage.delete(messageWrapperDiv);
+    deleteResponseActivityAutoCollapseScheduleOwner(owner);
   }
 
-  function scheduleResponseActivityToolAutoCollapse(messageWrapperDiv, toolKey, deadlineAtMs) {
+  function scheduleResponseActivityToolAutoCollapse(messageWrapperDiv, toolKey, deadlineAtMs, options = {}) {
     const normalizedToolKey = String(toolKey || '').trim();
     const normalizedDeadlineAtMs = Number(deadlineAtMs);
     if (!messageWrapperDiv || !normalizedToolKey || !Number.isFinite(normalizedDeadlineAtMs) || normalizedDeadlineAtMs < 0) {
       return;
     }
 
-    const scheduleMap = getResponseActivityAutoCollapseScheduleMap(messageWrapperDiv, true);
+    const { owner, scheduleMap } = getResponseActivityAutoCollapseScheduleContext(messageWrapperDiv, true, options);
+    if (!owner || !scheduleMap) return;
+    const ownerMessageId = owner.messageId || '';
     const existingRecord = scheduleMap?.get(normalizedToolKey) || null;
     if (existingRecord?.deadlineAtMs === normalizedDeadlineAtMs && Number(existingRecord?.timerId) > 0) {
       return;
     }
-    clearResponseActivityToolAutoCollapseSchedule(messageWrapperDiv, normalizedToolKey);
+    clearResponseActivityToolAutoCollapseSchedule(messageWrapperDiv, normalizedToolKey, {
+      messageId: ownerMessageId
+    });
 
     const delayMs = Math.max(0, normalizedDeadlineAtMs - Date.now());
     const timerId = setTimeout(() => {
-      const liveScheduleMap = getResponseActivityAutoCollapseScheduleMap(messageWrapperDiv, false);
+      const liveMessageWrapperDiv = resolveLiveMessageElement(ownerMessageId, messageWrapperDiv);
+      const liveTimelineRoot = liveMessageWrapperDiv?.querySelector?.('.response-activity-timeline') || null;
+      const liveToolItem = findResponseActivityToolItemByKey(liveTimelineRoot, normalizedToolKey);
+      const liveDomDeadlineAtMs = readResponseActivityToolAutoCollapseDeadlineFromItem(liveToolItem);
+      const { scheduleMap: liveScheduleMap } = getResponseActivityAutoCollapseScheduleContext(
+        messageWrapperDiv,
+        false,
+        { messageId: ownerMessageId }
+      );
       const liveRecord = liveScheduleMap?.get(normalizedToolKey) || null;
-      if (!liveRecord || liveRecord.deadlineAtMs !== normalizedDeadlineAtMs) return;
+      const liveRecordDeadlineAtMs = Number(liveRecord?.deadlineAtMs);
+      const hasMatchingLiveRecord = Number.isFinite(liveRecordDeadlineAtMs)
+        && liveRecordDeadlineAtMs === normalizedDeadlineAtMs;
+      const hasMatchingLiveDomDeadline = Number.isFinite(liveDomDeadlineAtMs)
+        && liveDomDeadlineAtMs === normalizedDeadlineAtMs;
+      if (!hasMatchingLiveRecord && !hasMatchingLiveDomDeadline) return;
 
-      liveScheduleMap.set(normalizedToolKey, {
-        deadlineAtMs: normalizedDeadlineAtMs,
-        timerId: null
-      });
-
-      if (!messageWrapperDiv.isConnected) {
+      if (liveScheduleMap) {
+        liveScheduleMap.set(normalizedToolKey, {
+          deadlineAtMs: normalizedDeadlineAtMs,
+          timerId: null
+        });
+      }
+      if (!liveMessageWrapperDiv) {
         return;
       }
 
-      const messageId = String(messageWrapperDiv.getAttribute('data-message-id') || '').trim();
+      markResponseActivityToolAutoCollapsedInDom(liveMessageWrapperDiv, normalizedToolKey);
+
+      const messageId = normalizeMessageId(
+        ownerMessageId
+        || liveMessageWrapperDiv.getAttribute?.('data-message-id')
+        || ''
+      );
       if (!messageId) return;
       syncAssistantMessageMetadata(messageId, null, {
-        fallbackElement: messageWrapperDiv
+        fallbackElement: liveMessageWrapperDiv
       });
     }, delayMs);
 
@@ -2619,13 +2772,15 @@ export function createMessageProcessor(appContext) {
     }
   }
 
-  function removeResponseActivityTimelineDisplay(messageWrapperDiv) {
+  function removeResponseActivityTimelineDisplay(messageWrapperDiv, options = {}) {
     const timelineRoot = messageWrapperDiv?.querySelector?.('.response-activity-timeline');
     if (timelineRoot) {
       captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot);
       timelineRoot.remove();
     }
-    clearAllResponseActivityToolAutoCollapseSchedules(messageWrapperDiv);
+    if (options?.preserveAutoCollapseSchedules !== true) {
+      clearAllResponseActivityToolAutoCollapseSchedules(messageWrapperDiv);
+    }
     resetAssistantSurfaceSnapshot(messageWrapperDiv, 'responseActivity');
   }
 
@@ -2694,6 +2849,7 @@ export function createMessageProcessor(appContext) {
     let cursor = panelBodyInner.firstChild;
 
     nextSnapshot.entries.forEach((entrySnapshot) => {
+      const existingItem = existingItemsByKey.get(entrySnapshot.key) || null;
       if (entrySnapshot.entryKind === 'tool' && entrySnapshot.hasDetails) {
         const manualState = manualExpandedToolKeys.has(entrySnapshot.key)
           ? 'expanded'
@@ -2702,10 +2858,13 @@ export function createMessageProcessor(appContext) {
           manualState,
           shouldAutoRemainExpanded: entrySnapshot.shouldAutoRemainExpanded,
           autoCollapsed: autoCollapsedToolKeys.has(entrySnapshot.key),
-          pendingAutoCollapseDeadlineAtMs: readResponseActivityToolAutoCollapseDeadline(messageWrapperDiv, entrySnapshot.key)
+          pendingAutoCollapseDeadlineAtMs:
+            readResponseActivityToolAutoCollapseDeadline(messageWrapperDiv, entrySnapshot.key)
+            ?? readResponseActivityToolAutoCollapseDeadlineFromItem(existingItem)
         });
 
         entrySnapshot.expanded = expansionState.expanded;
+        entrySnapshot.autoCollapseDeadlineAtMs = expansionState.pendingAutoCollapseDeadlineAtMs;
         if (expansionState.autoCollapsed) {
           autoCollapsedToolKeys.add(entrySnapshot.key);
         } else {
@@ -2725,7 +2884,7 @@ export function createMessageProcessor(appContext) {
         entrySnapshot.expanded = false;
       }
 
-      let item = existingItemsByKey.get(entrySnapshot.key) || null;
+      let item = existingItem;
       if (!item) {
         item = document.createElement('div');
       }
@@ -2745,6 +2904,12 @@ export function createMessageProcessor(appContext) {
           timelineRoot,
           previousUiState?.toolUiByKey?.[entrySnapshot.key] || null
         );
+      }
+
+      if (entrySnapshot.entryKind === 'tool' && entrySnapshot.hasDetails) {
+        writeResponseActivityToolAutoCollapseDeadlineToItem(item, entrySnapshot.autoCollapseDeadlineAtMs);
+      } else {
+        writeResponseActivityToolAutoCollapseDeadlineToItem(item, null);
       }
 
       cursor = item.nextSibling;
@@ -3106,7 +3271,7 @@ export function createMessageProcessor(appContext) {
    * @returns {boolean}
    */
   function syncAssistantMessageMetadata(messageId, nodeLike, options = {}) {
-    const messageWrapperDiv = options?.fallbackElement || resolveMessageElement(messageId);
+    const messageWrapperDiv = resolveLiveMessageElement(messageId, options?.fallbackElement || null);
     const node = (nodeLike && typeof nodeLike === 'object')
       ? nodeLike
       : (messageId ? chatHistoryManager.chatHistory.messages.find(msg => msg.id === messageId) : null);
@@ -3131,7 +3296,9 @@ export function createMessageProcessor(appContext) {
     }
 
     if (hasPreResponseStatus) {
-      removeResponseActivityTimelineDisplay(messageWrapperDiv);
+      removeResponseActivityTimelineDisplay(messageWrapperDiv, {
+        preserveAutoCollapseSchedules: true
+      });
       setupThoughtsDisplay(messageWrapperDiv, null, processMathAndMarkdown);
       setupResponseToolCallsDisplay(messageWrapperDiv, null);
       enhanceMarkdownContent(messageWrapperDiv);
@@ -3151,7 +3318,11 @@ export function createMessageProcessor(appContext) {
         { runtimeSnapshot }
       );
     } else {
-      removeResponseActivityTimelineDisplay(messageWrapperDiv);
+      removeResponseActivityTimelineDisplay(messageWrapperDiv, {
+        preserveAutoCollapseSchedules:
+          isResponseActivityTurnRuntimeActive(messageWrapperDiv)
+          || !!messageWrapperDiv.querySelector('.response-activity-timeline')
+      });
       setupThoughtsDisplay(messageWrapperDiv, null, processMathAndMarkdown);
       setupResponseToolCallsDisplay(messageWrapperDiv, null);
     }
@@ -3204,7 +3375,7 @@ export function createMessageProcessor(appContext) {
       node = (messageId ? chatHistoryManager.chatHistory.messages.find(msg => msg.id === messageId) : null) || node;
     }
 
-    const messageWrapperDiv = fallbackElement || resolveMessageElement(messageId);
+    const messageWrapperDiv = resolveLiveMessageElement(messageId, fallbackElement);
     if (messageWrapperDiv?.dataset) {
       const runtimeStatus = String(normalizedOptions.runtimeSnapshot?.activeTurn?.status || '').trim().toLowerCase();
       const boundAssistantMessageId = String(normalizedOptions.runtimeSnapshot?.activeTurn?.boundAssistantMessageId || '').trim();
