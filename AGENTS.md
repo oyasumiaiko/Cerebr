@@ -41,6 +41,19 @@
 - **禁止**为了图省事直接 raw `spawn chrome.exe --user-data-dir=...` 再赌它会隔离到独立实例；这个路径已经在真实机器上证明会偏航，可能把页面开进用户当前正在使用的 Chrome。
 - 当前固定 profile 路径：`output/playwright/_profiles/chrome_stable_manual_extension_profile`
 - 浏览器/CDP 回归脚本统一优先复用 `tests/lib/stable_chrome_sidebar_harness.cjs`，不要各自再造一套浏览器启动分支。
+- **仅在 git worktree 里验证“当前 checkout 的 unpacked 扩展代码”时**，允许走一个**例外路径**：
+  - 使用 Playwright 自带 `chromium`，而不是 stable Chrome 固定 profile。
+  - 启动参数使用 `ignoreDefaultArgs: ['--disable-extensions']`，并显式传：
+    - `--disable-extensions-except=<当前 worktree repoRoot>`
+    - `--load-extension=<当前 worktree repoRoot>`
+  - 复用 `tests/lib/worktree_unpacked_extension_harness.cjs`，不要再把这段 `--load-extension` 逻辑临时写成一大段内联脚本。
+  - 这条路径**只用于 worktree 中间验证 / 当前 checkout 自测**，**不替代**上面的 stable Chrome 最终回归路径。
+  - 这条路径下的 `extensionId` 会随 unpacked 根目录变化；不要拿它和固定 stable profile 里的扩展 ID 做等值假设，也不要指望复用 stable profile 中已有的扩展状态。
+- 已持久化的 worktree 脚本：
+  - 最小探针：`node tests/cdp_worktree_unpacked_sidebar_probe.cjs . output/playwright/<case> [https://example.com/]`
+    - 用途：确认当前 worktree 代码能被 Chromium 以 unpacked 扩展方式拉起，并成功打开宿主页内嵌 sidebar。
+  - 网页截图工具回归：`node tests/cdp_webpage_screenshot_tool_regression.cjs . output/playwright/<case> worktree_unpacked`
+    - 用途：在当前 worktree 代码上验证 `webpage_screenshot` tool 注入、截图 follow-up、最终 assistant 完成三段闭环。
 - 如果需要验证 **service worker / extension target / 更底层网络日志**，再走 **CDP**；但先确认浏览器实例里确实已经看到扩展 service worker。
 - 打开侧栏后，**先等 sidebar 内部真正读到 API 配置**，再发消息。至少确认：
   - `window.apiConfigs.length > 0`

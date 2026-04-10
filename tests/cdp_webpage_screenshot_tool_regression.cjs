@@ -12,12 +12,22 @@ const {
   waitFor,
   waitForSidebarFrame
 } = require('./lib/stable_chrome_sidebar_harness.cjs');
+const {
+  launchWorktreeUnpackedChromiumContext,
+  resolveWorktreeUnpackedProfileDir,
+  waitForWorktreeExtensionWorker
+} = require('./lib/worktree_unpacked_extension_harness.cjs');
 
-const [repoRoot, outputDir, chromePath] = process.argv.slice(2);
+const [rawRepoRoot, outputDir, rawArg3 = '', rawArg4 = ''] = process.argv.slice(2);
+const repoRoot = rawRepoRoot ? path.resolve(rawRepoRoot) : '';
+const launchMode = (rawArg3 === 'stable' || rawArg3 === 'worktree_unpacked')
+  ? rawArg3
+  : ((rawArg4 === 'stable' || rawArg4 === 'worktree_unpacked') ? rawArg4 : 'stable');
+const chromePath = (launchMode === rawArg3) ? '' : rawArg3;
 
-if (!repoRoot || !outputDir || !chromePath) {
+if (!repoRoot || !outputDir || (launchMode === 'stable' && !chromePath)) {
   throw new Error(
-    'Usage: node tests/cdp_webpage_screenshot_tool_regression.cjs <repoRoot> <outputDir> <chromePath>'
+    'Usage: node tests/cdp_webpage_screenshot_tool_regression.cjs <repoRoot> <outputDir> [chromePath] [mode=stable|worktree_unpacked]'
   );
 }
 
@@ -361,6 +371,7 @@ async function main() {
   const result = {
     startedAt: new Date().toISOString(),
     outputDir,
+    launchMode,
     headless: runHeadless,
     steps: []
   };
@@ -368,24 +379,47 @@ async function main() {
   const mockServer = await runMockResponsesServer();
   result.mockOrigin = mockServer.origin;
 
-  const profileDir = resolveFixedSidebarProfileDir(repoRoot);
+  const profileDir = launchMode === 'worktree_unpacked'
+    ? resolveWorktreeUnpackedProfileDir(repoRoot, 'webpage-screenshot-tool-regression')
+    : resolveFixedSidebarProfileDir(repoRoot);
   await fsp.mkdir(profileDir, { recursive: true });
   result.profileDir = profileDir;
 
   let context = null;
   try {
-    context = await launchFixedSidebarContext({
-      chromium,
-      profileDir,
-      executablePath: chromePath,
-      headless: runHeadless
-    });
+    context = launchMode === 'worktree_unpacked'
+      ? await launchWorktreeUnpackedChromiumContext({
+        chromium,
+        repoRoot,
+        profileDir,
+        headless: runHeadless
+      })
+      : await launchFixedSidebarContext({
+        chromium,
+        profileDir,
+        executablePath: chromePath,
+        headless: runHeadless
+      });
     result.steps.push('browser_ready');
 
-    const extensionWorker = await reloadUnpackedExtension(context, { timeoutMs: 30_000 });
+    const page = context.pages()[0] || await context.newPage();
+    page.on('pageerror', (error) => {
+      result.pageError = String(error && (error.stack || error.message || error));
+    });
+
+    let extensionWorker = null;
+    if (launchMode === 'worktree_unpacked') {
+      await page.goto(`${mockServer.origin}/`, { waitUntil: 'domcontentloaded' });
+      result.steps.push('page_loaded');
+      extensionWorker = await waitForWorktreeExtensionWorker(context, { timeoutMs: 30_000 });
+    } else {
+      extensionWorker = await reloadUnpackedExtension(context, { timeoutMs: 30_000 });
+      await page.goto(`${mockServer.origin}/`, { waitUntil: 'domcontentloaded' });
+      result.steps.push('page_loaded');
+    }
     const extensionId = new URL(extensionWorker.url()).host;
     result.extensionId = extensionId;
-    result.steps.push('extension_reloaded');
+    result.steps.push(launchMode === 'worktree_unpacked' ? 'worker_ready' : 'extension_reloaded');
 
     await extensionWorker.evaluate(`(async () => {
       await chrome.storage.sync.clear();
@@ -393,14 +427,6 @@ async function main() {
       return true;
     })()`);
     result.steps.push('storage_seeded');
-
-    const page = context.pages()[0] || await context.newPage();
-    page.on('pageerror', (error) => {
-      result.pageError = String(error && (error.stack || error.message || error));
-    });
-
-    await page.goto(`${mockServer.origin}/`, { waitUntil: 'domcontentloaded' });
-    result.steps.push('page_loaded');
 
     const openSidebarResponse = await extensionWorker.evaluate(
       buildSendContentMessageExpression(JSON.stringify({ type: 'OPEN_SIDEBAR' }))
