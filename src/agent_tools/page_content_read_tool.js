@@ -8,8 +8,8 @@
  * - 它不做 DOM 级结构化定位，因此不替代 js_runtime_execute。
  */
 
-export const PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS = 5000;
-export const PAGE_CONTENT_READ_MAX_CHARS = 5000;
+export const PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS = 20_000;
+export const PAGE_CONTENT_READ_MAX_CHARS = 20_000;
 
 function clampNonNegativeInt(value, fallback) {
   const numeric = Number(value);
