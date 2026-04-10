@@ -25,6 +25,14 @@ import { buildApiFooterRenderData } from '../utils/api_footer_template.js';
 import { normalizeResponsesPromptCacheKey } from '../utils/responses_prompt_cache.js';
 import { findPendingRequestUserInputFromConversationMessages } from '../utils/request_user_input_resume.js';
 import {
+  EXTENSION_STATE_BACKUP_DOMAIN_API,
+  EXTENSION_STATE_BACKUP_DOMAIN_MISC,
+  buildExtensionStateBackupFilename,
+  createExtensionStateBackupSnapshot,
+  parseExtensionStateBackupSnapshot,
+  restoreExtensionStateBackupSnapshot
+} from '../utils/extension_state_backup.js';
+import {
   buildChatHistorySearchPlan as buildChatHistorySearchPlanShared,
   buildChatHistoryTextPlan as buildChatHistoryTextPlanShared,
   buildMetaSearchText as buildMetaSearchTextShared,
@@ -12428,6 +12436,135 @@ export function createChatHistoryUI(appContext) {
     return merged;
   }
 
+  function getExtensionStateDomainLabel(domain) {
+    return domain === EXTENSION_STATE_BACKUP_DOMAIN_API ? 'API 状态' : '杂项设置';
+  }
+
+  function summarizeExtensionStateRestoreResult(result) {
+    if (!result || typeof result !== 'object') return '未返回写回摘要';
+    const parts = [];
+
+    const appendAreaSummary = (groupLabel, groupValue) => {
+      if (!groupValue || typeof groupValue !== 'object') return;
+      for (const [areaName, areaResult] of Object.entries(groupValue)) {
+        const removed = Array.isArray(areaResult?.removedKeys) ? areaResult.removedKeys.length : 0;
+        const written = Array.isArray(areaResult?.writtenKeys) ? areaResult.writtenKeys.length : 0;
+        parts.push(`${groupLabel}.${areaName} 删除 ${removed} 项 / 写入 ${written} 项`);
+      }
+    };
+
+    appendAreaSummary('chrome.storage', result.chromeStorage);
+    appendAreaSummary('window', result.windowStorage);
+    return parts.join('；') || '未写入任何条目';
+  }
+
+  async function confirmExtensionStateRestore(domain) {
+    const label = getExtensionStateDomainLabel(domain);
+    const confirmFn = appContext?.utils?.showConfirm;
+    if (typeof confirmFn === 'function') {
+      return await confirmFn({
+        message: `确认恢复${label}？`,
+        description: `将覆盖当前扩展的${label}（仅 sync/local/localStorage，不包含聊天记录 / IndexedDB），恢复完成后会自动刷新侧栏。`,
+        confirmText: '开始恢复',
+        cancelText: '取消',
+        type: 'warning'
+      });
+    }
+    return window.confirm(`将覆盖当前扩展的${label}（不包含聊天记录 / IndexedDB），恢复完成后会自动刷新侧栏，是否继续？`);
+  }
+
+  async function exportExtensionStateBackup(domain) {
+    const label = getExtensionStateDomainLabel(domain);
+    const steps = ['读取扩展存储', '构建备份文件', '保存文件', '完成'];
+    const sp = utils.createStepProgress({ steps, type: 'info' });
+    sp.setStep(0);
+
+    try {
+      const snapshot = await createExtensionStateBackupSnapshot({ domain });
+      sp.next('构建备份文件');
+
+      const prefs = await loadBackupPreferencesDownloadsOnly();
+      const preferredCompress = prefs.compressDefault !== false;
+      const { blob } = await buildBackupBlob(snapshot, preferredCompress);
+      const isCompressed = blob.type === 'application/gzip';
+      const filename = buildExtensionStateBackupFilename({ domain, compress: isCompressed });
+
+      sp.next('保存文件');
+      await triggerBlobDownload(blob, filename);
+      sp.next('完成');
+      sp.complete(`${label}备份完成`, true);
+    } catch (error) {
+      console.error(`导出${label}备份失败:`, error);
+      sp.fail?.(`${label}备份失败`);
+      showNotification?.({
+        message: `${label}备份失败`,
+        description: String(error?.message || error),
+        type: 'error',
+        duration: 3200
+      });
+    }
+  }
+
+  async function restoreExtensionStateBackup(domain) {
+    const label = getExtensionStateDomainLabel(domain);
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,.gz,application/json,application/gzip';
+    input.multiple = false;
+
+    input.addEventListener('change', async () => {
+      const file = input.files?.[0] || null;
+      if (!file) return;
+
+      const steps = ['读取文件', '校验备份', '写回存储', '刷新侧栏'];
+      const sp = utils.createStepProgress({ steps, type: 'warning' });
+      sp.setStep(0);
+
+      try {
+        const text = await readBackupFileAsText(file);
+        sp.next('校验备份');
+
+        const parsed = JSON.parse(text);
+        const snapshot = parseExtensionStateBackupSnapshot(parsed, { expectedDomain: domain });
+        const confirmed = await confirmExtensionStateRestore(domain);
+        if (!confirmed) {
+          sp.complete('已取消恢复', true);
+          return;
+        }
+
+        sp.next('写回存储');
+        const restoreResult = await restoreExtensionStateBackupSnapshot(snapshot, { expectedDomain: domain });
+        const summary = summarizeExtensionStateRestoreResult(restoreResult);
+
+        sp.next('刷新侧栏');
+        sp.complete(`${label}恢复完成，准备刷新`, true);
+        showNotification?.({
+          message: `${label}恢复完成`,
+          description: summary,
+          type: 'success',
+          duration: 2600
+        });
+
+        setTimeout(() => {
+          try {
+            window.location.reload();
+          } catch (_) {}
+        }, 180);
+      } catch (error) {
+        console.error(`恢复${label}备份失败:`, error);
+        sp.fail?.(`${label}恢复失败`);
+        showNotification?.({
+          message: `${label}恢复失败`,
+          description: String(error?.message || error),
+          type: 'error',
+          duration: 3600
+        });
+      }
+    }, { once: true });
+
+    input.click();
+  }
+
   // 已移除目录授权/直写方案，统一使用下载 API
 
   // ==== UI：在聊天记录面板添加“备份与恢复”标签页 ====
@@ -12528,6 +12665,56 @@ export function createChatHistoryUI(appContext) {
     manualSection.appendChild(manualHintMeta);
 
     container.appendChild(manualSection);
+
+    const extensionStateSection = document.createElement('div');
+    extensionStateSection.className = 'backup-section';
+
+    const extensionStateTitle = document.createElement('div');
+    extensionStateTitle.className = 'backup-panel-subtitle';
+    extensionStateTitle.textContent = '扩展状态备份';
+    extensionStateSection.appendChild(extensionStateTitle);
+
+    const extensionStateApiButtons = document.createElement('div');
+    extensionStateApiButtons.className = 'backup-button-group';
+
+    const exportApiStateBtn = document.createElement('button');
+    exportApiStateBtn.className = 'backup-button';
+    exportApiStateBtn.textContent = '导出 API 状态';
+    extensionStateApiButtons.appendChild(exportApiStateBtn);
+
+    const restoreApiStateBtn = document.createElement('button');
+    restoreApiStateBtn.className = 'backup-button';
+    restoreApiStateBtn.textContent = '恢复 API 状态';
+    extensionStateApiButtons.appendChild(restoreApiStateBtn);
+
+    extensionStateSection.appendChild(extensionStateApiButtons);
+
+    const extensionStateMiscButtons = document.createElement('div');
+    extensionStateMiscButtons.className = 'backup-button-group';
+
+    const exportMiscStateBtn = document.createElement('button');
+    exportMiscStateBtn.className = 'backup-button';
+    exportMiscStateBtn.textContent = '导出杂项设置';
+    extensionStateMiscButtons.appendChild(exportMiscStateBtn);
+
+    const restoreMiscStateBtn = document.createElement('button');
+    restoreMiscStateBtn.className = 'backup-button';
+    restoreMiscStateBtn.textContent = '恢复杂项设置';
+    extensionStateMiscButtons.appendChild(restoreMiscStateBtn);
+
+    extensionStateSection.appendChild(extensionStateMiscButtons);
+
+    const extensionStateHint = document.createElement('div');
+    extensionStateHint.className = 'backup-panel-hint';
+    extensionStateHint.textContent = '透明备份 chrome.storage.sync / chrome.storage.local / 扩展页 localStorage；不包含聊天记录 / IndexedDB。';
+    extensionStateSection.appendChild(extensionStateHint);
+
+    const extensionStateHintRestore = document.createElement('div');
+    extensionStateHintRestore.className = 'backup-panel-hint';
+    extensionStateHintRestore.textContent = '恢复时只覆盖目标域：API 状态不会覆盖杂项设置，杂项设置也不会覆盖 API 状态。';
+    extensionStateSection.appendChild(extensionStateHintRestore);
+
+    container.appendChild(extensionStateSection);
 
     const cleanupSection = document.createElement('div');
     cleanupSection.className = 'backup-section';
@@ -12808,6 +12995,22 @@ export function createChatHistoryUI(appContext) {
 
     fullResetBtn.addEventListener('click', async () => {
       await runManualBackup({ excludeImages: false, resetIncremental: true });
+    });
+
+    exportApiStateBtn.addEventListener('click', async () => {
+      await exportExtensionStateBackup(EXTENSION_STATE_BACKUP_DOMAIN_API);
+    });
+
+    restoreApiStateBtn.addEventListener('click', async () => {
+      await restoreExtensionStateBackup(EXTENSION_STATE_BACKUP_DOMAIN_API);
+    });
+
+    exportMiscStateBtn.addEventListener('click', async () => {
+      await exportExtensionStateBackup(EXTENSION_STATE_BACKUP_DOMAIN_MISC);
+    });
+
+    restoreMiscStateBtn.addEventListener('click', async () => {
+      await restoreExtensionStateBackup(EXTENSION_STATE_BACKUP_DOMAIN_MISC);
     });
 
     cleanupBtn.addEventListener('click', async () => {
