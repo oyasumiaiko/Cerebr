@@ -70,3 +70,8 @@
 
 ## Architecture Overview
 - Core drives chat flow; UI renders sidebar; Extension layer wires background/content; API manages model configs.
+
+## External Source References
+- 当用户明确说“参考 Codex”时，从 `C:\Users\wintermute\Documents\repos\codex-remote\reference\openai-codex` 获取对应源码与协议实现。
+- 当用户明确说“参考 Claude Code”时，从 `C:\Users\wintermute\Downloads\claude-code-main\src` 获取对应源码实现。
+- 当需要参考 Codex GUI、前端 webview 或界面交互实现时，从 `C:\Users\wintermute\Documents\repos\codex-remote\reference\openai-chatgpt-vscode-webview-restored` 获取对应前端源码。
