@@ -13,7 +13,9 @@ import {
   buildResponsesLocalCompactionMarker,
   findLatestAssistantPromptTokenEntry,
   normalizeResponsesLocalCompactionSettings,
-  resolveResponsesAutoCompactionDecision
+  parseResponsesCompactResponseText,
+  resolveResponsesAutoCompactionDecision,
+  summarizeResponsesCompactRequestBody
 } from '../utils/responses_local_compaction.js';
 import { createAdaptiveUpdateThrottler } from '../utils/adaptive_update_throttler.js';
 import { extractPlainTextFromContent } from '../utils/conversation_title.js';
@@ -4867,6 +4869,7 @@ export function createMessageSender(appContext) {
       conversationChain,
       sendChatHistoryFlag: normalizedPayload.sendChatHistoryFlag !== false
     });
+    const compactRequestSummary = summarizeResponsesCompactRequestBody(compactRequestBody);
     const compactResponse = await apiManager.sendResponsesCompactRequest({
       requestBody: compactRequestBody,
       config: usedApiConfig,
@@ -4877,12 +4880,12 @@ export function createMessageSender(appContext) {
       throw new Error(errorText || `Compact 请求失败 (${compactResponse.status})`);
     }
 
-    let compactPayload = null;
-    try {
-      compactPayload = await compactResponse.json();
-    } catch (error) {
-      throw new Error(`Compact 响应解析失败：${error?.message || 'invalid json'}`);
-    }
+    const compactResponseText = await compactResponse.text().catch(() => '');
+    const compactPayload = parseResponsesCompactResponseText(compactResponseText, {
+      status: compactResponse.status,
+      contentLength: compactResponse.headers?.get?.('content-length') || '',
+      requestSummary: compactRequestSummary
+    });
     if (compactPayload?.error) {
       throw new Error(compactPayload.error?.message || 'Compact 接口返回错误');
     }

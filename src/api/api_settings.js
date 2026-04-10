@@ -5352,7 +5352,10 @@ export function createApiManager(appContext) {
 
       // 组装请求
       let endpointUrl = normalizedEndpointOverride || effectiveBaseUrl;
-      const headers = { 'Content-Type': 'application/json' };
+      const headers = {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json'
+      };
       if (isGeminiConnection && !normalizedEndpointOverride) {
         endpointUrl = buildGeminiEndpointUrl({
           baseUrl: effectiveBaseUrl,

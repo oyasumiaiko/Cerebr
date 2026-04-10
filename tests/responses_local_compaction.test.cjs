@@ -97,3 +97,96 @@ test('resolveResponsesAutoCompactionDecision 在最新 marker 后没有新 assis
     sourceAssistantMessageId: null
   });
 });
+
+test('buildResponsesCompactRequestBody 会仅对 compact 请求里的 function_call_output 做预算内截断', async () => {
+  const {
+    buildResponsesCompactRequestBody,
+    RESPONSES_LOCAL_COMPACTION_REQUEST_MAX_BYTES
+  } = await loadResponsesLocalCompactionModule();
+
+  const largeOutput = 'A'.repeat(12000);
+  const requestBody = {
+    model: 'gpt-5.4',
+    instructions: 'base instructions',
+    tools: [{ type: 'function', name: 'page_content_read' }],
+    input: [
+      {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: 'keep original user message intact' }]
+      },
+      ...Array.from({ length: 60 }, (_unused, index) => ({
+        type: 'function_call_output',
+        call_id: `call_${index}`,
+        output: [
+          {
+            type: 'input_text',
+            text: `${largeOutput}${index}`
+          }
+        ]
+      }))
+    ]
+  };
+
+  const compactBody = buildResponsesCompactRequestBody(requestBody);
+  const serializedBytes = Buffer.byteLength(JSON.stringify(compactBody), 'utf8');
+  assert.ok(serializedBytes <= RESPONSES_LOCAL_COMPACTION_REQUEST_MAX_BYTES);
+  assert.equal(
+    compactBody.input[0].content[0].text,
+    'keep original user message intact'
+  );
+  assert.match(compactBody.input[1].output[0].text, /compact truncated/);
+  assert.ok(compactBody.input[1].output[0].text.length < largeOutput.length);
+});
+
+test('buildResponsesCompactRequestBody 在仍超预算时只保留最新 turn 后缀', async () => {
+  const {
+    buildResponsesCompactRequestBody,
+    RESPONSES_LOCAL_COMPACTION_REQUEST_MAX_BYTES
+  } = await loadResponsesLocalCompactionModule();
+
+  const requestBody = {
+    model: 'gpt-5.4',
+    instructions: 'base instructions',
+    input: Array.from({ length: 40 }, (_unused, index) => ([
+      {
+        type: 'message',
+        role: 'user',
+        content: [{ type: 'input_text', text: `user turn ${index}` }]
+      },
+      {
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: `assistant turn ${index}: ${'B'.repeat(8000)}` }]
+      }
+    ])).flat()
+  };
+
+  const compactBody = buildResponsesCompactRequestBody(requestBody);
+  const serializedBytes = Buffer.byteLength(JSON.stringify(compactBody), 'utf8');
+  assert.ok(serializedBytes <= RESPONSES_LOCAL_COMPACTION_REQUEST_MAX_BYTES);
+  assert.ok(compactBody.input.length < requestBody.input.length);
+  assert.equal(compactBody.input[0].type, 'message');
+  assert.equal(compactBody.input[0].role, 'user');
+  assert.match(compactBody.input[0].content[0].text, /user turn \d+/);
+});
+
+test('parseResponsesCompactResponseText 对 200 空响应体给出明确错误', async () => {
+  const { parseResponsesCompactResponseText } = await loadResponsesLocalCompactionModule();
+
+  assert.throws(
+    () => parseResponsesCompactResponseText('', {
+      status: 200,
+      contentLength: '0',
+      requestSummary: {
+        serializedBytes: 765600,
+        inputCount: 335,
+        functionCallOutputCount: 67,
+        functionCallOutputBytes: 381980,
+        maxFunctionCallOutputBytes: 12290,
+        toolCount: 10
+      }
+    }),
+    /空响应体/
+  );
+});
