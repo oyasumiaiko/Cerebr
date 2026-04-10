@@ -4,10 +4,10 @@ const {
   buildSendContentMessageExpression,
   launchFixedSidebarContext,
   loadPlaywright,
+  reloadUnpackedExtension,
   resolveFixedSidebarProfileDir,
   shouldRunHeadless,
   waitFor,
-  waitForExtensionWorker,
   waitForSidebarFrame
 } = require('./lib/stable_chrome_sidebar_harness.cjs');
 
@@ -161,10 +161,11 @@ async function main() {
     });
     result.steps.push('browser_ready');
 
-    extensionWorker = await waitForExtensionWorker(context, { timeoutMs: 30_000 });
+    extensionWorker = await reloadUnpackedExtension(context, { timeoutMs: 30_000 });
     const extensionId = new URL(extensionWorker.url()).host;
     result.extensionId = extensionId;
     result.steps.push('background_ready');
+    result.steps.push('extension_reloaded');
 
     await extensionWorker.evaluate(`(async () => {
       await chrome.storage.sync.clear();
