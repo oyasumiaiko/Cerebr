@@ -6609,6 +6609,7 @@ export function createMessageSender(appContext) {
     const descriptionLines = [
       '在浏览器脚本环境中执行一次性 JavaScript。',
       'code 字段会作为 async 函数体运行，可直接使用 await 和 return。',
+      '若需要跨多次调用复用状态，请显式把对象或值挂到 globalThis；同一页面环境未刷新时，后续 IIFE 可继续读取这些 globalThis 字段。',
       '可访问当前执行环境的 DOM / Web API，不要假设能直接访问页面主世界里的自定义 JS 对象。',
       'console.log/info/warn/error/debug 的输出会被捕获并一并回传，可用于调试或分步观察。',
       '若需要回传大量长字符串或多行文本，优先使用 console.log 输出；为避免长字符串作为 return 值时变成 JSON 字符串表现，return 更适合简洁结果值。',
