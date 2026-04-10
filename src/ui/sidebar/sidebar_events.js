@@ -409,8 +409,9 @@ function setupEmptyStateHandlers(appContext) {
         const payload = await new Promise((resolve, reject) => {
           try {
             chrome.runtime.sendMessage({
-              type: 'GET_PAGE_CONTENT_FROM_SIDEBAR',
-              tabId: Number.isFinite(Number(targetTabId)) ? Number(targetTabId) : null
+              type: 'GET_PAGE_CONTENT_READ_RESULT_FROM_SIDEBAR',
+              tabId: Number.isFinite(Number(targetTabId)) ? Number(targetTabId) : null,
+              args: null
             }, (response) => {
               const runtimeError = chrome.runtime.lastError;
               if (runtimeError) {
@@ -426,7 +427,7 @@ function setupEmptyStateHandlers(appContext) {
         const title = typeof payload?.title === 'string' ? payload.title.trim() : '';
         const url = typeof payload?.url === 'string' ? payload.url.trim() : '';
         const content = typeof payload?.content === 'string' ? payload.content.trim() : '';
-        if (!title || !url || !content) {
+        if (payload?.ok !== true || !title || !url || !content) {
           appContext.utils.showNotification({ message: '未能提取到页面内容', type: 'warning' });
           return null;
         }

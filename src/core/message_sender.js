@@ -53,11 +53,9 @@ import {
 import {
   ensureResponsesReplayOutputItemsIncludeFunctionCalls
 } from '../utils/responses_follow_up.js';
-import { buildPageContentReadResult } from '../agent_tools/page_content_read_tool.js';
 import {
   PDF_CONTENT_READ_TOOL_NAME,
-  buildPdfContentReadFunctionToolDefinition,
-  buildPdfContentReadResult
+  buildPdfContentReadFunctionToolDefinition
 } from '../agent_tools/pdf_content_read_tool.js';
 import {
   buildConversationReferenceSnapshot,
@@ -6133,25 +6131,32 @@ export function createMessageSender(appContext) {
     }
   }
 
-  /**
-   * 获取网页内容
-   * @private
-   * @returns {Promise<Object|null>} 页面内容对象，包含标题、URL和内容文本
-   */
-  async function getPageContent() {
+  async function getPageContentReadResult(rawArgs) {
     try {
-      console.log('发送获取网页内容请求');
+      console.log('发送 page_content_read 结果请求');
       const targetTabId = await utils?.resolveBoundSidebarTargetTabId?.();
-      const response = await chrome.runtime.sendMessage({
-        type: 'GET_PAGE_CONTENT_FROM_SIDEBAR',
-        tabId: Number.isFinite(Number(targetTabId)) ? Number(targetTabId) : null
+      return await chrome.runtime.sendMessage({
+        type: 'GET_PAGE_CONTENT_READ_RESULT_FROM_SIDEBAR',
+        tabId: Number.isFinite(Number(targetTabId)) ? Number(targetTabId) : null,
+        args: rawArgs && typeof rawArgs === 'object' ? rawArgs : null
       });
-      if (response) {
-        state.pageInfo = response;
-      }
-      return response;
     } catch (error) {
-      console.error('获取网页内容失败:', error);
+      console.error('获取 page_content_read 结果失败:', error);
+      return null;
+    }
+  }
+
+  async function getPdfContentReadResult(rawArgs) {
+    try {
+      console.log('发送 pdf_content_read 结果请求');
+      const targetTabId = await utils?.resolveBoundSidebarTargetTabId?.();
+      return await chrome.runtime.sendMessage({
+        type: 'GET_PDF_CONTENT_READ_RESULT_FROM_SIDEBAR',
+        tabId: Number.isFinite(Number(targetTabId)) ? Number(targetTabId) : null,
+        args: rawArgs && typeof rawArgs === 'object' ? rawArgs : null
+      });
+    } catch (error) {
+      console.error('获取 pdf_content_read 结果失败:', error);
       return null;
     }
   }
@@ -6657,7 +6662,7 @@ export function createMessageSender(appContext) {
       },
       max_chars: {
         type: ['integer', 'null'],
-        description: '可选。读取的连续字符长度。若与 skip_chars 一起提供，则返回从 skip_chars 开始的连续片段；若两者都省略，则返回默认中间截断预览。'
+        description: '可选。读取的连续字符长度。若与 skip_chars 一起提供，则返回从 skip_chars 开始的连续片段；若两者都省略，则返回默认从开头开始的安全预览。'
       }
     };
     return {
@@ -6668,7 +6673,7 @@ export function createMessageSender(appContext) {
         '它会返回页面正文与可访问 iframe 文本的预包装读取结果，并对多行做 trim 与空白折叠，更适合一次快速通读页面内容。',
         '若用户在对话开头说“这个”或未明确指代对象，默认指当前网页环境上下文，请先调用本工具读取页面再回答。',
         '这不是 DOM 结构化提取工具；若当前页面是 PDF 且需要按章节 / 片段读取，请优先使用 pdf_content_read；若需要按元素、选择器、属性进行结构化定位与提取，请优先使用 js_runtime_execute。',
-        '默认返回中间截断预览；也可通过 skip_chars 与 max_chars 读取指定连续片段。'
+        '默认返回从开头开始的安全预览；也可通过 skip_chars 与 max_chars 读取指定连续片段。'
       ].join(' '),
       strict: true,
       parameters: {
@@ -7197,8 +7202,14 @@ export function createMessageSender(appContext) {
    */
   async function executeResponsesPageContentFunction(rawArgs) {
     try {
-      const pageContent = await getPageContent();
-      return buildPageContentReadResult(pageContent, rawArgs);
+      const result = await getPageContentReadResult(rawArgs);
+      return result || {
+        ok: false,
+        error: {
+          message: '未能从当前网页读取 page_content_read 结果。',
+          name: 'PageContentReadUnavailableError'
+        }
+      };
     } catch (error) {
       return {
         ok: false,
@@ -7220,8 +7231,14 @@ export function createMessageSender(appContext) {
    */
   async function executeResponsesPdfContentFunction(rawArgs) {
     try {
-      const pageContent = await getPageContent();
-      return buildPdfContentReadResult(pageContent, rawArgs);
+      const result = await getPdfContentReadResult(rawArgs);
+      return result || {
+        ok: false,
+        error: {
+          message: '未能从当前网页读取 pdf_content_read 结果。',
+          name: 'PdfContentReadUnavailableError'
+        }
+      };
     } catch (error) {
       return {
         ok: false,

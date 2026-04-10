@@ -475,56 +475,34 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // 处理来自 sidebar 的网页内容请求
-  if (message.type === 'GET_PAGE_CONTENT_FROM_SIDEBAR') {
+  if (message.type === 'GET_PAGE_CONTENT_READ_RESULT_FROM_SIDEBAR') {
     (async () => {
-      let retryCount = 0;
-      const maxRetries = 3;
-      const retryDelay = 1000; // 1秒延迟
-
-      async function tryGetContent() {
-        try {
-          const targetTabId = resolveSidebarRequestTargetTabId({
-            explicitTabId: message?.tabId,
-            senderTabId: sender?.tab?.id
-          });
-          if (!Number.isFinite(targetTabId)) {
-            return null;
-          }
-
-          if (!sender.url || !sender.url.includes('src/ui/sidebar/sidebar.html')) {
-            return null;
-          }
-
-          if (await isTabConnected(targetTabId)) {
-            return await chrome.tabs.sendMessage(targetTabId, {
-              type: 'GET_PAGE_CONTENT_INTERNAL'
-            });
-          }
-          return null;
-        } catch (error) {
-          console.error(`获取页面内容失败 (尝试 ${retryCount + 1}/${maxRetries}):`, error);
-          return null;
+      const result = await relaySidebarContentRequestToTab({
+        message,
+        sender,
+        logLabel: '获取 page_content_read 结果失败',
+        contentMessage: {
+          type: 'GET_PAGE_CONTENT_READ_RESULT_INTERNAL',
+          args: message?.args ?? null
         }
-      }
+      });
+      sendResponse(result);
+    })();
+    return true;
+  }
 
-      async function getContentWithRetry() {
-        while (retryCount < maxRetries) {
-          const content = await tryGetContent();
-          if (content) {
-            return content;
-          }
-          retryCount++;
-          if (retryCount < maxRetries) {
-            console.log(`等待 ${retryDelay}ms 后进行第 ${retryCount + 1} 次重试...`);
-            await new Promise(resolve => setTimeout(resolve, retryDelay));
-          }
+  if (message.type === 'GET_PDF_CONTENT_READ_RESULT_FROM_SIDEBAR') {
+    (async () => {
+      const result = await relaySidebarContentRequestToTab({
+        message,
+        sender,
+        logLabel: '获取 pdf_content_read 结果失败',
+        contentMessage: {
+          type: 'GET_PDF_CONTENT_READ_RESULT_INTERNAL',
+          args: message?.args ?? null
         }
-        return null;
-      }
-
-      const content = await getContentWithRetry();
-      sendResponse(content);
+      });
+      sendResponse(result);
     })();
     return true;
   }
@@ -660,6 +638,55 @@ async function sendMessageToTab(tabId, message) {
     if (await isTabConnected(tabId)) {
         return chrome.tabs.sendMessage(tabId, message);
     }
+    return null;
+}
+
+async function relaySidebarContentRequestToTab({
+    message,
+    sender,
+    contentMessage,
+    logLabel = '转发侧栏请求失败'
+}) {
+    let retryCount = 0;
+    const maxRetries = 3;
+    const retryDelay = 1000;
+
+    async function tryRelay() {
+        try {
+            const targetTabId = resolveSidebarRequestTargetTabId({
+                explicitTabId: message?.tabId,
+                senderTabId: sender?.tab?.id
+            });
+            if (!Number.isFinite(targetTabId)) {
+                return null;
+            }
+
+            if (!sender?.url || !sender.url.includes('src/ui/sidebar/sidebar.html')) {
+                return null;
+            }
+
+            if (await isTabConnected(targetTabId)) {
+                return await chrome.tabs.sendMessage(targetTabId, contentMessage);
+            }
+            return null;
+        } catch (error) {
+            console.error(`${logLabel} (尝试 ${retryCount + 1}/${maxRetries}):`, error);
+            return null;
+        }
+    }
+
+    while (retryCount < maxRetries) {
+        const result = await tryRelay();
+        if (result) {
+            return result;
+        }
+        retryCount++;
+        if (retryCount < maxRetries) {
+            console.log(`等待 ${retryDelay}ms 后进行第 ${retryCount + 1} 次重试...`);
+            await new Promise(resolve => setTimeout(resolve, retryDelay));
+        }
+    }
+
     return null;
 }
 

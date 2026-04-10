@@ -1262,18 +1262,45 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // 处理获取页面内容请求
-  if (message.type === 'GET_PAGE_CONTENT_INTERNAL') {
-    console.log('收到获取页面内容请求');
+  if (message.type === 'GET_PAGE_CONTENT_READ_RESULT_INTERNAL') {
+    console.log('收到 page_content_read 结果请求');
     isProcessing = true;
 
-    extractPageContent().then(content => {
+    extractPageContent().then((content) => {
       isProcessing = false;
-      sendResponse(content);
-    }).catch(error => {
-      console.error('提取页面内容失败:', error);
+      sendResponse(buildPageContentReadResultForTransport(content, message?.args));
+    }).catch((error) => {
+      console.error('构造 page_content_read 结果失败:', error);
       isProcessing = false;
-      sendResponse(null);
+      sendResponse({
+        ok: false,
+        error: {
+          message: error?.message || '构造 page_content_read 结果失败',
+          name: error?.name || 'PageContentReadTransportError'
+        }
+      });
+    });
+
+    return true;
+  }
+
+  if (message.type === 'GET_PDF_CONTENT_READ_RESULT_INTERNAL') {
+    console.log('收到 pdf_content_read 结果请求');
+    isProcessing = true;
+
+    extractPageContent().then((content) => {
+      isProcessing = false;
+      sendResponse(buildPdfContentReadResultForTransport(content, message?.args));
+    }).catch((error) => {
+      console.error('构造 pdf_content_read 结果失败:', error);
+      isProcessing = false;
+      sendResponse({
+        ok: false,
+        error: {
+          message: error?.message || '构造 pdf_content_read 结果失败',
+          name: error?.name || 'PdfContentReadTransportError'
+        }
+      });
     });
 
     return true;
@@ -1480,6 +1507,419 @@ function extractImportantDOM() {
   }
 
   return clone.outerHTML;
+}
+
+const PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS = 5000;
+const PAGE_CONTENT_READ_MAX_CHARS = 5000;
+const PDF_CONTENT_READ_DEFAULT_MAX_CHARS = 4000;
+const PDF_CONTENT_READ_MAX_CHARS = 8000;
+
+function clampNonNegativeInt(value, fallback) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.max(0, Math.trunc(numeric));
+}
+
+function clampPositiveInt(value, fallback, max = Infinity) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return Math.min(max, fallback);
+  }
+  return Math.max(1, Math.min(max, Math.trunc(numeric)));
+}
+
+function isPlainObject(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function formatPercent(numerator, denominator) {
+  const safeNumerator = Number(numerator);
+  const safeDenominator = Number(denominator);
+  if (!Number.isFinite(safeNumerator) || !Number.isFinite(safeDenominator) || safeDenominator <= 0) {
+    return 0;
+  }
+  return Number(((safeNumerator / safeDenominator) * 100).toFixed(2));
+}
+
+function normalizePageContentReadTextForTransport(text) {
+  if (typeof text !== 'string') return '';
+  return text
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function normalizePageContentReadArgsForTransport(rawArgs) {
+  const args = isPlainObject(rawArgs) ? rawArgs : {};
+  const skipChars = clampNonNegativeInt(args.skip_chars, 0);
+  const maxChars = (args.max_chars == null)
+    ? null
+    : Math.max(
+      1,
+      Math.min(
+        PAGE_CONTENT_READ_MAX_CHARS,
+        clampNonNegativeInt(args.max_chars, PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS)
+      )
+    );
+  return {
+    skipChars,
+    maxChars
+  };
+}
+
+function buildPageContentReadResultForTransport(pageContent, rawArgs) {
+  const title = typeof pageContent?.title === 'string' ? pageContent.title.trim() : '';
+  const url = typeof pageContent?.url === 'string' ? pageContent.url.trim() : '';
+  const normalizedText = normalizePageContentReadTextForTransport(pageContent?.content || '');
+  const totalChars = normalizedText.length;
+  const { skipChars, maxChars } = normalizePageContentReadArgsForTransport(rawArgs);
+  const hasExplicitRange = skipChars > 0 || maxChars !== null;
+
+  if (!normalizedText) {
+    return {
+      ok: false,
+      title,
+      url,
+      total_chars: 0,
+      error: {
+        message: '当前页面未提取到可读文本。',
+        name: 'EmptyPageContentError'
+      }
+    };
+  }
+
+  if (!hasExplicitRange) {
+    const effectiveMaxChars = PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS;
+    const end = Math.min(totalChars, effectiveMaxChars);
+    const content = normalizedText.slice(0, end);
+    const omittedChars = Math.max(0, totalChars - content.length);
+    return {
+      ok: true,
+      mode: 'preview',
+      title,
+      url,
+      normalized_whitespace: true,
+      extraction_scope: 'page_plus_accessible_iframe_text',
+      total_chars: totalChars,
+      max_chars: effectiveMaxChars,
+      returned_chars: content.length,
+      omitted_chars: omittedChars,
+      omitted_pct: formatPercent(omittedChars, totalChars),
+      truncated: omittedChars > 0,
+      has_more_after_range: end < totalChars,
+      content
+    };
+  }
+
+  const effectiveMaxChars = maxChars ?? PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS;
+  const start = Math.min(skipChars, totalChars);
+  const end = Math.min(totalChars, start + effectiveMaxChars);
+  const content = normalizedText.slice(start, end);
+  const omittedChars = Math.max(0, totalChars - content.length);
+
+  return {
+    ok: true,
+    mode: 'range',
+    title,
+    url,
+    normalized_whitespace: true,
+    extraction_scope: 'page_plus_accessible_iframe_text',
+    total_chars: totalChars,
+    skip_chars: start,
+    max_chars: effectiveMaxChars,
+    returned_chars: content.length,
+    omitted_chars: omittedChars,
+    omitted_pct: formatPercent(omittedChars, totalChars),
+    truncated: omittedChars > 0,
+    has_more_after_range: end < totalChars,
+    content
+  };
+}
+
+function normalizePdfContentReadTextForTransport(text) {
+  if (typeof text !== 'string') return '';
+  return text
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map(line => line.trim().replace(/\s+/g, ' '))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function normalizePdfContentReadArgsForTransport(rawArgs) {
+  const args = isPlainObject(rawArgs) ? rawArgs : {};
+  const chapterId = typeof args.chapter_id === 'string' ? args.chapter_id.trim() : '';
+  const hasExplicitChunkRequest = !!chapterId || args.chunk_index != null || args.max_chars != null;
+  return {
+    chapterId: chapterId || null,
+    chunkIndex: clampNonNegativeInt(args.chunk_index, 0),
+    maxChars: clampPositiveInt(args.max_chars, PDF_CONTENT_READ_DEFAULT_MAX_CHARS, PDF_CONTENT_READ_MAX_CHARS),
+    includeOutline: args.include_outline === true,
+    hasExplicitChunkRequest
+  };
+}
+
+function countPdfChunksByCharsForTransport(textLength, maxChars) {
+  if (!Number.isFinite(textLength) || textLength <= 0) return 0;
+  return Math.ceil(textLength / maxChars);
+}
+
+function normalizePdfChapterTreeForTransport(rawChapters, parentChapterId = null, level = 1) {
+  const chapters = Array.isArray(rawChapters) ? rawChapters : [];
+  return chapters
+    .map((item, index) => {
+      const chapterId = parentChapterId ? `${parentChapterId}.${index + 1}` : `${index + 1}`;
+      const children = normalizePdfChapterTreeForTransport(item?.children, chapterId, level + 1);
+      const content = normalizePdfContentReadTextForTransport(item?.content || '');
+      const pageNumber = Number.isFinite(Number(item?.pageNumber)) && Number(item.pageNumber) >= 1
+        ? Math.trunc(Number(item.pageNumber))
+        : null;
+      const title = typeof item?.chapterTitle === 'string' && item.chapterTitle.trim()
+        ? item.chapterTitle.trim()
+        : `未命名章节 ${chapterId}`;
+
+      return {
+        chapter_id: chapterId,
+        parent_chapter_id: parentChapterId,
+        level,
+        title,
+        page_number: pageNumber,
+        content,
+        char_count: content.length,
+        children,
+        child_count: children.length
+      };
+    })
+    .filter(item => item.char_count > 0 || item.child_count > 0 || !!item.title);
+}
+
+function buildSyntheticFullDocumentChapterForTransport(fullText) {
+  return [
+    {
+      chapter_id: '1',
+      parent_chapter_id: null,
+      level: 1,
+      title: '全文',
+      page_number: 1,
+      content: fullText,
+      char_count: fullText.length,
+      children: [],
+      child_count: 0
+    }
+  ];
+}
+
+function flattenPdfChapterTreeForTransport(chapters) {
+  const flat = [];
+  const walk = (items) => {
+    for (const item of items) {
+      flat.push(item);
+      if (Array.isArray(item.children) && item.children.length > 0) {
+        walk(item.children);
+      }
+    }
+  };
+  walk(Array.isArray(chapters) ? chapters : []);
+  return flat;
+}
+
+function buildPdfContentReadErrorForTransport(pageContent, message, name) {
+  const title = typeof pageContent?.title === 'string' ? pageContent.title.trim() : '';
+  const url = typeof pageContent?.url === 'string' ? pageContent.url.trim() : '';
+  return {
+    ok: false,
+    title,
+    url,
+    is_pdf: pageContent?.isPDF === true,
+    error: {
+      message,
+      name
+    }
+  };
+}
+
+function buildPdfOutlineEntriesForTransport(flatOutline, maxChars) {
+  return flatOutline.map((chapter) => ({
+    chapter_id: chapter.chapter_id,
+    parent_chapter_id: chapter.parent_chapter_id,
+    level: chapter.level,
+    title: chapter.title,
+    page_number: chapter.page_number,
+    child_count: chapter.child_count,
+    char_count: chapter.char_count,
+    chunk_count: countPdfChunksByCharsForTransport(chapter.char_count, maxChars)
+  }));
+}
+
+function slicePdfChunkTextForTransport(text, chunkIndex, maxChars, errorName, scopeLabel) {
+  const totalChars = text.length;
+  const totalChunks = countPdfChunksByCharsForTransport(totalChars, maxChars);
+  if (totalChunks <= 0) {
+    return {
+      ok: false,
+      error: {
+        message: `${scopeLabel}没有可读取的正文文本。`,
+        name: errorName
+      }
+    };
+  }
+  if (chunkIndex >= totalChunks) {
+    return {
+      ok: false,
+      error: {
+        message: `${scopeLabel}片段索引越界：chunk_index=${chunkIndex}，但当前只存在 ${totalChunks} 个片段（0-${totalChunks - 1}）。`,
+        name: errorName
+      }
+    };
+  }
+
+  const start = chunkIndex * maxChars;
+  const end = Math.min(totalChars, start + maxChars);
+  return {
+    ok: true,
+    chunk_index: chunkIndex,
+    max_chars: maxChars,
+    returned_chars: end - start,
+    total_chunks: totalChunks,
+    has_prev_chunk: chunkIndex > 0,
+    has_next_chunk: chunkIndex < totalChunks - 1,
+    prev_chunk_index: chunkIndex > 0 ? chunkIndex - 1 : null,
+    next_chunk_index: chunkIndex < totalChunks - 1 ? chunkIndex + 1 : null,
+    content: text.slice(start, end)
+  };
+}
+
+function buildPdfContentReadResultForTransport(pageContent, rawArgs) {
+  if (pageContent?.isPDF !== true) {
+    return buildPdfContentReadErrorForTransport(pageContent, '当前页面不是 PDF，不能使用 pdf_content_read。', 'NotPdfPageError');
+  }
+
+  const title = typeof pageContent?.title === 'string' ? pageContent.title.trim() : '';
+  const url = typeof pageContent?.url === 'string' ? pageContent.url.trim() : '';
+  const fullText = normalizePdfContentReadTextForTransport(pageContent?.content || '');
+  if (!fullText) {
+    return buildPdfContentReadErrorForTransport(pageContent, '当前 PDF 未提取到可读文本。', 'EmptyPdfContentError');
+  }
+
+  const args = normalizePdfContentReadArgsForTransport(rawArgs);
+  const normalizedTree = normalizePdfChapterTreeForTransport(pageContent?.chapters);
+  const chapterTree = normalizedTree.length > 0 ? normalizedTree : buildSyntheticFullDocumentChapterForTransport(fullText);
+  const flatOutline = flattenPdfChapterTreeForTransport(chapterTree);
+  const outline = buildPdfOutlineEntriesForTransport(flatOutline, args.maxChars);
+  const totalChars = fullText.length;
+
+  if (!args.hasExplicitChunkRequest) {
+    return {
+      ok: true,
+      mode: 'overview',
+      title,
+      url,
+      is_pdf: true,
+      total_chars: totalChars,
+      total_chapters: outline.length,
+      root_chapter_count: chapterTree.length,
+      default_max_chars: args.maxChars,
+      outline_chunk_chars: args.maxChars,
+      max_chars_limit: PDF_CONTENT_READ_MAX_CHARS,
+      document_chunk_count_default: countPdfChunksByCharsForTransport(totalChars, args.maxChars),
+      outline,
+      guidance: '先从 outline 里选择 chapter_id；读章节正文时传 chapter_id + chunk_index；顺序通读整篇 PDF 时只传 chunk_index。注意：父章节正文通常包含其子章节页范围。'
+    };
+  }
+
+  if (args.chapterId) {
+    const chapter = flatOutline.find(item => item.chapter_id === args.chapterId);
+    if (!chapter) {
+      return buildPdfContentReadErrorForTransport(pageContent, `chapter_id=${args.chapterId} 不存在，请先查看 overview 返回的 outline。`, 'PdfChapterNotFoundError');
+    }
+
+    const sliced = slicePdfChunkTextForTransport(
+      chapter.content,
+      args.chunkIndex,
+      args.maxChars,
+      'PdfChapterChunkOutOfRangeError',
+      `章节 ${chapter.title}`
+    );
+    if (!sliced.ok) {
+      return {
+        ok: false,
+        title,
+        url,
+        is_pdf: true,
+        error: sliced.error
+      };
+    }
+
+    return {
+      ok: true,
+      mode: 'chapter_chunk',
+      title,
+      url,
+      is_pdf: true,
+      total_chars: totalChars,
+      max_chars: args.maxChars,
+      outline_chunk_chars: args.includeOutline ? args.maxChars : undefined,
+      chunk_index: sliced.chunk_index,
+      returned_chars: sliced.returned_chars,
+      total_chunks: sliced.total_chunks,
+      has_prev_chunk: sliced.has_prev_chunk,
+      has_next_chunk: sliced.has_next_chunk,
+      prev_chunk_index: sliced.prev_chunk_index,
+      next_chunk_index: sliced.next_chunk_index,
+      selection: {
+        chapter_id: chapter.chapter_id,
+        parent_chapter_id: chapter.parent_chapter_id,
+        level: chapter.level,
+        title: chapter.title,
+        page_number: chapter.page_number,
+        char_count: chapter.char_count,
+        chunk_count: countPdfChunksByCharsForTransport(chapter.char_count, args.maxChars),
+        child_count: chapter.child_count
+      },
+      outline: args.includeOutline ? outline : undefined,
+      content: sliced.content
+    };
+  }
+
+  const sliced = slicePdfChunkTextForTransport(
+    fullText,
+    args.chunkIndex,
+    args.maxChars,
+    'PdfDocumentChunkOutOfRangeError',
+    '整篇 PDF'
+  );
+  if (!sliced.ok) {
+    return {
+      ok: false,
+      title,
+      url,
+      is_pdf: true,
+      error: sliced.error
+    };
+  }
+
+  return {
+    ok: true,
+    mode: 'document_chunk',
+    title,
+    url,
+    is_pdf: true,
+    total_chars: totalChars,
+    max_chars: args.maxChars,
+    chunk_index: sliced.chunk_index,
+    returned_chars: sliced.returned_chars,
+    total_chunks: sliced.total_chunks,
+    has_prev_chunk: sliced.has_prev_chunk,
+    has_next_chunk: sliced.has_next_chunk,
+    prev_chunk_index: sliced.prev_chunk_index,
+    next_chunk_index: sliced.next_chunk_index,
+    content: sliced.content
+  };
 }
 
 async function extractPageContent() {

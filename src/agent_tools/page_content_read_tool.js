@@ -62,10 +62,10 @@ function normalizePageContentReadArgs(rawArgs) {
  * 基于抽取后的页面内容，构造给模型看的快速读取结果。
  *
  * 规则：
- * - 默认（未显式指定 skip/max）返回完整规范化正文；
+ * - 默认（未显式指定 skip/max）返回从头开始的安全预览；
  * - 一旦显式指定 skip 或 max_chars，则按连续区间读取；
- * - 真正展示给模型前，统一由工具输出层做 5000 字符中间截断；
- * - 因此这里不再额外做一套 preview 截断，避免不同工具有不同的截断语义。
+ * - preview / range 两种模式都会显式返回 returned / omitted 元信息；
+ * - 这样即使页面很长，也不会把整篇正文都塞进一次工具结果里。
  *
  * @param {{title?:string, url?:string, content?:string}|null|undefined} pageContent
  * @param {any} rawArgs
@@ -93,6 +93,10 @@ export function buildPageContentReadResult(pageContent, rawArgs) {
   }
 
   if (!hasExplicitRange) {
+    const effectiveMaxChars = PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS;
+    const end = Math.min(totalChars, effectiveMaxChars);
+    const content = normalizedText.slice(0, end);
+    const omittedChars = Math.max(0, totalChars - content.length);
     return {
       ok: true,
       mode: 'preview',
@@ -101,11 +105,13 @@ export function buildPageContentReadResult(pageContent, rawArgs) {
       normalized_whitespace: true,
       extraction_scope: 'page_plus_accessible_iframe_text',
       total_chars: totalChars,
-      returned_chars: totalChars,
-      omitted_chars: 0,
-      omitted_pct: 0,
-      truncated: false,
-      content: normalizedText
+      max_chars: effectiveMaxChars,
+      returned_chars: content.length,
+      omitted_chars: omittedChars,
+      omitted_pct: formatPercent(omittedChars, totalChars),
+      truncated: omittedChars > 0,
+      has_more_after_range: end < totalChars,
+      content
     };
   }
 

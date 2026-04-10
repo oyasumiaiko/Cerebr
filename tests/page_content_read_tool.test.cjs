@@ -16,7 +16,7 @@ test('normalizePageContentReadText 会折叠多行与多余空白', async () => 
   assert.equal(text, '第一行 第二行 第三词 第四行');
 });
 
-test('buildPageContentReadResult 默认返回完整规范化正文，截断交给统一工具输出层处理', async () => {
+test('buildPageContentReadResult 默认返回安全预览而不是整篇正文', async () => {
   const { buildPageContentReadResult } = await loadPageContentReadToolModule();
   const result = buildPageContentReadResult({
     title: 'Example',
@@ -26,11 +26,13 @@ test('buildPageContentReadResult 默认返回完整规范化正文，截断交�
 
   assert.equal(result.ok, true);
   assert.equal(result.mode, 'preview');
-  assert.equal(result.truncated, false);
-  assert.equal(result.returned_chars, 12000);
-  assert.equal(result.omitted_chars, 0);
-  assert.equal(result.omitted_pct, 0);
-  assert.equal(result.content.length, 12000);
+  assert.equal(result.max_chars, 5000);
+  assert.equal(result.truncated, true);
+  assert.equal(result.returned_chars, 5000);
+  assert.equal(result.omitted_chars, 7000);
+  assert.equal(result.omitted_pct, 58.33);
+  assert.equal(result.has_more_after_range, true);
+  assert.equal(result.content.length, 5000);
 });
 
 test('buildPageContentReadResult 支持 skip_chars + max_chars 连续读取', async () => {
