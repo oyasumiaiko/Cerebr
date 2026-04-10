@@ -70,6 +70,18 @@ test('deriveAssistantPreResponseStatusFromResponsesSse 会把 SSE 事件收敛�
   );
 
   assert.deepEqual(
+    deriveAssistantPreResponseStatusFromResponsesSse('response.output_item.added', {
+      item: { type: 'tool_search_call' }
+    }),
+    {
+      text: '模型正在准备工具调用...',
+      stage: 'responses_tool_call',
+      note: '',
+      showSpinner: true
+    }
+  );
+
+  assert.deepEqual(
     deriveAssistantPreResponseStatusFromResponsesSse('response.output_text.delta'),
     {
       text: '模型正在生成回复...',

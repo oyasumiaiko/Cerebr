@@ -70,6 +70,12 @@ const RESPONSES_CODE_INTERPRETER_TOOL_SECTION_TOGGLE_SPEC = Object.freeze({
   label: '启用代码解释器',
   help: '启用后自动在 /responses 的 tools 中附加 { type: "code_interpreter", container: { type: "auto" } }，由 OpenAI 服务端沙箱执行 Python。'
 });
+const RESPONSES_TOOL_SEARCH_TOOL_SECTION_TOGGLE_SPEC = Object.freeze({
+  path: ['builtin_tools', 'tool_search', 'enabled'],
+  key: 'builtin_tools.tool_search.enabled',
+  label: '启用工具搜索',
+  help: '启用后自动在 /responses 的 tools 中附加 { type: "tool_search" }。仅负责 hosted 模式入口；带 defer_loading 的 function / namespace / MCP server 仍需在 Tools JSON 中声明。'
+});
 const RESPONSES_MAIN_FIELD_SPECS = Object.freeze([
   {
     path: ['reasoning', 'effort'],
@@ -315,7 +321,7 @@ const RESPONSES_ADVANCED_FIELD_SPECS = Object.freeze([
     jsonMode: 'array',
     rows: 6,
     placeholder: '[\n  { \"type\": \"web_search\" }\n]',
-    help: '填写 JSON 数组。'
+    help: '填写 JSON 数组。若启用 hosted tool_search，需要在这里声明带 defer_loading 的 function / namespace / MCP server。'
   }
 ]);
 const RESPONSES_SEARCH_TOOL_FIELD_SPECS = Object.freeze([
@@ -354,6 +360,7 @@ const RESPONSES_SEARCH_TOOL_FIELD_SPECS = Object.freeze([
     help: '传给 web_search 的 user_location 对象。'
   }
 ]);
+const RESPONSES_TOOL_SEARCH_TOOL_FIELD_SPECS = Object.freeze([]);
 const RESPONSES_CODE_INTERPRETER_TOOL_FIELD_SPECS = Object.freeze([]);
 const GEMINI_THINKING_LEVEL_OPTIONS = Object.freeze(['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']);
 const GEMINI_RESPONSE_MIME_TYPE_OPTIONS = Object.freeze(['text/plain', 'application/json']);
@@ -803,7 +810,7 @@ export function createApiManager(appContext) {
 
   /**
    * 把“专门的内置工具开关”翻译为真正的 Responses API tools/include 字段。
-   * 当前覆盖 web_search / code_interpreter；后续若要扩展 file_search，也只需在这里追加。
+   * 当前覆盖 web_search / code_interpreter / tool_search；后续若要扩展 file_search，也只需在这里追加。
    * @param {Object} settings
    * @returns {{tools: Array<Object>, include: Array<string>}}
    */
@@ -819,6 +826,9 @@ export function createApiManager(appContext) {
     const include = [];
     const webSearch = (builtinTools.web_search && typeof builtinTools.web_search === 'object' && !Array.isArray(builtinTools.web_search))
       ? builtinTools.web_search
+      : null;
+    const toolSearch = (builtinTools.tool_search && typeof builtinTools.tool_search === 'object' && !Array.isArray(builtinTools.tool_search))
+      ? builtinTools.tool_search
       : null;
     const codeInterpreter = (builtinTools.code_interpreter && typeof builtinTools.code_interpreter === 'object' && !Array.isArray(builtinTools.code_interpreter))
       ? builtinTools.code_interpreter
@@ -856,6 +866,14 @@ export function createApiManager(appContext) {
         type: 'code_interpreter',
         container: { type: 'auto' }
       };
+      const compactedTool = compactResponsesApiSettingValue(tool);
+      if (compactedTool && typeof compactedTool === 'object' && !Array.isArray(compactedTool)) {
+        tools.push(compactedTool);
+      }
+    }
+
+    if (toolSearch?.enabled === true) {
+      const tool = { type: 'tool_search' };
       const compactedTool = compactResponsesApiSettingValue(tool);
       if (compactedTool && typeof compactedTool === 'object' && !Array.isArray(compactedTool)) {
         tools.push(compactedTool);
@@ -3765,6 +3783,15 @@ export function createApiManager(appContext) {
       getSettingsSnapshot: getResponsesSettingsSnapshot,
       updateSettingAtPath: updateResponsesSettingAtPath
     });
+    const createResponsesToolSearchSection = () => createApiFieldSettingsSection({
+      title: '工具搜索',
+      description: '这里单独管理 Responses API 的 hosted tool_search；开启后会自动附加 `{ type: "tool_search" }`。带 `defer_loading` 的具体工具定义仍需写在上面的 Tools 字段里。',
+      mainSpecs: [],
+      advancedSpecs: RESPONSES_TOOL_SEARCH_TOOL_FIELD_SPECS,
+      sectionToggleSpec: RESPONSES_TOOL_SEARCH_TOOL_SECTION_TOGGLE_SPEC,
+      getSettingsSnapshot: getResponsesSettingsSnapshot,
+      updateSettingAtPath: updateResponsesSettingAtPath
+    });
     const createGeminiSettingsSection = () => createApiFieldSettingsSection({
       title: 'Gemini API 字段',
       description: 'Gemini generateContent 的附加字段会以稀疏结构存储；未启用字段不会附加到请求体。',
@@ -3903,6 +3930,7 @@ export function createApiManager(appContext) {
     const responsesSettingsSection = createResponsesSettingsSection();
     const responsesSearchToolSection = createResponsesSearchToolSection();
     const responsesCodeInterpreterToolSection = createResponsesCodeInterpreterToolSection();
+    const responsesToolSearchSection = createResponsesToolSearchSection();
     const geminiSettingsSection = createGeminiSettingsSection();
     const providerSettingsHost = document.createElement('div');
     providerSettingsHost.className = 'provider-settings-host';
@@ -3925,6 +3953,10 @@ export function createApiManager(appContext) {
           responsesCodeInterpreterToolSection.hidden = false;
           nextSections.push(responsesCodeInterpreterToolSection);
         }
+        if (responsesToolSearchSection) {
+          responsesToolSearchSection.hidden = false;
+          nextSections.push(responsesToolSearchSection);
+        }
       } else if (responsesSettingsSection) {
         responsesSettingsSection.hidden = true;
         if (responsesSearchToolSection) {
@@ -3932,6 +3964,9 @@ export function createApiManager(appContext) {
         }
         if (responsesCodeInterpreterToolSection) {
           responsesCodeInterpreterToolSection.hidden = true;
+        }
+        if (responsesToolSearchSection) {
+          responsesToolSearchSection.hidden = true;
         }
       }
       if (isGeminiConnectionSelected() && geminiSettingsSection) {
