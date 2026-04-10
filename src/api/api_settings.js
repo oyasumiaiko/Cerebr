@@ -23,9 +23,8 @@ import {
   buildResponsesBuiltinToolOverrides as buildResponsesBuiltinToolOverridesFromRegistry
 } from './responses_builtin_tools.js';
 import {
-  RESPONSES_LOCAL_COMPACTION_DEFAULT_THRESHOLD,
-  buildResponsesCompactEndpointUrl,
   buildResponsesCompactRequestBody,
+  resolveResponsesCompactEndpointUrl,
   normalizeResponsesLocalCompactionSettings
 } from '../utils/responses_local_compaction.js';
 
@@ -317,15 +316,12 @@ const RESPONSES_ADVANCED_FIELD_SPECS = Object.freeze([
 ]);
 const RESPONSES_LOCAL_COMPACTION_FIELD_SPECS = Object.freeze([
   {
-    path: ['thresholdPromptTokens'],
-    key: 'thresholdPromptTokens',
-    label: '自动压缩阈值（promptTokens）',
-    kind: 'number',
-    min: 1,
-    step: 1,
-    defaultValue: RESPONSES_LOCAL_COMPACTION_DEFAULT_THRESHOLD,
-    placeholder: String(RESPONSES_LOCAL_COMPACTION_DEFAULT_THRESHOLD),
-    help: '仅用于“发送新消息前”的自动 compact 判定；手动 /compact 不受此开关限制。'
+    path: ['endpointUrl'],
+    key: 'endpointUrl',
+    label: 'Compact 端点 URL',
+    kind: 'text',
+    placeholder: '留空则沿用当前 Responses 端点并自动补 /compact',
+    help: '可为 compact 单独指定端点；若填写的是 /responses，也会在发送时自动补成 /compact。'
   }
 ]);
 const GEMINI_THINKING_LEVEL_OPTIONS = Object.freeze(['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']);
@@ -712,8 +708,8 @@ export function createApiManager(appContext) {
    *
    * 说明：
    * - 这不是 `/responses` 官方 request body 字段，因此单独挂在配置顶层；
-   * - `enabled` 仅控制发送前自动 compact；
-   * - 手动 `/compact` 命令始终可用。
+   * - 当前仅承载“手动 /compact”所需的独立端点覆盖；
+   * - 手动 `/compact` 命令始终可用；未单独配置端点时回退到当前 Responses endpoint + `/compact`。
    *
    * @param {any} settings
    * @returns {Object|undefined}
@@ -3167,7 +3163,7 @@ export function createApiManager(appContext) {
     };
     const getResponsesLocalCompactionSnapshot = () =>
       normalizeResponsesLocalCompactionConfig(apiConfigs[index]?.responsesLocalCompaction)
-      || { thresholdPromptTokens: RESPONSES_LOCAL_COMPACTION_DEFAULT_THRESHOLD };
+      || {};
     const setResponsesLocalCompactionSnapshot = (nextSettings, { persist = true } = {}) => {
       const normalized = normalizeResponsesLocalCompactionConfig(nextSettings);
       if (normalized) {
@@ -3732,14 +3728,9 @@ export function createApiManager(appContext) {
     });
     const createResponsesLocalCompactionSection = () => createApiFieldSettingsSection({
       title: '本地上下文压缩',
-      description: '发送新消息前可按上一条 assistant 的 promptTokens 自动 compact；手动 `/compact` 始终可用。',
+      description: '仅保留手动 `/compact`；可为 compact 单独指定端点，不再自动触发。',
       mainSpecs: RESPONSES_LOCAL_COMPACTION_FIELD_SPECS,
       advancedSpecs: [],
-      sectionToggleSpec: {
-        path: ['enabled'],
-        label: '启用自动 compact',
-        help: '关闭时不自动 compact，但仍可手动输入 /compact。'
-      },
       getSettingsSnapshot: getResponsesLocalCompactionSnapshot,
       updateSettingAtPath: updateResponsesLocalCompactionAtPath
     });
@@ -5556,7 +5547,8 @@ export function createApiManager(appContext) {
    * 发送 Responses compact 请求。
    *
    * 说明：
-   * - 直接基于当前 Responses endpoint 推导同路径 `/compact`；
+   * - 若本地 compact 设置填写了独立端点，则优先使用该端点；
+   * - 否则基于当前 Responses endpoint 推导同路径 `/compact`；
    * - 复用现有鉴权、key 轮换与免 key 请求逻辑；
    * - 请求体会先投影为 compact 端点允许的字段子集。
    *
@@ -5573,7 +5565,10 @@ export function createApiManager(appContext) {
       throw new Error('当前配置不是 Responses API，无法发送 compact 请求。');
     }
 
-    const compactEndpointUrl = buildResponsesCompactEndpointUrl(config?.baseUrl);
+    const compactEndpointUrl = resolveResponsesCompactEndpointUrl(
+      config?.baseUrl,
+      normalizeResponsesLocalCompactionConfig(config?.responsesLocalCompaction)?.endpointUrl
+    );
     const compactRequestBody = buildResponsesCompactRequestBody(requestBody);
 
     return sendRequestWithResolvedEndpoint({

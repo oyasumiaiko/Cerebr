@@ -30,9 +30,9 @@ const pageUrl = (typeof rawPageUrl === 'string' && rawPageUrl.trim())
 const runHeadless = shouldRunHeadless();
 const { chromium } = loadPlaywright(repoRoot);
 
-const FIRST_REPLY = 'STEP1_OK';
-const SECOND_REPLY = 'CODEWORD=BLUE-ELEPHANT-42';
-const THIRD_REPLY = 'CODEWORD2=BLUE-ELEPHANT-42';
+const FIRST_REPLY = 'STEP1_OK CODEWORD=BLUE-ELEPHANT-42';
+const SECOND_REPLY = 'STEP2_OK';
+const THIRD_REPLY = 'CODEWORD=BLUE-ELEPHANT-42';
 const COMPACTION_MARKER_TEXT = '已压缩上下文';
 function buildStorageSeed(fixedEnv) {
   const responsesSourceId = 'src_fixed_responses_local_compaction';
@@ -74,10 +74,6 @@ function buildStorageSeed(fixedEnv) {
           enabled: false
         }
       }
-    },
-    responsesLocalCompaction: {
-      enabled: true,
-      thresholdPromptTokens: 1
     }
   };
   const responsesSource = {
@@ -336,7 +332,7 @@ async function main() {
     await fillAndSend(
       page,
       sidebarFrame,
-      'Remember this exact codeword for later: BLUE-ELEPHANT-42. Reply exactly STEP1_OK.'
+      'Remember this exact codeword for later: BLUE-ELEPHANT-42. Reply exactly STEP1_OK CODEWORD=BLUE-ELEPHANT-42.'
     );
     result.steps.push('first_message_sent');
     result.afterFirstUser = await waitForUserMessage(sidebarFrame, 'BLUE-ELEPHANT-42');
@@ -346,26 +342,25 @@ async function main() {
     await fillAndSend(
       page,
       sidebarFrame,
-      'What exact codeword did I ask you to remember earlier? Reply exactly CODEWORD=BLUE-ELEPHANT-42.'
+      'Do not mention the earlier codeword. Reply exactly STEP2_OK.'
     );
     result.steps.push('second_message_sent');
-    result.afterSecondUser = await waitForUserMessage(sidebarFrame, 'Reply exactly CODEWORD=BLUE-ELEPHANT-42.');
-    result.afterAutoMarker = await waitForMarkerCount(sidebarFrame, 1);
+    result.afterSecondUser = await waitForUserMessage(sidebarFrame, 'Reply exactly STEP2_OK.');
     result.afterSecondReply = await waitForAssistantReply(sidebarFrame, SECOND_REPLY);
     result.steps.push('second_reply_received');
 
     await fillAndSend(page, sidebarFrame, '/compact');
     result.steps.push('manual_compact_sent');
-    result.afterManualMarker = await waitForMarkerCount(sidebarFrame, 2);
+    result.afterManualMarker = await waitForMarkerCount(sidebarFrame, 1);
     result.steps.push('manual_compact_completed');
 
     await fillAndSend(
       page,
       sidebarFrame,
-      'Repeat the same codeword again. Reply exactly CODEWORD2=BLUE-ELEPHANT-42.'
+      'What exact codeword did I ask you to remember earlier? Reply exactly CODEWORD=<the exact codeword only>.'
     );
     result.steps.push('third_message_sent');
-    result.afterThirdUser = await waitForUserMessage(sidebarFrame, 'Reply exactly CODEWORD2=BLUE-ELEPHANT-42.');
+    result.afterThirdUser = await waitForUserMessage(sidebarFrame, 'Reply exactly CODEWORD=<the exact codeword only>.');
     result.afterThirdReply = await waitForAssistantReply(sidebarFrame, THIRD_REPLY);
     result.steps.push('third_reply_received');
 
@@ -388,11 +383,14 @@ async function main() {
     if (result.compactRequests.length <= 0) {
       throw new Error('未捕获到 /responses/compact 请求。');
     }
-    if ((result.finalSidebarSnapshot?.markerCount || 0) < 2) {
-      throw new Error('最终侧栏中未看到至少两个 compact marker。');
+    if ((result.finalSidebarSnapshot?.markerCount || 0) < 1) {
+      throw new Error('最终侧栏中未看到 compact marker。');
     }
     if (!String(result.afterSecondReply?.lastAiText || '').includes(SECOND_REPLY)) {
-      throw new Error(`自动 compact 后的第二次回复不符合预期：${result.afterSecondReply?.lastAiText || '<empty>'}`);
+      throw new Error(`手动 compact 前的第二次回复不符合预期：${result.afterSecondReply?.lastAiText || '<empty>'}`);
+    }
+    if (String(result.afterSecondReply?.lastAiText || '').includes('BLUE-ELEPHANT-42')) {
+      throw new Error(`第二次回复仍泄露 codeword，导致第三次并不依赖 compact：${result.afterSecondReply?.lastAiText || '<empty>'}`);
     }
     if (!String(result.afterThirdReply?.lastAiText || '').includes(THIRD_REPLY)) {
       throw new Error(`手动 compact 后的第三次回复不符合预期：${result.afterThirdReply?.lastAiText || '<empty>'}`);

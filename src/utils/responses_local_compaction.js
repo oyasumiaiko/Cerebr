@@ -2,16 +2,13 @@
  * Responses 本地上下文压缩相关纯函数。
  *
  * 设计目标：
- * - 将“本地 compact”涉及的 wire 规则、历史 marker 规则和自动触发判定集中管理；
+ * - 将“本地 compact”涉及的 wire 规则、历史 marker 规则集中管理；
  * - 让 `api_settings.js`、`message_sender.js`、`message_composer.js` 共享同一套实现，
  *   避免各处再各写一份 endpoint 推导 / body 投影 / marker 判断逻辑；
  * - 全部保持为 JSON 友好的纯函数，方便单元测试与后续扩展。
  */
 
 export const RESPONSES_LOCAL_COMPACTION_SOURCE = 'responses_local';
-export const RESPONSES_LOCAL_COMPACTION_DEFAULT_THRESHOLD = 120000;
-export const RESPONSES_LOCAL_COMPACTION_REQUEST_MAX_BYTES = 240000;
-export const RESPONSES_LOCAL_COMPACTION_FUNCTION_OUTPUT_TEXT_LIMIT_STEPS = [4000, 2000, 1000, 500];
 
 function cloneJsonValue(value) {
   if (value == null) return value ?? null;
@@ -65,120 +62,26 @@ function truncateCompactText(text, maxChars) {
   ].join('');
 }
 
-function sanitizeCompactFunctionOutputContentItem(item, maxTextChars) {
-  if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
-  const cloned = cloneJsonValue(item);
-  if (!cloned || typeof cloned !== 'object' || Array.isArray(cloned)) return null;
-
-  const type = String(cloned.type || '').trim().toLowerCase();
-  if (type === 'input_text' || type === 'output_text') {
-    if (typeof cloned.text === 'string') {
-      cloned.text = truncateCompactText(cloned.text, maxTextChars);
-    }
-    return cloned;
-  }
-
-  if (type === 'input_image') {
-    const imageUrl = (typeof cloned.image_url === 'string') ? cloned.image_url.trim() : '';
-    if (/^data:/i.test(imageUrl)) {
-      const detailText = (typeof cloned.detail === 'string' && cloned.detail.trim())
-        ? ` detail=${cloned.detail.trim()}`
-        : '';
-      return {
-        type: 'input_text',
-        text: `[inline image omitted from compact request; source=data-url${detailText}]`
-      };
-    }
-    return cloned;
-  }
-
-  return cloned;
+function sanitizeCompactFunctionOutputPayload(output) {
+  return cloneJsonValue(output);
 }
 
-function sanitizeCompactFunctionOutputPayload(output, maxTextChars) {
-  if (typeof output === 'string') {
-    return truncateCompactText(output, maxTextChars);
-  }
-  if (Array.isArray(output)) {
-    return output
-      .map(item => sanitizeCompactFunctionOutputContentItem(item, maxTextChars))
-      .filter(Boolean);
-  }
-  if (!output || typeof output !== 'object') {
-    return cloneJsonValue(output);
-  }
-
-  const cloned = cloneJsonValue(output);
-  if (!cloned || typeof cloned !== 'object' || Array.isArray(cloned)) {
-    return cloned;
-  }
-
-  if (typeof cloned.body === 'string') {
-    cloned.body = truncateCompactText(cloned.body, maxTextChars);
-    return cloned;
-  }
-  if (Array.isArray(cloned.body)) {
-    cloned.body = cloned.body
-      .map(item => sanitizeCompactFunctionOutputContentItem(item, maxTextChars))
-      .filter(Boolean);
-    return cloned;
-  }
-  if (Array.isArray(cloned.content)) {
-    cloned.content = cloned.content
-      .map(item => sanitizeCompactFunctionOutputContentItem(item, maxTextChars))
-      .filter(Boolean);
-    return cloned;
-  }
-  if (typeof cloned.text === 'string') {
-    cloned.text = truncateCompactText(cloned.text, maxTextChars);
-  }
-  return cloned;
-}
-
-function sanitizeCompactReplayInputItem(item, maxTextChars) {
+function sanitizeCompactReplayInputItem(item) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
   const cloned = cloneJsonValue(item);
   if (!cloned || typeof cloned !== 'object' || Array.isArray(cloned)) return null;
 
   const type = String(cloned.type || '').trim().toLowerCase();
   if (type === 'function_call_output' || type === 'custom_tool_call_output') {
-    cloned.output = sanitizeCompactFunctionOutputPayload(cloned.output, maxTextChars);
+    cloned.output = sanitizeCompactFunctionOutputPayload(cloned.output);
   }
   return cloned;
 }
 
-function sanitizeCompactReplayInputItems(items, maxTextChars) {
+function sanitizeCompactReplayInputItems(items) {
   return (Array.isArray(items) ? items : [])
-    .map(item => sanitizeCompactReplayInputItem(item, maxTextChars))
+    .map(item => sanitizeCompactReplayInputItem(item))
     .filter(Boolean);
-}
-
-function findNextCompactTurnBoundaryIndex(items) {
-  const source = Array.isArray(items) ? items : [];
-  for (let index = 1; index < source.length; index += 1) {
-    const item = source[index];
-    if (item?.type === 'message' && item?.role === 'user') {
-      return index;
-    }
-  }
-  return -1;
-}
-
-function trimCompactInputItemsToRequestBudget(items, baseProjected) {
-  let trimmedItems = Array.isArray(items) ? items.slice() : [];
-  while (
-    trimmedItems.length > 1
-    && estimateJsonSerializedBytes({ ...baseProjected, input: trimmedItems })
-      > RESPONSES_LOCAL_COMPACTION_REQUEST_MAX_BYTES
-  ) {
-    const nextBoundaryIndex = findNextCompactTurnBoundaryIndex(trimmedItems);
-    if (nextBoundaryIndex > 0) {
-      trimmedItems = trimmedItems.slice(nextBoundaryIndex);
-      continue;
-    }
-    trimmedItems = trimmedItems.slice(1);
-  }
-  return trimmedItems;
 }
 
 function buildCompactRequestSummaryObject(requestBody) {
@@ -251,28 +154,26 @@ function normalizePositiveInteger(value) {
  * 规范化 Responses 本地 compact 设置。
  *
  * 说明：
- * - `enabled` 只控制“发送前自动 compact”；
- * - 手动 `/compact` 不依赖该开关；
- * - 若只保存了 threshold，也允许保留，便于用户先设阈值再开启。
+ * - 当前只保留“手动 `/compact`”相关设置；
+ * - 独立 compact 端点可显式覆盖；为空时回退到当前 Responses endpoint + `/compact`；
+ * - 旧版自动 compact 配置（例如 enabled / thresholdPromptTokens）在这里直接丢弃，
+ *   避免继续污染新的手动模式语义。
  *
  * @param {any} raw
- * @returns {{enabled:boolean, thresholdPromptTokens:number}|null}
+ * @returns {{endpointUrl:string}|null}
  */
 export function normalizeResponsesLocalCompactionSettings(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
 
-  const thresholdPromptTokens = normalizePositiveInteger(
-    raw.thresholdPromptTokens ?? raw.threshold_prompt_tokens
-  );
-  const enabled = raw.enabled === true;
-
-  if (!enabled && thresholdPromptTokens == null) {
+  const endpointUrl = (typeof (raw.endpointUrl ?? raw.compactEndpointUrl ?? raw.endpoint_url ?? raw.compact_endpoint_url) === 'string')
+    ? String(raw.endpointUrl ?? raw.compactEndpointUrl ?? raw.endpoint_url ?? raw.compact_endpoint_url).trim()
+    : '';
+  if (!endpointUrl) {
     return null;
   }
 
   return {
-    enabled,
-    thresholdPromptTokens: thresholdPromptTokens || RESPONSES_LOCAL_COMPACTION_DEFAULT_THRESHOLD
+    endpointUrl
   };
 }
 
@@ -298,6 +199,22 @@ export function buildResponsesCompactEndpointUrl(baseUrl) {
     return trimmed;
   }
   return `${trimmed}/compact`;
+}
+
+/**
+ * 解析 compact 实际请求端点。
+ *
+ * 优先级：
+ * - 若 API 页面为 compact 单独配置了端点，则优先使用它；
+ * - 否则回退到当前 Responses endpoint 并在末尾追加 `/compact`。
+ *
+ * @param {any} baseUrl
+ * @param {any} explicitCompactEndpointUrl
+ * @returns {string}
+ */
+export function resolveResponsesCompactEndpointUrl(baseUrl, explicitCompactEndpointUrl) {
+  const explicit = (typeof explicitCompactEndpointUrl === 'string') ? explicitCompactEndpointUrl.trim() : '';
+  return buildResponsesCompactEndpointUrl(explicit || baseUrl);
 }
 
 /**
@@ -338,27 +255,38 @@ export function buildResponsesCompactRequestBody(requestBody) {
 
   if (Object.prototype.hasOwnProperty.call(source, 'input')) {
     const inputItems = Array.isArray(source.input) ? source.input : [];
-    const candidateLimits = RESPONSES_LOCAL_COMPACTION_FUNCTION_OUTPUT_TEXT_LIMIT_STEPS;
-    let selectedInputItems = sanitizeCompactReplayInputItems(inputItems, candidateLimits[0]);
-
-    for (let index = 0; index < candidateLimits.length; index += 1) {
-      const maxTextChars = candidateLimits[index];
-      const candidateInputItems = sanitizeCompactReplayInputItems(inputItems, maxTextChars);
-      const candidateRequestBody = { ...projected, input: candidateInputItems };
-      const candidateBytes = estimateJsonSerializedBytes(candidateRequestBody);
-      selectedInputItems = candidateInputItems;
-      if (
-        candidateBytes <= RESPONSES_LOCAL_COMPACTION_REQUEST_MAX_BYTES
-        || index === candidateLimits.length - 1
-      ) {
-        break;
-      }
-    }
-
-    projected.input = trimCompactInputItemsToRequestBudget(selectedInputItems, projected);
+    projected.input = sanitizeCompactReplayInputItems(inputItems);
   }
 
   return projected;
+}
+
+/**
+ * 对 compact 请求应用显式 instructions 覆盖策略。
+ *
+ * 设计目标：
+ * - compact 不应继续沿用“聊天发送链路里抽离出来的 system 指令”，否则会把用户自定义角色、
+ *   全局模板、甚至别的模型人格一股脑带进 `/responses/compact`；
+ * - 这里允许调用方在 compact 专用路径上覆盖成一份稳定的 instructions，或者显式删除。
+ *
+ * @param {any} requestBody
+ * @param {string|null|undefined} instructionsText
+ * @returns {Object}
+ */
+export function applyResponsesCompactInstructionsOverride(requestBody, instructionsText) {
+  const source = (requestBody && typeof requestBody === 'object' && !Array.isArray(requestBody))
+    ? requestBody
+    : {};
+  const nextBody = cloneJsonValue(source) || {};
+  const normalizedInstructions = (typeof instructionsText === 'string')
+    ? instructionsText.trim()
+    : '';
+  if (normalizedInstructions) {
+    nextBody.instructions = normalizedInstructions;
+  } else {
+    delete nextBody.instructions;
+  }
+  return nextBody;
 }
 
 export function summarizeResponsesCompactRequestBody(requestBody) {
@@ -473,45 +401,10 @@ export function findLatestAssistantPromptTokenEntry(chain) {
 }
 
 /**
- * 解析自动 compact 是否应当触发。
- *
- * @param {any} chain
- * @param {any} thresholdPromptTokens
- * @returns {{shouldCompact:boolean, promptTokensBefore:number|null, sourceAssistantMessageId:string|null}}
- */
-export function resolveResponsesAutoCompactionDecision(chain, thresholdPromptTokens) {
-  const normalizedThreshold = normalizePositiveInteger(thresholdPromptTokens);
-  if (normalizedThreshold == null) {
-    return {
-      shouldCompact: false,
-      promptTokensBefore: null,
-      sourceAssistantMessageId: null
-    };
-  }
-
-  const latestEntry = findLatestAssistantPromptTokenEntry(chain);
-  if (!latestEntry) {
-    return {
-      shouldCompact: false,
-      promptTokensBefore: null,
-      sourceAssistantMessageId: null
-    };
-  }
-
-  return {
-    shouldCompact: latestEntry.promptTokens >= normalizedThreshold,
-    promptTokensBefore: latestEntry.promptTokens,
-    sourceAssistantMessageId: (typeof latestEntry.node?.id === 'string' && latestEntry.node.id.trim())
-      ? latestEntry.node.id.trim()
-      : null
-  };
-}
-
-/**
  * 构造 compact marker 元信息。
  *
  * @param {Object} options
- * @returns {{source:string, sourceAssistantMessageId:string|null, promptTokensBefore:number|null, thresholdPromptTokens:number|null, compactedAt:number|null}}
+ * @returns {{source:string, sourceAssistantMessageId:string|null, promptTokensBefore:number|null, compactedAt:number|null}}
  */
 export function buildResponsesLocalCompactionMarker(options = {}) {
   const normalizedOptions = (options && typeof options === 'object') ? options : {};
@@ -520,7 +413,6 @@ export function buildResponsesLocalCompactionMarker(options = {}) {
     ? normalizedOptions.sourceAssistantMessageId.trim()
     : null;
   const promptTokensBefore = normalizePositiveInteger(normalizedOptions.promptTokensBefore);
-  const thresholdPromptTokens = normalizePositiveInteger(normalizedOptions.thresholdPromptTokens);
   const compactedAt = Number.isFinite(Number(normalizedOptions.compactedAt))
     ? Number(normalizedOptions.compactedAt)
     : Date.now();
@@ -529,7 +421,6 @@ export function buildResponsesLocalCompactionMarker(options = {}) {
     source: RESPONSES_LOCAL_COMPACTION_SOURCE,
     sourceAssistantMessageId,
     promptTokensBefore,
-    thresholdPromptTokens,
     compactedAt
   };
 }

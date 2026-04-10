@@ -10,13 +10,15 @@ import { extractThinkingFromText, mergeStreamingThoughts, mergeThoughts } from '
 import { mergeResponsesReasoningText, normalizeResponsesReasoningText } from '../utils/responses_activity_reasoning.js';
 import { cloneResponsesInputItems, mergeResponsesInputItems } from '../utils/responses_input_items.js';
 import {
+  applyResponsesCompactInstructionsOverride,
   buildResponsesLocalCompactionMarker,
   findLatestAssistantPromptTokenEntry,
-  normalizeResponsesLocalCompactionSettings,
   parseResponsesCompactResponseText,
-  resolveResponsesAutoCompactionDecision,
   summarizeResponsesCompactRequestBody
 } from '../utils/responses_local_compaction.js';
+import {
+  RESPONSES_COMPACT_CODEX_GPT_5_4_BASE_INSTRUCTIONS
+} from '../utils/responses_compact_codex_instructions.js';
 import { createAdaptiveUpdateThrottler } from '../utils/adaptive_update_throttler.js';
 import { extractPlainTextFromContent } from '../utils/conversation_title.js';
 import { deleteMessageFromChatHistory } from './chat_history_manager.js';
@@ -4730,10 +4732,6 @@ export function createMessageSender(appContext) {
     return node;
   }
 
-  function getResponsesLocalCompactionConfig(config) {
-    return normalizeResponsesLocalCompactionSettings(config?.responsesLocalCompaction) || null;
-  }
-
   function buildResponsesLocalCompactionHistoryPatch(options = {}) {
     const normalizedOptions = (options && typeof options === 'object') ? options : {};
     return {
@@ -4741,7 +4739,6 @@ export function createMessageSender(appContext) {
       contextCompactionMarker: buildResponsesLocalCompactionMarker({
         sourceAssistantMessageId: normalizedOptions.sourceAssistantMessageId || null,
         promptTokensBefore: normalizedOptions.promptTokensBefore,
-        thresholdPromptTokens: normalizedOptions.thresholdPromptTokens,
         compactedAt: normalizedOptions.compactedAt
       })
     };
@@ -4846,9 +4843,13 @@ export function createMessageSender(appContext) {
       messages: compactMessages,
       config: usedApiConfig
     });
+    const compactRequestBody = applyResponsesCompactInstructionsOverride(
+      baseRequestBody,
+      RESPONSES_COMPACT_CODEX_GPT_5_4_BASE_INSTRUCTIONS
+    );
 
     return prepareResponsesRequestBodyForCustomTools(
-      baseRequestBody,
+      compactRequestBody,
       usedApiConfig,
       resolveResponsesPageToolEnvironment()
     );
@@ -4901,7 +4902,6 @@ export function createMessageSender(appContext) {
       compactOutput,
       sourceAssistantMessageId: normalizedPayload.sourceAssistantMessageId || null,
       promptTokensBefore: normalizedPayload.promptTokensBefore,
-      thresholdPromptTokens: normalizedPayload.thresholdPromptTokens,
       compactedAt: Date.now()
     });
     const markerResult = appendResponsesLocalCompactionMarker({
@@ -5488,8 +5488,7 @@ export function createMessageSender(appContext) {
           activeThreadContext,
           historyMessagesRef: null,
           sourceAssistantMessageId: latestAssistantEntry?.node?.id || null,
-          promptTokensBefore: latestAssistantEntry?.promptTokens ?? null,
-          thresholdPromptTokens: getResponsesLocalCompactionConfig(usedApiConfig)?.thresholdPromptTokens ?? null
+          promptTokensBefore: latestAssistantEntry?.promptTokens ?? null
         });
 
         const savedConversation = await chatHistoryUI?.saveCurrentConversation?.(true, {
@@ -9085,41 +9084,6 @@ export function createMessageSender(appContext) {
         || lockConfig
         || apiManager.getSelectedConfig();
       const sendChatHistoryFlag = shouldSendChatHistory || forceSendFullHistory;
-      if (!regenerateMode && sendChatHistoryFlag && isOpenAIResponsesApiConfig(effectiveApiConfig)) {
-        const localCompactionConfig = getResponsesLocalCompactionConfig(effectiveApiConfig);
-        if (localCompactionConfig?.enabled) {
-          const compactConversationChain = resolveConversationChainForAttempt({
-            attemptState: attempt,
-            conversationSnapshot,
-            activeThreadContext,
-            regenerateMode,
-            messageId,
-            sendChatHistoryFlag
-          });
-          const autoCompactDecision = resolveResponsesAutoCompactionDecision(
-            compactConversationChain,
-            localCompactionConfig.thresholdPromptTokens
-          );
-          if (autoCompactDecision.shouldCompact) {
-            await executeResponsesLocalCompaction({
-              usedApiConfig: effectiveApiConfig,
-              conversationChain: compactConversationChain,
-              sendChatHistoryFlag,
-              signal,
-              activeThreadContext,
-              historyMessagesRef: isAttemptUsingDetachedMainConversationHistory(attempt)
-                ? (attempt?.historyMessagesRef || null)
-                : null,
-              sourceAssistantMessageId: autoCompactDecision.sourceAssistantMessageId,
-              promptTokensBefore: autoCompactDecision.promptTokensBefore,
-              thresholdPromptTokens: localCompactionConfig.thresholdPromptTokens
-            });
-            if (isAttemptMainConversationActive(attempt) && typeof showNotification === 'function') {
-              showNotification({ message: '已自动压缩上下文', type: 'info', duration: 1600 });
-            }
-          }
-        }
-      }
 
       // 在重新生成模式下，不添加新的用户消息
       let userMessageDiv;

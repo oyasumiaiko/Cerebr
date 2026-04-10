@@ -41,7 +41,7 @@ import { normalizeResponsesPromptCacheKey } from '../utils/responses_prompt_cach
  * @property {Array<any>|null} [contextual_input_items_before] - 仅供模型可见、位于该消息前面的隐藏 contextual input items（不参与 UI 渲染，可选）
  * @property {string|null} [pageRuntimeContextSignature] - 页面运行环境隐藏上下文的稳定签名；为空表示沿用更早一次已生效的上下文（可选）
  * @property {string|null} [environmentContextSignature] - 通用 environment_context 的稳定签名；为空表示沿用更早一次已生效的上下文（可选）
- * @property {{source:string,sourceAssistantMessageId:string|null,promptTokensBefore:number|null,thresholdPromptTokens:number|null,compactedAt:number|null}|null} [contextCompactionMarker] - 本地 Responses compact marker（可选）
+ * @property {{source:string,sourceAssistantMessageId:string|null,promptTokensBefore:number|null,compactedAt:number|null}|null} [contextCompactionMarker] - 本地 Responses compact marker（可选）
  */
 
 /**
