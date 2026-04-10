@@ -4,6 +4,7 @@ const {
   buildSendContentMessageExpression,
   launchFixedSidebarContext,
   loadPlaywright,
+  reloadUnpackedExtension,
   resolveFixedSidebarProfileDir,
   resolveStableChromeExecutablePath,
   shouldRunHeadless,
@@ -126,10 +127,11 @@ async function main() {
     });
     result.steps.push('browser_ready');
 
-    const extensionWorker = await waitForExtensionWorker(context, { timeoutMs: 30_000 });
+    const extensionWorker = await reloadUnpackedExtension(context, { timeoutMs: 30_000 });
     const extensionId = new URL(extensionWorker.url()).host;
     result.extensionId = extensionId;
     result.steps.push('background_ready');
+    result.steps.push('extension_reloaded');
 
     const storageSeed = buildLiveResponsesStorageSeed({
       baseUrl: fixedEnv.responsesBaseUrl,

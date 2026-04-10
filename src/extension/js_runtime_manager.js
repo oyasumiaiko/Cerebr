@@ -1,5 +1,3 @@
-import { createBrowserJsReplKernel } from '../utils/browser_js_repl.js';
-
 /**
  * 基于 chrome.userScripts 的最小可用 JS Runtime。
  *
@@ -12,6 +10,497 @@ import { createBrowserJsReplKernel } from '../utils/browser_js_repl.js';
  */
 
 const JS_REPL_KERNEL_GLOBAL_KEY = '__cerebrJsReplKernelV1__';
+
+function createJsReplSyntaxError(message) {
+  const error = new SyntaxError(message);
+  error.name = 'SyntaxError';
+  return error;
+}
+
+function isJsReplIdentifierStartChar(char) {
+  return !!char && /[A-Za-z_$]/.test(char);
+}
+
+function isJsReplIdentifierPartChar(char) {
+  return !!char && /[A-Za-z0-9_$]/.test(char);
+}
+
+function isJsReplWhitespaceChar(char) {
+  return char === ' ' || char === '\t' || char === '\n' || char === '\r' || char === '\f';
+}
+
+function skipJsReplStringLiteral(source, index) {
+  const quote = source[index];
+  let cursor = index + 1;
+  while (cursor < source.length) {
+    const char = source[cursor];
+    if (char === '\\') {
+      cursor += 2;
+      continue;
+    }
+    if (char === quote) return cursor + 1;
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function skipJsReplLineComment(source, index) {
+  let cursor = index + 2;
+  while (cursor < source.length && source[cursor] !== '\n') cursor += 1;
+  return cursor;
+}
+
+function skipJsReplBlockComment(source, index) {
+  let cursor = index + 2;
+  while (cursor < source.length) {
+    if (source[cursor] === '*' && source[cursor + 1] === '/') {
+      return cursor + 2;
+    }
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function skipJsReplBalancedSection(source, index, closingChar) {
+  let cursor = index;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  let parenDepth = 0;
+  while (cursor < source.length) {
+    const char = source[cursor];
+    const next = source[cursor + 1];
+    if (char === '\'' || char === '"') {
+      cursor = skipJsReplStringLiteral(source, cursor);
+      continue;
+    }
+    if (char === '`') {
+      cursor = skipJsReplTemplateLiteral(source, cursor);
+      continue;
+    }
+    if (char === '/' && next === '/') {
+      cursor = skipJsReplLineComment(source, cursor);
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      cursor = skipJsReplBlockComment(source, cursor);
+      continue;
+    }
+    if (char === '{') braceDepth += 1;
+    else if (char === '}') {
+      if (closingChar === '}' && braceDepth === 0 && bracketDepth === 0 && parenDepth === 0) {
+        return cursor + 1;
+      }
+      braceDepth = Math.max(0, braceDepth - 1);
+    } else if (char === '[') bracketDepth += 1;
+    else if (char === ']') bracketDepth = Math.max(0, bracketDepth - 1);
+    else if (char === '(') parenDepth += 1;
+    else if (char === ')') parenDepth = Math.max(0, parenDepth - 1);
+    if (closingChar !== '}' && char === closingChar && braceDepth === 0 && bracketDepth === 0 && parenDepth === 0) {
+      return cursor + 1;
+    }
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function skipJsReplTemplateLiteral(source, index) {
+  let cursor = index + 1;
+  while (cursor < source.length) {
+    const char = source[cursor];
+    if (char === '\\') {
+      cursor += 2;
+      continue;
+    }
+    if (char === '`') return cursor + 1;
+    if (char === '$' && source[cursor + 1] === '{') {
+      cursor = skipJsReplBalancedSection(source, cursor + 2, '}');
+      continue;
+    }
+    cursor += 1;
+  }
+  return cursor;
+}
+
+function findJsReplNextNonWhitespace(source, index) {
+  let cursor = index;
+  while (cursor < source.length) {
+    const char = source[cursor];
+    const next = source[cursor + 1];
+    if (isJsReplWhitespaceChar(char)) {
+      cursor += 1;
+      continue;
+    }
+    if (char === '/' && next === '/') {
+      cursor = skipJsReplLineComment(source, cursor);
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      cursor = skipJsReplBlockComment(source, cursor);
+      continue;
+    }
+    break;
+  }
+  return cursor;
+}
+
+function jsReplStartsWithKeyword(source, index, keyword) {
+  if (!source.startsWith(keyword, index)) return false;
+  const before = source[index - 1];
+  const after = source[index + keyword.length];
+  if (before && isJsReplIdentifierPartChar(before)) return false;
+  if (after && isJsReplIdentifierPartChar(after)) return false;
+  return true;
+}
+
+function splitJsReplTopLevelByComma(source) {
+  const parts = [];
+  let cursor = 0;
+  let segmentStart = 0;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  let parenDepth = 0;
+  while (cursor < source.length) {
+    const char = source[cursor];
+    const next = source[cursor + 1];
+    if (char === '\'' || char === '"') {
+      cursor = skipJsReplStringLiteral(source, cursor);
+      continue;
+    }
+    if (char === '`') {
+      cursor = skipJsReplTemplateLiteral(source, cursor);
+      continue;
+    }
+    if (char === '/' && next === '/') {
+      cursor = skipJsReplLineComment(source, cursor);
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      cursor = skipJsReplBlockComment(source, cursor);
+      continue;
+    }
+    if (char === '{') braceDepth += 1;
+    else if (char === '}') braceDepth = Math.max(0, braceDepth - 1);
+    else if (char === '[') bracketDepth += 1;
+    else if (char === ']') bracketDepth = Math.max(0, bracketDepth - 1);
+    else if (char === '(') parenDepth += 1;
+    else if (char === ')') parenDepth = Math.max(0, parenDepth - 1);
+    else if (char === ',' && braceDepth === 0 && bracketDepth === 0 && parenDepth === 0) {
+      parts.push(source.slice(segmentStart, cursor));
+      segmentStart = cursor + 1;
+    }
+    cursor += 1;
+  }
+  parts.push(source.slice(segmentStart));
+  return parts;
+}
+
+function findJsReplTopLevelEquals(source) {
+  let cursor = 0;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  let parenDepth = 0;
+  while (cursor < source.length) {
+    const char = source[cursor];
+    const next = source[cursor + 1];
+    if (char === '\'' || char === '"') {
+      cursor = skipJsReplStringLiteral(source, cursor);
+      continue;
+    }
+    if (char === '`') {
+      cursor = skipJsReplTemplateLiteral(source, cursor);
+      continue;
+    }
+    if (char === '/' && next === '/') {
+      cursor = skipJsReplLineComment(source, cursor);
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      cursor = skipJsReplBlockComment(source, cursor);
+      continue;
+    }
+    if (char === '{') braceDepth += 1;
+    else if (char === '}') braceDepth = Math.max(0, braceDepth - 1);
+    else if (char === '[') bracketDepth += 1;
+    else if (char === ']') bracketDepth = Math.max(0, bracketDepth - 1);
+    else if (char === '(') parenDepth += 1;
+    else if (char === ')') parenDepth = Math.max(0, parenDepth - 1);
+    else if (
+      char === '='
+      && braceDepth === 0
+      && bracketDepth === 0
+      && parenDepth === 0
+      && next !== '='
+      && source[cursor - 1] !== '='
+      && source[cursor - 1] !== '!'
+      && next !== '>'
+    ) {
+      return cursor;
+    }
+    cursor += 1;
+  }
+  return -1;
+}
+
+function readJsReplVariableDeclaration(source, startIndex) {
+  let cursor = startIndex;
+  const kind = jsReplStartsWithKeyword(source, cursor, 'const')
+    ? 'const'
+    : jsReplStartsWithKeyword(source, cursor, 'let')
+      ? 'let'
+      : 'var';
+  cursor += kind.length;
+  let braceDepth = 0;
+  let bracketDepth = 0;
+  let parenDepth = 0;
+  while (cursor < source.length) {
+    const char = source[cursor];
+    const next = source[cursor + 1];
+    if (char === '\'' || char === '"') {
+      cursor = skipJsReplStringLiteral(source, cursor);
+      continue;
+    }
+    if (char === '`') {
+      cursor = skipJsReplTemplateLiteral(source, cursor);
+      continue;
+    }
+    if (char === '/' && next === '/') {
+      cursor = skipJsReplLineComment(source, cursor);
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      cursor = skipJsReplBlockComment(source, cursor);
+      continue;
+    }
+    if (char === '{') braceDepth += 1;
+    else if (char === '}') braceDepth = Math.max(0, braceDepth - 1);
+    else if (char === '[') bracketDepth += 1;
+    else if (char === ']') bracketDepth = Math.max(0, bracketDepth - 1);
+    else if (char === '(') parenDepth += 1;
+    else if (char === ')') parenDepth = Math.max(0, parenDepth - 1);
+    else if (char === ';' && braceDepth === 0 && bracketDepth === 0 && parenDepth === 0) {
+      return {
+        raw: source.slice(startIndex, cursor + 1),
+        end: cursor + 1,
+        kind
+      };
+    }
+    cursor += 1;
+  }
+  return {
+    raw: source.slice(startIndex),
+    end: source.length,
+    kind
+  };
+}
+
+function findJsReplDeclarationBodyBounds(source, startIndex) {
+  let cursor = startIndex;
+  let bodyStart = -1;
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  while (cursor < source.length) {
+    const char = source[cursor];
+    const next = source[cursor + 1];
+    if (char === '\'' || char === '"') {
+      cursor = skipJsReplStringLiteral(source, cursor);
+      continue;
+    }
+    if (char === '`') {
+      cursor = skipJsReplTemplateLiteral(source, cursor);
+      continue;
+    }
+    if (char === '/' && next === '/') {
+      cursor = skipJsReplLineComment(source, cursor);
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      cursor = skipJsReplBlockComment(source, cursor);
+      continue;
+    }
+    if (char === '(') parenDepth += 1;
+    else if (char === ')') parenDepth = Math.max(0, parenDepth - 1);
+    else if (char === '[') bracketDepth += 1;
+    else if (char === ']') bracketDepth = Math.max(0, bracketDepth - 1);
+    else if (char === '{' && parenDepth === 0 && bracketDepth === 0) {
+      bodyStart = cursor;
+      break;
+    }
+    cursor += 1;
+  }
+  if (bodyStart < 0) {
+    throw createJsReplSyntaxError('Unterminated declaration body');
+  }
+  const bodyEnd = skipJsReplBalancedSection(source, bodyStart + 1, '}');
+  return {
+    bodyStart,
+    bodyEnd
+  };
+}
+
+function readJsReplFunctionOrClassDeclaration(source, startIndex, type) {
+  const startSlice = source.slice(startIndex);
+  const declarationPattern = type === 'class'
+    ? /^class\s+([A-Za-z_$][\w$]*)/
+    : /^(async\s+)?function\*?\s+([A-Za-z_$][\w$]*)/;
+  const match = declarationPattern.exec(startSlice);
+  if (!match) return null;
+  const name = type === 'class' ? match[1] : match[2];
+  const bounds = findJsReplDeclarationBodyBounds(source, startIndex);
+  let end = bounds.bodyEnd;
+  while (end < source.length && isJsReplWhitespaceChar(source[end])) end += 1;
+  if (source[end] === ';') end += 1;
+  return {
+    raw: source.slice(startIndex, end),
+    end,
+    name
+  };
+}
+
+function transformHostPageJsReplNamedDeclaration(rawDeclaration, name) {
+  const expressionSource = String(rawDeclaration || '').trim().replace(/;$/, '').trim();
+  return `__cerebrSetBinding(${JSON.stringify(name)}, (${expressionSource}));`;
+}
+
+function transformHostPageJsReplVariableDeclaration(rawStatement, kind) {
+  const source = String(rawStatement || '').trim().replace(/;$/, '').trim();
+  const declaratorsSource = source.slice(kind.length).trim();
+  if (!declaratorsSource) {
+    throw createJsReplSyntaxError(`Unexpected end of ${kind} declaration`);
+  }
+  const declarators = splitJsReplTopLevelByComma(declaratorsSource)
+    .map(item => item.trim())
+    .filter(Boolean);
+  if (declarators.length <= 0) {
+    throw createJsReplSyntaxError(`Unexpected end of ${kind} declaration`);
+  }
+  const lines = [];
+  for (const declarator of declarators) {
+    const equalsIndex = findJsReplTopLevelEquals(declarator);
+    const pattern = (equalsIndex >= 0 ? declarator.slice(0, equalsIndex) : declarator).trim();
+    const initializer = (equalsIndex >= 0 ? declarator.slice(equalsIndex + 1) : '').trim();
+    if (!pattern) {
+      throw createJsReplSyntaxError(`Invalid ${kind} declaration: missing binding pattern`);
+    }
+    if (!/^[A-Za-z_$][\w$]*$/.test(pattern)) {
+      throw createJsReplSyntaxError(
+        '宿主页 js_repl 当前仅支持顶层简单标识符声明；请将解构声明改写为逐项赋值。'
+      );
+    }
+    if (kind === 'const' && !initializer) {
+      throw createJsReplSyntaxError('Missing initializer in const declaration');
+    }
+    lines.push(
+      `__cerebrSetBinding(${JSON.stringify(pattern)}, ${initializer ? `(${initializer})` : 'undefined'});`
+    );
+  }
+  return lines.join('\n');
+}
+
+/**
+ * 把浏览器宿主页版 js_repl 的顶层声明改写成“绑定到 REPL 作用域”的稳定形式。
+ *
+ * 说明：
+ * - 这里只处理宿主页 `userScripts` 路径，目标是彻底避开 `new Function` / `AsyncFunction`，
+ *   从而不再触发扩展侧的 `unsafe-eval` CSP 限制；
+ * - 语义上优先支持最常见的顶层简单标识符声明（例如 `const savedTitle = ...;`）；
+ * - 顶层复杂解构声明目前显式报错，避免模型误以为已支持并在 live 场景里静默失败。
+ *
+ * @param {string} source
+ * @returns {string}
+ */
+export function transformHostPageJsReplSource(source) {
+  const input = String(source || '');
+  let cursor = 0;
+  let output = '';
+  let statementStart = true;
+  while (cursor < input.length) {
+    const char = input[cursor];
+    const next = input[cursor + 1];
+
+    if (char === '\'' || char === '"') {
+      const end = skipJsReplStringLiteral(input, cursor);
+      output += input.slice(cursor, end);
+      cursor = end;
+      statementStart = false;
+      continue;
+    }
+    if (char === '`') {
+      const end = skipJsReplTemplateLiteral(input, cursor);
+      output += input.slice(cursor, end);
+      cursor = end;
+      statementStart = false;
+      continue;
+    }
+    if (char === '/' && next === '/') {
+      const end = skipJsReplLineComment(input, cursor);
+      output += input.slice(cursor, end);
+      cursor = end;
+      continue;
+    }
+    if (char === '/' && next === '*') {
+      const end = skipJsReplBlockComment(input, cursor);
+      output += input.slice(cursor, end);
+      cursor = end;
+      continue;
+    }
+
+    if (statementStart) {
+      if (jsReplStartsWithKeyword(input, cursor, 'import') || jsReplStartsWithKeyword(input, cursor, 'export')) {
+        throw createJsReplSyntaxError('js_repl does not support top-level import/export declarations in browser mode');
+      }
+
+      if (jsReplStartsWithKeyword(input, cursor, 'const') || jsReplStartsWithKeyword(input, cursor, 'let') || jsReplStartsWithKeyword(input, cursor, 'var')) {
+        const declaration = readJsReplVariableDeclaration(input, cursor);
+        output += transformHostPageJsReplVariableDeclaration(declaration.raw, declaration.kind);
+        cursor = declaration.end;
+        statementStart = true;
+        continue;
+      }
+
+      if (jsReplStartsWithKeyword(input, cursor, 'async')) {
+        const afterAsync = findJsReplNextNonWhitespace(input, cursor + 'async'.length);
+        if (jsReplStartsWithKeyword(input, afterAsync, 'function')) {
+          const declaration = readJsReplFunctionOrClassDeclaration(input, cursor, 'function');
+          if (declaration) {
+            output += transformHostPageJsReplNamedDeclaration(declaration.raw, declaration.name);
+            cursor = declaration.end;
+            statementStart = true;
+            continue;
+          }
+        }
+      }
+
+      if (jsReplStartsWithKeyword(input, cursor, 'function')) {
+        const declaration = readJsReplFunctionOrClassDeclaration(input, cursor, 'function');
+        if (declaration) {
+          output += transformHostPageJsReplNamedDeclaration(declaration.raw, declaration.name);
+          cursor = declaration.end;
+          statementStart = true;
+          continue;
+        }
+      }
+
+      if (jsReplStartsWithKeyword(input, cursor, 'class')) {
+        const declaration = readJsReplFunctionOrClassDeclaration(input, cursor, 'class');
+        if (declaration) {
+          output += transformHostPageJsReplNamedDeclaration(declaration.raw, declaration.name);
+          cursor = declaration.end;
+          statementStart = true;
+          continue;
+        }
+      }
+    }
+
+    output += char;
+    cursor += 1;
+    if (char === ';') {
+      statementStart = true;
+    } else if (!isJsReplWhitespaceChar(char)) {
+      statementStart = false;
+    }
+  }
+  return output;
+}
 
 /**
  * 将错误对象压缩成适合 UI 展示的轻量结构。
@@ -278,57 +767,158 @@ ${body}
 
 function buildUserScriptReplExecuteSource(userCode) {
   const code = (typeof userCode === 'string') ? userCode : '';
-  const createKernelSource = createBrowserJsReplKernel.toString();
+  const transformedCode = transformHostPageJsReplSource(code);
   return `
-  (async () => {
-    const __cerebrKernelKey = ${JSON.stringify(JS_REPL_KERNEL_GLOBAL_KEY)};
-    const __cerebrCreateKernel = ${createKernelSource};
+  const __cerebrKernelKey = ${JSON.stringify(JS_REPL_KERNEL_GLOBAL_KEY)};
+  const __cerebrReservedNames = new Set([
+    '__cerebrKernelKey',
+    '__cerebrReservedNames',
+    '__cerebrState',
+    '__cerebrBindings',
+    '__cerebrHasBinding',
+    '__cerebrSetBinding',
+    '__cerebrShouldBindGlobalFunction',
+    '__cerebrReadGlobalValue',
+    '__cerebrGlobalProxy',
+    '__cerebrScope'
+  ]);
+  const __cerebrState = (() => {
+    const existing = globalThis[__cerebrKernelKey];
     if (
-      !globalThis[__cerebrKernelKey]
-      || typeof globalThis[__cerebrKernelKey].execute !== 'function'
-      || typeof globalThis[__cerebrKernelKey].reset !== 'function'
+      existing
+      && typeof existing === 'object'
+      && !Array.isArray(existing)
+      && existing.__cerebrBrowserJsReplState === true
+      && existing.bindings
+      && typeof existing.bindings === 'object'
     ) {
-      globalThis[__cerebrKernelKey] = __cerebrCreateKernel(globalThis);
+      return existing;
     }
-    const __cerebrKernel = globalThis[__cerebrKernelKey];
-    const __cerebrResult = await __cerebrKernel.execute(${JSON.stringify(code)});
-    return {
-      __cerebrJsRuntimeEnvelope: true,
-      ok: __cerebrResult?.ok === true,
-      value: __cerebrResult?.ok === true ? (__cerebrResult?.value ?? null) : null,
-      logs: Array.isArray(__cerebrResult?.logs) ? __cerebrResult.logs : [],
-      error: __cerebrResult?.ok === true
-        ? null
-        : (__cerebrResult?.error || {
-            name: 'JsReplExecutionError',
-            message: 'JS REPL 执行失败。',
-            stack: ''
-          })
+    const created = {
+      __cerebrBrowserJsReplState: true,
+      bindings: Object.create(null)
     };
+    globalThis[__cerebrKernelKey] = created;
+    return created;
   })();
+  const __cerebrBindings = __cerebrState.bindings;
+  const __cerebrHasBinding = (name) => Object.prototype.hasOwnProperty.call(__cerebrBindings, name);
+  const __cerebrSetBinding = (name, value) => {
+    __cerebrBindings[name] = value;
+    return value;
+  };
+  const __cerebrShouldBindGlobalFunction = (value) => {
+    if (typeof value !== 'function') return false;
+    if (Object.prototype.hasOwnProperty.call(value, 'prototype')) return false;
+    const ownKeys = Object.getOwnPropertyNames(value)
+      .filter((key) => !['length', 'name', 'arguments', 'caller'].includes(key));
+    return ownKeys.length <= 0;
+  };
+  const __cerebrReadGlobalValue = (key) => {
+    if (key === Symbol.unscopables) return undefined;
+    if (key === 'globalThis' || key === 'self' || key === 'window') return __cerebrGlobalProxy;
+    if (key === 'console') return globalThis.console;
+    if (key === 'globalThisRaw') return globalThis;
+    if (typeof key === 'symbol') return globalThis[key];
+    if (__cerebrHasBinding(key)) return __cerebrBindings[key];
+    if (key in globalThis) {
+      const value = globalThis[key];
+      if (__cerebrShouldBindGlobalFunction(value)) {
+        try {
+          return value.bind(globalThis);
+        } catch (_) {
+          return value;
+        }
+      }
+      return value;
+    }
+    return undefined;
+  };
+  const __cerebrGlobalProxy = new Proxy(Object.create(null), {
+    get(_target, key) {
+      return __cerebrReadGlobalValue(key);
+    },
+    set(_target, key, value) {
+      if (typeof key === 'string') {
+        __cerebrBindings[key] = value;
+        return true;
+      }
+      globalThis[key] = value;
+      return true;
+    },
+    has(_target, key) {
+      if (typeof key === 'string' && __cerebrHasBinding(key)) return true;
+      if (key === 'globalThis' || key === 'self' || key === 'window' || key === 'console' || key === 'globalThisRaw') {
+        return true;
+      }
+      return key in globalThis;
+    },
+    deleteProperty(_target, key) {
+      if (typeof key === 'string' && __cerebrHasBinding(key)) {
+        delete __cerebrBindings[key];
+        return true;
+      }
+      return true;
+    }
+  });
+  const __cerebrScope = new Proxy(Object.create(null), {
+    has(_target, key) {
+      if (typeof key === 'string' && __cerebrReservedNames.has(key)) return false;
+      if (key === Symbol.unscopables) return false;
+      if (typeof key === 'string' && __cerebrHasBinding(key)) return true;
+      if (key === 'globalThis' || key === 'self' || key === 'window' || key === 'console' || key === 'globalThisRaw') {
+        return true;
+      }
+      return key in globalThis;
+    },
+    get(_target, key) {
+      if (typeof key === 'string' && __cerebrReservedNames.has(key)) return undefined;
+      return __cerebrReadGlobalValue(key);
+    },
+    set(_target, key, value) {
+      if (typeof key === 'string' && __cerebrHasBinding(key)) {
+        __cerebrBindings[key] = value;
+        return true;
+      }
+      globalThis[key] = value;
+      return true;
+    },
+    deleteProperty(_target, key) {
+      if (typeof key === 'string' && __cerebrHasBinding(key)) {
+        delete __cerebrBindings[key];
+        return true;
+      }
+      return true;
+    }
+  });
+  return await (async function () {
+    with (__cerebrScope) {
+${transformedCode}
+    }
+  }).call(__cerebrGlobalProxy);
 `.trim();
 }
 
 function buildUserScriptReplResetSource() {
-  const createKernelSource = createBrowserJsReplKernel.toString();
   return `
-  (() => {
-    const __cerebrKernelKey = ${JSON.stringify(JS_REPL_KERNEL_GLOBAL_KEY)};
-    const __cerebrCreateKernel = ${createKernelSource};
-    try {
-      delete globalThis[__cerebrKernelKey];
-    } catch (_) {
-      globalThis[__cerebrKernelKey] = null;
-    }
-    globalThis[__cerebrKernelKey] = __cerebrCreateKernel(globalThis);
-    return {
-      __cerebrJsRuntimeEnvelope: true,
-      ok: true,
-      value: 'js_repl kernel reset',
-      logs: [],
-      error: null
-    };
-  })();
+  const __cerebrKernelKey = ${JSON.stringify(JS_REPL_KERNEL_GLOBAL_KEY)};
+  const __cerebrExistingState = globalThis[__cerebrKernelKey];
+  if (
+    __cerebrExistingState
+    && typeof __cerebrExistingState === 'object'
+    && !Array.isArray(__cerebrExistingState)
+    && __cerebrExistingState.bindings
+    && typeof __cerebrExistingState.bindings === 'object'
+  ) {
+    Object.keys(__cerebrExistingState.bindings).forEach((name) => {
+      delete __cerebrExistingState.bindings[name];
+    });
+  }
+  globalThis[__cerebrKernelKey] = {
+    __cerebrBrowserJsReplState: true,
+    bindings: Object.create(null)
+  };
+  return 'js_repl kernel reset';
 `.trim();
 }
 
@@ -486,7 +1076,7 @@ export function createJsRuntimeManager() {
       injectImmediately: request?.injectImmediately === true,
       js: [
         {
-          code: buildUserScriptReplExecuteSource(code)
+          code: buildUserScriptSource(buildUserScriptReplExecuteSource(code))
         }
       ]
     });
@@ -542,7 +1132,7 @@ export function createJsRuntimeManager() {
       injectImmediately: true,
       js: [
         {
-          code: buildUserScriptReplResetSource()
+          code: buildUserScriptSource(buildUserScriptReplResetSource())
         }
       ]
     });

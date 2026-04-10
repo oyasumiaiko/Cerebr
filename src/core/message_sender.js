@@ -7180,9 +7180,16 @@ export function createMessageSender(appContext) {
     const normalized = (rawResult && typeof rawResult === 'object' && !Array.isArray(rawResult))
       ? cloneDataSafely(rawResult)
       : { ok: false, value: null, logs: [], items: [], error: null };
+    const normalizedTabId = (
+      normalized?.tabId === null
+      || normalized?.tabId === undefined
+      || (typeof normalized?.tabId === 'string' && !normalized.tabId.trim())
+    )
+      ? null
+      : Number(normalized.tabId);
     return {
       ok: normalized?.ok === true,
-      tabId: Number.isFinite(Number(normalized?.tabId)) ? Number(normalized.tabId) : null,
+      tabId: Number.isFinite(normalizedTabId) ? normalizedTabId : null,
       value: cloneDataSafely(normalized?.value ?? null),
       logs: Array.isArray(normalized?.logs)
         ? cloneDataSafely(normalized.logs)

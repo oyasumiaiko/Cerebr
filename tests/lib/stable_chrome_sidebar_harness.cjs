@@ -125,6 +125,28 @@ async function waitForExtensionWorker(context, { timeoutMs = 30_000 } = {}) {
   ), { timeoutMs, intervalMs: 300, label: 'extension service worker' });
 }
 
+/**
+ * 对固定 profile 里的 unpacked 扩展做一次显式 reload，确保当前测试读取到磁盘上的最新源码。
+ *
+ * 背景：
+ * - 这个固定 stable Chrome profile 会长期复用已经安装好的 unpacked 扩展；
+ * - 如果不主动 reload，Chrome 可能继续沿用上一次会话里已加载的旧代码；
+ * - 这会导致“代码其实已经修好，但 smoke 仍在跑旧扩展”的假失败。
+ *
+ * @param {import('playwright').BrowserContext} context
+ * @param {{timeoutMs?: number, settleMs?: number}} [options]
+ * @returns {Promise<import('playwright').Worker>}
+ */
+async function reloadUnpackedExtension(context, { timeoutMs = 30_000, settleMs = 2_000 } = {}) {
+  const worker = await waitForExtensionWorker(context, { timeoutMs });
+  await worker.evaluate(() => {
+    chrome.runtime.reload();
+    return true;
+  }).catch(() => null);
+  await sleep(settleMs);
+  return await waitForExtensionWorker(context, { timeoutMs });
+}
+
 async function waitForSidebarFrame(page, extensionId, { timeoutMs = 30_000 } = {}) {
   return await waitFor(async () => (
     page.frames().find((frame) => frame.url().startsWith(`chrome-extension://${extensionId}/src/ui/sidebar/sidebar.html`)) || null
@@ -137,6 +159,7 @@ module.exports = {
   buildSendContentMessageExpression,
   launchFixedSidebarContext,
   loadPlaywright,
+  reloadUnpackedExtension,
   resolveFixedSidebarProfileDir,
   resolveStableChromeExecutablePath,
   shouldRunHeadless,
