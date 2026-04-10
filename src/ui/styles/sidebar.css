@@ -1880,30 +1880,6 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     width: 100%;
 }
 
-/* 斜杠命令提示面板（输入框上方） */
-#slash-command-hints {
-    position: absolute;
-    left: 12px;
-    right: 12px;
-    bottom: calc(100% + 6px);
-    display: none;
-    flex-direction: column;
-    gap: 6px;
-    padding: 10px 12px;
-    border-radius: 12px;
-    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 55%, transparent);
-    background: var(--cerebr-panel-surface-bg, var(--cerebr-input-bg));
-    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
-    box-shadow:
-      0 12px 22px rgba(0, 0, 0, 0.18),
-      inset 0 0 0 1px color-mix(in srgb, #fff 12%, transparent);
-    z-index: 1002;
-}
-
-#slash-command-hints.visible {
-    display: flex;
-}
-
 .slash-command-hints-header {
     font-size: calc(var(--cerebr-font-size, 14px) * 0.78);
     color: var(--cerebr-text-color);
@@ -1915,16 +1891,16 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    max-height: 220px;
+    max-height: 340px;
     overflow-y: auto;
 }
 
 .slash-command-hint-item {
-    display: flex;
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
     align-items: center;
-    justify-content: space-between;
     gap: 12px;
-    padding: 8px 10px;
+    padding: 9px 12px;
     border-radius: 8px;
     cursor: pointer;
     border: 1px solid transparent;
@@ -1942,25 +1918,13 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--cerebr-highlight) 45%, transparent);
 }
 
-.slash-command-hint-main {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-}
-
-.slash-command-hint-title {
+.slash-command-hint-command {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
     font-weight: 600;
     color: var(--cerebr-text-color);
     white-space: nowrap;
-}
-
-.slash-command-hint-alias {
-    font-size: calc(var(--cerebr-font-size, 14px) * 0.74);
-    opacity: 0.6;
+    min-width: 0;
 }
 
 .slash-command-hint-desc {
@@ -1969,13 +1933,9 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-}
-
-.slash-command-hint-usage {
-    font-size: calc(var(--cerebr-font-size, 14px) * 0.74);
     color: var(--cerebr-text-color);
-    opacity: 0.6;
-    white-space: nowrap;
+    text-align: right;
+    min-width: 0;
 }
 
 .slash-command-hint-item--empty {
@@ -8334,29 +8294,23 @@ body.chat-history-panel-resizing {
 .confirm-actions .btn.btn-primary { background: var(--cerebr-highlight, #2ecc71); color: #fff; border-color: transparent; }
 .confirm-actions .btn.btn-secondary { background: color-mix(in srgb, var(--cerebr-surface, #ffffff) 88%, transparent); }
 
-.composer-request-panel {
-  --composer-request-content-font-size: calc(var(--cerebr-font-size) * 0.7);
+.composer-accessory-drawer {
   display: block;
   width: 100%;
   margin: 0;
   padding: 0;
   box-sizing: border-box;
-  font-size: var(--composer-request-content-font-size);
   color: var(--cerebr-text-color);
   pointer-events: auto;
   transform-origin: bottom center;
   animation: composerRequestDrawerIn 160ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
-.composer-request-panel.is-closing {
+.composer-accessory-drawer.is-closing {
   animation: composerRequestDrawerOut 140ms cubic-bezier(0.4, 0, 1, 1) forwards;
 }
 
-.composer-request-stage {
-  display: block;
-}
-
-.composer-request-question {
+.composer-accessory-drawer-surface {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -8369,6 +8323,26 @@ body.chat-history-panel-resizing {
   box-shadow:
     0 12px 28px rgba(15, 23, 42, 0.14),
     inset 0 0 0 1px color-mix(in srgb, #ffffff 10%, transparent);
+}
+
+.composer-request-panel {
+  --composer-request-content-font-size: calc(var(--cerebr-font-size) * 0.7);
+  font-size: var(--composer-request-content-font-size);
+}
+
+.composer-request-stage {
+  display: block;
+}
+
+.composer-slash-command-panel {
+  --composer-request-content-font-size: calc(var(--cerebr-font-size) * 0.7);
+  font-size: var(--composer-request-content-font-size);
+}
+
+.composer-slash-command-surface {
+  gap: 8px;
+  padding-top: 12px;
+  padding-bottom: 12px;
 }
 
 .composer-request-question-header {

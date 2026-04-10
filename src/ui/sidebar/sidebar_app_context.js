@@ -111,9 +111,6 @@ export function createSidebarAppContext(isStandalone) {
     connectionSourceAddButton: document.getElementById('connection-source-add'),
     apiCardsContainer: document.querySelector('#api-settings .api-cards'),
     apiSettingsAddButton: document.getElementById('api-add-config'),
-    slashCommandHints: document.getElementById('slash-command-hints'),
-    slashCommandHintsHeader: document.querySelector('#slash-command-hints .slash-command-hints-header'),
-    slashCommandHintsList: document.querySelector('#slash-command-hints .slash-command-hints-list'),
     previewModal: document.querySelector('.image-preview-modal'),
     previewImage: document.querySelector('.image-preview-modal img'),
     previewCloseButton: document.querySelector('.image-preview-modal .image-preview-close'),
@@ -240,12 +237,14 @@ export function registerSidebarUtilities(appContext) {
       || appContext.dom.inputContainer
       || null;
   };
+  appContext.utils.getComposerAccessoryRegion = getComposerAccessoryRegion;
 
   const refreshComposerAccessoryLayout = () => {
     window.requestAnimationFrame(() => {
       appContext.utils.updateInputContainerHeightVar?.();
     });
   };
+  appContext.utils.refreshComposerAccessoryLayout = refreshComposerAccessoryLayout;
 
   const REQUEST_USER_INPUT_DRAFT_SESSION_KEY = '__draft__';
   let activeRequestUserInputSession = null;
@@ -325,6 +324,7 @@ export function registerSidebarUtilities(appContext) {
       if (activeRequestUserInputSession?.panel === node) return;
       node.remove();
     });
+    appContext.utils.hideSlashCommandHints?.();
     removeConversationScopedComposerPreviewDom();
     refreshComposerAccessoryLayout();
   };
@@ -480,6 +480,8 @@ export function registerSidebarUtilities(appContext) {
       return Promise.reject(new Error('当前界面尚未初始化输入框辅助区。'));
     }
 
+    appContext.utils.hideSlashCommandHints?.();
+
     if (activeRequestUserInputSession && activeRequestUserInputSession !== existingSession) {
       unmountRequestUserInputSession(activeRequestUserInputSession);
     }
@@ -492,7 +494,7 @@ export function registerSidebarUtilities(appContext) {
     let session = null;
     const promise = new Promise((resolve) => {
       const panel = document.createElement('section');
-      panel.className = 'composer-request-panel';
+      panel.className = 'composer-accessory-drawer composer-request-panel';
       panel.setAttribute('role', 'group');
       panel.setAttribute('aria-label', '模型补充提问');
       panel.tabIndex = -1;
@@ -625,7 +627,7 @@ export function registerSidebarUtilities(appContext) {
         currentOtherInput = null;
 
         const questionEl = document.createElement('section');
-        questionEl.className = 'composer-request-question';
+        questionEl.className = 'composer-accessory-drawer-surface composer-request-question';
 
         const questionHeader = document.createElement('div');
         questionHeader.className = 'composer-request-question-header';

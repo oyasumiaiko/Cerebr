@@ -1182,15 +1182,16 @@ function setupWindowMessageHandlers(appContext) {
  */
 function setupSlashCommandHints(appContext) {
   const input = appContext.dom.messageInput;
-  const panel = appContext.dom.slashCommandHints;
-  const list = appContext.dom.slashCommandHintsList;
-  const header = appContext.dom.slashCommandHintsHeader;
   const sender = appContext.services.messageSender;
 
-  if (!input || !panel || !list) return;
+  if (!input) return;
   if (!sender || typeof sender.getSlashCommandHints !== 'function') return;
 
   let isPointerInside = false;
+  let panel = null;
+  let header = null;
+  let list = null;
+  let closeTimer = 0;
   const hintState = {
     items: [],
     activeIndex: -1,
@@ -1198,30 +1199,114 @@ function setupSlashCommandHints(appContext) {
     lastActiveKey: ''
   };
 
-  const setPanelVisible = (visible) => {
-    if (visible) {
-      panel.classList.add('visible');
-      panel.setAttribute('aria-hidden', 'false');
-      hintState.isVisible = true;
-    } else {
-      panel.classList.remove('visible');
-      panel.setAttribute('aria-hidden', 'true');
-      hintState.isVisible = false;
-    }
+  const clearCloseTimer = () => {
+    if (!closeTimer) return;
+    window.clearTimeout(closeTimer);
+    closeTimer = 0;
   };
 
   const clearList = () => {
+    if (!list) return;
     while (list.firstChild) {
       list.removeChild(list.firstChild);
     }
   };
 
+  const getAccessoryHost = () => {
+    return appContext.utils.getComposerAccessoryRegion?.()
+      || appContext.dom.composerAccessoryRegion
+      || appContext.dom.inputContainer
+      || null;
+  };
+
+  const detachPanel = () => {
+    if (!panel) return;
+    panel.classList.remove('is-closing');
+    panel.setAttribute('aria-hidden', 'true');
+    if (panel.isConnected) {
+      panel.remove();
+      appContext.utils.refreshComposerAccessoryLayout?.();
+    }
+  };
+
+  const ensurePanel = () => {
+    const host = getAccessoryHost();
+    if (!host) return null;
+
+    clearCloseTimer();
+
+    if (!panel) {
+      panel = document.createElement('section');
+      panel.className = 'composer-accessory-drawer composer-slash-command-panel';
+      panel.setAttribute('aria-hidden', 'true');
+      panel.setAttribute('aria-label', '斜杠命令');
+
+      const surface = document.createElement('div');
+      surface.className = 'composer-accessory-drawer-surface composer-slash-command-surface';
+
+      header = document.createElement('div');
+      header.className = 'slash-command-hints-header';
+      surface.appendChild(header);
+
+      list = document.createElement('div');
+      list.className = 'slash-command-hints-list';
+      surface.appendChild(list);
+
+      panel.appendChild(surface);
+
+      panel.addEventListener('pointerenter', () => { isPointerInside = true; });
+      panel.addEventListener('pointerleave', () => { isPointerInside = false; });
+      panel.addEventListener('mousemove', (e) => {
+        const item = e.target?.closest?.('.slash-command-hint-item');
+        if (!item || !list) return;
+        const items = list.querySelectorAll('.slash-command-hint-item');
+        const index = Array.from(items).indexOf(item);
+        if (index >= 0) setActiveIndex(index);
+      });
+      panel.addEventListener('mousedown', (e) => {
+        // 阻止点击提示面板时输入框失焦，保证点击选择不会先触发 blur 关闭。
+        e.preventDefault();
+      });
+      panel.addEventListener('click', (e) => {
+        const item = e.target?.closest?.('.slash-command-hint-item');
+        if (!item) return;
+        if (!executeHintIfNeeded(item)) {
+          applyHintToInput(item);
+        }
+      });
+    }
+
+    panel.classList.remove('is-closing');
+    panel.setAttribute('aria-hidden', 'false');
+    hintState.isVisible = true;
+
+    if (panel.parentElement !== host || host.lastElementChild !== panel) {
+      host.appendChild(panel);
+      appContext.utils.refreshComposerAccessoryLayout?.();
+    }
+
+    return panel;
+  };
+
   const hideHints = () => {
+    clearCloseTimer();
     clearList();
     hintState.items = [];
     hintState.activeIndex = -1;
     hintState.lastActiveKey = '';
-    setPanelVisible(false);
+    hintState.isVisible = false;
+
+    if (!panel) return;
+    panel.setAttribute('aria-hidden', 'true');
+    if (!panel.isConnected) {
+      panel.classList.remove('is-closing');
+      return;
+    }
+    panel.classList.add('is-closing');
+    closeTimer = window.setTimeout(() => {
+      closeTimer = 0;
+      detachPanel();
+    }, 140);
   };
 
   const buildEmptyItem = (keyword) => {
@@ -1239,30 +1324,26 @@ function setupSlashCommandHints(appContext) {
     itemEl.dataset.apply = hintItem.applyText || '';
     itemEl.dataset.execute = hintItem.executeOnEnter ? '1' : '0';
 
-    const main = document.createElement('div');
-    main.className = 'slash-command-hint-main';
-
-    const title = document.createElement('div');
-    title.className = 'slash-command-hint-title';
-    title.textContent = hintItem.label || '';
+    // 斜杠菜单改为紧凑单行：左边保留完整命令模板，右边保留灰字说明，
+    // 避免同一命令在左右两侧重复显示并浪费垂直空间。
+    const command = document.createElement('div');
+    command.className = 'slash-command-hint-command';
+    command.textContent = hintItem.usage || hintItem.applyText || hintItem.label || '';
 
     const desc = document.createElement('div');
     desc.className = 'slash-command-hint-desc';
     desc.textContent = hintItem.description || '';
 
-    main.appendChild(title);
-    main.appendChild(desc);
-
-    const usage = document.createElement('div');
-    usage.className = 'slash-command-hint-usage';
-    usage.textContent = hintItem.usage || '';
-
-    itemEl.appendChild(main);
-    itemEl.appendChild(usage);
+    itemEl.appendChild(command);
+    itemEl.appendChild(desc);
     return itemEl;
   };
 
   const setActiveIndex = (index) => {
+    if (!list) {
+      hintState.activeIndex = -1;
+      return;
+    }
     const items = list.querySelectorAll('.slash-command-hint-item');
     const total = items.length;
     if (!total) {
@@ -1288,6 +1369,7 @@ function setupSlashCommandHints(appContext) {
   };
 
   const resolveDefaultActiveIndex = () => {
+    if (!list) return -1;
     const items = list.querySelectorAll('.slash-command-hint-item');
     if (!items.length) return -1;
     if (hintState.lastActiveKey) {
@@ -1309,15 +1391,19 @@ function setupSlashCommandHints(appContext) {
     const items = Array.isArray(result.items) ? result.items : [];
     const keyword = result.keyword || '';
 
-    clearList();
-    if (header) {
-      const title = keyword ? `斜杠命令 · 匹配 "${keyword}"` : '斜杠命令';
-      header.textContent = title;
+    if (!ensurePanel() || !header || !list) {
+      hideHints();
+      return;
     }
+
+    clearList();
+    const title = keyword ? `斜杠命令 · 匹配 "${keyword}"` : '斜杠命令';
+    header.textContent = title;
 
     if (items.length === 0) {
       list.appendChild(buildEmptyItem(keyword));
-      setPanelVisible(true);
+      hintState.items = [];
+      hintState.activeIndex = -1;
       return;
     }
 
@@ -1325,7 +1411,6 @@ function setupSlashCommandHints(appContext) {
       list.appendChild(buildHintItem(hintItem));
     });
 
-    setPanelVisible(true);
     hintState.items = items;
     const nextIndex = resolveDefaultActiveIndex();
     if (nextIndex >= 0) {
@@ -1356,29 +1441,6 @@ function setupSlashCommandHints(appContext) {
     appContext.services.messageSender.sendMessage();
     return true;
   };
-
-  panel.addEventListener('pointerenter', () => { isPointerInside = true; });
-  panel.addEventListener('pointerleave', () => { isPointerInside = false; });
-  panel.addEventListener('mousemove', (e) => {
-    const item = e.target?.closest?.('.slash-command-hint-item');
-    if (!item) return;
-    const items = list.querySelectorAll('.slash-command-hint-item');
-    const index = Array.from(items).indexOf(item);
-    if (index >= 0) setActiveIndex(index);
-  });
-
-  panel.addEventListener('mousedown', (e) => {
-    // 阻止点击提示面板时输入框失焦
-    e.preventDefault();
-  });
-
-  panel.addEventListener('click', (e) => {
-    const item = e.target?.closest?.('.slash-command-hint-item');
-    if (!item) return;
-    if (!executeHintIfNeeded(item)) {
-      applyHintToInput(item);
-    }
-  });
 
   input.addEventListener('input', updateHints);
   input.addEventListener('focus', updateHints);
