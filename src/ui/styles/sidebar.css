@@ -1615,9 +1615,14 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     width: 100%;
     max-width: 100%;
     padding: 8px 0;
-    background: transparent;
-    box-shadow: none;
-    border-radius: 0;
+    background: transparent !important;
+    box-shadow: none !important;
+    border: none !important;
+    outline: none !important;
+    filter: none !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    border-radius: 0 !important;
 }
 
 .message.context-compaction-message .text-content,
@@ -1651,11 +1656,19 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     background:
         linear-gradient(90deg,
             transparent 0%,
-            color-mix(in srgb, currentColor 28%, transparent) 18%,
-            color-mix(in srgb, currentColor 68%, transparent) 50%,
-            color-mix(in srgb, currentColor 28%, transparent) 82%,
-            transparent 100%);
+            color-mix(in srgb, currentColor 8%, transparent) 26%,
+            color-mix(in srgb, currentColor 24%, transparent) 56%,
+            color-mix(in srgb, currentColor 72%, transparent) 100%);
     transform-origin: center;
+}
+
+.context-compaction-divider__row > .context-compaction-divider__line:last-child {
+    background:
+        linear-gradient(90deg,
+            color-mix(in srgb, currentColor 72%, transparent) 0%,
+            color-mix(in srgb, currentColor 24%, transparent) 44%,
+            color-mix(in srgb, currentColor 8%, transparent) 74%,
+            transparent 100%);
 }
 
 .context-compaction-divider__pill {
@@ -1757,18 +1770,13 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     animation: contextCompactionIconSpin 1.2s linear infinite;
 }
 
-.context-compaction-divider.is-pending .context-compaction-divider__line,
-.context-compaction-divider.is-success .context-compaction-divider__line {
+.context-compaction-divider.is-pending .context-compaction-divider__line {
     background-size: 220% 100%;
     animation: contextCompactionLineSweep 2.4s ease-in-out infinite;
 }
 
 .context-compaction-divider.is-pending .context-compaction-divider__pill {
     animation: contextCompactionPulse 1.8s ease-in-out infinite;
-}
-
-.context-compaction-divider.is-success .context-compaction-divider__pill {
-    animation: contextCompactionPulse 2.6s ease-in-out infinite;
 }
 
 @keyframes contextCompactionLineSweep {
