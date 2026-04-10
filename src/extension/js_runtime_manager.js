@@ -1,3 +1,5 @@
+import { createKeyedSequentialAsyncQueue } from '../utils/sequential_async_queue.js';
+
 /**
  * 基于 chrome.userScripts 的最小可用 JS Runtime。
  *
@@ -928,6 +930,8 @@ function buildUserScriptReplResetSource() {
  * @returns {Object}
  */
 export function createJsRuntimeManager() {
+  const replOperationQueue = createKeyedSequentialAsyncQueue();
+
   /**
    * 探测当前环境是否真的可执行 userScripts。
    * 这里既检查 API 是否存在，也检查 execute / getScripts 是否可用。
@@ -1058,46 +1062,48 @@ export function createJsRuntimeManager() {
       throw new Error('执行 JS REPL 失败：代码内容为空。');
     }
 
-    const availability = await getAvailability();
-    if (!availability.available) {
-      throw new Error(availability.reason || 'JS REPL 当前不可用');
-    }
+    return await replOperationQueue.enqueue(String(tabId), async () => {
+      const availability = await getAvailability();
+      if (!availability.available) {
+        throw new Error(availability.reason || 'JS REPL 当前不可用');
+      }
 
-    /** @type {chrome.userScripts.UserScriptInjectionTarget} */
-    const target = { tabId };
-    if (Array.isArray(request?.frameIds) && request.frameIds.length > 0) {
-      target.frameIds = request.frameIds
-        .map(value => Number(value))
-        .filter(value => Number.isFinite(value));
-    }
+      /** @type {chrome.userScripts.UserScriptInjectionTarget} */
+      const target = { tabId };
+      if (Array.isArray(request?.frameIds) && request.frameIds.length > 0) {
+        target.frameIds = request.frameIds
+          .map(value => Number(value))
+          .filter(value => Number.isFinite(value));
+      }
 
-    const rawItems = await chrome.userScripts.execute({
-      target,
-      injectImmediately: request?.injectImmediately === true,
-      js: [
-        {
-          code: buildUserScriptSource(buildUserScriptReplExecuteSource(code))
-        }
-      ]
+      const rawItems = await chrome.userScripts.execute({
+        target,
+        injectImmediately: request?.injectImmediately === true,
+        js: [
+          {
+            code: buildUserScriptSource(buildUserScriptReplExecuteSource(code))
+          }
+        ]
+      });
+
+      const items = Array.isArray(rawItems)
+        ? rawItems.map(normalizeExecuteResultItem)
+        : [];
+      const successfulItems = items.filter(item => !item.error);
+      const logs = items.flatMap((item) => {
+        if (!Array.isArray(item?.logs)) return [];
+        return item.logs.map((log) => normalizeJsRuntimeLogEntry(log, item.frameId));
+      });
+
+      return {
+        ok: items.every(item => !item.error),
+        items,
+        logs,
+        value: successfulItems.length === 1
+          ? successfulItems[0].result
+          : successfulItems.map(item => item.result)
+      };
     });
-
-    const items = Array.isArray(rawItems)
-      ? rawItems.map(normalizeExecuteResultItem)
-      : [];
-    const successfulItems = items.filter(item => !item.error);
-    const logs = items.flatMap((item) => {
-      if (!Array.isArray(item?.logs)) return [];
-      return item.logs.map((log) => normalizeJsRuntimeLogEntry(log, item.frameId));
-    });
-
-    return {
-      ok: items.every(item => !item.error),
-      items,
-      logs,
-      value: successfulItems.length === 1
-        ? successfulItems[0].result
-        : successfulItems.map(item => item.result)
-    };
   }
 
   /**
@@ -1114,46 +1120,48 @@ export function createJsRuntimeManager() {
       throw new Error('重置 JS REPL 失败：缺少有效 tabId。');
     }
 
-    const availability = await getAvailability();
-    if (!availability.available) {
-      throw new Error(availability.reason || 'JS REPL 当前不可用');
-    }
+    return await replOperationQueue.enqueue(String(tabId), async () => {
+      const availability = await getAvailability();
+      if (!availability.available) {
+        throw new Error(availability.reason || 'JS REPL 当前不可用');
+      }
 
-    /** @type {chrome.userScripts.UserScriptInjectionTarget} */
-    const target = { tabId };
-    if (Array.isArray(request?.frameIds) && request.frameIds.length > 0) {
-      target.frameIds = request.frameIds
-        .map(value => Number(value))
-        .filter(value => Number.isFinite(value));
-    }
+      /** @type {chrome.userScripts.UserScriptInjectionTarget} */
+      const target = { tabId };
+      if (Array.isArray(request?.frameIds) && request.frameIds.length > 0) {
+        target.frameIds = request.frameIds
+          .map(value => Number(value))
+          .filter(value => Number.isFinite(value));
+      }
 
-    const rawItems = await chrome.userScripts.execute({
-      target,
-      injectImmediately: true,
-      js: [
-        {
-          code: buildUserScriptSource(buildUserScriptReplResetSource())
-        }
-      ]
+      const rawItems = await chrome.userScripts.execute({
+        target,
+        injectImmediately: true,
+        js: [
+          {
+            code: buildUserScriptSource(buildUserScriptReplResetSource())
+          }
+        ]
+      });
+
+      const items = Array.isArray(rawItems)
+        ? rawItems.map(normalizeExecuteResultItem)
+        : [];
+      const successfulItems = items.filter(item => !item.error);
+      const logs = items.flatMap((item) => {
+        if (!Array.isArray(item?.logs)) return [];
+        return item.logs.map((log) => normalizeJsRuntimeLogEntry(log, item.frameId));
+      });
+
+      return {
+        ok: items.every(item => !item.error),
+        items,
+        logs,
+        value: successfulItems.length === 1
+          ? successfulItems[0].result
+          : successfulItems.map(item => item.result)
+      };
     });
-
-    const items = Array.isArray(rawItems)
-      ? rawItems.map(normalizeExecuteResultItem)
-      : [];
-    const successfulItems = items.filter(item => !item.error);
-    const logs = items.flatMap((item) => {
-      if (!Array.isArray(item?.logs)) return [];
-      return item.logs.map((log) => normalizeJsRuntimeLogEntry(log, item.frameId));
-    });
-
-    return {
-      ok: items.every(item => !item.error),
-      items,
-      logs,
-      value: successfulItems.length === 1
-        ? successfulItems[0].result
-        : successfulItems.map(item => item.result)
-    };
   }
 
   /**

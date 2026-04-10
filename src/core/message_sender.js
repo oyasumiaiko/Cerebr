@@ -6661,8 +6661,6 @@ export function createMessageSender(appContext) {
     const descriptionLines = [
       '在浏览器脚本环境中执行带持久化状态的 JavaScript REPL 单元。',
       '同一环境里，前一个 js_repl 单元里定义的顶层绑定可在后续 js_repl 单元继续使用，直到调用 js_repl_reset、页面刷新或宿主环境重建。',
-      'code 字段应直接提供原始 JavaScript 源码字符串，不要包 JSON、引号或 markdown 代码块。',
-      '支持可选首行 pragma：// js-repl: timeout_ms=15000。',
       '支持顶层 await、显式 return、console.log/info/warn/error/debug。',
       '如需稳定回传最终结果，推荐显式使用 return；console 输出也会被捕获并一并回传。',
       '为了让顶层声明稳定改写，请尽量让顶层 const/let/var 声明以分号结束。',
@@ -6680,7 +6678,7 @@ export function createMessageSender(appContext) {
         properties: {
           code: {
             type: 'string',
-            description: '要执行的原始 JavaScript 源码。支持顶层 await、return 与可选首行 `// js-repl: timeout_ms=...` pragma。不要包 markdown 代码块或 JSON。'
+            description: '要执行的 JavaScript 源码。支持顶层 await 与 return。'
           },
           frame_ids: {
             type: ['array', 'null'],
@@ -8447,6 +8445,14 @@ export function createMessageSender(appContext) {
       });
       await persistAttemptConversationSnapshot(attemptState, { force: true });
 
+      /**
+       * 这里必须保持“按 response output 顺序逐个 await 执行”，不能改成 Promise.all。
+       *
+       * 原因：
+       * - `js_repl` / `js_repl_reset` 是有状态工具；
+       * - 同一轮里如果模型一次返回多个 function_call，后一个调用可能依赖前一个调用写入的绑定；
+       * - 因此即便服务端开启了 parallel_tool_calls，这里的本地落地仍要以“收到顺序”为准串行执行。
+       */
       const functionCallOutputs = [];
       for (const toolCall of pendingFunctionCalls) {
         if (signal?.aborted) {
