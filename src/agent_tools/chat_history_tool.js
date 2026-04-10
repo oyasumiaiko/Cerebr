@@ -13,6 +13,7 @@ export const HISTORY_SEARCH_TOOL_DEFAULT_MAX_RESULTS = 20;
 export const HISTORY_SEARCH_TOOL_MAX_RESULTS = 100;
 export const HISTORY_SEARCH_EXCERPT_CONTEXT_CHARS = 40;
 export const HISTORY_SEARCH_MAX_EXCERPTS = 3;
+export const HISTORY_READ_MESSAGE_DEFAULT_MAX_CHARS = 5_000;
 
 function clampPositiveInt(value, fallback, max = Number.POSITIVE_INFINITY) {
   const numeric = Number(value);
@@ -24,6 +25,15 @@ function clampNonNegativeInt(value, fallback, max = Number.POSITIVE_INFINITY) {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return fallback;
   return Math.max(0, Math.min(Math.trunc(numeric), max));
+}
+
+function formatPercent(numerator, denominator) {
+  const safeNumerator = Number(numerator);
+  const safeDenominator = Number(denominator);
+  if (!Number.isFinite(safeNumerator) || !Number.isFinite(safeDenominator) || safeDenominator <= 0) {
+    return 0;
+  }
+  return Number(((safeNumerator / safeDenominator) * 100).toFixed(2));
 }
 
 function normalizeStringArray(value) {
@@ -212,11 +222,13 @@ function normalizeHistoryReadArguments(rawArgs) {
   if (args.thread_ref != null && threadRef <= 0) {
     throw new Error('history_read 参数错误：thread_ref 必须是从 1 开始的正整数。');
   }
+  const readFullMessages = args.read_full_messages === true;
   return {
     convRef,
     start,
     end,
-    threadRef
+    threadRef,
+    readFullMessages
   };
 }
 
@@ -289,6 +301,30 @@ function toReadableMessageRecord(message, indexField, indexValue) {
     role: typeof message?.role === 'string' ? message.role : '',
     timestamp: Number(message?.timestamp) || 0,
     content: extractMessagePlainText(message, { includeHiddenThreadSelection: false })
+  };
+}
+
+function buildHistoryReadMessageRecord(message, readFullMessages = false) {
+  const base = (message && typeof message === 'object' && !Array.isArray(message))
+    ? { ...message }
+    : {};
+  const rawContent = typeof base.content === 'string' ? base.content : '';
+  const totalChars = rawContent.length;
+  const shouldTruncate = !readFullMessages && totalChars > HISTORY_READ_MESSAGE_DEFAULT_MAX_CHARS;
+  const content = shouldTruncate
+    ? rawContent.slice(0, HISTORY_READ_MESSAGE_DEFAULT_MAX_CHARS)
+    : rawContent;
+  const returnedChars = content.length;
+  const omittedChars = Math.max(0, totalChars - returnedChars);
+  return {
+    ...base,
+    content,
+    content_total_chars: totalChars,
+    content_returned_chars: returnedChars,
+    content_omitted_chars: omittedChars,
+    content_omitted_pct: formatPercent(omittedChars, totalChars),
+    content_truncated: omittedChars > 0,
+    content_max_chars: readFullMessages ? null : HISTORY_READ_MESSAGE_DEFAULT_MAX_CHARS
   };
 }
 
@@ -732,7 +768,7 @@ export async function executeHistorySearchTool(rawArgs, dependencies = {}) {
  * @returns {Promise<Object>}
  */
 export async function executeHistoryReadTool(rawArgs, dependencies = {}) {
-  const { convRef, start, end, threadRef } = normalizeHistoryReadArguments(rawArgs);
+  const { convRef, start, end, threadRef, readFullMessages } = normalizeHistoryReadArguments(rawArgs);
   const snapshot = dependencies?.snapshot;
   if (!snapshot || !(snapshot.convIdByRef instanceof Map)) {
     throw new Error('history_read 缺少可用的会话快照。');
@@ -764,9 +800,13 @@ export async function executeHistoryReadTool(rawArgs, dependencies = {}) {
       conv_ref: convRef,
       ...buildConversationMetadataResult(meta, snapshot, visibleCounts),
       scope: 'main',
+      read_full_messages: readFullMessages,
+      message_truncation_max_chars: readFullMessages ? null : HISTORY_READ_MESSAGE_DEFAULT_MAX_CHARS,
       start,
       end: effectiveEnd,
-      messages: referenceMap.mainMessages.slice(start - 1, effectiveEnd)
+      messages: referenceMap.mainMessages
+        .slice(start - 1, effectiveEnd)
+        .map(message => buildHistoryReadMessageRecord(message, readFullMessages))
     };
   }
 
@@ -783,11 +823,15 @@ export async function executeHistoryReadTool(rawArgs, dependencies = {}) {
     conv_ref: convRef,
     ...buildConversationMetadataResult(meta, snapshot, visibleCounts),
     scope: 'thread',
+    read_full_messages: readFullMessages,
+    message_truncation_max_chars: readFullMessages ? null : HISTORY_READ_MESSAGE_DEFAULT_MAX_CHARS,
     thread_ref: thread.thread_ref,
     thread_message_count: thread.thread_message_count,
     thread_anchor_msg_index: thread.thread_anchor_msg_index,
     start,
     end: effectiveEnd,
-    messages: thread.messages.slice(start - 1, effectiveEnd)
+    messages: thread.messages
+      .slice(start - 1, effectiveEnd)
+      .map(message => buildHistoryReadMessageRecord(message, readFullMessages))
   };
 }

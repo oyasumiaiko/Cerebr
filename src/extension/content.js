@@ -1531,10 +1531,10 @@ function extractImportantDOM() {
   return clone.outerHTML;
 }
 
-const PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS = 20_000;
-const PAGE_CONTENT_READ_MAX_CHARS = 20_000;
-const PDF_CONTENT_READ_DEFAULT_MAX_CHARS = 4000;
-const PDF_CONTENT_READ_MAX_CHARS = 8000;
+const PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS = 10_000;
+const PAGE_CONTENT_READ_MAX_CHARS = 50_000;
+const PDF_CONTENT_READ_DEFAULT_MAX_CHARS = 10_000;
+const PDF_CONTENT_READ_MAX_CHARS = 50_000;
 
 function clampNonNegativeInt(value, fallback) {
   const numeric = Number(value);

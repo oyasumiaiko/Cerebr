@@ -42,6 +42,8 @@ test('buildPdfContentReadResult 默认返回 PDF 章节索引 overview', async (
   assert.equal(result.ok, true);
   assert.equal(result.mode, 'overview');
   assert.equal(result.total_chapters, 2);
+  assert.equal(result.default_max_chars, 10000);
+  assert.equal(result.max_chars_limit, 50000);
   assert.equal(result.outline[0].chapter_id, '1');
   assert.equal(result.outline[1].chapter_id, '1.1');
   assert.match(result.guidance, /chapter_id/);

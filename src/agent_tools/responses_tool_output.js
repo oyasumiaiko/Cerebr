@@ -3,12 +3,14 @@
  *
  * 这里统一解决三件事：
  * 1. JS 工具返回对象 / 数组时，默认转成稳定、可读的 JSON 文本；
- * 2. 过长输出统一按字符数做中间截断，避免上下文被意外撑爆；
+ * 2. 过长输出统一走可配置截断：默认尾截断，JS Runtime 明确使用中间截断；
  * 3. 需要时把长文本切成多个 input_text content item，避免“大块 JSON 字符串二次转义”。
  */
-export const RESPONSES_TOOL_OUTPUT_MAX_CHARS = 10_000;
+export const RESPONSES_TOOL_OUTPUT_MAX_CHARS = 5_000;
 export const RESPONSES_TOOL_OUTPUT_CHUNK_CHARS = 3_000;
 export const RESPONSES_TOOL_OUTPUT_PRETTY_JSON_MAX_CHARS = 1_000;
+const RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL = 'tail';
+const RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE = 'middle';
 
 function trimTrailingWhitespace(text) {
   return String(text ?? '').replace(/[ \t]+\n/g, '\n').trim();
@@ -90,56 +92,233 @@ function formatTruncationPercent(omittedChars, totalChars) {
   return ((omittedChars / totalChars) * 100).toFixed(2);
 }
 
-export function buildResponsesToolOutputTruncationInfo(text, maxChars = RESPONSES_TOOL_OUTPUT_MAX_CHARS) {
+function normalizeResponsesToolOutputTruncationConfig(maxCharsOrOptions, maybeOptions = {}) {
+  const options = (
+    maxCharsOrOptions
+    && typeof maxCharsOrOptions === 'object'
+    && !Array.isArray(maxCharsOrOptions)
+  )
+    ? { ...maxCharsOrOptions }
+    : { ...maybeOptions, maxChars: maxCharsOrOptions };
+  const rawMode = typeof options.mode === 'string' ? options.mode.trim().toLowerCase() : '';
+  const mode = rawMode === RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
+    ? RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
+    : RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL;
+  const maxChars = Math.max(
+    0,
+    Math.trunc(Number(options.maxChars) || RESPONSES_TOOL_OUTPUT_MAX_CHARS)
+  );
+  return {
+    maxChars,
+    mode
+  };
+}
+
+function buildResponsesToolOutputNoticeText({
+  omittedChars,
+  totalChars,
+  omittedPct,
+  omittedStart,
+  omittedEnd,
+  returnedStart = null,
+  returnedEnd = null,
+  mode = RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL
+}) {
+  const base = `truncated ${omittedChars} chars out of ${totalChars} total chars (${omittedPct}%)`;
+  if (
+    mode !== RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
+    && Number.isFinite(returnedStart)
+    && Number.isFinite(returnedEnd)
+  ) {
+    return `[... ${base}; returned range [${returnedStart}, ${returnedEnd}) ...]`;
+  }
+  return `[... ${base}; omitted range [${omittedStart}, ${omittedEnd}) ...]`;
+}
+
+function appendStandaloneNoticeLine(text, notice) {
+  const content = typeof text === 'string' ? text : String(text ?? '');
+  const normalizedNotice = typeof notice === 'string' ? notice.trim() : '';
+  if (!normalizedNotice) return content;
+  if (!content) return normalizedNotice;
+  return `${content}\n${normalizedNotice}`;
+}
+
+function applyResponsesToolOutputTruncation(text, truncation) {
+  if (truncation === null || truncation === false) {
+    return typeof text === 'string' ? text : String(text ?? '');
+  }
+  const normalized = normalizeResponsesToolOutputTruncationConfig(truncation);
+  return truncateResponsesToolOutputText(text, normalized);
+}
+
+function buildResponsesToolOutputSelectionNoticeText(totalChars, rangeStart, rangeEnd) {
+  const safeTotalChars = Number(totalChars);
+  const safeRangeStart = Number(rangeStart);
+  const safeRangeEnd = Number(rangeEnd);
+  if (!Number.isFinite(safeTotalChars) || safeTotalChars <= 0) return '';
+  if (!Number.isFinite(safeRangeStart) || !Number.isFinite(safeRangeEnd)) return '';
+  const normalizedStart = Math.max(0, Math.min(Math.trunc(safeRangeStart), safeTotalChars));
+  const normalizedEnd = Math.max(normalizedStart, Math.min(Math.trunc(safeRangeEnd), safeTotalChars));
+  const returnedChars = normalizedEnd - normalizedStart;
+  const omittedChars = Math.max(0, safeTotalChars - returnedChars);
+  if (omittedChars <= 0) return '';
+  return buildResponsesToolOutputNoticeText({
+    omittedChars,
+    totalChars: safeTotalChars,
+    omittedPct: formatTruncationPercent(omittedChars, safeTotalChars),
+    omittedStart: normalizedStart,
+    omittedEnd: safeTotalChars,
+    returnedStart: normalizedStart,
+    returnedEnd: normalizedEnd,
+    mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL
+  });
+}
+
+export function buildResponsesToolOutputTruncationInfo(
+  text,
+  maxCharsOrOptions = RESPONSES_TOOL_OUTPUT_MAX_CHARS,
+  maybeOptions = {}
+) {
   const content = typeof text === 'string' ? text : String(text ?? '');
   const chars = Array.from(content);
   const totalChars = chars.length;
-  const safeMaxChars = Math.max(0, Math.trunc(Number(maxChars) || RESPONSES_TOOL_OUTPUT_MAX_CHARS));
+  const { maxChars: safeMaxChars, mode } = normalizeResponsesToolOutputTruncationConfig(
+    maxCharsOrOptions,
+    maybeOptions
+  );
 
   if (totalChars <= safeMaxChars) {
     return {
       text: content,
+      notice: '',
       truncated: false,
       totalChars,
       omittedChars: 0,
       omittedPct: '0.00',
       omittedStart: totalChars,
-      omittedEnd: totalChars
+      omittedEnd: totalChars,
+      returnedStart: 0,
+      returnedEnd: totalChars,
+      mode
     };
   }
 
-  let prefixChars = Math.ceil(safeMaxChars / 2);
-  let suffixChars = safeMaxChars - prefixChars;
-  let omittedStart = prefixChars;
-  let omittedEnd = Math.max(omittedStart, totalChars - suffixChars);
-  let omittedChars = Math.max(0, omittedEnd - omittedStart);
-  let omittedPct = formatTruncationPercent(omittedChars, totalChars);
-  let notice = `[... truncated ${omittedChars} chars out of ${totalChars} total chars (${omittedPct}%); omitted range [${omittedStart}, ${omittedEnd}) ...]`;
+  if (mode === RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE) {
+    let prefixChars = Math.ceil(safeMaxChars / 2);
+    let suffixChars = safeMaxChars - prefixChars;
+    let omittedStart = prefixChars;
+    let omittedEnd = Math.max(omittedStart, totalChars - suffixChars);
+    let omittedChars = Math.max(0, omittedEnd - omittedStart);
+    let omittedPct = formatTruncationPercent(omittedChars, totalChars);
+    let notice = buildResponsesToolOutputNoticeText({
+      omittedChars,
+      totalChars,
+      omittedPct,
+      omittedStart,
+      omittedEnd,
+      mode
+    });
 
-  const availableChars = Math.max(0, safeMaxChars - Array.from(notice).length);
-  prefixChars = Math.ceil(availableChars / 2);
-  suffixChars = availableChars - prefixChars;
-  omittedStart = prefixChars;
-  omittedEnd = Math.max(omittedStart, totalChars - suffixChars);
-  omittedChars = Math.max(0, omittedEnd - omittedStart);
+    const availableChars = Math.max(0, safeMaxChars - Array.from(notice).length);
+    prefixChars = Math.ceil(availableChars / 2);
+    suffixChars = availableChars - prefixChars;
+    omittedStart = prefixChars;
+    omittedEnd = Math.max(omittedStart, totalChars - suffixChars);
+    omittedChars = Math.max(0, omittedEnd - omittedStart);
+    omittedPct = formatTruncationPercent(omittedChars, totalChars);
+    notice = buildResponsesToolOutputNoticeText({
+      omittedChars,
+      totalChars,
+      omittedPct,
+      omittedStart,
+      omittedEnd,
+      mode
+    });
+    const prefix = chars.slice(0, omittedStart).join('');
+    const suffix = chars.slice(omittedEnd).join('');
+
+    return {
+      text: [prefix, notice, suffix].filter(Boolean).join('\n'),
+      notice,
+      truncated: true,
+      totalChars,
+      omittedChars,
+      omittedPct,
+      omittedStart,
+      omittedEnd,
+      returnedStart: null,
+      returnedEnd: null,
+      mode
+    };
+  }
+
+  let returnedEnd = Math.min(totalChars, safeMaxChars);
+  let omittedChars = Math.max(0, totalChars - returnedEnd);
+  let omittedPct = formatTruncationPercent(omittedChars, totalChars);
+  let notice = buildResponsesToolOutputNoticeText({
+    omittedChars,
+    totalChars,
+    omittedPct,
+    omittedStart: returnedEnd,
+    omittedEnd: totalChars,
+    returnedStart: 0,
+    returnedEnd,
+    mode
+  });
+  const minimumWithNotice = Array.from(notice).length + 1;
+  if (safeMaxChars <= minimumWithNotice) {
+    return {
+      text: chars.slice(0, safeMaxChars).join(''),
+      notice: '',
+      truncated: true,
+      totalChars,
+      omittedChars: Math.max(0, totalChars - safeMaxChars),
+      omittedPct: formatTruncationPercent(Math.max(0, totalChars - safeMaxChars), totalChars),
+      omittedStart: safeMaxChars,
+      omittedEnd: totalChars,
+      returnedStart: 0,
+      returnedEnd: Math.min(totalChars, safeMaxChars),
+      mode
+    };
+  }
+
+  const availableChars = Math.max(0, safeMaxChars - minimumWithNotice);
+  returnedEnd = Math.min(totalChars, availableChars);
+  omittedChars = Math.max(0, totalChars - returnedEnd);
   omittedPct = formatTruncationPercent(omittedChars, totalChars);
-  notice = `[... truncated ${omittedChars} chars out of ${totalChars} total chars (${omittedPct}%); omitted range [${omittedStart}, ${omittedEnd}) ...]`;
-  const prefix = chars.slice(0, omittedStart).join('');
-  const suffix = chars.slice(omittedEnd).join('');
+  notice = buildResponsesToolOutputNoticeText({
+    omittedChars,
+    totalChars,
+    omittedPct,
+    omittedStart: returnedEnd,
+    omittedEnd: totalChars,
+    returnedStart: 0,
+    returnedEnd,
+    mode
+  });
+  const prefix = chars.slice(0, returnedEnd).join('');
 
   return {
-    text: [prefix, notice, suffix].filter(Boolean).join('\n'),
+    text: appendStandaloneNoticeLine(prefix, notice),
+    notice,
     truncated: true,
     totalChars,
     omittedChars,
     omittedPct,
-    omittedStart,
-    omittedEnd
+    omittedStart: returnedEnd,
+    omittedEnd: totalChars,
+    returnedStart: 0,
+    returnedEnd,
+    mode
   };
 }
 
-export function truncateResponsesToolOutputText(text, maxChars = RESPONSES_TOOL_OUTPUT_MAX_CHARS) {
-  return buildResponsesToolOutputTruncationInfo(text, maxChars).text;
+export function truncateResponsesToolOutputText(
+  text,
+  maxCharsOrOptions = RESPONSES_TOOL_OUTPUT_MAX_CHARS,
+  maybeOptions = {}
+) {
+  return buildResponsesToolOutputTruncationInfo(text, maxCharsOrOptions, maybeOptions).text;
 }
 
 function chunkTextByChars(text, chunkChars = RESPONSES_TOOL_OUTPUT_CHUNK_CHARS) {
@@ -170,9 +349,12 @@ export function buildResponsesToolOutputContentItems(value, options = {}) {
   const serialized = stringifyResponsesToolOutputValue(value);
   const truncated = truncateResponsesToolOutputText(
     serialized,
-    Number.isFinite(Number(options?.maxChars))
-      ? Number(options.maxChars)
-      : RESPONSES_TOOL_OUTPUT_MAX_CHARS
+    {
+      maxChars: Number.isFinite(Number(options?.maxChars))
+        ? Number(options.maxChars)
+        : RESPONSES_TOOL_OUTPUT_MAX_CHARS,
+      mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL
+    }
   );
   const chunks = chunkTextByChars(
     truncated,
@@ -315,13 +497,19 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
   const blocks = [];
   const metadataText = truncateResponsesToolOutputText(
     trimJsonMetadataValue(metadata),
-    RESPONSES_TOOL_OUTPUT_MAX_CHARS
+    {
+      maxChars: RESPONSES_TOOL_OUTPUT_MAX_CHARS,
+      mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
+    }
   );
   blocks.push(buildXmlBlock('metadata', metadataText));
 
   const returnValueText = truncateResponsesToolOutputText(
     trimTrailingWhitespace(formatResponsesJsRuntimeValueText(normalized.value)),
-    RESPONSES_TOOL_OUTPUT_MAX_CHARS
+    {
+      maxChars: RESPONSES_TOOL_OUTPUT_MAX_CHARS,
+      mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
+    }
   );
   if (returnValueText && returnValueText !== 'null') {
     blocks.push(buildXmlBlock('return_value', returnValueText));
@@ -330,7 +518,10 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
   if (effectiveTopLevelLogs.length > 0 && items.length <= 1) {
     const consoleLogsText = truncateResponsesToolOutputText(
       trimTrailingWhitespace(effectiveTopLevelLogs.map((log) => formatResponsesJsRuntimeLogText(log)).filter(Boolean).join('\n')),
-      RESPONSES_TOOL_OUTPUT_MAX_CHARS
+      {
+        maxChars: RESPONSES_TOOL_OUTPUT_MAX_CHARS,
+        mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
+      }
     );
     if (consoleLogsText) {
       blocks.push(buildXmlBlock('console_logs', consoleLogsText));
@@ -339,7 +530,10 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
 
   const topLevelErrorText = truncateResponsesToolOutputText(
     trimTrailingWhitespace(formatResponsesJsRuntimeErrorText(normalized.error)),
-    RESPONSES_TOOL_OUTPUT_MAX_CHARS
+    {
+      maxChars: RESPONSES_TOOL_OUTPUT_MAX_CHARS,
+      mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
+    }
   );
   if (topLevelErrorText) {
     blocks.push(buildXmlBlock('error', topLevelErrorText));
@@ -359,7 +553,10 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
       if (item.error) {
         const frameErrorText = truncateResponsesToolOutputText(
           trimTrailingWhitespace(formatResponsesJsRuntimeErrorText(item.error)),
-          RESPONSES_TOOL_OUTPUT_MAX_CHARS
+          {
+            maxChars: RESPONSES_TOOL_OUTPUT_MAX_CHARS,
+            mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
+          }
         );
         if (frameErrorText) innerBlocks.push(buildXmlBlock('error', frameErrorText));
       } else {
@@ -370,7 +567,10 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
         } else {
           const frameReturnValueText = truncateResponsesToolOutputText(
             trimTrailingWhitespace(formatResponsesJsRuntimeValueText(item.result)),
-            RESPONSES_TOOL_OUTPUT_MAX_CHARS
+            {
+              maxChars: RESPONSES_TOOL_OUTPUT_MAX_CHARS,
+              mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
+            }
           );
           if (frameReturnValueText && frameReturnValueText !== 'null') {
             innerBlocks.push(buildXmlBlock('return_value', frameReturnValueText));
@@ -381,7 +581,10 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
       if (Array.isArray(item.logs) && item.logs.length > 0) {
         const frameLogsText = truncateResponsesToolOutputText(
           trimTrailingWhitespace(item.logs.map((log) => formatResponsesJsRuntimeLogText(log, Number.isFinite(Number(item.frameId)) ? Number(item.frameId) : null)).filter(Boolean).join('\n')),
-          RESPONSES_TOOL_OUTPUT_MAX_CHARS
+          {
+            maxChars: RESPONSES_TOOL_OUTPUT_MAX_CHARS,
+            mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
+          }
         );
         if (frameLogsText) innerBlocks.push(buildXmlBlock('console_logs', frameLogsText));
       }
@@ -393,7 +596,10 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
 
     const frameResultsText = truncateResponsesToolOutputText(
       trimTrailingWhitespace(frameBlocks),
-      RESPONSES_TOOL_OUTPUT_MAX_CHARS
+      {
+        maxChars: RESPONSES_TOOL_OUTPUT_MAX_CHARS,
+        mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
+      }
     );
     if (frameResultsText) {
       blocks.push(buildXmlBlock('frame_results', frameResultsText));
@@ -419,11 +625,23 @@ export function buildResponsesJsRuntimeToolOutputContentItems(result, options = 
 }
 
 function buildXmlToolResultText(rootTag, metadata, blocks = [], options = {}) {
+  const metadataTruncation = Object.prototype.hasOwnProperty.call(options, 'metadataTruncation')
+    ? options.metadataTruncation
+    : {
+      mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL,
+      maxChars: RESPONSES_TOOL_OUTPUT_MAX_CHARS
+    };
+  const defaultBlockTruncation = Object.prototype.hasOwnProperty.call(options, 'blockTruncation')
+    ? options.blockTruncation
+    : {
+      mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL,
+      maxChars: RESPONSES_TOOL_OUTPUT_MAX_CHARS
+    };
   const sections = [];
   if (metadata && typeof metadata === 'object') {
-    const metadataText = truncateResponsesToolOutputText(
+    const metadataText = applyResponsesToolOutputTruncation(
       trimJsonMetadataValue(metadata),
-      RESPONSES_TOOL_OUTPUT_MAX_CHARS
+      metadataTruncation
     );
     if (metadataText) sections.push(buildXmlBlock('metadata', metadataText));
   }
@@ -434,7 +652,10 @@ function buildXmlToolResultText(rootTag, metadata, blocks = [], options = {}) {
     if (!tag) continue;
     const rawText = trimTrailingWhitespace(block.text);
     if (!rawText) continue;
-    const text = truncateResponsesToolOutputText(rawText, RESPONSES_TOOL_OUTPUT_MAX_CHARS);
+    const blockTruncation = Object.prototype.hasOwnProperty.call(block, 'truncation')
+      ? block.truncation
+      : defaultBlockTruncation;
+    const text = applyResponsesToolOutputTruncation(rawText, blockTruncation);
     sections.push(buildXmlBlock(tag, text));
   }
 
@@ -475,9 +696,20 @@ function buildResponsesPageContentToolOutputText(result) {
   };
   const blocks = [];
   if (typeof normalized.content === 'string' && normalized.content.trim()) {
+    const rangeStart = Number.isFinite(Number(normalized.skip_chars)) ? Number(normalized.skip_chars) : 0;
+    const returnedChars = Number.isFinite(Number(normalized.returned_chars))
+      ? Number(normalized.returned_chars)
+      : normalized.content.length;
+    const rangeEnd = rangeStart + Math.max(0, returnedChars);
+    const notice = buildResponsesToolOutputSelectionNoticeText(
+      Number(normalized.total_chars) || 0,
+      rangeStart,
+      rangeEnd
+    );
     blocks.push({
       tag: 'content',
-      text: normalized.content
+      text: appendStandaloneNoticeLine(normalized.content, notice),
+      truncation: null
     });
   }
   if (normalized.error) {
@@ -563,9 +795,29 @@ function buildResponsesPdfContentToolOutputText(result) {
     });
   }
   if (typeof normalized.content === 'string' && normalized.content.trim()) {
+    const scopeTotalChars = (() => {
+      if (normalized.mode === 'chapter_chunk') {
+        const chapterChars = Number(normalized?.selection?.char_count);
+        if (Number.isFinite(chapterChars) && chapterChars > 0) return chapterChars;
+      }
+      const total = Number(normalized.total_chars);
+      return Number.isFinite(total) && total > 0 ? total : 0;
+    })();
+    const rangeStart = Number.isFinite(Number(normalized.chunk_index)) && Number.isFinite(Number(normalized.max_chars))
+      ? Math.max(0, Math.trunc(Number(normalized.chunk_index)) * Math.max(1, Math.trunc(Number(normalized.max_chars))))
+      : 0;
+    const returnedChars = Number.isFinite(Number(normalized.returned_chars))
+      ? Number(normalized.returned_chars)
+      : normalized.content.length;
+    const notice = buildResponsesToolOutputSelectionNoticeText(
+      scopeTotalChars,
+      rangeStart,
+      rangeStart + Math.max(0, returnedChars)
+    );
     blocks.push({
       tag: 'content',
-      text: normalized.content
+      text: appendStandaloneNoticeLine(normalized.content, notice),
+      truncation: null
     });
   }
   if (normalized.error) {
@@ -620,7 +872,11 @@ function buildResponsesHistorySearchToolOutputText(result) {
     }).join('\n\n');
     blocks.push({
       tag: 'results',
-      text: resultsText
+      text: resultsText,
+      truncation: {
+        mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL,
+        maxChars: RESPONSES_TOOL_OUTPUT_MAX_CHARS
+      }
     });
   }
   if (normalized.error) {
@@ -650,11 +906,20 @@ function buildResponsesHistoryReadToolOutputText(result) {
         timestamp !== '' ? `timestamp="${xmlAttributeEscape(timestamp)}"` : ''
       ].filter(Boolean).join(' ');
       const content = typeof message?.content === 'string' ? message.content : '';
-      return `<message${attrs ? ` ${attrs}` : ''}>\n${content}\n</message>`;
+      const returnedChars = Number.isFinite(Number(message?.content_returned_chars))
+        ? Number(message.content_returned_chars)
+        : content.length;
+      const totalChars = Number.isFinite(Number(message?.content_total_chars))
+        ? Number(message.content_total_chars)
+        : returnedChars;
+      const notice = buildResponsesToolOutputSelectionNoticeText(totalChars, 0, Math.max(0, returnedChars));
+      const contentWithNotice = appendStandaloneNoticeLine(content, notice);
+      return `<message${attrs ? ` ${attrs}` : ''}>\n${contentWithNotice}\n</message>`;
     }).join('\n\n');
     blocks.push({
       tag: 'messages',
-      text: messageText
+      text: messageText,
+      truncation: null
     });
   }
   if (normalized.error) {

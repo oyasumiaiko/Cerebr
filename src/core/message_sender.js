@@ -7000,7 +7000,7 @@ export function createMessageSender(appContext) {
       },
       max_chars: {
         type: ['integer', 'null'],
-        description: '可选。读取的连续字符长度。若与 skip_chars 一起提供，则返回从 skip_chars 开始的连续片段；若两者都省略，则返回默认从开头开始的安全预览。'
+        description: '可选。读取的连续字符长度。默认 10000，最大 50000。若与 skip_chars 一起提供，则返回从 skip_chars 开始的连续片段；若两者都省略，则返回默认从开头开始的截断预览。'
       }
     };
     return {
@@ -7011,7 +7011,7 @@ export function createMessageSender(appContext) {
         '它会返回页面正文与可访问 iframe 文本的预包装读取结果，并对多行做 trim 与空白折叠，更适合一次快速通读页面内容。',
         '若用户在对话开头说“这个”或未明确指代对象，默认指当前网页环境上下文，请先调用本工具读取页面再回答。',
         '这不是 DOM 结构化提取工具；若当前页面是 PDF 且需要按章节 / 片段读取，请优先使用 pdf_content_read；若需要按元素、选择器、属性进行结构化定位与提取，请优先使用 js_runtime_execute。',
-        '默认返回从开头开始的安全预览；也可通过 skip_chars 与 max_chars 读取指定连续片段。'
+        '默认返回从开头开始的 10000 字符预览，最大单次读取 50000 字符；正文若被截断，会在正文末尾附带统一的截断提示。也可通过 skip_chars 与 max_chars 读取指定连续片段。'
       ].join(' '),
       strict: true,
       parameters: {
@@ -7141,6 +7141,10 @@ export function createMessageSender(appContext) {
       thread_ref: {
         type: ['integer', 'null'],
         description: '可选。若提供，则读取该线程内的 thread_msg_index 窗口；不传则读取主线消息窗口。'
+      },
+      read_full_messages: {
+        type: ['boolean', 'null'],
+        description: '可选。true 时不对单条消息正文应用默认 5000 字符截断；不传或 false 时，每条消息正文最多返回 5000 字符，并在正文末尾附统一的截断提示。'
       }
     };
     return {
@@ -7150,7 +7154,8 @@ export function createMessageSender(appContext) {
         '按窗口读取单个已保存会话的聊天正文。',
         '传入 conv_ref 与 1-based 闭区间 start/end；默认读取主线消息 msg_index。',
         '若要读取线程消息，则额外传入 thread_ref，此时读取该线程内的 thread_msg_index 窗口。',
-        '它只返回用户可见聊天正文，不返回内部 tool output、hidden contextual items 或 replay items。'
+        '它只返回用户可见聊天正文，不返回内部 tool output、hidden contextual items 或 replay items。',
+        '默认每条消息正文最多返回 5000 字符；若确实需要完整正文，可显式传 read_full_messages=true。'
       ].join(' '),
       strict: true,
       parameters: {

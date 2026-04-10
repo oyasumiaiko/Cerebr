@@ -26,13 +26,13 @@ test('buildPageContentReadResult 默认返回安全预览而不是整篇正文',
 
   assert.equal(result.ok, true);
   assert.equal(result.mode, 'preview');
-  assert.equal(result.max_chars, 20000);
-  assert.equal(result.truncated, false);
-  assert.equal(result.returned_chars, 12000);
-  assert.equal(result.omitted_chars, 0);
-  assert.equal(result.omitted_pct, 0);
-  assert.equal(result.has_more_after_range, false);
-  assert.equal(result.content.length, 12000);
+  assert.equal(result.max_chars, 10000);
+  assert.equal(result.truncated, true);
+  assert.equal(result.returned_chars, 10000);
+  assert.equal(result.omitted_chars, 2000);
+  assert.equal(result.omitted_pct, 16.67);
+  assert.equal(result.has_more_after_range, true);
+  assert.equal(result.content.length, 10000);
 });
 
 test('buildPageContentReadResult 支持 skip_chars + max_chars 连续读取', async () => {

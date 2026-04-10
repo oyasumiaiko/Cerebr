@@ -11,8 +11,8 @@
  */
 
 export const PDF_CONTENT_READ_TOOL_NAME = 'pdf_content_read';
-export const PDF_CONTENT_READ_DEFAULT_MAX_CHARS = 4000;
-export const PDF_CONTENT_READ_MAX_CHARS = 8000;
+export const PDF_CONTENT_READ_DEFAULT_MAX_CHARS = 10_000;
+export const PDF_CONTENT_READ_MAX_CHARS = 50_000;
 
 function clampNonNegativeInt(value, fallback) {
   const numeric = Number(value);

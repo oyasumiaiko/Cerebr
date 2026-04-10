@@ -37,10 +37,21 @@ test('stringifyResponsesToolOutputValue 对超过 1000 字符的 JSON 使用紧�
   assert.match(text, /^\{"long":"x+/);
 });
 
-test('truncateResponsesToolOutputText 使用统一的字符截断提示', async () => {
+test('truncateResponsesToolOutputText 默认使用统一的结尾截断提示', async () => {
   const { truncateResponsesToolOutputText } = await loadResponsesToolOutputModule();
   const source = `${'A'.repeat(6000)}${'B'.repeat(6000)}`;
   const truncated = truncateResponsesToolOutputText(source, 5000);
+  assert.notEqual(truncated, source);
+  assert.match(truncated, /truncated \d+ chars out of 12000 total chars/);
+  assert.match(truncated, /returned range \[0, \d+\)/);
+  assert.match(truncated, /^A+/);
+  assert.doesNotMatch(truncated, /B+$/);
+});
+
+test('truncateResponsesToolOutputText 支持显式中间截断模式，供 js_runtime 使用', async () => {
+  const { truncateResponsesToolOutputText } = await loadResponsesToolOutputModule();
+  const source = `${'A'.repeat(6000)}${'B'.repeat(6000)}`;
+  const truncated = truncateResponsesToolOutputText(source, { maxChars: 5000, mode: 'middle' });
   assert.notEqual(truncated, source);
   assert.match(truncated, /truncated \d+ chars out of 12000 total chars/);
   assert.match(truncated, /omitted range \[\d+, \d+\)/);
@@ -168,7 +179,7 @@ test('buildResponsesPageContentToolOutputContentItems 使用 metadata + content 
   assert.match(text, /<content>\s*Alpha <b>Beta<\/b>/);
 });
 
-test('buildResponsesPageContentToolOutputContentItems 对长页面内容使用统一中间截断标记', async () => {
+test('buildResponsesPageContentToolOutputContentItems 复用页面工具自身的截断结果并附带统一提示', async () => {
   const { buildResponsesPageContentToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesPageContentToolOutputContentItems({
     ok: true,
@@ -176,15 +187,17 @@ test('buildResponsesPageContentToolOutputContentItems 对长页面内容使用�
     title: 'Example',
     url: 'https://example.com',
     total_chars: 12000,
-    returned_chars: 12000,
-    omitted_chars: 0,
-    omitted_pct: 0,
-    truncated: false,
-    content: 'A'.repeat(12000)
+    skip_chars: 0,
+    max_chars: 10000,
+    returned_chars: 10000,
+    omitted_chars: 2000,
+    omitted_pct: 16.67,
+    truncated: true,
+    content: 'A'.repeat(10000)
   });
   const text = formatResponsesToolOutputForDisplay(items);
   assert.match(text, /<content>/);
-  assert.match(text, /\[\.\.\. truncated \d+ chars out of 12000 total chars \([\d.]+%\); omitted range \[\d+, \d+\) \.\.\.\]/);
+  assert.match(text, /\[\.\.\. truncated 2000 chars out of 12000 total chars \(16\.67%\); returned range \[0, 10000\) \.\.\.\]/);
 });
 
 test('buildResponsesPdfContentToolOutputContentItems 使用 overview / selection / content XML 分块', async () => {
@@ -216,7 +229,8 @@ test('buildResponsesPdfContentToolOutputContentItems 使用 overview / selection
     selection: {
       chapter_id: '1',
       title: '第一章',
-      level: 1
+      level: 1,
+      char_count: 4500
     },
     content: 'Alpha\nBeta'
   });
@@ -227,6 +241,7 @@ test('buildResponsesPdfContentToolOutputContentItems 使用 overview / selection
   assert.match(text, /<selection>/);
   assert.match(text, /"chapter_id": "1"/);
   assert.match(text, /<content>\s*Alpha/);
+  assert.match(text, /\[\.\.\. truncated 2500 chars out of 4500 total chars \(55\.56%\); returned range \[2000, 4000\) \.\.\.\]/);
 });
 
 test('buildResponsesHistorySearchToolOutputContentItems 使用 conversation XML 分块', async () => {
@@ -271,6 +286,45 @@ test('buildResponsesHistorySearchToolOutputContentItems 使用 conversation XML 
   assert.doesNotMatch(text, /&lt;/);
 });
 
+test('buildResponsesHistorySearchToolOutputContentItems 对过长正文结果块使用结尾截断提示', async () => {
+  const { buildResponsesHistorySearchToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesHistorySearchToolOutputContentItems({
+    ok: true,
+    query: { text_all: ['alpha'], result_mode: 'matches' },
+    max_results: 5,
+    result_mode: 'matches',
+    total_matches: 1,
+    results: [
+      {
+        conv_ref: 1,
+        page_title: 'Long Page',
+        conversation_title: 'Long Conversation',
+        url: 'https://example.com',
+        created_at: '2026-04-07T00:00:00+08:00',
+        updated_at: '2026-04-07T00:01:00+08:00',
+        message_count: 3,
+        main_message_count: 3,
+        thread_message_count: 0,
+        thread_count: 0,
+        has_threads: false,
+        is_branch: false,
+        parent_conv_ref: null,
+        has_api_lock: false,
+        match: {
+          reason: 'message',
+          total_hit_count: 1,
+          matched_message_count: 1,
+          locations: [{ msg_index: 1 }],
+          excerpts: ['X'.repeat(6000)]
+        }
+      }
+    ]
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<results>/);
+  assert.match(text, /truncated \d+ chars out of \d+ total chars \([\d.]+%\); returned range \[0, \d+\)/);
+});
+
 test('buildResponsesHistoryReadToolOutputContentItems 使用 messages XML 分块', async () => {
   const { buildResponsesHistoryReadToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesHistoryReadToolOutputContentItems({
@@ -302,6 +356,48 @@ test('buildResponsesHistoryReadToolOutputContentItems 使用 messages XML 分块
   assert.match(text, /<messages>/);
   assert.match(text, /<message msg_index="1" role="user" timestamp="1775458218025">/);
   assert.match(text, /Hello <xml>/);
+});
+
+test('buildResponsesHistoryReadToolOutputContentItems 在单条消息末尾附默认 5000 字截断提示', async () => {
+  const { buildResponsesHistoryReadToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesHistoryReadToolOutputContentItems({
+    ok: true,
+    conv_ref: 9,
+    page_title: 'Repo',
+    conversation_title: 'Long read',
+    url: 'https://example.com/repo',
+    created_at: '2026-04-07T00:00:00+08:00',
+    updated_at: '2026-04-07T00:02:00+08:00',
+    message_count: 1,
+    main_message_count: 1,
+    thread_message_count: 0,
+    thread_count: 0,
+    has_threads: false,
+    is_branch: false,
+    parent_conv_ref: null,
+    has_api_lock: false,
+    scope: 'main',
+    read_full_messages: false,
+    message_truncation_max_chars: 5000,
+    start: 1,
+    end: 1,
+    messages: [
+      {
+        msg_index: 1,
+        role: 'user',
+        timestamp: 1775458218025,
+        content: 'A'.repeat(5000),
+        content_total_chars: 6200,
+        content_returned_chars: 5000,
+        content_omitted_chars: 1200,
+        content_omitted_pct: 19.35,
+        content_truncated: true
+      }
+    ]
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<messages>/);
+  assert.match(text, /truncated 1200 chars out of 6200 total chars \(19\.35%\); returned range \[0, 5000\)/);
 });
 
 test('buildResponsesAskableModelsToolOutputContentItems 使用 guidance 与 models XML 分块', async () => {
