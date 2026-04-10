@@ -70,6 +70,10 @@
  * });
  */
 import { extractThinkingFromText } from '../utils/thoughts_parser.js';
+import {
+  isUsableResponsesLocalCompactionMarker,
+  sliceConversationChainAfterLatestCompactionMarker
+} from '../utils/responses_local_compaction.js';
 
 export function composeMessages(args) {
   const {
@@ -180,16 +184,23 @@ export function composeMessages(args) {
     }
   }
 
+  // 若历史里已经存在本地 compact marker，则只有“最新 marker 及其之后的消息”
+  // 仍然参与模型可见上下文构造；marker 自身通过 response_input_items 承载 compact 后历史。
+  effectiveChain = sliceConversationChainAfterLatestCompactionMarker(effectiveChain);
+
   if (sendChatHistory) {
     const normalizedMaxUserHistory = normalizeOptionalNonNegativeInt(maxUserHistory);
     const normalizedMaxAssistantHistory = normalizeOptionalNonNegativeInt(maxAssistantHistory);
     const useRoleBasedLimits = (normalizedMaxUserHistory !== null) || (normalizedMaxAssistantHistory !== null);
 
     if (useRoleBasedLimits) {
-      const limited = selectConversationNodesByRole(effectiveChain, {
-        maxUserMessages: normalizedMaxUserHistory,
-        maxAssistantMessages: normalizedMaxAssistantHistory
-      });
+      const limited = ensureLeadingCompactionMarkerSelected(
+        effectiveChain,
+        selectConversationNodesByRole(effectiveChain, {
+          maxUserMessages: normalizedMaxUserHistory,
+          maxAssistantMessages: normalizedMaxAssistantHistory
+        })
+      );
       messages.push(...limited.map(nodeToMessage));
     } else {
       // 旧逻辑：单一 maxHistory，按总条目数裁剪
@@ -197,8 +208,12 @@ export function composeMessages(args) {
       if (maxHistory === 0) {
         // 不添加任何历史消息
       } else if (maxHistory && maxHistory > 0) {
-        // 限制历史消息数量
-        const limited = effectiveChain.slice(-maxHistory);
+        // 限制历史消息数量；若链首是 compact marker，则即使窗口较小也强制保留，
+        // 否则 compact 后 replacement history 会在下一轮再次丢失。
+        const limited = ensureLeadingCompactionMarkerSelected(
+          effectiveChain,
+          effectiveChain.slice(-maxHistory)
+        );
         messages.push(...limited.map(nodeToMessage));
       } else {
         // 发送全部历史消息
@@ -233,6 +248,41 @@ export function composeMessages(args) {
   }
 
   return applyUserMessageSpacing(messages);
+}
+
+/**
+ * 当有效链首节点是可用 compact marker 时，确保它不会被后续的 maxHistory / 分角色裁剪再次裁掉。
+ *
+ * 原因：
+ * - marker 自身并不是普通 assistant 文本，而是 compact 后 replacement history 的承载点；
+ * - 一旦它在裁剪阶段丢失，后续请求就只剩“marker 之后的增量消息”，压缩效果会被立刻破坏。
+ *
+ * @param {Array<any>} effectiveChain
+ * @param {Array<any>} selectedNodes
+ * @returns {Array<any>}
+ */
+function ensureLeadingCompactionMarkerSelected(effectiveChain, selectedNodes) {
+  const chain = Array.isArray(effectiveChain) ? effectiveChain : [];
+  const selected = Array.isArray(selectedNodes) ? selectedNodes.slice() : [];
+  const leadingMarker = chain[0];
+  if (!isUsableResponsesLocalCompactionMarker(leadingMarker)) {
+    return selected;
+  }
+
+  const markerId = (typeof leadingMarker?.id === 'string' && leadingMarker.id.trim())
+    ? leadingMarker.id.trim()
+    : '';
+  const alreadySelected = selected.some((node) => {
+    if (!node) return false;
+    if (node === leadingMarker) return true;
+    if (!markerId) return false;
+    return (typeof node?.id === 'string' && node.id.trim()) === markerId;
+  });
+  if (alreadySelected) {
+    return selected;
+  }
+
+  return [leadingMarker, ...selected];
 }
 
 /**

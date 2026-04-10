@@ -18,11 +18,21 @@ async function loadResponsesInputItemsModule() {
 }
 
 async function loadMessageComposerModule() {
+  const inlineModuleSource = (source) => source
+    .replace(/export function /g, 'function ')
+    .replace(/export const /g, 'const ')
+    .replace(/export \{[\s\S]*?\};?/g, '');
   const filePath = path.resolve(__dirname, '../src/core/message_composer.js');
   let source = await fs.readFile(filePath, 'utf8');
+  const compactionSourcePath = path.resolve(__dirname, '../src/utils/responses_local_compaction.js');
+  const compactionSource = inlineModuleSource(await fs.readFile(compactionSourcePath, 'utf8'));
   source = source.replace(
     "import { extractThinkingFromText } from '../utils/thoughts_parser.js';",
     "const extractThinkingFromText = (text) => ({ cleanText: text, thoughtsText: '' });"
+  );
+  source = source.replace(
+    /import\s*\{\s*isUsableResponsesLocalCompactionMarker,\s*sliceConversationChainAfterLatestCompactionMarker\s*\}\s*from '\.\.\/utils\/responses_local_compaction\.js';/,
+    `${compactionSource}\n`
   );
   const dataUrl = `data:text/javascript;base64,${Buffer.from(source, 'utf8').toString('base64')}`;
   return import(dataUrl);
@@ -158,6 +168,119 @@ test('composeMessages last-user fallback path also uses outboundContent', async 
   });
 
   assert.equal(messages[0].content, '原始输入\\n\\n当前网页内容：标题：Example');
+});
+
+test('composeMessages 只让最新 compact marker 及其之后的历史进入模型上下文', async () => {
+  const { composeMessages } = await loadMessageComposerModule();
+
+  const messages = composeMessages({
+    prompts: { system: { prompt: '' } },
+    injectedSystemMessages: [],
+    pageContent: null,
+    imageContainsScreenshot: false,
+    omitDefaultSystemPrompt: true,
+    currentPromptType: 'none',
+    regenerateMode: false,
+    messageId: null,
+    conversationChain: [
+      { id: 'u1', role: 'user', content: '旧用户' },
+      { id: 'a1', role: 'assistant', content: '旧助手' },
+      {
+        id: 'marker-old',
+        role: 'assistant',
+        content: '旧 marker',
+        response_input_items: [{ type: 'compaction', encrypted_content: 'old-summary' }],
+        contextCompactionMarker: { source: 'responses_local', compactedAt: 1 }
+      },
+      { id: 'u2', role: 'user', content: '旧 marker 之后的用户' },
+      {
+        id: 'marker-new',
+        role: 'assistant',
+        content: '新 marker',
+        response_input_items: [{ type: 'compaction', encrypted_content: 'new-summary' }],
+        contextCompactionMarker: { source: 'responses_local', compactedAt: 2 }
+      },
+      { id: 'u3', role: 'user', content: '最新 marker 之后的用户' }
+    ],
+    sendChatHistory: true,
+    maxHistory: 16,
+    maxUserHistory: 16,
+    maxAssistantHistory: 16
+  });
+
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].role, 'assistant');
+  assert.equal(messages[0].content, '新 marker');
+  assert.equal(messages[1].content, '最新 marker 之后的用户');
+});
+
+test('composeMessages 在 maxHistory 裁剪后仍保留最新 compact marker', async () => {
+  const { composeMessages } = await loadMessageComposerModule();
+
+  const messages = composeMessages({
+    prompts: { system: { prompt: '' } },
+    injectedSystemMessages: [],
+    pageContent: null,
+    imageContainsScreenshot: false,
+    omitDefaultSystemPrompt: true,
+    currentPromptType: 'none',
+    regenerateMode: false,
+    messageId: null,
+    conversationChain: [
+      {
+        id: 'marker-new',
+        role: 'assistant',
+        content: '新 marker',
+        response_input_items: [{ type: 'compaction', encrypted_content: 'new-summary' }],
+        contextCompactionMarker: { source: 'responses_local', compactedAt: 2 }
+      },
+      { id: 'u3', role: 'user', content: '最新 marker 之后的用户' },
+      { id: 'a3', role: 'assistant', content: '最新回答' }
+    ],
+    sendChatHistory: true,
+    maxHistory: 1,
+    maxUserHistory: null,
+    maxAssistantHistory: null
+  });
+
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].content, '新 marker');
+  assert.equal(messages[1].content, '最新回答');
+});
+
+test('composeMessages 在按角色裁剪时不把 compact marker 计入 assistant 上限', async () => {
+  const { composeMessages } = await loadMessageComposerModule();
+
+  const messages = composeMessages({
+    prompts: { system: { prompt: '' } },
+    injectedSystemMessages: [],
+    pageContent: null,
+    imageContainsScreenshot: false,
+    omitDefaultSystemPrompt: true,
+    currentPromptType: 'none',
+    regenerateMode: false,
+    messageId: null,
+    conversationChain: [
+      {
+        id: 'marker-new',
+        role: 'assistant',
+        content: '新 marker',
+        response_input_items: [{ type: 'compaction', encrypted_content: 'new-summary' }],
+        contextCompactionMarker: { source: 'responses_local', compactedAt: 2 }
+      },
+      { id: 'u3', role: 'user', content: '最新 marker 之后的用户' },
+      { id: 'a3', role: 'assistant', content: '最新回答' }
+    ],
+    sendChatHistory: true,
+    maxHistory: 16,
+    maxUserHistory: 1,
+    maxAssistantHistory: 1
+  });
+
+  assert.equal(messages.length, 3);
+  assert.equal(messages[0].content, '新 marker');
+  assert.equal(messages[1].content, '最新 marker 之后的用户');
+  assert.equal(messages[2].content, '最新回答');
 });
 
 test('mergeResponsesInputItems de-duplicates identical reasoning items without stable ids', async () => {
