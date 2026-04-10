@@ -1306,6 +1306,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'GET_WEBPAGE_SCREENSHOT_RESULT_INTERNAL') {
+    console.log('收到 webpage_screenshot 结果请求');
+    isProcessing = true;
+
+    capturePromptFriendlyScreenshot(message?.args).then((result) => {
+      isProcessing = false;
+      sendResponse(result);
+    }).catch((error) => {
+      console.error('构造网页截图工具结果失败:', error);
+      isProcessing = false;
+      sendResponse({
+        ok: false,
+        error: {
+          message: error?.message || '构造网页截图工具结果失败',
+          name: error?.name || 'WebpageScreenshotTransportError'
+        }
+      });
+    });
+
+    return true;
+  }
+
   try {
     // 接收来自background.js的消息
     const iframe = sidebar.sidebar?.querySelector('.cerebr-sidebar__iframe');
@@ -2273,43 +2295,104 @@ async function extractChaptersFromPDFData(completeData) {
  * 捕获当前可见标签页的屏幕截图并发送到侧边栏。
  * 截图前会先隐藏侧边栏，并在等待两帧后再进行截图，最后恢复侧边栏显示。
  */
-function captureAndDropScreenshot() {
+function captureVisibleTabWhileSidebarHidden(requestMessageBuilder) {
   const sidebarVisibility = sidebar.sidebar.style.visibility; // 保存侧边栏原始可见状态
   sidebar.sidebar.style.transition = 'none'; // 设置侧边栏无过渡效果
   sidebar.sidebar.style.visibility = 'hidden'; // 立即隐藏侧边栏
+  let restored = false;
+
+  function restoreSidebarVisibility() {
+    if (restored) return;
+    restored = true;
+    sidebar.sidebar.style.visibility = sidebarVisibility;
+    sidebar.sidebar.style.transition = '';
+  }
 
   /**
    * 递归地执行 requestAnimationFrame，并在指定次数后执行截屏操作。
    * @param {number} waitFramesCount 递归层级，控制等待的帧数。
    */
   function waitCaptureWithAnimationFrame(waitFramesCount) {
-    requestAnimationFrame(() => {
-      if (waitFramesCount > 0) {
-        // 递归调用，减少递归层级
-        waitCaptureWithAnimationFrame(waitFramesCount - 1);
-      } else {
-        // 达到指定递归层级后，执行截屏操作
-        chrome.runtime.sendMessage({ action: 'capture_visible_tab' }, (response) => {
-          sidebar.sidebar.style.visibility = sidebarVisibility; // 截图完成后恢复侧边栏显示
-          sidebar.sidebar.style.transition = '';
-          const iframe = sidebar.sidebar?.querySelector('.cerebr-sidebar__iframe');
-          if (response && response.success && response.dataURL) {
-            console.log('页面截图完成，发送到侧边栏');
-            if (iframe) {
-              iframe.contentWindow.postMessage({
-                type: 'DROP_IMAGE',
-                imageData: { data: response.dataURL, name: 'page-screenshot.png' },
-              }, '*');
-            }
-          } else {
-            console.error('屏幕截图失败:', response && response.error);
+    return new Promise((resolve, reject) => {
+      requestAnimationFrame(() => {
+        if (waitFramesCount > 0) {
+          resolve(waitCaptureWithAnimationFrame(waitFramesCount - 1));
+          return;
+        }
+
+        const requestMessage = (typeof requestMessageBuilder === 'function')
+          ? requestMessageBuilder()
+          : null;
+        if (!requestMessage || typeof requestMessage !== 'object') {
+          restoreSidebarVisibility();
+          reject(new Error('截图请求构造失败：缺少有效的 request message。'));
+          return;
+        }
+
+        chrome.runtime.sendMessage(requestMessage, (response) => {
+          restoreSidebarVisibility();
+          const lastError = chrome.runtime?.lastError;
+          if (lastError) {
+            reject(new Error(lastError.message || '发送截图请求失败'));
+            return;
           }
+          resolve(response);
         });
-      }
+      });
     });
   }
 
-  waitCaptureWithAnimationFrame(5); // 初始调用，设置递归层级为 5，实现等待五帧的效果
+  return waitCaptureWithAnimationFrame(5); // 初始调用，设置递归层级为 5，实现等待五帧的效果
+}
+
+function captureAndDropScreenshot() {
+  captureVisibleTabWhileSidebarHidden(() => ({ action: 'capture_visible_tab' }))
+    .then((response) => {
+      const iframe = sidebar.sidebar?.querySelector('.cerebr-sidebar__iframe');
+      if (response && response.success && response.dataURL) {
+        console.log('页面截图完成，发送到侧边栏');
+        if (iframe) {
+          iframe.contentWindow.postMessage({
+            type: 'DROP_IMAGE',
+            imageData: { data: response.dataURL, name: 'page-screenshot.png' },
+          }, '*');
+        }
+      } else {
+        console.error('屏幕截图失败:', response && response.error);
+      }
+    })
+    .catch((error) => {
+      console.error('屏幕截图失败:', error);
+    });
+}
+
+/**
+ * 捕获一张供 agent tool 使用的网页截图。
+ *
+ * 行为要求：
+ * - 和用户点击截图按钮保持同一截图边界：先隐藏侧边栏，再等待若干帧；
+ * - 真正的压缩与 detail 处理放在后台模块完成，这里只负责“避免把侧栏自己拍进去”；
+ * - 返回值直接对齐 message_sender 需要的 transport 结构。
+ *
+ * @param {any} rawArgs
+ * @returns {Promise<Object>}
+ */
+function capturePromptFriendlyScreenshot(rawArgs) {
+  return captureVisibleTabWhileSidebarHidden(() => ({
+    action: 'capture_visible_tab_for_prompt',
+    args: rawArgs && typeof rawArgs === 'object' ? rawArgs : null
+  })).then((response) => {
+    if (response && typeof response === 'object') {
+      return response;
+    }
+    return {
+      ok: false,
+      error: {
+        message: '网页截图工具未返回有效结果。',
+        name: 'WebpageScreenshotEmptyResponseError'
+      }
+    };
+  });
 }
 
 // ====================== 临时调试用 ======================

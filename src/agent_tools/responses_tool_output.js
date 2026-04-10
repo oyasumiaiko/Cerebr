@@ -847,6 +847,67 @@ export function buildResponsesGenericXmlToolOutputContentItems(rootTag, result, 
   return buildResponsesXmlToolOutputContentItems(text, options);
 }
 
+function extractDataUrlMimeType(value) {
+  if (typeof value !== 'string') return '';
+  const match = value.match(/^data:([^;,]+)(?:;base64)?,/i);
+  return match ? String(match[1] || '').toLowerCase() : '';
+}
+
+function estimateDataUrlBytes(value) {
+  if (typeof value !== 'string') return 0;
+  const commaIndex = value.indexOf(',');
+  const base64 = commaIndex >= 0 ? value.slice(commaIndex + 1) : value;
+  if (!base64) return 0;
+  return Math.round((base64.length * 3) / 4);
+}
+
+function formatResponsesInputImageItemForDisplay(item, index = 0) {
+  const imageUrl = (typeof item?.image_url === 'string') ? item.image_url.trim() : '';
+  const detail = (typeof item?.detail === 'string' && item.detail.trim()) ? item.detail.trim() : '';
+  const mimeType = extractDataUrlMimeType(imageUrl) || 'image';
+  const approxBytes = estimateDataUrlBytes(imageUrl);
+  const lines = [
+    `[input_image #${index + 1}]`,
+    `mime_type: ${mimeType}`,
+    `detail: ${detail || 'default'}`
+  ];
+  if (approxBytes > 0) {
+    lines.push(`approx_bytes: ${approxBytes}`);
+  }
+  if (imageUrl.startsWith('data:')) {
+    lines.push('image_url: [data URL omitted]');
+  } else if (imageUrl) {
+    lines.push(`image_url: ${imageUrl}`);
+  }
+  return lines.join('\n');
+}
+
+function formatResponsesContentItemArrayForDisplay(body) {
+  const items = Array.isArray(body) ? body : [];
+  if (items.length <= 0) return '';
+
+  if (items.every((item) => item && typeof item === 'object' && item.type === 'input_text' && typeof item.text === 'string')) {
+    return items.map((item) => item.text).join('');
+  }
+
+  const blocks = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (!item || typeof item !== 'object') return '';
+    if (item.type === 'input_text' && typeof item.text === 'string') {
+      blocks.push(item.text);
+      continue;
+    }
+    if (item.type === 'input_image' && typeof item.image_url === 'string') {
+      blocks.push(formatResponsesInputImageItemForDisplay(item, index));
+      continue;
+    }
+    return '';
+  }
+
+  return blocks.join('\n\n').trim();
+}
+
 /**
  * 将 function_call_output.output 正规化成适合 UI 展示的文本。
  *
@@ -872,6 +933,11 @@ export function formatResponsesToolOutputForDisplay(body) {
   }
 
   if (Array.isArray(body)) {
+    const contentItemText = formatResponsesContentItemArrayForDisplay(body);
+    if (contentItemText) {
+      return contentItemText;
+    }
+
     const textChunks = body
       .map((item) => {
         if (item && typeof item === 'object' && item.type === 'input_text' && typeof item.text === 'string') {

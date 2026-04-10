@@ -58,6 +58,10 @@ import {
   buildPdfContentReadFunctionToolDefinition
 } from '../agent_tools/pdf_content_read_tool.js';
 import {
+  WEBPAGE_SCREENSHOT_TOOL_NAME,
+  buildWebpageScreenshotFunctionToolDefinition
+} from '../agent_tools/webpage_screenshot_tool.js';
+import {
   buildConversationReferenceSnapshot,
   executeHistoryReadTool,
   executeHistorySearchTool
@@ -110,6 +114,7 @@ import {
 const RESPONSES_JS_RUNTIME_TOOL_NAME = 'js_runtime_execute';
 const RESPONSES_PAGE_CONTENT_TOOL_NAME = 'page_content_read';
 const RESPONSES_PDF_CONTENT_TOOL_NAME = PDF_CONTENT_READ_TOOL_NAME;
+const RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME = WEBPAGE_SCREENSHOT_TOOL_NAME;
 const RESPONSES_HISTORY_SEARCH_TOOL_NAME = 'history_search';
 const RESPONSES_HISTORY_READ_TOOL_NAME = 'history_read';
 const RESPONSES_REQUEST_USER_INPUT_TOOL_NAME = REQUEST_USER_INPUT_TOOL_NAME;
@@ -6161,6 +6166,21 @@ export function createMessageSender(appContext) {
     }
   }
 
+  async function getWebpageScreenshotResult(rawArgs) {
+    try {
+      console.log('发送 webpage_screenshot 结果请求');
+      const targetTabId = await utils?.resolveBoundSidebarTargetTabId?.();
+      return await chrome.runtime.sendMessage({
+        type: 'GET_WEBPAGE_SCREENSHOT_RESULT_FROM_SIDEBAR',
+        tabId: Number.isFinite(Number(targetTabId)) ? Number(targetTabId) : null,
+        args: rawArgs && typeof rawArgs === 'object' ? rawArgs : null
+      });
+    } catch (error) {
+      console.error('获取 webpage_screenshot 结果失败:', error);
+      return null;
+    }
+  }
+
   /**
    * 在重新生成开始前重置既有 AI 消息的基础时序/usage 元信息。
    *
@@ -6849,6 +6869,7 @@ export function createMessageSender(appContext) {
       buildResponsesHistoryReadFunctionToolDefinition()
     ];
     if (pageToolEnvironment?.exposePageContentTool) {
+      tools.push(buildWebpageScreenshotFunctionToolDefinition());
       tools.push(buildPdfContentReadFunctionToolDefinition());
       tools.push(buildResponsesPageContentFunctionToolDefinition());
     }
@@ -7022,6 +7043,31 @@ export function createMessageSender(appContext) {
         error: normalizeResponsesCustomToolError(error)
       });
     }
+  }
+
+  function serializeResponsesWebpageScreenshotFunctionToolOutput(value) {
+    const normalized = (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+    const imageUrl = (typeof normalized.image_url === 'string') ? normalized.image_url.trim() : '';
+    const detail = (normalized.detail === 'original') ? 'original' : null;
+
+    if (normalized.ok === true && imageUrl) {
+      const item = {
+        type: 'input_image',
+        image_url: imageUrl
+      };
+      if (detail) {
+        item.detail = detail;
+      }
+      return [item];
+    }
+
+    return buildResponsesGenericXmlToolOutputContentItems('webpage_screenshot_result', {
+      ok: false,
+      error: normalized.error || {
+        message: '网页截图工具未返回可用图片。',
+        name: 'WebpageScreenshotUnavailableError'
+      }
+    });
   }
 
   function serializeResponsesHistorySearchFunctionToolOutput(value) {
@@ -7238,6 +7284,35 @@ export function createMessageSender(appContext) {
         error: {
           message: '未能从当前网页读取 pdf_content_read 结果。',
           name: 'PdfContentReadUnavailableError'
+        }
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      };
+    }
+  }
+
+  /**
+   * 执行网页截图工具并返回给模型可直接消费的图片结果。
+   *
+   * 说明：
+   * - 截图来源固定为当前侧栏绑定网页的可见区域；
+   * - content script 负责隐藏侧边栏，避免把对话 UI 自己拍进去；
+   * - 默认返回压缩后的 prompt 图片，`detail: original` 时保留原始分辨率截图。
+   *
+   * @param {any} rawArgs
+   * @returns {Promise<Object>}
+   */
+  async function executeResponsesWebpageScreenshotFunction(rawArgs) {
+    try {
+      const result = await getWebpageScreenshotResult(rawArgs);
+      return result || {
+        ok: false,
+        error: {
+          message: '未能从当前网页获取 webpage_screenshot 结果。',
+          name: 'WebpageScreenshotUnavailableError'
         }
       };
     } catch (error) {
@@ -7741,7 +7816,7 @@ export function createMessageSender(appContext) {
    * - 未知函数：显式回一个错误对象，而不是静默吞掉，方便模型自我修正。
    *
    * @param {Object} toolCallRecord
-   * @returns {Promise<{type:'function_call_output', call_id:string, output:Array<{type:'input_text', text:string}>}>}
+   * @returns {Promise<{type:'function_call_output', call_id:string, output:Array<Object>}>}
    */
   async function executeResponsesCustomFunctionToolCall(toolCallRecord, options = {}) {
     const callId = (typeof toolCallRecord?.call_id === 'string' && toolCallRecord.call_id.trim())
@@ -7786,6 +7861,8 @@ export function createMessageSender(appContext) {
       outputPayload = await executeResponsesPageContentFunction(parsedArgs);
     } else if (functionName === RESPONSES_PDF_CONTENT_TOOL_NAME) {
       outputPayload = await executeResponsesPdfContentFunction(parsedArgs);
+    } else if (functionName === RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME) {
+      outputPayload = await executeResponsesWebpageScreenshotFunction(parsedArgs);
     } else if (functionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME) {
       outputPayload = await executeResponsesHistorySearchFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_HISTORY_READ_TOOL_NAME) {
@@ -7819,6 +7896,8 @@ export function createMessageSender(appContext) {
             ? serializeResponsesPageContentFunctionToolOutput(outputPayload)
             : functionName === RESPONSES_PDF_CONTENT_TOOL_NAME
               ? serializeResponsesPdfContentFunctionToolOutput(outputPayload)
+              : functionName === RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME
+                ? serializeResponsesWebpageScreenshotFunctionToolOutput(outputPayload)
             : functionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME
               ? serializeResponsesHistorySearchFunctionToolOutput(outputPayload)
               : functionName === RESPONSES_HISTORY_READ_TOOL_NAME

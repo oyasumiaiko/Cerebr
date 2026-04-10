@@ -68,6 +68,22 @@ test('formatResponsesToolOutputForDisplay 能拼回 input_text 分块', async ()
   assert.equal(text, '{\n  "ok": true,\n  "value": 1\n}');
 });
 
+test('formatResponsesToolOutputForDisplay 会把 input_image 输出压成摘要，避免直接展示 base64', async () => {
+  const { formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const text = formatResponsesToolOutputForDisplay([
+    {
+      type: 'input_image',
+      image_url: 'data:image/jpeg;base64,aGVsbG8=',
+      detail: 'original'
+    }
+  ]);
+  assert.match(text, /\[input_image #1\]/);
+  assert.match(text, /mime_type: image\/jpeg/);
+  assert.match(text, /detail: original/);
+  assert.match(text, /image_url: \[data URL omitted\]/);
+  assert.doesNotMatch(text, /aGVsbG8=/);
+});
+
 test('buildResponsesJsRuntimeToolOutputText 使用 XML 分块且避免大 JSON 包裹主输出', async () => {
   const { buildResponsesJsRuntimeToolOutputText } = await loadResponsesToolOutputModule();
   const text = buildResponsesJsRuntimeToolOutputText({
