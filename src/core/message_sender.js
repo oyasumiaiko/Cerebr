@@ -131,6 +131,8 @@ const RESPONSES_REQUEST_USER_INPUT_TOOL_NAME = REQUEST_USER_INPUT_TOOL_NAME;
 const RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME = LIST_ASKABLE_MODELS_TOOL_NAME;
 const RESPONSES_ASK_OTHER_AI_TOOL_NAME = ASK_OTHER_AI_TOOL_NAME;
 const RESPONSES_LOCAL_COMPACTION_MARKER_TEXT = '已压缩上下文（基于上一轮上下文大小）';
+const RESPONSES_LOCAL_COMPACTION_PENDING_TEXT = '上下文压缩中';
+const RESPONSES_LOCAL_COMPACTION_ERROR_TEXT = '上下文压缩失败';
 
 /**
  * 创建消息发送器
@@ -4624,6 +4626,7 @@ export function createMessageSender(appContext) {
       pageRuntimeContextSignature: null,
       environmentContextSignature: null,
       contextCompactionMarker: null,
+      responsesLocalCompactionStatus: null,
       pageMeta: null
     };
 
@@ -4740,7 +4743,128 @@ export function createMessageSender(appContext) {
         sourceAssistantMessageId: normalizedOptions.sourceAssistantMessageId || null,
         promptTokensBefore: normalizedOptions.promptTokensBefore,
         compactedAt: normalizedOptions.compactedAt
+      }),
+      responsesLocalCompactionStatus: buildResponsesLocalCompactionStatus({
+        state: 'success',
+        phase: 'completed',
+        requestBytes: normalizedOptions.requestBytes,
+        inputCount: normalizedOptions.inputCount,
+        toolCount: normalizedOptions.toolCount,
+        responseStatus: normalizedOptions.responseStatus,
+        responseBytes: normalizedOptions.responseBytes,
+        outputCount: Array.isArray(normalizedOptions.compactOutput)
+          ? normalizedOptions.compactOutput.length
+          : normalizedOptions.outputCount
       })
+    };
+  }
+
+  function buildResponsesLocalCompactionStatus(options = {}) {
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const normalizeNullableInt = (value) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : null;
+    };
+    const normalizeState = (value) => {
+      const normalized = String(value || '').trim().toLowerCase();
+      if (normalized === 'success' || normalized === 'error' || normalized === 'pending') {
+        return normalized;
+      }
+      return 'pending';
+    };
+    const normalizePhase = (value, fallbackState) => {
+      const normalized = String(value || '').trim().toLowerCase();
+      if (normalized) return normalized;
+      if (fallbackState === 'success') return 'completed';
+      if (fallbackState === 'error') return 'failed';
+      return 'preparing';
+    };
+
+    const stateValue = normalizeState(normalizedOptions.state);
+    const errorMessage = (typeof normalizedOptions.errorMessage === 'string' && normalizedOptions.errorMessage.trim())
+      ? normalizedOptions.errorMessage.trim()
+      : null;
+
+    return {
+      state: stateValue,
+      phase: normalizePhase(normalizedOptions.phase, stateValue),
+      requestBytes: normalizeNullableInt(normalizedOptions.requestBytes),
+      inputCount: normalizeNullableInt(normalizedOptions.inputCount),
+      toolCount: normalizeNullableInt(normalizedOptions.toolCount),
+      responseStatus: normalizeNullableInt(normalizedOptions.responseStatus),
+      responseBytes: normalizeNullableInt(normalizedOptions.responseBytes),
+      outputCount: normalizeNullableInt(normalizedOptions.outputCount),
+      errorMessage,
+      updatedAt: normalizeNullableInt(normalizedOptions.updatedAt) || Date.now()
+    };
+  }
+
+  function buildResponsesLocalCompactionStatusHistoryPatch(options = {}) {
+    return {
+      responsesLocalCompactionStatus: buildResponsesLocalCompactionStatus(options)
+    };
+  }
+
+  function findAssistantHistoryNodeForCompactionMessage(messageId, historyMessagesRef = null) {
+    const normalizedMessageId = (typeof messageId === 'string' || typeof messageId === 'number')
+      ? String(messageId).trim()
+      : '';
+    if (!normalizedMessageId) return null;
+    const targetMessages = Array.isArray(historyMessagesRef)
+      ? historyMessagesRef
+      : chatHistoryManager?.chatHistory?.messages;
+    if (!Array.isArray(targetMessages)) return null;
+    return targetMessages.find((node) => node && node.id === normalizedMessageId) || null;
+  }
+
+  function updateResponsesLocalCompactionMessage(payload = {}) {
+    const normalizedPayload = (payload && typeof payload === 'object') ? payload : {};
+    const targetMessageId = (typeof normalizedPayload.targetMessageId === 'string')
+      ? normalizedPayload.targetMessageId.trim()
+      : '';
+    if (!targetMessageId) {
+      return appendResponsesLocalCompactionMarker(normalizedPayload);
+    }
+
+    const markerText = (typeof normalizedPayload.text === 'string' && normalizedPayload.text.trim())
+      ? normalizedPayload.text.trim()
+      : RESPONSES_LOCAL_COMPACTION_MARKER_TEXT;
+    const historyPatch = (normalizedPayload.historyPatch && typeof normalizedPayload.historyPatch === 'object')
+      ? normalizedPayload.historyPatch
+      : null;
+    const historyMessagesRef = Array.isArray(normalizedPayload.historyMessagesRef)
+      ? normalizedPayload.historyMessagesRef
+      : null;
+    const node = findAssistantHistoryNodeForCompactionMessage(targetMessageId, historyMessagesRef);
+    if (!node) {
+      return appendResponsesLocalCompactionMarker({
+        ...normalizedPayload,
+        text: markerText
+      });
+    }
+
+    node.content = imageHandler.processImageTags(markerText, null);
+    node.thoughtsRaw = null;
+    node.hasInlineImages = false;
+    if (historyPatch) {
+      Object.assign(node, historyPatch);
+    }
+
+    if (!historyMessagesRef) {
+      const fallbackElement = resolveMessageElementForSender(targetMessageId);
+      messageProcessor.syncAssistantMessageView(targetMessageId, {
+        node,
+        content: markerText,
+        thoughtsRaw: null,
+        fallbackElement,
+        suppressMissingNodeWarning: true
+      });
+    }
+
+    return {
+      messageId: targetMessageId,
+      node,
+      element: resolveMessageElementForSender(targetMessageId)
     };
   }
 
@@ -4871,6 +4995,15 @@ export function createMessageSender(appContext) {
       sendChatHistoryFlag: normalizedPayload.sendChatHistoryFlag !== false
     });
     const compactRequestSummary = summarizeResponsesCompactRequestBody(compactRequestBody);
+    if (typeof normalizedPayload.onStatusUpdate === 'function') {
+      normalizedPayload.onStatusUpdate({
+        state: 'pending',
+        phase: 'sending',
+        requestBytes: compactRequestSummary?.serializedBytes,
+        inputCount: compactRequestSummary?.inputCount,
+        toolCount: compactRequestSummary?.toolCount
+      });
+    }
     const compactResponse = await apiManager.sendResponsesCompactRequest({
       requestBody: compactRequestBody,
       config: usedApiConfig,
@@ -4902,9 +5035,16 @@ export function createMessageSender(appContext) {
       compactOutput,
       sourceAssistantMessageId: normalizedPayload.sourceAssistantMessageId || null,
       promptTokensBefore: normalizedPayload.promptTokensBefore,
-      compactedAt: Date.now()
+      compactedAt: Date.now(),
+      requestBytes: compactRequestSummary?.serializedBytes,
+      inputCount: compactRequestSummary?.inputCount,
+      toolCount: compactRequestSummary?.toolCount,
+      responseStatus: compactResponse.status,
+      responseBytes: (new TextEncoder()).encode(compactResponseText).length,
+      outputCount: compactOutput.length
     });
-    const markerResult = appendResponsesLocalCompactionMarker({
+    const markerResult = updateResponsesLocalCompactionMessage({
+      targetMessageId: normalizedPayload.targetMessageId || '',
       text: RESPONSES_LOCAL_COMPACTION_MARKER_TEXT,
       historyPatch,
       activeThreadContext: normalizedPayload.activeThreadContext || null,
@@ -5481,27 +5621,69 @@ export function createMessageSender(appContext) {
           sendChatHistoryFlag: shouldSendChatHistory
         });
         const latestAssistantEntry = findLatestAssistantPromptTokenEntry(conversationChain);
-        await executeResponsesLocalCompaction({
-          usedApiConfig,
-          conversationChain,
-          sendChatHistoryFlag: true,
+        const pendingMarkerResult = appendResponsesLocalCompactionMarker({
+          text: RESPONSES_LOCAL_COMPACTION_PENDING_TEXT,
+          historyPatch: buildResponsesLocalCompactionStatusHistoryPatch({
+            state: 'pending',
+            phase: 'preparing'
+          }),
           activeThreadContext,
-          historyMessagesRef: null,
-          sourceAssistantMessageId: latestAssistantEntry?.node?.id || null,
-          promptTokensBefore: latestAssistantEntry?.promptTokens ?? null
+          historyMessagesRef: null
         });
+        clearInputs();
+        inputController?.focusToEnd?.();
+        scrollToBottom(activeThreadContext?.container || chatContainer);
 
-        const savedConversation = await chatHistoryUI?.saveCurrentConversation?.(true, {
-          preserveExistingApiLock: true
-        });
-        const savedConversationId = normalizeConversationId(savedConversation?.id);
-        if (savedConversationId) {
-          updateCurrentConversationContext(savedConversationId);
+        try {
+          const compactionResult = await executeResponsesLocalCompaction({
+            usedApiConfig,
+            conversationChain,
+            sendChatHistoryFlag: true,
+            activeThreadContext,
+            historyMessagesRef: null,
+            sourceAssistantMessageId: latestAssistantEntry?.node?.id || null,
+            promptTokensBefore: latestAssistantEntry?.promptTokens ?? null,
+            targetMessageId: pendingMarkerResult?.messageId || '',
+            onStatusUpdate: (statusPatch) => {
+              updateResponsesLocalCompactionMessage({
+                targetMessageId: pendingMarkerResult?.messageId || '',
+                text: RESPONSES_LOCAL_COMPACTION_PENDING_TEXT,
+                historyPatch: buildResponsesLocalCompactionStatusHistoryPatch(statusPatch),
+                activeThreadContext,
+                historyMessagesRef: null
+              });
+            }
+          });
+
+          const savedConversation = await chatHistoryUI?.saveCurrentConversation?.(true, {
+            preserveExistingApiLock: true
+          });
+          const savedConversationId = normalizeConversationId(savedConversation?.id);
+          if (savedConversationId) {
+            updateCurrentConversationContext(savedConversationId);
+          }
+          return {
+            ok: true,
+            markerMessageId: compactionResult?.markerMessageId || pendingMarkerResult?.messageId || ''
+          };
+        } catch (error) {
+          updateResponsesLocalCompactionMessage({
+            targetMessageId: pendingMarkerResult?.messageId || '',
+            text: RESPONSES_LOCAL_COMPACTION_ERROR_TEXT,
+            historyPatch: buildResponsesLocalCompactionStatusHistoryPatch({
+              state: 'error',
+              phase: 'failed',
+              errorMessage: error?.message || '上下文压缩失败'
+            }),
+            activeThreadContext,
+            historyMessagesRef: null
+          });
+          console.error('执行 /compact 失败:', error);
+          return {
+            ok: false,
+            error: error?.message || '上下文压缩失败'
+          };
         }
-        if (typeof showNotification === 'function') {
-          showNotification({ message: '已压缩当前上下文', type: 'success' });
-        }
-        return { ok: true };
       },
       requiresArgs: false
     },

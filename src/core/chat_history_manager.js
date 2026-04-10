@@ -42,6 +42,7 @@ import { normalizeResponsesPromptCacheKey } from '../utils/responses_prompt_cach
  * @property {string|null} [pageRuntimeContextSignature] - 页面运行环境隐藏上下文的稳定签名；为空表示沿用更早一次已生效的上下文（可选）
  * @property {string|null} [environmentContextSignature] - 通用 environment_context 的稳定签名；为空表示沿用更早一次已生效的上下文（可选）
  * @property {{source:string,sourceAssistantMessageId:string|null,promptTokensBefore:number|null,compactedAt:number|null}|null} [contextCompactionMarker] - 本地 Responses compact marker（可选）
+ * @property {{state:string,phase:string,requestBytes:number|null,inputCount:number|null,toolCount:number|null,responseStatus:number|null,responseBytes:number|null,outputCount:number|null,errorMessage:string|null,updatedAt:number|null}|null} [responsesLocalCompactionStatus] - 本地 `/compact` UI 状态元信息，仅用于消息流展示与诊断（可选）
  */
 
 /**
@@ -115,6 +116,9 @@ function createMessageNode(role, content, parentId = null) {
     // 本地 Responses compact 成功后会插入一条可见 marker；
     // 该字段用于让 composeMessages 只截取“最新 marker 及其之后”的模型可见历史。
     contextCompactionMarker: null,
+    // `/compact` 的“构建载荷 / 已发送 / 成功 / 失败”状态展示元信息。
+    // 注意：pending / error 这类仅用于 UI 的节点不会重新发给模型，composeMessages 会显式跳过。
+    responsesLocalCompactionStatus: null,
     // --- 页面元信息（用于固定“会话来源页”，避免生成过程中切换标签页导致 URL/标题错绑）---
     // 说明：
     // - 仅在“首条用户消息”创建时写入；后续消息不重复写，避免冗余。

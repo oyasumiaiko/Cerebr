@@ -100,6 +100,12 @@ export function composeMessages(args) {
   // - OpenAI 兼容的 reasoning_content 必须“原样回传”，因此这里直接使用节点上保存的 reasoning_content；
   // - thoughtSignatureSource 用于让下游 buildRequest 决定：哪些签名该发给 Gemini，哪些该发给 OpenAI 兼容接口。
   const nodeToMessage = (node) => {
+    const compactStatus = node?.responsesLocalCompactionStatus;
+    if (compactStatus && !isUsableResponsesLocalCompactionMarker(node)) {
+      // `/compact` 的 pending / error 提示仅用于本地消息流反馈，不应重新进入模型上下文。
+      return null;
+    }
+
     const role = mapRole(node?.role);
     const thoughtSignature = node?.thoughtSignature || null;
     const thoughtSignatureSource = node?.thoughtSignatureSource || null;
@@ -194,14 +200,14 @@ export function composeMessages(args) {
     const useRoleBasedLimits = (normalizedMaxUserHistory !== null) || (normalizedMaxAssistantHistory !== null);
 
     if (useRoleBasedLimits) {
-      const limited = ensureLeadingCompactionMarkerSelected(
-        effectiveChain,
-        selectConversationNodesByRole(effectiveChain, {
-          maxUserMessages: normalizedMaxUserHistory,
-          maxAssistantMessages: normalizedMaxAssistantHistory
-        })
-      );
-      messages.push(...limited.map(nodeToMessage));
+        const limited = ensureLeadingCompactionMarkerSelected(
+          effectiveChain,
+          selectConversationNodesByRole(effectiveChain, {
+            maxUserMessages: normalizedMaxUserHistory,
+            maxAssistantMessages: normalizedMaxAssistantHistory
+          })
+        );
+      messages.push(...limited.map(nodeToMessage).filter(Boolean));
     } else {
       // 旧逻辑：单一 maxHistory，按总条目数裁剪
       // 当 maxHistory 为 0 时，不发送任何历史消息
@@ -214,16 +220,19 @@ export function composeMessages(args) {
           effectiveChain,
           effectiveChain.slice(-maxHistory)
         );
-        messages.push(...limited.map(nodeToMessage));
+        messages.push(...limited.map(nodeToMessage).filter(Boolean));
       } else {
         // 发送全部历史消息
-        messages.push(...effectiveChain.map(nodeToMessage));
+        messages.push(...effectiveChain.map(nodeToMessage).filter(Boolean));
       }
     }
   } else {
     // 只发送最后一条
-    if (effectiveChain.length > 0) {
-      const last = effectiveChain[effectiveChain.length - 1];
+    const lastVisibleNode = [...effectiveChain].reverse().find((node) => {
+      return !(node?.responsesLocalCompactionStatus && !isUsableResponsesLocalCompactionMarker(node));
+    });
+    if (lastVisibleNode) {
+      const last = lastVisibleNode;
       const lastContent = (mapRole(last.role) === 'user' && last?.outboundContent != null)
         ? last.outboundContent
         : last.content;

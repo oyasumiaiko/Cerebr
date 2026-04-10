@@ -283,6 +283,45 @@ test('composeMessages 在按角色裁剪时不把 compact marker 计入 assistan
   assert.equal(messages[2].content, '最新回答');
 });
 
+test('composeMessages skips local-only compact status messages without replay items', async () => {
+  const { composeMessages } = await loadMessageComposerModule();
+
+  const messages = composeMessages({
+    prompts: { system: { prompt: '' } },
+    injectedSystemMessages: [],
+    pageContent: null,
+    imageContainsScreenshot: false,
+    omitDefaultSystemPrompt: true,
+    currentPromptType: 'none',
+    regenerateMode: false,
+    messageId: null,
+    conversationChain: [
+      { id: 'u1', role: 'user', content: 'first user' },
+      {
+        id: 'c_pending',
+        role: 'assistant',
+        content: '上下文压缩中',
+        responsesLocalCompactionStatus: { state: 'pending', phase: 'sending' }
+      },
+      {
+        id: 'c_error',
+        role: 'assistant',
+        content: '上下文压缩失败',
+        responsesLocalCompactionStatus: { state: 'error', phase: 'failed', errorMessage: 'empty body' }
+      },
+      { id: 'u2', role: 'user', content: 'latest user' }
+    ],
+    sendChatHistory: true,
+    maxHistory: 20,
+    maxUserHistory: null,
+    maxAssistantHistory: null
+  });
+
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].content, 'first user');
+  assert.ok(String(messages[1].content || '').includes('latest user'));
+});
+
 test('mergeResponsesInputItems de-duplicates identical reasoning items without stable ids', async () => {
   const { mergeResponsesInputItems } = await loadResponsesInputItemsModule();
 

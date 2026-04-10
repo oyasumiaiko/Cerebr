@@ -3263,6 +3263,157 @@ export function createMessageProcessor(appContext) {
     return true;
   }
 
+  function normalizeResponsesLocalCompactionStatus(status) {
+    if (!status || typeof status !== 'object' || Array.isArray(status)) return null;
+    const normalizeInt = (value) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : null;
+    };
+    const state = String(status.state || '').trim().toLowerCase();
+    if (!state) return null;
+    return {
+      state,
+      phase: String(status.phase || '').trim().toLowerCase(),
+      requestBytes: normalizeInt(status.requestBytes),
+      inputCount: normalizeInt(status.inputCount),
+      toolCount: normalizeInt(status.toolCount),
+      responseStatus: normalizeInt(status.responseStatus),
+      responseBytes: normalizeInt(status.responseBytes),
+      outputCount: normalizeInt(status.outputCount),
+      errorMessage: (typeof status.errorMessage === 'string' && status.errorMessage.trim())
+        ? status.errorMessage.trim()
+        : '',
+      updatedAt: normalizeInt(status.updatedAt)
+    };
+  }
+
+  function formatCompactStatusBytes(bytes) {
+    const parsed = Number(bytes);
+    if (!Number.isFinite(parsed) || parsed <= 0) return '';
+    if (parsed >= 1024 * 1024) {
+      return `${(parsed / (1024 * 1024)).toFixed(parsed >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+    }
+    if (parsed >= 1024) {
+      return `${(parsed / 1024).toFixed(parsed >= 10 * 1024 ? 0 : 1)} KB`;
+    }
+    return `${Math.trunc(parsed)} B`;
+  }
+
+  function truncateCompactStatusText(text, maxLength = 120) {
+    const normalized = (typeof text === 'string') ? text.trim().replace(/\s+/g, ' ') : '';
+    if (!normalized) return '';
+    if (normalized.length <= maxLength) return normalized;
+    return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+  }
+
+  function buildResponsesLocalCompactionPresentation(node) {
+    const status = normalizeResponsesLocalCompactionStatus(node?.responsesLocalCompactionStatus);
+    const hasSuccessfulMarker = !!(node?.contextCompactionMarker
+      && Array.isArray(node?.response_input_items)
+      && node.response_input_items.length > 0);
+    const state = status?.state || (hasSuccessfulMarker ? 'success' : '');
+    if (!state) return null;
+
+    const metaParts = [];
+    if (status?.requestBytes) metaParts.push(`载荷 ${formatCompactStatusBytes(status.requestBytes)}`);
+    if (status?.inputCount) metaParts.push(`${status.inputCount} 条输入`);
+    if (status?.responseBytes) metaParts.push(`响应 ${formatCompactStatusBytes(status.responseBytes)}`);
+    if (status?.outputCount) metaParts.push(`${status.outputCount} 个 output items`);
+    if (status?.responseStatus) metaParts.push(`HTTP ${status.responseStatus}`);
+
+    let title = '上下文已压缩';
+    let iconClass = 'fa-box-archive';
+    let stateClass = 'success';
+
+    if (state === 'pending') {
+      stateClass = 'pending';
+      iconClass = 'fa-arrows-rotate';
+      title = status?.phase === 'sending'
+        ? '上下文压缩请求已发送'
+        : '上下文压缩中';
+    } else if (state === 'error') {
+      stateClass = 'error';
+      iconClass = 'fa-circle-exclamation';
+      title = '上下文压缩失败';
+    }
+
+    const fallbackMeta = (() => {
+      if (stateClass === 'pending') {
+        return status?.phase === 'sending'
+          ? '请求已发出，等待 compact 响应'
+          : '正在构建 compact 载荷';
+      }
+      if (stateClass === 'error') {
+        return truncateCompactStatusText(status?.errorMessage || '未收到有效 compact 响应');
+      }
+      return '后续轮次将复用压缩后的历史';
+    })();
+
+    return {
+      state: stateClass,
+      title,
+      iconClass,
+      meta: metaParts.length > 0
+        ? `${metaParts.join(' · ')}${stateClass === 'error' && status?.errorMessage ? ` · ${truncateCompactStatusText(status.errorMessage)}` : ''}`
+        : fallbackMeta
+    };
+  }
+
+  function syncResponsesLocalCompactionDisplay(messageWrapperDiv, node) {
+    if (!messageWrapperDiv) return false;
+    const presentation = buildResponsesLocalCompactionPresentation(node);
+    const existingBanner = messageWrapperDiv.querySelector('.context-compaction-divider');
+
+    if (!presentation) {
+      messageWrapperDiv.classList.remove('context-compaction-message');
+      delete messageWrapperDiv.dataset.compactionState;
+      if (existingBanner) existingBanner.remove();
+      return false;
+    }
+
+    messageWrapperDiv.classList.add('context-compaction-message');
+    messageWrapperDiv.dataset.compactionState = presentation.state;
+
+    let banner = existingBanner;
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.className = 'context-compaction-divider';
+      banner.innerHTML = `
+        <div class="context-compaction-divider__row">
+          <span class="context-compaction-divider__line" aria-hidden="true"></span>
+          <div class="context-compaction-divider__pill">
+            <i class="context-compaction-divider__icon fa-solid" aria-hidden="true"></i>
+            <span class="context-compaction-divider__label"></span>
+          </div>
+          <span class="context-compaction-divider__line" aria-hidden="true"></span>
+        </div>
+        <div class="context-compaction-divider__meta"></div>
+      `;
+      const textContent = messageWrapperDiv.querySelector('.text-content');
+      if (textContent) {
+        messageWrapperDiv.insertBefore(banner, textContent);
+      } else {
+        messageWrapperDiv.appendChild(banner);
+      }
+    }
+
+    banner.className = `context-compaction-divider is-${presentation.state}`;
+    const icon = banner.querySelector('.context-compaction-divider__icon');
+    const label = banner.querySelector('.context-compaction-divider__label');
+    const meta = banner.querySelector('.context-compaction-divider__meta');
+    if (icon) {
+      icon.className = `context-compaction-divider__icon fa-solid ${presentation.iconClass}`;
+    }
+    if (label) {
+      label.textContent = presentation.title;
+    }
+    if (meta) {
+      meta.textContent = presentation.meta || '';
+      meta.hidden = !presentation.meta;
+    }
+    return true;
+  }
+
   /**
    * 根据历史节点把 assistant 消息的附加元数据显示到 DOM。
    * @param {string|null} messageId
@@ -3296,6 +3447,19 @@ export function createMessageProcessor(appContext) {
     }
 
     if (hasPreResponseStatus) {
+      removeResponseActivityTimelineDisplay(messageWrapperDiv, {
+        preserveAutoCollapseSchedules: true
+      });
+      setupThoughtsDisplay(messageWrapperDiv, null, processMathAndMarkdown);
+      setupResponseToolCallsDisplay(messageWrapperDiv, null);
+      syncResponsesLocalCompactionDisplay(messageWrapperDiv, null);
+      enhanceMarkdownContent(messageWrapperDiv);
+      messageVirtualizer.scheduleUpdate(resolveMessageListContainer(messageWrapperDiv));
+      return true;
+    }
+
+    const hasCompactionDisplay = syncResponsesLocalCompactionDisplay(messageWrapperDiv, node);
+    if (hasCompactionDisplay) {
       removeResponseActivityTimelineDisplay(messageWrapperDiv, {
         preserveAutoCollapseSchedules: true
       });
