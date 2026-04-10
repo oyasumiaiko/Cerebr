@@ -20,6 +20,7 @@ import { resolveThoughtsPanelLifecycleState } from '../utils/thoughts_panel_life
 import { getAssistantActivityTimeline } from '../utils/assistant_activity_timeline.js';
 import { resolveResponseActivityPanelModeState } from '../utils/response_activity_panel_mode.js';
 import { resolveResponseActivityToolExpansionState } from '../utils/response_activity_tool_auto_collapse.js';
+import { normalizeAssistantPreResponseStatus } from '../utils/assistant_pre_response_status.js';
 import {
   formatResponsesToolOutputForDisplay,
   hasResponsesToolOutputBody
@@ -1347,10 +1348,14 @@ export function createMessageProcessor(appContext) {
 
     // 统一清理“错误态”残留，避免重试成功后仍显示红字/旧重试按钮。
     try {
+      messageDiv.classList.remove('assistant-pre-response');
       messageDiv.classList.remove('error-message');
       messageDiv.classList.remove('loading-message');
       messageDiv.classList.remove('regenerating');
+      delete messageDiv.dataset.preResponseStage;
       messageDiv.removeAttribute('title');
+      const preResponseStatus = messageDiv.querySelectorAll('.assistant-pre-response-status');
+      preResponseStatus.forEach((statusEl) => statusEl.remove());
       const retryActions = messageDiv.querySelectorAll('.error-retry-actions');
       retryActions.forEach((actionEl) => actionEl.remove());
       const rootTextNodes = Array.from(messageDiv.childNodes || []).filter(node => node && node.nodeType === 3);
@@ -3009,6 +3014,90 @@ export function createMessageProcessor(appContext) {
     return true;
   }
 
+  function resolveAssistantPreResponseStatus(messageId, messageWrapperDiv, runtimeSnapshot) {
+    const normalizedStatus = normalizeAssistantPreResponseStatus(runtimeSnapshot?.activeTurn?.preResponseStatus || null);
+    if (!normalizedStatus || !messageWrapperDiv) return null;
+
+    const runtimeStatus = String(runtimeSnapshot?.activeTurn?.status || '').trim().toLowerCase();
+    if (!runtimeStatus || ['idle', 'completed', 'aborted', 'error'].includes(runtimeStatus)) {
+      return null;
+    }
+
+    const boundAssistantMessageId = String(runtimeSnapshot?.activeTurn?.boundAssistantMessageId || '').trim();
+    const normalizedMessageId = String(
+      messageId
+      || messageWrapperDiv.getAttribute?.('data-message-id')
+      || ''
+    ).trim();
+
+    if (boundAssistantMessageId) {
+      return boundAssistantMessageId === normalizedMessageId ? normalizedStatus : null;
+    }
+
+    if (
+      messageWrapperDiv.classList.contains('loading-message')
+      || messageWrapperDiv.classList.contains('updating')
+    ) {
+      return normalizedStatus;
+    }
+
+    return null;
+  }
+
+  function ensureAssistantPreResponseStatusSurface(messageWrapperDiv) {
+    if (!messageWrapperDiv) return null;
+    let surface = messageWrapperDiv.querySelector('.assistant-pre-response-status');
+    if (surface) return surface;
+
+    surface = document.createElement('div');
+    surface.className = 'assistant-pre-response-status';
+
+    const spinner = document.createElement('span');
+    spinner.className = 'assistant-pre-response-status__spinner';
+    spinner.setAttribute('aria-hidden', 'true');
+    surface.appendChild(spinner);
+
+    const text = document.createElement('span');
+    text.className = 'assistant-pre-response-status__text';
+    surface.appendChild(text);
+
+    const anchor = messageWrapperDiv.firstElementChild || null;
+    if (anchor) {
+      messageWrapperDiv.insertBefore(surface, anchor);
+    } else {
+      messageWrapperDiv.appendChild(surface);
+    }
+    return surface;
+  }
+
+  function syncAssistantPreResponseStatus(messageId, messageWrapperDiv, runtimeSnapshot) {
+    if (!messageWrapperDiv) return false;
+    const status = resolveAssistantPreResponseStatus(messageId, messageWrapperDiv, runtimeSnapshot);
+    const existingSurface = messageWrapperDiv.querySelector('.assistant-pre-response-status');
+
+    if (!status) {
+      messageWrapperDiv.classList.remove('assistant-pre-response');
+      delete messageWrapperDiv.dataset.preResponseStage;
+      existingSurface?.remove?.();
+      return false;
+    }
+
+    const surface = existingSurface || ensureAssistantPreResponseStatusSurface(messageWrapperDiv);
+    if (!surface) return false;
+    const textElement = surface.querySelector('.assistant-pre-response-status__text');
+    if (textElement) {
+      textElement.textContent = status.text;
+    } else {
+      surface.textContent = status.text;
+    }
+    surface.classList.toggle('assistant-pre-response-status--spinnerless', status.showSpinner === false);
+    surface.setAttribute('data-stage', status.stage || '');
+    surface.setAttribute('data-note', status.note || '');
+    messageWrapperDiv.classList.add('assistant-pre-response');
+    messageWrapperDiv.dataset.preResponseStage = status.stage || '';
+    return true;
+  }
+
   /**
    * 根据历史节点把 assistant 消息的附加元数据显示到 DOM。
    * @param {string|null} messageId
@@ -3022,10 +3111,33 @@ export function createMessageProcessor(appContext) {
       ? nodeLike
       : (messageId ? chatHistoryManager.chatHistory.messages.find(msg => msg.id === messageId) : null);
     const runtimeSnapshot = options?.runtimeSnapshot || null;
-    if (!messageWrapperDiv || !node) return false;
-    const role = String(node.role || '').toLowerCase();
-    if (role !== 'assistant' && role !== 'ai') return false;
+    if (!messageWrapperDiv) return false;
+    const role = String(node?.role || '').toLowerCase();
+    const isAssistantLike = role === 'assistant'
+      || role === 'ai'
+      || ((!node) && (
+        messageWrapperDiv.classList.contains('ai-message')
+        || messageWrapperDiv.classList.contains('loading-message')
+      ));
+    if (!isAssistantLike) return false;
     try { messageWrapperDiv.removeAttribute('title'); } catch (_) {}
+    const hasPreResponseStatus = syncAssistantPreResponseStatus(messageId, messageWrapperDiv, runtimeSnapshot);
+
+    if (!node) {
+      if (hasPreResponseStatus) {
+        messageVirtualizer.scheduleUpdate(resolveMessageListContainer(messageWrapperDiv));
+      }
+      return hasPreResponseStatus;
+    }
+
+    if (hasPreResponseStatus) {
+      removeResponseActivityTimelineDisplay(messageWrapperDiv);
+      setupThoughtsDisplay(messageWrapperDiv, null, processMathAndMarkdown);
+      setupResponseToolCallsDisplay(messageWrapperDiv, null);
+      enhanceMarkdownContent(messageWrapperDiv);
+      messageVirtualizer.scheduleUpdate(resolveMessageListContainer(messageWrapperDiv));
+      return true;
+    }
 
     const responseTimeline = getAssistantActivityTimeline(node);
     if (responseTimeline.length > 0) {

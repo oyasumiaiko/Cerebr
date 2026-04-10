@@ -419,7 +419,7 @@ async function main() {
           snapshot
         };
       }
-      if (latestAiText && !/正在获取页面运行环境上下文/.test(latestAiText)) {
+      if (latestAiText && !/正在准备页面上下文/.test(latestAiText)) {
         return {
           reason: 'ai_message_progressed',
           stage,

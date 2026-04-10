@@ -84,7 +84,13 @@ import {
   JS_RUNTIME_ENV_ISOLATED_SANDBOX,
   resolvePageToolEnvironment
 } from '../agent_tools/page_tool_environment.js';
-import { deriveResponsesSseLoadingStatus } from '../utils/responses_stream_status.js';
+import {
+  createAssistantPreResponseStatus,
+  deriveAssistantPreResponseStatusFromLocalStage,
+  deriveAssistantPreResponseStatusFromRequestEvent,
+  deriveAssistantPreResponseStatusFromResponsesSse,
+  normalizeAssistantPreResponseStatus
+} from '../utils/assistant_pre_response_status.js';
 import {
   buildPageRuntimeContextPayload,
   resolvePageRuntimeContextAttachment
@@ -464,6 +470,7 @@ export function createMessageSender(appContext) {
     if (!snapshot || typeof snapshot !== 'object') return false;
     if (String(snapshot?.activeTurn?.status || '').trim().toLowerCase() !== 'idle') return true;
     if (snapshot?.activeTurn?.attemptId || snapshot?.activeTurn?.jobId || snapshot?.activeTurn?.boundAssistantMessageId) return true;
+    if (snapshot?.activeTurn?.preResponseStatus && typeof snapshot.activeTurn.preResponseStatus === 'object') return true;
     if (Array.isArray(snapshot?.responses?.accumulatedInputItems) && snapshot.responses.accumulatedInputItems.length > 0) return true;
     if (Array.isArray(snapshot?.responses?.accumulatedTimeline) && snapshot.responses.accumulatedTimeline.length > 0) return true;
     if (snapshot?.responses?.assistantPhase || snapshot?.responses?.lastResponseId) return true;
@@ -4698,42 +4705,20 @@ export function createMessageSender(appContext) {
     return node;
   }
 
-  /**
-   * 安全更新“加载占位消息”的状态文案。
-   *
-   * 设计背景：
-   * - 流式输出在拿到首个 token 后会移除 loadingMessage 并创建正式 AI 消息；
-   * - 用户手动停止/自动重试/异常路径也可能提前移除或替换该元素；
-   * - 因此任何状态更新都必须先确认节点仍在 DOM 中，避免写入已失效的引用。
-   *
-   * @param {HTMLElement|null} loadingMessage
-   * @param {string} text - 需要展示的短文案（尽量一行可读）
-   * @param {Object|null} [meta] - 更细粒度的补充信息（仅用于 title 悬停提示；不得包含敏感数据）
-   */
-  function updateLoadingStatus(loadingMessage, text, meta = null) {
-    if (!loadingMessage || !loadingMessage.parentNode) return;
-    const safeText = (typeof text === 'string') ? text : String(text ?? '');
-    try {
-      const rootTextNodes = Array.from(loadingMessage.childNodes || []).filter(node => node && node.nodeType === 3);
-      rootTextNodes.forEach((node) => node.remove());
-    } catch (_) {}
-    let textContentDiv = loadingMessage.querySelector('.text-content');
-    if (!textContentDiv) {
-      textContentDiv = document.createElement('div');
-      textContentDiv.classList.add('text-content');
-      const thoughtsDiv = loadingMessage.querySelector('.thoughts-content');
-      const apiFooter = loadingMessage.querySelector('.api-footer');
-      if (thoughtsDiv && thoughtsDiv.nextSibling) {
-        loadingMessage.insertBefore(textContentDiv, thoughtsDiv.nextSibling);
-      } else if (apiFooter && apiFooter.parentNode === loadingMessage) {
-        loadingMessage.insertBefore(textContentDiv, apiFooter);
-      } else {
-        loadingMessage.appendChild(textContentDiv);
-      }
+  function renderAttemptPreResponseStatus(loadingMessage, attemptState = null) {
+    const liveElement = resolveLiveLoadingStatusElement(loadingMessage, attemptState);
+    if (!liveElement) return;
+    const runtimeSnapshot = attemptState ? getAttemptRuntimeSnapshot(attemptState) : null;
+    if (typeof messageProcessor?.syncAssistantMessageMetadata === 'function') {
+      messageProcessor.syncAssistantMessageMetadata(
+        liveElement.getAttribute?.('data-message-id') || null,
+        { role: 'assistant' },
+        {
+          fallbackElement: liveElement,
+          runtimeSnapshot
+        }
+      );
     }
-    textContentDiv.textContent = safeText;
-    loadingMessage.setAttribute('data-original-text', safeText);
-    try { loadingMessage.removeAttribute('title'); } catch (_) {}
   }
 
   /**
@@ -4784,53 +4769,67 @@ export function createMessageSender(appContext) {
       : null;
   }
 
+  function clearAttemptPreResponseStatus(attemptState, loadingMessage = null) {
+    if (!attemptState || typeof attemptState !== 'object') return;
+    clearAttemptLoadingStatusPulse(attemptState);
+    attemptState.pendingLoadingStatusText = '';
+    attemptState.pendingLoadingStatusMeta = null;
+    updateAttemptRuntimeState(attemptState, (draft) => {
+      draft.activeTurn.preResponseStatus = null;
+    });
+    renderAttemptPreResponseStatus(loadingMessage || attemptState.loadingMessage || null, attemptState);
+  }
+
+  function syncAttemptPreResponseStatusFromLocalStage(loadingMessage, attemptState = null, stage = '', data = {}) {
+    const normalizedStatus = deriveAssistantPreResponseStatusFromLocalStage(stage, data);
+    if (!normalizedStatus) return;
+    syncAttemptLoadingStatus(loadingMessage, attemptState, normalizedStatus.text, {
+      stage: normalizedStatus.stage,
+      note: normalizedStatus.note || '',
+      showSpinner: normalizedStatus.showSpinner
+    });
+  }
+
   /**
-   * 更新“请求进行中”的状态文案，并在原地替换场景下同步到 assistant 节点本身。
+   * 更新“正文出现前”的统一状态。
    *
-   * 这样即使中途发生一次基于历史节点的局部重渲染，也不会把旧答案重新顶回屏幕。
-   *
-   * @param {HTMLElement|null} loadingMessage
-   * @param {{ aiMessageId?: string|null, firstVisibleOutputAtMs?: number|null }} [attemptState]
-   * @param {string} text
-   * @param {Object|null} [meta]
+   * 关键约束：
+   * - 状态文案不再写进 assistant 正文节点；
+   * - DOM 与历史节点都通过 runtimeSnapshot 投影同一份状态；
+   * - 这样重试、原地替换、切会话重渲染时都不会再把状态文本误当成正式回答。
    */
   function syncAttemptLoadingStatus(loadingMessage, attemptState = null, text = '', meta = null) {
-    const liveElement = resolveLiveLoadingStatusElement(loadingMessage, attemptState);
-    const targetMessageId = normalizeConversationId(attemptState?.aiMessageId)
-      || normalizeConversationId(liveElement?.getAttribute?.('data-message-id') || '')
-      || normalizeConversationId(loadingMessage?.getAttribute?.('data-message-id') || '');
+    const normalizedMeta = (meta && typeof meta === 'object') ? meta : {};
+    const normalizedStatus = normalizeAssistantPreResponseStatus({
+      text,
+      stage: normalizedMeta.stage || '',
+      note: normalizedMeta.note || '',
+      showSpinner: normalizedMeta.showSpinner
+    }) || createAssistantPreResponseStatus(text, normalizedMeta.stage || '', {
+      note: normalizedMeta.note || '',
+      showSpinner: normalizedMeta.showSpinner
+    });
+    if (!normalizedStatus) return;
 
     if (attemptState && typeof attemptState === 'object') {
-      attemptState.pendingLoadingStatusText = text;
-      attemptState.pendingLoadingStatusMeta = meta && typeof meta === 'object'
-        ? { ...meta }
-        : null;
-      ensureAttemptLoadingStatusPulse(attemptState, loadingMessage || liveElement || null);
+      attemptState.pendingLoadingStatusText = normalizedStatus.text;
+      attemptState.pendingLoadingStatusMeta = {
+        stage: normalizedStatus.stage,
+        note: normalizedStatus.note || '',
+        showSpinner: normalizedStatus.showSpinner === true
+      };
+      updateAttemptRuntimeState(attemptState, (draft) => {
+        draft.activeTurn.preResponseStatus = {
+          text: normalizedStatus.text,
+          stage: normalizedStatus.stage,
+          note: normalizedStatus.note || '',
+          showSpinner: normalizedStatus.showSpinner === true
+        };
+      });
+      ensureAttemptLoadingStatusPulse(attemptState, loadingMessage || null);
     }
 
-    if (liveElement) {
-      updateLoadingStatus(liveElement, text, meta);
-    }
-
-    if (!targetMessageId || normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) != null) {
-      return;
-    }
-
-    const node = resolveAttemptAiNode(attemptState, targetMessageId)
-      || chatHistoryManager?.chatHistory?.messages?.find?.((item) => item?.id === targetMessageId)
-      || null;
-    if (!node || String(node.role || '').toLowerCase() !== 'assistant') return;
-
-    node.content = text;
-    node.thoughtsRaw = null;
-    syncAttemptAssistantView(targetMessageId, {
-      attemptState,
-      node,
-      content: text,
-      thoughtsRaw: null,
-      fallbackElement: liveElement || null,
-      suppressMissingNodeWarning: true
-    });
+    renderAttemptPreResponseStatus(loadingMessage, attemptState);
   }
 
   /**
@@ -4881,13 +4880,7 @@ export function createMessageSender(appContext) {
         return;
       }
 
-      const meta = (attemptState.pendingLoadingStatusMeta && typeof attemptState.pendingLoadingStatusMeta === 'object')
-        ? attemptState.pendingLoadingStatusMeta
-        : null;
-      const liveElement = resolveLiveLoadingStatusElement(loadingMessage || attemptState.loadingMessage || null, attemptState);
-      if (liveElement) {
-        updateLoadingStatus(liveElement, text, meta);
-      }
+      renderAttemptPreResponseStatus(loadingMessage || attemptState.loadingMessage || null, attemptState);
 
       attemptState.loadingStatusPulseActive = true;
       attemptState.loadingStatusPulseTimerId = setTimeout(tick, 80);
@@ -4936,131 +4929,14 @@ export function createMessageSender(appContext) {
     return (evt) => {
       const loadingMessage = resolveTarget();
       if (!evt || typeof evt !== 'object') return;
-      const writeStatus = (text, meta = null) => {
-        if (normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) != null) return;
-        syncAttemptLoadingStatus(loadingMessage, attemptState, text, meta);
-      };
-
-      const stage = evt.stage;
-      switch (stage) {
-        case 'api_key_file_loaded': {
-          const count = Number(evt.keyCount) || 0;
-          writeStatus(
-            count > 0 ? `已读取本地 Key 文件 (${count} 个 key)...` : '已读取本地 Key 文件...',
-            { stage, apiBase: evt.apiBase || '', modelName: evt.modelName || '' }
-          );
-          break;
-        }
-        case 'api_key_file_load_failed': {
-          const willFallback = !!evt.willFallback;
-          const fallbackCount = Number(evt.fallbackKeyCount) || 0;
-          const note = (typeof evt.reason === 'string' && evt.reason.trim())
-            ? `本地文件读取失败：${evt.reason.trim().slice(0, 220)}`
-            : '本地文件读取失败。';
-          writeStatus(
-            willFallback
-              ? `本地 Key 文件读取失败，回退到输入框 Key (${fallbackCount} 个)...`
-              : '本地 Key 文件读取失败，且没有可回退的 Key。',
-            { stage, apiBase: evt.apiBase || '', modelName: evt.modelName || '', note }
-          );
-          break;
-        }
-        case 'api_key_file_reload_start': {
-          writeStatus(
-            '当前 Key 不可用，正在重读本地 Key 文件...',
-            { stage, apiBase: evt.apiBase || '', modelName: evt.modelName || '' }
-          );
-          break;
-        }
-        case 'api_key_selected': {
-          const keyCount = Number(evt.keyCount) || 1;
-          const keyIndex = Number(evt.keyIndex);
-          const hasIndex = Number.isFinite(keyIndex) && keyIndex >= 0;
-          const keySource = (typeof evt.keySource === 'string') ? evt.keySource : 'inline';
-          const sourceText = keySource.startsWith('file')
-            ? '（来源：本地文件）'
-            : (keySource === 'inline_fallback' ? '（来源：输入框回退）' : '');
-          const text = keyCount > 1 && hasIndex
-            ? `正在选择可用的 API Key (${keyIndex + 1}/${keyCount})${sourceText}...`
-            : `正在校验 API Key${sourceText}...`;
-          writeStatus(text, {
-            stage,
-            apiBase: evt.apiBase || '',
-            modelName: evt.modelName || '',
-            note: keyCount > 1 ? '提示：检测到多 Key 配置，必要时会自动轮换以提升成功率。' : ''
-          });
-          break;
-        }
-        case 'api_key_omitted': {
-          writeStatus(
-            '未提供 API Key，按免 key 模式发起请求...',
-            { stage, apiBase: evt.apiBase || '', modelName: evt.modelName || '' }
-          );
-          break;
-        }
-        case 'http_request_start': {
-          writeStatus('正在建立连接并上传请求载荷...', {
-            stage,
-            apiBase: evt.apiBase || '',
-            modelName: evt.modelName || ''
-          });
-          break;
-        }
-        case 'http_request_sent': {
-          writeStatus('请求已发出，等待服务器响应...', {
-            stage,
-            apiBase: evt.apiBase || '',
-            modelName: evt.modelName || '',
-            note: '此阶段可能包含：上传剩余载荷、服务器排队、模型开始计算。'
-          });
-          break;
-        }
-        case 'http_response_headers_received': {
-          const httpStatus = Number(evt.status);
-          writeStatus('已收到响应头，服务器正在开始处理...', {
-            stage,
-            apiBase: evt.apiBase || '',
-            modelName: evt.modelName || '',
-            httpStatus: Number.isFinite(httpStatus) ? httpStatus : undefined,
-            note: '对于 SSE，这通常意味着后续会陆续收到 response.created / reasoning / tool 调用等事件。'
-          });
-          break;
-        }
-        case 'http_429_rate_limited': {
-          const willRetry = !!evt.willRetry;
-          writeStatus(
-            willRetry ? '触发限流 (HTTP 429)，正在切换 API Key 重试...' : '触发限流 (HTTP 429)...',
-            { stage, apiBase: evt.apiBase || '', modelName: evt.modelName || '', httpStatus: 429 }
-          );
-          break;
-        }
-        case 'http_400_bad_request_not_blacklisted': {
-          writeStatus(
-            '请求参数错误 (HTTP 400)，本次不会拉黑 API Key。',
-            { stage, apiBase: evt.apiBase || '', modelName: evt.modelName || '', httpStatus: 400 }
-          );
-          break;
-        }
-        case 'http_auth_or_bad_request_key_blacklisted': {
-          const httpStatus = Number(evt.status);
-          const willRetry = !!evt.willRetry;
-          const noApiKey = !!evt.noApiKey;
-          writeStatus(
-            noApiKey
-              ? `请求被拒绝 (HTTP ${Number.isFinite(httpStatus) ? httpStatus : '?'})，当前为免 key 模式。`
-              : (
-                willRetry
-                  ? `API Key 可能无效/受限 (HTTP ${Number.isFinite(httpStatus) ? httpStatus : '?'})，正在切换 Key 重试...`
-                  : `API Key 可能无效/受限 (HTTP ${Number.isFinite(httpStatus) ? httpStatus : '?'})...`
-              ),
-            { stage, apiBase: evt.apiBase || '', modelName: evt.modelName || '', httpStatus }
-          );
-          break;
-        }
-        default:
-          // 其他阶段先不做 UI 文案映射，避免过度刷屏；需要时再逐步补充。
-          break;
-      }
+      if (normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) != null) return;
+      const normalizedStatus = deriveAssistantPreResponseStatusFromRequestEvent(evt);
+      if (!normalizedStatus) return;
+      syncAttemptLoadingStatus(loadingMessage, attemptState, normalizedStatus.text, {
+        stage: normalizedStatus.stage,
+        note: normalizedStatus.note || '',
+        showSpinner: normalizedStatus.showSpinner
+      });
     };
   }
 
@@ -6078,9 +5954,13 @@ export function createMessageSender(appContext) {
     const resetErrorUiState = (element) => {
       if (!element) return;
       try {
+        element.classList.remove('assistant-pre-response');
         element.classList.remove('error-message');
         element.classList.remove('loading-message');
         element.classList.remove('regenerating');
+      } catch (_) {}
+      try {
+        element.querySelectorAll('.assistant-pre-response-status').forEach((statusEl) => statusEl.remove());
       } catch (_) {}
       try {
         element.querySelectorAll('.error-retry-actions').forEach((actionEl) => actionEl.remove());
@@ -6110,6 +5990,11 @@ export function createMessageSender(appContext) {
       const reuseMessageId = (reuseElement?.getAttribute?.('data-message-id') || '').trim();
       const isEphemeralErrorMessage = !boundMessageId;
       const shouldReuseErrorBubble = !!reuseElement && !!reuseMessageId;
+      const originalErrorText = (reuseElement?.getAttribute?.('data-original-text')
+        || messageElement.getAttribute('data-original-text')
+        || messageElement.querySelector('.text-content')?.textContent
+        || ''
+      ).trim();
       let retryResult = null;
       retryBtn.disabled = true;
       const originalText = retryBtn.textContent;
@@ -6124,6 +6009,22 @@ export function createMessageSender(appContext) {
         });
         reuseElement.classList.add('loading-message');
         reuseElement.classList.add('updating');
+        try {
+          messageProcessor?.syncAssistantMessageMetadata?.(
+            reuseMessageId || null,
+            { role: 'assistant' },
+            {
+              fallbackElement: reuseElement,
+              runtimeSnapshot: {
+                activeTurn: {
+                  status: 'streaming',
+                  boundAssistantMessageId: reuseMessageId || null,
+                  preResponseStatus: createAssistantPreResponseStatus('正在准备请求...', 'manual_retry')
+                }
+              }
+            }
+          );
+        } catch (_) {}
         if (messageElement !== reuseElement) {
           resetErrorUiState(messageElement);
           if (messageElement.isConnected) {
@@ -6151,9 +6052,17 @@ export function createMessageSender(appContext) {
         if (!isEphemeralErrorMessage && messageElement.isConnected) {
           const succeeded = !!(retryResult && retryResult.ok === true);
           if (!succeeded) {
+            resetErrorUiState(messageElement);
+            setMessageStatusText(messageElement, originalErrorText || '重试失败，请再次尝试。', {
+              clearRetryActions: true,
+              clearThoughts: true,
+              clearTitle: true
+            });
+            messageElement.classList.add('error-message');
             messageElement.classList.remove('loading-message');
             messageElement.classList.remove('updating');
             messageElement.classList.remove('regenerating');
+            attachManualRetryAction(messageElement, retryFn);
           }
         }
         if (retryBtn.isConnected) {
@@ -8081,11 +7990,12 @@ export function createMessageSender(appContext) {
     const canUpdateLoadingStatus = () => normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) == null;
 
     if (canUpdateLoadingStatus()) {
-      syncAttemptLoadingStatus(resolveLoadingStatusTarget() || loadingMessage, attemptState, '正在发送请求（上传请求载荷）...', {
-        stage: 'send_request',
-        apiBase: usedApiConfig?.baseUrl || '',
-        modelName: usedApiConfig?.modelName || ''
-      });
+      syncAttemptPreResponseStatusFromLocalStage(
+        resolveLoadingStatusTarget() || loadingMessage,
+        attemptState,
+        'send_request',
+        { apiBase: usedApiConfig?.baseUrl || '', modelName: usedApiConfig?.modelName || '' }
+      );
     }
     updateAttemptRuntimeState(attemptState, (draft) => {
       draft.activeTurn.status = 'streaming';
@@ -8103,11 +8013,11 @@ export function createMessageSender(appContext) {
 
     if (!response.ok) {
       if (canUpdateLoadingStatus()) {
-        syncAttemptLoadingStatus(
+        syncAttemptPreResponseStatusFromLocalStage(
           resolveLoadingStatusTarget() || loadingMessage,
           attemptState,
-          `服务器返回错误 (HTTP ${response.status})，正在读取错误详情...`,
-          { stage: 'read_error_body', httpStatus: response.status, apiBase: usedApiConfig?.baseUrl || '', modelName: usedApiConfig?.modelName || '' }
+          'read_error_body',
+          { httpStatus: response.status, apiBase: usedApiConfig?.baseUrl || '', modelName: usedApiConfig?.modelName || '' }
         );
       }
       const error = await response.text();
@@ -8117,11 +8027,11 @@ export function createMessageSender(appContext) {
     {
       const responseHeadersTarget = resolveLoadingStatusTarget() || loadingMessage || null;
       if (responseHeadersTarget && normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) == null) {
-        syncAttemptLoadingStatus(
+        syncAttemptPreResponseStatusFromLocalStage(
           responseHeadersTarget,
           attemptState,
-          `已收到响应头 (HTTP ${response.status})，准备接收回复...`,
-          { stage: 'response_headers_received', httpStatus: response.status, apiBase: usedApiConfig?.baseUrl || '', modelName: usedApiConfig?.modelName || '' }
+          'response_headers_received',
+          { httpStatus: response.status, apiBase: usedApiConfig?.baseUrl || '', modelName: usedApiConfig?.modelName || '' }
         );
       }
     }
@@ -8594,6 +8504,7 @@ export function createMessageSender(appContext) {
         draft.activeTurn.status = 'streaming';
         draft.activeTurn.startedAt = startedAt;
         draft.activeTurn.boundAssistantMessageId = null;
+        draft.activeTurn.preResponseStatus = null;
         // 这是真正“正文 answer 已开始可见”的窄信号：
         // - 仅在 answer 文本首次出现后才置为 true；
         // - 不把 reasoning / commentary / tool timeline / 状态占位文案算作正文；
@@ -8626,9 +8537,7 @@ export function createMessageSender(appContext) {
 	      try { attemptState.uiUpdateThrottler?.flush?.({ force: true }); } catch (_) {}
 	      try { attemptState.uiUpdateThrottler?.cancel?.(); } catch (_) {}
 	      try { attemptState.uiUpdateThrottler = null; } catch (_) {}
-        clearAttemptLoadingStatusPulse(attemptState);
-        attemptState.pendingLoadingStatusText = '';
-        attemptState.pendingLoadingStatusMeta = null;
+        clearAttemptPreResponseStatus(attemptState, attemptState.loadingMessage || null);
 
 	      attemptState.finished = true;
       activeAttempts.delete(attemptState.id);
@@ -8637,6 +8546,7 @@ export function createMessageSender(appContext) {
         draft.activeTurn.status = attemptState.completedSuccessfully
           ? 'completed'
           : (attemptState.manualAbort ? 'aborted' : 'error');
+        draft.activeTurn.preResponseStatus = null;
       });
 
       if (attemptState.completedSuccessfully) {
@@ -8981,8 +8891,8 @@ export function createMessageSender(appContext) {
             textContentDiv.classList.add('text-content');
             loadingMessage.appendChild(textContentDiv);
           }
-          textContentDiv.textContent = '正在处理...';
-          loadingMessage.setAttribute('data-original-text', '正在处理...');
+          textContentDiv.textContent = '';
+          loadingMessage.setAttribute('data-original-text', '');
           loadingMessage.removeAttribute('title');
           loadingMessage.classList.remove('error-message');
           loadingMessage.classList.add('loading-message');
@@ -8994,7 +8904,7 @@ export function createMessageSender(appContext) {
           const loadingOptions = activeThreadContext
             ? { container: activeThreadContext.container, skipDom: !threadUiActive }
             : (!shouldRenderMainConversationDom ? { skipDom: true } : null);
-          loadingMessage = messageProcessor.appendMessage('正在处理...', 'ai', true, null, null, null, null, null, loadingOptions);
+          loadingMessage = messageProcessor.appendMessage('', 'ai', true, null, null, null, null, null, loadingOptions);
           attempt.loadingMessage = loadingMessage;
           if (loadingMessage) {
             loadingMessage.classList.add('loading-message');
@@ -9022,7 +8932,7 @@ export function createMessageSender(appContext) {
       }
 
       // 更新加载状态：正在构建消息
-      syncAttemptLoadingStatus(loadingMessage, attempt, '正在构建消息...', { stage: 'compose_messages' });
+      syncAttemptPreResponseStatusFromLocalStage(loadingMessage, attempt, 'compose_messages');
 
       // 构建消息数组（改为纯函数 composer）
       if (Array.isArray(conversationSnapshot) && conversationSnapshot.length > 0) {
@@ -9086,7 +8996,7 @@ export function createMessageSender(appContext) {
           typeof utils?.getJsRuntimeFrames === 'function'
           && responsesPageToolEnvironment?.shouldInjectJsRuntimeFrameContext === true
         ) {
-          syncAttemptLoadingStatus(loadingMessage, attempt, '正在获取页面运行环境上下文...', { stage: 'get_js_runtime_frames' });
+          syncAttemptPreResponseStatusFromLocalStage(loadingMessage, attempt, 'get_js_runtime_frames');
           jsRuntimeFrames = await getJsRuntimeFrameSnapshot(
             responsesPageToolEnvironment.jsRuntimeEnvironment
           );
@@ -9178,7 +9088,7 @@ export function createMessageSender(appContext) {
       }
 
       // 更新加载状态：构造请求载荷（此阶段尚未发起网络请求，可能包含图片编码/自定义参数合并等耗时操作）
-      syncAttemptLoadingStatus(loadingMessage, attempt, '正在构造请求载荷...', { stage: 'build_request_body' });
+      syncAttemptPreResponseStatusFromLocalStage(loadingMessage, attempt, 'build_request_body');
 
       // 解析宽高比控制标记（如果存在），用于单次请求级别的图片配置覆盖
       if (!aspectRatioOverride) {
@@ -9431,12 +9341,16 @@ export function createMessageSender(appContext) {
       }
 
       if (messageElement) {
+        clearAttemptPreResponseStatus(attempt, messageElement);
         try {
           const rootTextNodes = Array.from(messageElement.childNodes || []).filter(node => node && node.nodeType === 3);
           rootTextNodes.forEach((node) => node.remove());
         } catch (_) {}
         try {
           messageElement.querySelectorAll('.error-retry-actions').forEach((actionEl) => actionEl.remove());
+        } catch (_) {}
+        try {
+          messageElement.querySelectorAll('.assistant-pre-response-status').forEach((statusEl) => statusEl.remove());
         } catch (_) {}
         try {
           messageElement.querySelectorAll('.thoughts-content').forEach((thoughtsEl) => thoughtsEl.remove());
@@ -9458,6 +9372,7 @@ export function createMessageSender(appContext) {
         textContentDiv.textContent = errorMessageText;
         messageElement.setAttribute('data-original-text', errorMessageText);
         messageElement.classList.add('error-message');
+        messageElement.classList.remove('assistant-pre-response');
         messageElement.classList.remove('loading-message');
         messageElement.classList.remove('updating');
         messageElement.classList.remove('regenerating');
@@ -10156,11 +10071,11 @@ export function createMessageSender(appContext) {
     {
       const streamStartTarget = resolveLoadingStatusTarget() || loadingMessage || null;
       if (streamStartTarget && normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) == null) {
-        syncAttemptLoadingStatus(
+        syncAttemptPreResponseStatusFromLocalStage(
           streamStartTarget,
           attemptState,
-          '已建立流式连接，等待首个 token...',
-          { stage: 'stream_wait_first_token', apiBase: usedApiConfig?.baseUrl || '', modelName: usedApiConfig?.modelName || '' }
+          'stream_wait_first_token',
+          { apiBase: usedApiConfig?.baseUrl || '', modelName: usedApiConfig?.modelName || '' }
         );
       }
     }
@@ -10353,14 +10268,16 @@ export function createMessageSender(appContext) {
 
     function updateLoadingStatusFromResponsesSseEvent(eventType, data) {
       if (!isOpenAIResponsesStream || !canStillUpdateLoadingStatus()) return;
-      const nextStatus = deriveResponsesSseLoadingStatus(eventType, data);
+      const nextStatus = deriveAssistantPreResponseStatusFromResponsesSse(eventType, data);
       if (!nextStatus) return;
       syncAttemptLoadingStatus(
         resolveLoadingStatusTarget() || loadingMessage || null,
         attemptState,
         nextStatus.text,
         {
-          ...nextStatus.meta,
+          stage: nextStatus.stage,
+          note: nextStatus.note || '',
+          showSpinner: nextStatus.showSpinner,
           apiBase: usedApiConfig?.baseUrl || '',
           modelName: usedApiConfig?.modelName || ''
         }
@@ -10372,6 +10289,8 @@ export function createMessageSender(appContext) {
       const previewTarget = resolveLoadingStatusTarget() || loadingMessage || null;
       if (!previewTarget || typeof messageProcessor?.syncAssistantMessageMetadata !== 'function') return;
       if (!Array.isArray(latestResponsesActivityTimeline) || latestResponsesActivityTimeline.length <= 0) return;
+
+      clearAttemptPreResponseStatus(attemptState, previewTarget);
 
       try {
         messageProcessor.syncAssistantMessageMetadata(
@@ -10619,9 +10538,7 @@ export function createMessageSender(appContext) {
         if (normalizeOptionalTimestamp(attemptState.firstVisibleOutputAtMs) == null) {
           attemptState.firstVisibleOutputAtMs = now;
         }
-        clearAttemptLoadingStatusPulse(attemptState);
-        attemptState.pendingLoadingStatusText = '';
-        attemptState.pendingLoadingStatusMeta = null;
+        clearAttemptPreResponseStatus(attemptState, loadingMessage || null);
         if (currentAiMessageId) {
           applyTimingMetaToMessage(
             currentAiMessageId,
@@ -11399,11 +11316,11 @@ export function createMessageSender(appContext) {
     const canUpdateLoadingStatus = () => normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) == null;
     // 非流式场景：响应头已收到，但需要完整下载/解析 body，可能会明显等待。
     if (canUpdateLoadingStatus()) {
-      syncAttemptLoadingStatus(
+      syncAttemptPreResponseStatusFromLocalStage(
         resolveLoadingStatusTarget() || loadingMessage || null,
         attemptState,
-        '正在下载并解析完整回复（非流式）...',
-        { stage: 'non_stream_read_body', apiBase: usedApiConfig?.baseUrl || '', modelName: usedApiConfig?.modelName || '' }
+        'non_stream_read_body',
+        { apiBase: usedApiConfig?.baseUrl || '', modelName: usedApiConfig?.modelName || '' }
       );
     }
 
@@ -11473,11 +11390,7 @@ export function createMessageSender(appContext) {
       if (normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) == null) {
         attemptState.firstVisibleOutputAtMs = completedAtMs;
       }
-      clearAttemptLoadingStatusPulse(attemptState);
-      if (attemptState) {
-        attemptState.pendingLoadingStatusText = '';
-        attemptState.pendingLoadingStatusMeta = null;
-      }
+      clearAttemptPreResponseStatus(attemptState, loadingMessage);
       const node = resolveAttemptAiNode(attemptState, messageId);
       const thinkingDurationMs = Number.isFinite(Number(node?.response_activity_duration_ms))
         ? Number(node.response_activity_duration_ms)

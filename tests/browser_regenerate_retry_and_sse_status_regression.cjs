@@ -436,7 +436,9 @@ async function main() {
           const aiMessage = document.querySelector(`.message.ai-message[data-message-id="${aiId}"]`);
           const aiMessages = Array.from(document.querySelectorAll('.message.ai-message'));
           const loadingMessages = Array.from(document.querySelectorAll('.message.loading-message'));
-          const statusText = aiMessage?.querySelector?.('.text-content')?.innerText || '';
+          const statusText = aiMessage?.querySelector?.('.assistant-pre-response-status__text')?.innerText
+            || aiMessage?.querySelector?.('.text-content')?.innerText
+            || '';
           const attemptSnapshot = (typeof sender?.__debugGetActiveAttemptsSnapshot === 'function')
             ? sender.__debugGetActiveAttemptsSnapshot()
             : [];
@@ -447,7 +449,7 @@ async function main() {
             statusText,
             className: aiMessage?.className || '',
             reachedFinalTextEarly: statusText.includes(finalText),
-            matched: /服务器已收到请求|模型正在思考|已收到响应头|已建立流式连接/.test(statusText),
+            matched: /请求已发出，等待模型响应|模型正在思考|模型正在准备工具调用|模型正在生成回复/.test(statusText),
             attemptSnapshot
           };
         };
@@ -586,7 +588,7 @@ async function main() {
     if (result.midStreamState.reachedFinalTextEarly) {
       throw new Error(`reply content appeared before mid-stream status sampling: ${result.midStreamState.statusText}`);
     }
-    if (!/服务器已收到请求|模型正在思考|已收到响应头|已建立流式连接/.test(result.midStreamState.statusText || '')) {
+    if (!/请求已发出，等待模型响应|模型正在思考|模型正在准备工具调用|模型正在生成回复/.test(result.midStreamState.statusText || '')) {
       throw new Error(`status text did not advance to server-side phase: ${result.midStreamState.statusText}`);
     }
     if (/构建消息|构造请求载荷|上传请求载荷/.test(result.midStreamState.statusText || '')) {

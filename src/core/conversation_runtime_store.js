@@ -33,6 +33,7 @@ function createDefaultActiveTurnState() {
     status: 'idle',
     startedAt: null,
     boundAssistantMessageId: null,
+    preResponseStatus: null,
     // 仅表示“真实 answer 正文是否已经开始可见”，
     // 不把 reasoning / commentary / 工具活动 / 状态占位文案算进去。
     hasVisibleAnswerStarted: false,
@@ -93,6 +94,9 @@ function sanitizeConversationRuntimeState(rawState, conversationId) {
     startedAt: Number.isFinite(Number(activeTurn.startedAt)) ? Number(activeTurn.startedAt) : null,
     boundAssistantMessageId: (typeof activeTurn.boundAssistantMessageId === 'string' && activeTurn.boundAssistantMessageId.trim())
       ? activeTurn.boundAssistantMessageId.trim()
+      : null,
+    preResponseStatus: (activeTurn.preResponseStatus && typeof activeTurn.preResponseStatus === 'object' && !Array.isArray(activeTurn.preResponseStatus))
+      ? cloneRuntimeData(activeTurn.preResponseStatus)
       : null,
     hasVisibleAnswerStarted: activeTurn.hasVisibleAnswerStarted === true,
     writeMode: (activeTurn.writeMode === 'append' || activeTurn.writeMode === 'replace')

@@ -898,6 +898,21 @@ export function registerSidebarUtilities(appContext) {
 
     const contextMenuManager = appContext.services.contextMenuManager;
     const messageSender = appContext.services.messageSender;
+    const isPreResponseMessage = messageElement.classList.contains('assistant-pre-response')
+      || messageElement.classList.contains('loading-message');
+    const hasAbortableRequest = !!messageSender?.hasAbortableRequest?.(messageElement);
+
+    if (isPreResponseMessage && hasAbortableRequest) {
+      messageSender.abortCurrentRequest?.(messageElement);
+      if (!messageId) {
+        messageElement.remove();
+        contextMenuManager?.hideContextMenu();
+        return;
+      }
+      await messageSender?.requestConversationMessageDeletion?.({ messageId });
+      contextMenuManager?.hideContextMenu();
+      return;
+    }
 
     if (!messageId) {
       messageElement.remove();

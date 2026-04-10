@@ -5251,21 +5251,7 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 
 
 .loading-message {
-    opacity: 0.7;
-    font-style: italic;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.loading-message::after {
-    content: '';
-    width: 12px;
-    height: 12px;
-    border: 2px solid var(--cerebr-text-color);
-    border-radius: 50%;
-    border-right-color: transparent;
-    animation: loading-spin 0.8s linear infinite;
+    opacity: 1;
 }
 
 @keyframes loading-spin {
@@ -5283,12 +5269,51 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     opacity: 0.95;
 }
 
-.loading-message.error-message::after {
+.message.error-message::after {
     display: none;
 }
 
-.message.error-message::after {
+.assistant-pre-response {
+    opacity: 0.96;
+}
+
+.assistant-pre-response .image-content,
+.assistant-pre-response .text-content,
+.assistant-pre-response .thoughts-content,
+.assistant-pre-response .response-activity-timeline,
+.assistant-pre-response .response-tool-calls,
+.assistant-pre-response .api-footer {
+    display: none !important;
+}
+
+.assistant-pre-response-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    min-width: 0;
+    color: color-mix(in srgb, var(--cerebr-text-color) 90%, transparent);
+    font-size: 0.96em;
+    line-height: 1.45;
+}
+
+.assistant-pre-response-status__spinner {
+    flex: 0 0 auto;
+    width: 12px;
+    height: 12px;
+    border: 2px solid color-mix(in srgb, var(--cerebr-text-color) 72%, transparent);
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: loading-spin 0.8s linear infinite;
+}
+
+.assistant-pre-response-status--spinnerless .assistant-pre-response-status__spinner {
     display: none;
+}
+
+.assistant-pre-response-status__text {
+    min-width: 0;
+    word-break: break-word;
 }
 
 .error-retry-actions {
