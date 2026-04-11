@@ -1895,6 +1895,90 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     background: transparent;
 }
 
+/* 回到底部按钮：
+   - 参考 Codex webview，把按钮放在 composer 正上方、水平居中；
+   - 使用一个高度为 0 的锚点容器承载绝对定位按钮，避免它参与普通流布局、把请求卡片/队列预览挤开；
+   - 通过 order:999 保证无论其它 accessory 何时插入，按钮都稳定落在最靠近输入框的位置。 */
+#scroll-to-bottom-anchor {
+    position: relative;
+    width: 100%;
+    height: 0;
+    order: 999;
+    align-self: stretch;
+    pointer-events: none;
+    z-index: 3;
+}
+
+#scroll-to-bottom-button {
+    position: absolute;
+    left: 50%;
+    bottom: 12px;
+    width: 34px;
+    height: 34px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-control-border) 92%, transparent);
+    border-radius: 999px;
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--cerebr-panel-surface-bg, var(--cerebr-input-bg)) 92%, rgba(255, 255, 255, 0.08)),
+        color-mix(in srgb, var(--cerebr-panel-surface-bg, var(--cerebr-input-bg)) 84%, rgba(0, 0, 0, 0.04))
+      );
+    color: var(--cerebr-text-color);
+    box-shadow:
+      0 12px 28px rgba(15, 23, 42, 0.16),
+      inset 0 1px 0 color-mix(in srgb, #ffffff 16%, transparent);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transform: translate(-50%, 8px) scale(0.96);
+    opacity: 0;
+    pointer-events: none;
+    cursor: pointer;
+    transition:
+      opacity 160ms ease,
+      transform 160ms ease,
+      border-color 160ms ease,
+      background-color 160ms ease,
+      box-shadow 160ms ease;
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
+    -webkit-backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
+}
+
+#scroll-to-bottom-button.is-visible {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translate(-50%, 0) scale(1);
+}
+
+#scroll-to-bottom-button:hover {
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 36%, var(--cerebr-control-border));
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--cerebr-control-bg-hover) 92%, rgba(255, 255, 255, 0.08)),
+        color-mix(in srgb, var(--cerebr-control-bg-active) 88%, rgba(0, 0, 0, 0.04))
+      );
+    box-shadow:
+      0 14px 30px rgba(15, 23, 42, 0.2),
+      inset 0 1px 0 color-mix(in srgb, #ffffff 18%, transparent);
+}
+
+#scroll-to-bottom-button:active {
+    transform: translate(-50%, 1px) scale(0.98);
+}
+
+#scroll-to-bottom-button:focus-visible {
+    outline: none;
+    box-shadow:
+      var(--cerebr-control-focus-ring),
+      0 14px 30px rgba(15, 23, 42, 0.2),
+      inset 0 1px 0 color-mix(in srgb, #ffffff 18%, transparent);
+}
+
+#scroll-to-bottom-button i {
+    font-size: 13px;
+}
+
 /* 顶部同心小圆点状态指示（对话框左上角） */
 .status-dot {
     position: absolute;

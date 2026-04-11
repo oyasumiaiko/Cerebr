@@ -12,6 +12,8 @@
  * @param {HTMLElement} appContext.dom.chatContainer - 聊天容器元素
  * @param {HTMLElement} appContext.dom.sendButton - 发送按钮元素
  * @param {HTMLElement} appContext.dom.inputContainer - 输入容器元素
+ * @param {HTMLElement} appContext.dom.composerAccessoryRegion - 输入框上方的 accessory 区域
+ * @param {HTMLElement} appContext.dom.scrollToBottomButton - 回到底部按钮元素
  * @param {HTMLElement} appContext.dom.promptSettings - 提示词设置面板元素
  * @param {HTMLElement} appContext.dom.collapseButton - 收起按钮元素
  * @param {Object} appContext.services.chatHistoryUI - 聊天历史UI对象
@@ -37,8 +39,10 @@ export function createUIManager(appContext) {
   const threadContainer = dom.threadContainer;
   const sendButton = dom.sendButton;
   const inputContainer = dom.inputContainer;
+  const composerAccessoryRegion = dom.composerAccessoryRegion;
   const collapseButton = dom.collapseButton;
   const imageContainer = dom.imageContainer; // Added for updateSendButtonState
+  const scrollToBottomButton = dom.scrollToBottomButton;
   // other DOM elements like sidebar, topBar, imagePreviewModal etc. can be accessed via dom if needed
 
   // Services from appContext.services
@@ -50,9 +54,14 @@ export function createUIManager(appContext) {
 
   let settingsMenuTimeout = null; // Timeout for hover-based closing
   const externalAltWheelStateUpdaters = new Set();
+  let scrollToBottomButtonVisibilityRaf = 0;
+  let scrollToBottomMutationObserver = null;
+  let scrollToBottomResizeObserver = null;
+  let scrollToBottomBodyAttrObserver = null;
   const SETTINGS_MENU_VIEWPORT_MARGIN_PX = 8;
   const SETTINGS_MENU_CLOSE_DELAY_MS = 220;
   const SETTINGS_MENU_SAFE_ZONE_PADDING_PX = 16;
+  const SCROLL_TO_BOTTOM_BUTTON_THRESHOLD_PX = 48;
   let lastPointerClientX = null;
   let lastPointerClientY = null;
 
@@ -207,6 +216,138 @@ export function createUIManager(appContext) {
     if (inputContainer) {
       inputContainer.classList.toggle('has-input', hasInput);
     }
+  }
+
+  function resolveScrollToBottomTargetContainer() {
+    // 线程模式下用户正在阅读右侧 thread 容器，此时按钮应服务当前可见线程，而不是强行跳主聊天区。
+    if (threadContainer && document.body.classList.contains('thread-mode-active')) {
+      return threadContainer;
+    }
+    return chatContainer;
+  }
+
+  function computeDistanceToContainerBottom(container) {
+    if (!(container instanceof HTMLElement)) return 0;
+    return Math.max(
+      0,
+      (container.scrollHeight || 0) - (container.scrollTop || 0) - (container.clientHeight || 0)
+    );
+  }
+
+  function setScrollToBottomButtonVisible(visible) {
+    if (!scrollToBottomButton) return;
+    const shouldShow = !!visible;
+    scrollToBottomButton.classList.toggle('is-visible', shouldShow);
+    scrollToBottomButton.setAttribute('aria-hidden', shouldShow ? 'false' : 'true');
+    scrollToBottomButton.tabIndex = shouldShow ? 0 : -1;
+  }
+
+  function updateScrollToBottomButtonVisibility() {
+    if (!scrollToBottomButton || !composerAccessoryRegion) return;
+
+    const targetContainer = resolveScrollToBottomTargetContainer();
+    const hasOverflow = !!targetContainer && ((targetContainer.scrollHeight || 0) - (targetContainer.clientHeight || 0)) > 1;
+    const hasMessages = !!targetContainer?.querySelector('.message');
+    const distanceToBottom = targetContainer ? computeDistanceToContainerBottom(targetContainer) : 0;
+    const shouldShow = hasMessages && hasOverflow && distanceToBottom > SCROLL_TO_BOTTOM_BUTTON_THRESHOLD_PX;
+
+    setScrollToBottomButtonVisible(shouldShow);
+  }
+
+  function scheduleScrollToBottomButtonVisibilityUpdate() {
+    if (!scrollToBottomButton || scrollToBottomButtonVisibilityRaf) return;
+    scrollToBottomButtonVisibilityRaf = requestAnimationFrame(() => {
+      scrollToBottomButtonVisibilityRaf = 0;
+      updateScrollToBottomButtonVisibility();
+    });
+  }
+
+  function setupScrollToBottomButton() {
+    if (!scrollToBottomButton || !composerAccessoryRegion) return;
+
+    setScrollToBottomButtonVisible(false);
+
+    const scrollTargetToBottom = () => {
+      const targetContainer = resolveScrollToBottomTargetContainer();
+      if (!(targetContainer instanceof HTMLElement)) return;
+
+      // 语义说明：
+      // - 这个按钮是“显式跳到最底部”，因此这里不复用 stopAtTop 语义，而是总是滚到真实底部；
+      // - 若全局 autoScroll 开关仍开启，则顺手恢复 shouldAutoScroll，让后续流式输出继续跟随最新内容；
+      // - 若用户在设置里明确关掉 autoScroll，这里只做一次性跳转，不悄悄改写其偏好。
+      if (settingsManager?.getSetting?.('autoScroll') !== false) {
+        messageSender.setShouldAutoScroll(true);
+      }
+
+      targetContainer.scrollTo({
+        top: Math.max(0, targetContainer.scrollHeight || 0),
+        behavior: 'smooth'
+      });
+      scheduleScrollToBottomButtonVisibilityUpdate();
+      window.setTimeout(scheduleScrollToBottomButtonVisibilityUpdate, 220);
+    };
+
+    scrollToBottomButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      scrollTargetToBottom();
+    });
+
+    const handleContainerScroll = () => {
+      scheduleScrollToBottomButtonVisibilityUpdate();
+    };
+    chatContainer?.addEventListener('scroll', handleContainerScroll, { passive: true });
+    threadContainer?.addEventListener('scroll', handleContainerScroll, { passive: true });
+
+    const handleContainerLoad = () => {
+      scheduleScrollToBottomButtonVisibilityUpdate();
+    };
+    chatContainer?.addEventListener('load', handleContainerLoad, true);
+    threadContainer?.addEventListener('load', handleContainerLoad, true);
+
+    scrollToBottomMutationObserver = new MutationObserver(() => {
+      scheduleScrollToBottomButtonVisibilityUpdate();
+    });
+    if (chatContainer) {
+      scrollToBottomMutationObserver.observe(chatContainer, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ['class', 'style']
+      });
+    }
+    if (threadContainer && threadContainer !== chatContainer) {
+      scrollToBottomMutationObserver.observe(threadContainer, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ['class', 'style']
+      });
+    }
+
+    try {
+      scrollToBottomResizeObserver = new ResizeObserver(() => {
+        scheduleScrollToBottomButtonVisibilityUpdate();
+      });
+      if (chatContainer) scrollToBottomResizeObserver.observe(chatContainer);
+      if (threadContainer && threadContainer !== chatContainer) scrollToBottomResizeObserver.observe(threadContainer);
+      if (composerAccessoryRegion) scrollToBottomResizeObserver.observe(composerAccessoryRegion);
+    } catch (_) {}
+
+    if (document.body) {
+      scrollToBottomBodyAttrObserver = new MutationObserver(() => {
+        scheduleScrollToBottomButtonVisibilityUpdate();
+      });
+      scrollToBottomBodyAttrObserver.observe(document.body, {
+        attributes: true,
+        attributeFilter: ['class', 'style']
+      });
+    }
+
+    window.addEventListener('resize', scheduleScrollToBottomButtonVisibilityUpdate, { passive: true });
+    scheduleScrollToBottomButtonVisibilityUpdate();
   }
 
   /**
@@ -758,6 +899,7 @@ export function createUIManager(appContext) {
     setupInputEventListeners();
     setupSettingsMenuEventListeners();
     setupChatContainerEventListeners();
+    setupScrollToBottomButton();
     setupFocusEventListeners();
     
     // 初始更新发送按钮状态

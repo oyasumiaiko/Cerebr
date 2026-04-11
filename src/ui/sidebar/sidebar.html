@@ -148,7 +148,13 @@
             <div class="input-api-current" title="当前 API"></div>
             <div class="input-api-list"></div>
         </div>
-        <div id="composer-accessory-region" aria-live="polite"></div>
+        <div id="composer-accessory-region" aria-live="polite">
+            <div id="scroll-to-bottom-anchor" aria-hidden="true">
+                <button id="scroll-to-bottom-button" type="button" aria-label="滚动到底部" title="滚动到底部">
+                    <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
+                </button>
+            </div>
+        </div>
         <div id="image-container"></div>
         <div id="message-row">
             <div id="message-input" contenteditable="plaintext-only" placeholder="输入消息..." role="textbox"></div>

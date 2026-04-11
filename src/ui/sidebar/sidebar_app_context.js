@@ -80,6 +80,8 @@ export function createSidebarAppContext(isStandalone) {
     promptSettingsPanel: document.getElementById('prompt-settings'),
     inputContainer: document.getElementById('input-container'),
     composerAccessoryRegion: document.getElementById('composer-accessory-region'),
+    scrollToBottomAnchor: document.getElementById('scroll-to-bottom-anchor'),
+    scrollToBottomButton: document.getElementById('scroll-to-bottom-button'),
     regenerateButton: document.getElementById('regenerate-message'),
     autoScrollSwitch: document.getElementById('auto-scroll-switch'),
     autoRetrySwitch: document.getElementById('auto-retry-switch'),
