@@ -131,7 +131,7 @@ async function runMockResponsesServer() {
       });
       writeSseEvent(res, { type: 'response.output_item.done', item: messageItem });
       // 刻意保留“正文已经可见但请求尚未 completed”的观察窗口，
-      // 让浏览器回归能稳定采到 thinking 中的 peek 窗口。
+      // 让浏览器回归能验证：思考面板会在正文开始后、请求完成前就自动收起。
       await sleep(1800);
       writeSseEvent(res, {
         type: 'response.completed',
@@ -425,6 +425,33 @@ async function main() {
     }
     result.steps.push('answer_started_state_captured');
 
+    result.answerCollapsedWhileUpdatingState = await waitFor(async () => {
+      return await sidebarFrame.evaluate((expectedText) => {
+        const chatContainer = document.querySelector('#chat-container');
+        const aiMessages = Array.from(document.querySelectorAll('.message.ai-message'));
+        const latest = aiMessages[aiMessages.length - 1];
+        if (!latest || !latest.classList.contains('updating')) return null;
+        const timeline = latest.querySelector('.response-activity-timeline');
+        const statusText = latest.querySelector('.text-content')?.innerText || '';
+        if (!timeline || !statusText.includes(expectedText)) return null;
+        const timelineClassName = timeline.className || '';
+        const panelBodyHeight = timeline.querySelector('.response-activity-panel-body')?.getBoundingClientRect?.().height || 0;
+        if (/\bis-peek\b/.test(timelineClassName) || /\bis-streaming\b/.test(timelineClassName) || panelBodyHeight > 1) {
+          return null;
+        }
+        return {
+          statusText,
+          panelExpanded: timeline.classList.contains('is-expanded'),
+          isUpdating: latest.classList.contains('updating'),
+          timelineClassName,
+          panelBodyHeight,
+          chatScrollTop: chatContainer.scrollTop || 0,
+          latestTopInContainer: latest.getBoundingClientRect().top - chatContainer.getBoundingClientRect().top
+        };
+      }, mockServer.finalAnswerText);
+    }, { timeoutMs: 20_000, intervalMs: 100, label: 'collapsed while answer still updating' });
+    result.steps.push('answer_collapsed_while_updating_captured');
+
     result.finalState = await waitFor(async () => {
       return await sidebarFrame.evaluate((expectedText) => {
         const chatContainer = document.querySelector('#chat-container');
@@ -497,17 +524,23 @@ async function main() {
     if (result.answerStartedState.panelExpanded) {
       throw new Error('Response activity panel should not fully expand when answer text starts');
     }
-    if (!/\bis-peek\b/.test(result.answerStartedState.timelineClassName || '')) {
-      throw new Error(`Expected thought window to stay in peek mode while turn is still streaming: ${result.answerStartedState.timelineClassName}`);
+    if (/\bis-peek\b/.test(result.answerStartedState.timelineClassName || '')) {
+      throw new Error(`Expected thought window to leave peek mode when visible answer starts: ${result.answerStartedState.timelineClassName}`);
     }
-    if ((result.answerStartedState.panelBodyHeight ?? 0) <= 0) {
-      throw new Error('Expected peek thought window body to stay visible while turn is still streaming');
+    if (/\bis-streaming\b/.test(result.answerStartedState.timelineClassName || '')) {
+      throw new Error(`Expected response activity timeline to stop reporting thinking-streaming when visible answer starts: ${result.answerStartedState.timelineClassName}`);
     }
     if ((result.anchorDrift?.reasoningToAnswerPx ?? Infinity) > 12) {
       throw new Error(`Latest assistant top anchor drifted during answer start: ${result.anchorDrift?.reasoningToAnswerPx}px`);
     }
     if ((result.anchorDrift?.reasoningToAnswerScrollPx ?? Infinity) > 12) {
       throw new Error(`Outer chat scrollTop drifted during answer start: ${result.anchorDrift?.reasoningToAnswerScrollPx}px`);
+    }
+    if (!result.answerCollapsedWhileUpdatingState?.isUpdating) {
+      throw new Error('Expected response activity panel to finish collapsing before the request completed');
+    }
+    if (result.answerCollapsedWhileUpdatingState.panelExpanded) {
+      throw new Error('Response activity panel unexpectedly re-expanded while answer was still updating');
     }
     if (result.finalState.panelExpanded) {
       throw new Error('Response activity panel re-expanded after completion');

@@ -1820,6 +1820,56 @@ export function createMessageProcessor(appContext) {
     return !['idle', 'completed', 'aborted', 'error'].includes(runtimeStatus);
   }
 
+  /**
+   * response_activity 面板的“思考阶段是否仍在进行中”判定。
+   *
+   * 这里刻意与“整条 assistant 消息是否仍在 streaming”分开：
+   * - 消息正文继续流式输出时，整条消息仍然是 updating；
+   * - 但一旦已经开始展示可见正文，就说明思考阶段已经结束，面板应允许自动收起。
+   *
+   * 判定顺序：
+   * 1. 优先使用本轮 runtimeSnapshot 的 hasVisibleAnswerStarted；
+   * 2. 否则回退到 message wrapper 上缓存的 dataset；
+   * 3. 最后用 DOM 上是否已经有可见正文做兜底。
+   *
+   * @param {HTMLElement|null} messageWrapperDiv
+   * @param {Object|null} runtimeSnapshot
+   * @param {Object|null} node
+   * @returns {boolean}
+   */
+  function isResponseActivityThinkingRuntimeActive(messageWrapperDiv, runtimeSnapshot = null, node = null) {
+    if (!messageWrapperDiv) return false;
+
+    const normalizedMessageId = String(
+      node?.id
+      || messageWrapperDiv.getAttribute?.('data-message-id')
+      || ''
+    ).trim();
+    const runtimeStatus = String(runtimeSnapshot?.activeTurn?.status || '').trim().toLowerCase();
+    const boundAssistantMessageId = String(runtimeSnapshot?.activeTurn?.boundAssistantMessageId || '').trim();
+    const runtimeBoundToCurrentMessage = !!(
+      normalizedMessageId
+      && boundAssistantMessageId
+      && boundAssistantMessageId === normalizedMessageId
+    );
+    const runtimeTurnActive = !!runtimeStatus && !['idle', 'completed', 'aborted', 'error'].includes(runtimeStatus);
+
+    if (runtimeBoundToCurrentMessage) {
+      return runtimeTurnActive && runtimeSnapshot?.activeTurn?.hasVisibleAnswerStarted !== true;
+    }
+
+    const datasetThinkingActive = String(messageWrapperDiv.dataset?.responseThinkingRuntimeActive || '').trim().toLowerCase();
+    if (datasetThinkingActive === 'true') return true;
+    if (datasetThinkingActive === 'false') return false;
+
+    if (!isResponseActivityTurnRuntimeActive(messageWrapperDiv)) return false;
+
+    const visibleAnswerText = String(messageWrapperDiv.querySelector('.text-content')?.innerText || '').trim();
+    if (visibleAnswerText) return false;
+
+    return true;
+  }
+
   function getResponseActivityDurationMs(node, timeline, isInProgress = false) {
     const storedDuration = Number(node?.response_activity_duration_ms);
     if (!isInProgress && Number.isFinite(storedDuration) && storedDuration >= 0) {
@@ -1838,10 +1888,8 @@ export function createMessageProcessor(appContext) {
       return kind === 'reasoning_summary' || kind === 'commentary';
     }).length;
     const toolCount = timeline.filter(entry => entry?.kind === 'tool_call').length;
-    // 面板级“是否仍在思考中”优先跟随当前 turn 的 runtime：
-    // - Responses 的 reasoning/commentary 并不总会显式补一条 `.done`；
-    // - 若继续依赖 entry.status，面板可能在请求结束后永远停留在 `is-streaming`。
-    const isInProgress = options.isInProgress === true;
+    // 这里的 in-progress 指“思考阶段仍在进行中”，不是“整条消息是否还在流”。
+    const isInProgress = options.isThinkingInProgress === true;
     const durationMs = getResponseActivityDurationMs(node, timeline, isInProgress);
     const durationLabel = formatResponseActivityElapsedDuration(durationMs);
     const metaParts = [];
@@ -2353,14 +2401,14 @@ export function createMessageProcessor(appContext) {
     return false;
   }
 
-  function buildResponseActivityToolEntrySnapshot(entry, index, isTurnRuntimeActive) {
+  function buildResponseActivityToolEntrySnapshot(entry, index, isThinkingRuntimeActive) {
     const key = getResponseActivityEntrySnapshotKey(entry, index);
     const renderSearchQueriesInline = isResponseActivitySearchQueryEntry(entry);
     const searchQueryLines = renderSearchQueriesInline ? getResponseActivityToolQueryLines(entry) : [];
     const hasDetails = hasResponseActivityToolDetails(entry);
-    const isInProgress = isTurnRuntimeActive && isResponseActivityEntryInProgress(entry);
+    const isInProgress = isThinkingRuntimeActive && isResponseActivityEntryInProgress(entry);
     const hasOutput = hasResponsesToolOutputBody(entry?.output);
-    const shouldAutoRemainExpanded = isInProgress || (!hasOutput && isTurnRuntimeActive);
+    const shouldAutoRemainExpanded = isInProgress || (!hasOutput && isThinkingRuntimeActive);
     const primaryParts = renderSearchQueriesInline ? null : buildResponseToolCallPrimaryParts(entry);
     const secondaryLines = getResponseActivityToolSecondaryLines(entry);
     const argumentsText = (typeof entry.arguments === 'string' && entry.arguments.trim())
@@ -2414,7 +2462,7 @@ export function createMessageProcessor(appContext) {
     };
   }
 
-  function buildResponseActivityEntrySnapshot(entry, index, processMathAndMarkdownFn, isTurnRuntimeActive) {
+  function buildResponseActivityEntrySnapshot(entry, index, processMathAndMarkdownFn, isThinkingRuntimeActive) {
     const key = getResponseActivityEntrySnapshotKey(entry, index);
     if (entry.kind === 'reasoning_summary' || entry.kind === 'commentary') {
       const rawText = (typeof entry.text === 'string') ? entry.text : '';
@@ -2430,18 +2478,18 @@ export function createMessageProcessor(appContext) {
         signature: renderedHtml
       };
     }
-    return buildResponseActivityToolEntrySnapshot(entry, index, isTurnRuntimeActive);
+    return buildResponseActivityToolEntrySnapshot(entry, index, isThinkingRuntimeActive);
   }
 
-  function buildResponseActivitySnapshot(node, timeline, processMathAndMarkdownFn, isTurnRuntimeActive) {
+  function buildResponseActivitySnapshot(node, timeline, processMathAndMarkdownFn, isThinkingRuntimeActive) {
     const panelSummary = buildResponseActivityPanelSummary(node, timeline, {
-      isInProgress: isTurnRuntimeActive
+      isThinkingInProgress: isThinkingRuntimeActive
     });
     const entries = timeline.map((entry, index) => buildResponseActivityEntrySnapshot(
       entry,
       index,
       processMathAndMarkdownFn,
-      isTurnRuntimeActive
+      isThinkingRuntimeActive
     ));
     const entryByKey = {};
     entries.forEach((entrySnapshot) => {
@@ -2849,11 +2897,15 @@ export function createMessageProcessor(appContext) {
       return false;
     }
 
-    const isTurnRuntimeActive = isResponseActivityTurnRuntimeActive(messageWrapperDiv);
-    const nextSnapshot = buildResponseActivitySnapshot(node, timeline, processMathAndMarkdownFn, isTurnRuntimeActive);
+    const isThinkingRuntimeActive = isResponseActivityThinkingRuntimeActive(
+      messageWrapperDiv,
+      normalizedOptions.runtimeSnapshot || null,
+      node
+    );
+    const nextSnapshot = buildResponseActivitySnapshot(node, timeline, processMathAndMarkdownFn, isThinkingRuntimeActive);
     const shell = ensureResponseActivityPanelShell(messageWrapperDiv);
     timelineRoot = shell.timelineRoot;
-    const shouldStickPanelBodyToBottom = isTurnRuntimeActive && isScrollableElementNearBottom(shell.panelBodyInner);
+    const shouldStickPanelBodyToBottom = isThinkingRuntimeActive && isScrollableElementNearBottom(shell.panelBodyInner);
     const previousUiState = captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot);
     restoreResponseActivityDatasetState(messageWrapperDiv, timelineRoot);
     const panelMode = reconcileResponseActivityPanelHeader(shell, nextSnapshot.panelSummary);
@@ -2974,7 +3026,7 @@ export function createMessageProcessor(appContext) {
     captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot);
     surfaceSnapshots.responseActivity = nextSnapshot;
 
-    if (isTurnRuntimeActive && (panelMode?.peek || shouldStickPanelBodyToBottom)) {
+    if (isThinkingRuntimeActive && (panelMode?.peek || shouldStickPanelBodyToBottom)) {
       requestAnimationFrame(() => {
         const livePanelBodyInner = shell.panelBodyInner;
         if (!livePanelBodyInner || !messageWrapperDiv.isConnected) return;
@@ -3654,8 +3706,12 @@ export function createMessageProcessor(appContext) {
       const boundAssistantMessageId = String(normalizedOptions.runtimeSnapshot?.activeTurn?.boundAssistantMessageId || '').trim();
       if (runtimeStatus && boundAssistantMessageId && boundAssistantMessageId === String(messageId || '').trim()) {
         messageWrapperDiv.dataset.responseRuntimeStatus = runtimeStatus;
+        const thinkingRuntimeActive = !['idle', 'completed', 'aborted', 'error'].includes(runtimeStatus)
+          && normalizedOptions.runtimeSnapshot?.activeTurn?.hasVisibleAnswerStarted !== true;
+        messageWrapperDiv.dataset.responseThinkingRuntimeActive = thinkingRuntimeActive ? 'true' : 'false';
       } else {
         delete messageWrapperDiv.dataset.responseRuntimeStatus;
+        delete messageWrapperDiv.dataset.responseThinkingRuntimeActive;
       }
     }
 

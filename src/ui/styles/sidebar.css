@@ -9216,8 +9216,9 @@ body.chat-empty .empty-state-content {
 }
 
 .message .response-activity-timeline.is-expanded .response-activity-panel-body {
-    max-height: min(70vh, 560px);
+    max-height: none;
     opacity: 1;
+    overflow: visible;
 }
 
 .message .response-activity-panel-body-inner {
@@ -9238,8 +9239,9 @@ body.chat-empty .empty-state-content {
 }
 
 .message .response-activity-timeline.is-expanded .response-activity-panel-body-inner {
-    max-height: min(70vh, 560px);
-    overflow-y: auto;
+    max-height: none;
+    height: auto;
+    overflow: visible;
     padding-bottom: 4px;
 }
 
