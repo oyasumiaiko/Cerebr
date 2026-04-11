@@ -92,6 +92,11 @@ import {
   normalizeRequestUserInputArguments
 } from '../agent_tools/request_user_input_tool.js';
 import {
+  JS_RUNTIME_SCRIPT_REGISTRY_TOOL_NAME,
+  buildJsRuntimeScriptRegistryFunctionToolDefinition,
+  executeJsRuntimeScriptRegistryTool
+} from '../agent_tools/js_runtime_script_registry_tool.js';
+import {
   JS_RUNTIME_ENV_BOUND_HOST_PAGE,
   JS_RUNTIME_ENV_ISOLATED_SANDBOX,
   resolvePageToolEnvironment
@@ -130,6 +135,7 @@ const RESPONSES_HISTORY_READ_TOOL_NAME = 'history_read';
 const RESPONSES_REQUEST_USER_INPUT_TOOL_NAME = REQUEST_USER_INPUT_TOOL_NAME;
 const RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME = LIST_ASKABLE_MODELS_TOOL_NAME;
 const RESPONSES_ASK_OTHER_AI_TOOL_NAME = ASK_OTHER_AI_TOOL_NAME;
+const RESPONSES_JS_RUNTIME_SCRIPT_REGISTRY_TOOL_NAME = JS_RUNTIME_SCRIPT_REGISTRY_TOOL_NAME;
 const RESPONSES_LOCAL_COMPACTION_MARKER_TEXT = '已压缩上下文（基于上一轮上下文大小）';
 const RESPONSES_LOCAL_COMPACTION_PENDING_TEXT = '上下文压缩中';
 const RESPONSES_LOCAL_COMPACTION_ERROR_TEXT = '上下文压缩失败';
@@ -7584,6 +7590,7 @@ export function createMessageSender(appContext) {
   function getResponsesCustomFunctionTools(usedApiConfig, pageToolEnvironment = resolveResponsesPageToolEnvironment()) {
     if (!isOpenAIResponsesApiConfig(usedApiConfig)) return [];
     const tools = [
+      buildJsRuntimeScriptRegistryFunctionToolDefinition(),
       buildRequestUserInputFunctionToolDefinition(),
       buildListAskableModelsFunctionToolDefinition(),
       buildAskOtherAiFunctionToolDefinition(),
@@ -8531,6 +8538,42 @@ export function createMessageSender(appContext) {
   }
 
   /**
+   * 执行扩展侧 JS 脚本注册表工具。
+   *
+   * 设计说明：
+   * - 存储管理（save/get/list/delete）完全走扩展侧 `chrome.storage.local`；
+   * - refresh 仅在显式请求时发生，并复用现有 `utils.executeJsRuntime`；
+   * - 默认 runtime 环境跟随当前页面工具模式，除非调用参数显式覆盖。
+   *
+   * @param {any} rawArgs
+   * @param {{attemptState?:any}} [options]
+   * @returns {Promise<Object>}
+   */
+  async function executeResponsesJsRuntimeScriptRegistryFunction(rawArgs, options = {}) {
+    try {
+      const defaultRuntimeEnvironment = resolveResponsesPageToolEnvironment(options?.attemptState).jsRuntimeEnvironment;
+      return await executeJsRuntimeScriptRegistryTool(rawArgs, {
+        executeJsRuntime: (typeof utils?.executeJsRuntime === 'function')
+          ? ((code, executionOptions = {}) => utils.executeJsRuntime(code, {
+              frameIds: Array.isArray(executionOptions?.frameIds) ? executionOptions.frameIds : null,
+              injectImmediately: executionOptions?.injectImmediately === true,
+              runtimeEnvironment: (typeof executionOptions?.runtimeEnvironment === 'string' && executionOptions.runtimeEnvironment.trim())
+                ? executionOptions.runtimeEnvironment.trim()
+                : defaultRuntimeEnvironment
+            }))
+          : null
+      });
+    } catch (error) {
+      return {
+        ok: false,
+        value: null,
+        items: [],
+        error: normalizeResponsesCustomToolError(error)
+      };
+    }
+  }
+
+  /**
    * 执行一个客户端负责落地的 Responses function_call。
    *
    * 当前策略：
@@ -8573,6 +8616,8 @@ export function createMessageSender(appContext) {
     let outputPayload = null;
     if (functionName === RESPONSES_JS_RUNTIME_TOOL_NAME) {
       outputPayload = await executeResponsesJsRuntimeFunction(parsedArgs, options);
+    } else if (functionName === RESPONSES_JS_RUNTIME_SCRIPT_REGISTRY_TOOL_NAME) {
+      outputPayload = await executeResponsesJsRuntimeScriptRegistryFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME) {
       outputPayload = await executeResponsesRequestUserInputFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME) {
@@ -8608,6 +8653,8 @@ export function createMessageSender(appContext) {
       output:
         functionName === RESPONSES_JS_RUNTIME_TOOL_NAME
           ? serializeResponsesJsRuntimeFunctionToolOutput(outputPayload)
+          : functionName === RESPONSES_JS_RUNTIME_SCRIPT_REGISTRY_TOOL_NAME
+            ? serializeResponsesFunctionToolOutput(outputPayload)
           : functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME
             ? serializeResponsesRequestUserInputFunctionToolOutput(outputPayload)
           : functionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME
