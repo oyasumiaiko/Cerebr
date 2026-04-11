@@ -1,4 +1,5 @@
 import { createJsRuntimeManager } from './js_runtime_manager.js';
+import { createMicroSkillManager } from './micro_skill_manager.js';
 import { buildPromptImageResultFromScreenshotDataUrl } from './prompt_image_capture.js';
 import { resolveSidebarRequestTargetTabId } from '../utils/sidebar_target_tab.js';
 import {
@@ -8,12 +9,18 @@ import {
 // 确保 Service Worker 立即激活
 self.addEventListener('install', (event) => {
   console.log('Service Worker 安装中...', new Date().toISOString());
-  event.waitUntil(self.skipWaiting());
+  event.waitUntil(Promise.all([
+    self.skipWaiting(),
+    ensureMicroSkillManagerReady({ force: true })
+  ]));
 });
 
 self.addEventListener('activate', (event) => {
   console.log('Service Worker 已激活', new Date().toISOString());
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(Promise.all([
+    self.clients.claim(),
+    ensureMicroSkillManagerReady({ force: true })
+  ]));
 });
 
 // 添加启动日志
@@ -438,6 +445,54 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === 'MICRO_SKILL_REGISTRY_ACTION') {
+    (async () => {
+      try {
+        await ensureMicroSkillManagerReady();
+        const targetTabId = Number.isFinite(Number(message?.tabId))
+          ? Number(message.tabId)
+          : null;
+        const result = await microSkillManager.executeRegistryAction(message?.payload || {}, {
+          tabId: targetTabId
+        });
+        sendResponse({ success: true, ...result });
+      } catch (error) {
+        sendResponse({
+          success: false,
+          error: error?.message || '微型 skill 注册表操作失败。'
+        });
+      }
+    })();
+    return true;
+  }
+
+  if (message?.type === 'GET_MATCHING_MICRO_SKILL_SUMMARIES') {
+    (async () => {
+      try {
+        await ensureMicroSkillManagerReady();
+        const standaloneSidebar = typeof sender?.url === 'string' && sender.url.includes('#standalone');
+        const targetTabId = standaloneSidebar
+          ? null
+          : resolveSidebarRequestTargetTabId({
+              explicitTabId: message?.tabId,
+              senderTabId: sender?.tab?.id
+            });
+
+        const result = await microSkillManager.listMatchingSkillSummariesForTab(targetTabId);
+        sendResponse({
+          success: true,
+          ...result
+        });
+      } catch (error) {
+        sendResponse({
+          success: false,
+          error: error?.message || '读取当前页面匹配的微型 skill 摘要失败。'
+        });
+      }
+    })();
+    return true;
+  }
+
   if (message?.type === 'GET_OPEN_CONVERSATION_TABS') {
     const ids = Array.isArray(message.conversationIds) ? message.conversationIds : null;
     const snapshot = buildOpenConversationSnapshot(ids);
@@ -802,6 +857,40 @@ async function captureVisibleTabForPrompt(windowId = null, rawArgs = null) {
  * - 不向页面执行环境注入任何扩展桥或宿主对象。
  */
 const jsRuntimeManager = createJsRuntimeManager();
+const microSkillManager = createMicroSkillManager({ jsRuntimeManager });
+let microSkillManagerReadyPromise = null;
+
+function ensureMicroSkillManagerReady(options = {}) {
+  if (!microSkillManagerReadyPromise || options?.force === true) {
+    microSkillManagerReadyPromise = microSkillManager
+      .initialize()
+      .catch((error) => {
+        console.error('初始化微型 skill manager 失败:', error);
+        throw error;
+      });
+  }
+  return microSkillManagerReadyPromise;
+}
+
+if (chrome?.runtime?.onStartup?.addListener) {
+  chrome.runtime.onStartup.addListener(() => {
+    void ensureMicroSkillManagerReady({ force: true });
+  });
+}
+
+if (chrome?.webNavigation?.onHistoryStateUpdated?.addListener) {
+  chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
+    if (Number(details?.frameId) !== 0) return;
+    if (!Number.isFinite(Number(details?.tabId))) return;
+    void ensureMicroSkillManagerReady()
+      .then(() => microSkillManager.syncCurrentDocumentSkills(Number(details.tabId), details.url || ''))
+      .catch((error) => {
+        console.warn('同页导航后同步微型 skill 失败:', error);
+      });
+  });
+}
+
+void ensureMicroSkillManagerReady().catch(() => {});
 
 
 

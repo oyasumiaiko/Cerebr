@@ -7463,6 +7463,435 @@ body.chat-history-panel-resizing {
     gap: 16px;
 }
 
+/* 微型 skill 查看器：沿用 Esc 面板现有的轻量卡面风格，避免变成独立页面式 UI。 */
+.history-tab-content[data-tab="micro-skills"] {
+    min-height: 0;
+}
+
+.micro-skill-viewer {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: 0;
+    height: 100%;
+    padding: 0 2px 8px;
+}
+
+.micro-skill-viewer-toolbar {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 0 2px;
+}
+
+.micro-skill-viewer-title-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.micro-skill-viewer-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: color-mix(in srgb, var(--cerebr-text-color) 92%, transparent);
+}
+
+.micro-skill-viewer-subtitle {
+    font-size: 12px;
+    line-height: 1.45;
+    color: color-mix(in srgb, var(--cerebr-text-color) 68%, transparent);
+    max-width: 640px;
+}
+
+.micro-skill-viewer-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.micro-skill-viewer-count {
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: color-mix(in srgb, var(--cerebr-text-color) 62%, transparent);
+}
+
+.micro-skill-viewer-body {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+    gap: 12px;
+}
+
+.micro-skill-viewer-pane {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px;
+    border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 84%, transparent);
+    background: color-mix(in srgb, var(--cerebr-panel-surface-bg) 88%, transparent);
+    box-shadow: 0 8px 20px rgba(15, 15, 15, 0.06);
+}
+
+.micro-skill-viewer-pane-list {
+    overflow: hidden;
+}
+
+.micro-skill-viewer-pane-detail {
+    overflow: auto;
+}
+
+.micro-skill-search-wrap {
+    flex: 0 0 auto;
+}
+
+.micro-skill-search-input {
+    width: 100%;
+    min-width: 0;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid var(--cerebr-control-border);
+    background: var(--cerebr-control-bg);
+    color: var(--cerebr-text-color);
+    box-sizing: border-box;
+}
+
+.micro-skill-search-input:focus {
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 52%, var(--cerebr-control-border));
+    box-shadow: var(--cerebr-control-focus-ring);
+}
+
+.micro-skill-list {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-right: 2px;
+}
+
+.micro-skill-list-item {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px;
+    text-align: left;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 78%, transparent);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--cerebr-control-bg) 72%, transparent);
+    color: var(--cerebr-text-color);
+    cursor: pointer;
+    transition: border-color 0.18s ease, background-color 0.18s ease, transform 0.18s ease;
+}
+
+.micro-skill-list-item:hover {
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 24%, var(--cerebr-border-color));
+    background: color-mix(in srgb, var(--cerebr-control-bg-hover) 88%, transparent);
+    transform: translateY(-1px);
+}
+
+.micro-skill-list-item.active {
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 46%, transparent);
+    background: color-mix(in srgb, var(--cerebr-highlight) 11%, var(--cerebr-control-bg));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--cerebr-highlight) 10%, transparent);
+}
+
+.micro-skill-list-item-title-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.micro-skill-list-item-title {
+    min-width: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: color-mix(in srgb, var(--cerebr-text-color) 94%, transparent);
+}
+
+.micro-skill-list-item-meta {
+    font-size: 11px;
+    color: color-mix(in srgb, var(--cerebr-text-color) 60%, transparent);
+    font-variant-numeric: tabular-nums;
+}
+
+.micro-skill-list-item-desc {
+    font-size: 12px;
+    line-height: 1.5;
+    color: color-mix(in srgb, var(--cerebr-text-color) 76%, transparent);
+}
+
+.micro-skill-status-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 75%, transparent);
+    background: color-mix(in srgb, var(--cerebr-control-bg) 72%, transparent);
+    color: color-mix(in srgb, var(--cerebr-text-color) 72%, transparent);
+}
+
+.micro-skill-status-pill.is-enabled {
+    border-color: color-mix(in srgb, var(--cerebr-status-success) 42%, transparent);
+    background: color-mix(in srgb, var(--cerebr-status-success) 12%, transparent);
+    color: color-mix(in srgb, var(--cerebr-status-success) 84%, var(--cerebr-text-color));
+}
+
+.micro-skill-status-pill.is-disabled {
+    border-color: color-mix(in srgb, var(--cerebr-status-warning) 36%, transparent);
+    background: color-mix(in srgb, var(--cerebr-status-warning) 12%, transparent);
+    color: color-mix(in srgb, var(--cerebr-status-warning) 86%, var(--cerebr-text-color));
+}
+
+.micro-skill-status-pill.is-builtin {
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 34%, transparent);
+    background: color-mix(in srgb, var(--cerebr-highlight) 10%, transparent);
+    color: color-mix(in srgb, var(--cerebr-highlight) 88%, var(--cerebr-text-color));
+}
+
+.micro-skill-list-empty,
+.micro-skill-detail-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    gap: 8px;
+    min-height: 180px;
+    padding: 20px 16px;
+    border: 1px dashed color-mix(in srgb, var(--cerebr-border-color) 78%, transparent);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--cerebr-control-bg) 48%, transparent);
+    color: color-mix(in srgb, var(--cerebr-text-color) 70%, transparent);
+}
+
+.micro-skill-detail-empty-title {
+    font-size: 15px;
+    font-weight: 600;
+    color: color-mix(in srgb, var(--cerebr-text-color) 92%, transparent);
+}
+
+.micro-skill-detail-empty-desc {
+    max-width: 440px;
+    font-size: 12px;
+    line-height: 1.5;
+}
+
+.micro-skill-detail-hero {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.micro-skill-detail-hero-text {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+    flex: 1;
+}
+
+.micro-skill-detail-title {
+    margin: 0;
+    font-size: 18px;
+    line-height: 1.2;
+    color: color-mix(in srgb, var(--cerebr-text-color) 96%, transparent);
+}
+
+.micro-skill-detail-subtitle {
+    font-size: 13px;
+    line-height: 1.55;
+    color: color-mix(in srgb, var(--cerebr-text-color) 74%, transparent);
+}
+
+.micro-skill-detail-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.micro-skill-action-button {
+    appearance: none;
+    border: 1px solid var(--cerebr-control-border);
+    background: var(--cerebr-control-bg);
+    color: var(--cerebr-text-color);
+    border-radius: 10px;
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.18s ease, border-color 0.18s ease, transform 0.18s ease;
+}
+
+.micro-skill-action-button:hover:not(:disabled) {
+    background: var(--cerebr-control-bg-hover);
+    border-color: var(--cerebr-control-border-hover);
+    transform: translateY(-1px);
+}
+
+.micro-skill-action-button:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.micro-skill-meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 8px;
+}
+
+.micro-skill-meta-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 74%, transparent);
+    background: color-mix(in srgb, var(--cerebr-control-bg) 52%, transparent);
+}
+
+.micro-skill-meta-key {
+    font-size: 11px;
+    letter-spacing: 0.03em;
+    color: color-mix(in srgb, var(--cerebr-text-color) 58%, transparent);
+}
+
+.micro-skill-meta-value {
+    font-size: 12px;
+    line-height: 1.5;
+    color: color-mix(in srgb, var(--cerebr-text-color) 92%, transparent);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.micro-skill-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.micro-skill-section-title {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: color-mix(in srgb, var(--cerebr-text-color) 88%, transparent);
+}
+
+.micro-skill-chip-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.micro-skill-chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 76%, transparent);
+    background: color-mix(in srgb, var(--cerebr-control-bg) 58%, transparent);
+    color: color-mix(in srgb, var(--cerebr-text-color) 84%, transparent);
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.micro-skill-text-block,
+.micro-skill-code-block {
+    margin: 0;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-code-border) 84%, transparent);
+    background: color-mix(in srgb, var(--cerebr-code-bg) 88%, transparent);
+    color: var(--cerebr-code-color);
+    font-family: Consolas, Monaco, "Courier New", monospace;
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow: auto;
+}
+
+.micro-skill-code-block code {
+    display: block;
+    white-space: pre;
+}
+
+.micro-skill-source-section {
+    padding-top: 4px;
+}
+
+.micro-skill-source-file {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.micro-skill-source-file + .micro-skill-source-file {
+    margin-top: 4px;
+}
+
+.micro-skill-source-file-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.micro-skill-source-file-path {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 76%, transparent);
+    background: color-mix(in srgb, var(--cerebr-control-bg) 62%, transparent);
+    color: color-mix(in srgb, var(--cerebr-text-color) 86%, transparent);
+    font-size: 12px;
+}
+
+.micro-skill-source-file-entry {
+    display: inline-flex;
+    align-items: center;
+    min-height: 26px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-highlight) 28%, transparent);
+    background: color-mix(in srgb, var(--cerebr-highlight) 10%, transparent);
+    color: color-mix(in srgb, var(--cerebr-highlight) 82%, var(--cerebr-text-color));
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: lowercase;
+}
+
+@media (max-width: 860px) {
+    .micro-skill-viewer-body {
+        grid-template-columns: 1fr;
+    }
+
+    .micro-skill-viewer-pane-list {
+        max-height: 260px;
+    }
+}
+
 #chat-history-panel .settings-tab-content {
     padding: 12px;
     gap: 10px;

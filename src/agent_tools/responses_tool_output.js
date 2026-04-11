@@ -1096,10 +1096,18 @@ export function buildResponsesGenericXmlToolOutputContentItems(rootTag, result, 
     ok: normalized.ok === true
   };
   const blocks = [];
-  if ('value' in normalized) {
+  const hasExplicitValue = Object.prototype.hasOwnProperty.call(normalized, 'value');
+  const fallbackResult = (() => {
+    if (hasExplicitValue) return undefined;
+    const payload = { ...normalized };
+    delete payload.ok;
+    delete payload.error;
+    return Object.keys(payload).length > 0 ? payload : undefined;
+  })();
+  if (hasExplicitValue || fallbackResult !== undefined) {
     blocks.push({
       tag: 'result',
-      text: stringifyResponsesToolOutputValue(normalized.value)
+      text: stringifyResponsesToolOutputValue(hasExplicitValue ? normalized.value : fallbackResult)
     });
   }
   if (normalized.error) {
