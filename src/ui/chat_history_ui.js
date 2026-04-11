@@ -146,6 +146,24 @@ export function createChatHistoryUI(appContext) {
   // --- 数据趋势缓存（图表） ---
   const TREND_STATS_TTL = 5 * 60 * 1000; // 5分钟缓存趋势统计（会在清理/更新后失效）
   let trendStatsCache = { data: null, time: 0, promise: null };
+  // 微型 skill 查看器：缓存列表 / 详情 / 源码，并把 UI 控制引用放在一处，避免在多个事件处理器之间散落状态。
+  const microSkillViewerState = {
+    initialized: false,
+    filterText: '',
+    selectedName: '',
+    summaries: [],
+    detailByName: new Map(),
+    sourceByName: new Map(),
+    refreshPromise: null,
+    requestSeq: 0,
+    refs: {
+      searchInput: null,
+      countText: null,
+      listContainer: null,
+      detailContainer: null,
+      refreshButton: null
+    }
+  };
 
   const galleryCache = {
     items: [],
@@ -9038,6 +9056,567 @@ export function createChatHistoryUI(appContext) {
     backupSettingsContent.dataset.lazyReady = '1';
   }
 
+  function getMicroSkillViewerRefs() {
+    return microSkillViewerState.refs;
+  }
+
+  function renderMicroSkillViewerEmptyState(container, title, description) {
+    if (!container) return;
+    container.innerHTML = '';
+    const empty = document.createElement('div');
+    empty.className = 'micro-skill-detail-empty';
+
+    const emptyTitle = document.createElement('div');
+    emptyTitle.className = 'micro-skill-detail-empty-title';
+    emptyTitle.textContent = title;
+    empty.appendChild(emptyTitle);
+
+    if (description) {
+      const emptyDesc = document.createElement('div');
+      emptyDesc.className = 'micro-skill-detail-empty-desc';
+      emptyDesc.textContent = description;
+      empty.appendChild(emptyDesc);
+    }
+
+    container.appendChild(empty);
+  }
+
+  async function executeMicroSkillViewerAction(payload) {
+    if (typeof utils?.executeMicroSkillRegistryAction !== 'function') {
+      throw new Error('当前界面没有可用的微型 skill 注册表入口。');
+    }
+    const result = await utils.executeMicroSkillRegistryAction(payload);
+    if (result?.success === true) {
+      const output = { ...result };
+      delete output.success;
+      return output;
+    }
+    throw new Error((typeof result?.error === 'string' && result.error.trim())
+      ? result.error.trim()
+      : '微型 skill 操作失败。');
+  }
+
+  function getFilteredMicroSkillSummaries() {
+    const keyword = String(microSkillViewerState.filterText || '').trim().toLowerCase();
+    if (!keyword) return [...microSkillViewerState.summaries];
+    return microSkillViewerState.summaries.filter((skill) => {
+      const displayName = String(skill?.interface?.display_name || '').toLowerCase();
+      const shortDescription = String(skill?.interface?.short_description || '').toLowerCase();
+      const description = String(skill?.description || '').toLowerCase();
+      const name = String(skill?.name || '').toLowerCase();
+      return (
+        name.includes(keyword)
+        || displayName.includes(keyword)
+        || shortDescription.includes(keyword)
+        || description.includes(keyword)
+      );
+    });
+  }
+
+  function renderMicroSkillSummaryList() {
+    const { listContainer, countText } = getMicroSkillViewerRefs();
+    if (!listContainer) return;
+
+    const filteredSummaries = getFilteredMicroSkillSummaries();
+    if (countText) {
+      countText.textContent = `${filteredSummaries.length} / ${microSkillViewerState.summaries.length}`;
+    }
+
+    listContainer.innerHTML = '';
+    if (filteredSummaries.length <= 0) {
+      const empty = document.createElement('div');
+      empty.className = 'micro-skill-list-empty';
+      empty.textContent = microSkillViewerState.summaries.length > 0
+        ? '当前筛选条件下没有匹配的微型 skill'
+        : '当前还没有已注册的微型 skill';
+      listContainer.appendChild(empty);
+      return;
+    }
+
+    filteredSummaries.forEach((skill) => {
+      const item = document.createElement('button');
+      item.type = 'button';
+      item.className = 'micro-skill-list-item';
+      if (skill.name === microSkillViewerState.selectedName) {
+        item.classList.add('active');
+      }
+      item.dataset.skillName = skill.name;
+
+      const titleRow = document.createElement('div');
+      titleRow.className = 'micro-skill-list-item-title-row';
+
+      const title = document.createElement('div');
+      title.className = 'micro-skill-list-item-title';
+      title.textContent = skill.interface?.display_name || skill.name;
+      titleRow.appendChild(title);
+
+      const status = document.createElement('span');
+      status.className = `micro-skill-status-pill${skill.enabled === true ? ' is-enabled' : ' is-disabled'}`;
+      status.textContent = skill.enabled === true ? '启用' : '停用';
+      titleRow.appendChild(status);
+
+      const meta = document.createElement('div');
+      meta.className = 'micro-skill-list-item-meta';
+      meta.textContent = `${skill.name} · r${skill.revision || 1}`;
+
+      const desc = document.createElement('div');
+      desc.className = 'micro-skill-list-item-desc';
+      desc.textContent = skill.interface?.short_description || skill.description || '';
+
+      item.appendChild(titleRow);
+      item.appendChild(meta);
+      item.appendChild(desc);
+      item.addEventListener('click', async () => {
+        microSkillViewerState.selectedName = skill.name;
+        renderMicroSkillSummaryList();
+        await loadMicroSkillDetailIntoViewer(skill.name, { forceReload: false, resetSourceView: false });
+      });
+      listContainer.appendChild(item);
+    });
+  }
+
+  function createMicroSkillMetaRow(label, value) {
+    const row = document.createElement('div');
+    row.className = 'micro-skill-meta-row';
+
+    const key = document.createElement('div');
+    key.className = 'micro-skill-meta-key';
+    key.textContent = label;
+    row.appendChild(key);
+
+    const val = document.createElement('div');
+    val.className = 'micro-skill-meta-value';
+    val.textContent = value || '—';
+    row.appendChild(val);
+    return row;
+  }
+
+  function createMicroSkillChipList(title, values) {
+    const section = document.createElement('div');
+    section.className = 'micro-skill-section';
+
+    const heading = document.createElement('div');
+    heading.className = 'micro-skill-section-title';
+    heading.textContent = title;
+    section.appendChild(heading);
+
+    const list = document.createElement('div');
+    list.className = 'micro-skill-chip-list';
+
+    (Array.isArray(values) ? values : []).forEach((value) => {
+      const chip = document.createElement('code');
+      chip.className = 'micro-skill-chip';
+      chip.textContent = String(value || '');
+      list.appendChild(chip);
+    });
+
+    section.appendChild(list);
+    return section;
+  }
+
+  function createMicroSkillTextSection(title, text) {
+    const section = document.createElement('div');
+    section.className = 'micro-skill-section';
+
+    const heading = document.createElement('div');
+    heading.className = 'micro-skill-section-title';
+    heading.textContent = title;
+    section.appendChild(heading);
+
+    const content = document.createElement('pre');
+    content.className = 'micro-skill-text-block';
+    content.textContent = text || '—';
+    section.appendChild(content);
+    return section;
+  }
+
+  async function loadMicroSkillSourceIntoViewer(skillName) {
+    const { detailContainer } = getMicroSkillViewerRefs();
+    if (!detailContainer) return;
+    try {
+      let sourcePayload = microSkillViewerState.sourceByName.get(skillName) || null;
+      if (!sourcePayload) {
+        const result = await executeMicroSkillViewerAction({
+          action: 'read_source',
+          skill_name: skillName
+        });
+        sourcePayload = result?.skill || null;
+        if (sourcePayload) {
+          microSkillViewerState.sourceByName.set(skillName, sourcePayload);
+        }
+      }
+
+      const existing = detailContainer.querySelector('.micro-skill-source-section');
+      if (existing) {
+        existing.remove();
+      }
+
+      const sourceSection = document.createElement('div');
+      sourceSection.className = 'micro-skill-section micro-skill-source-section';
+
+      const heading = document.createElement('div');
+      heading.className = 'micro-skill-section-title';
+      heading.textContent = '源码';
+      sourceSection.appendChild(heading);
+
+      const sourceBlock = document.createElement('pre');
+      sourceBlock.className = 'micro-skill-code-block';
+      const code = document.createElement('code');
+      code.textContent = sourcePayload?.source?.code || '';
+      sourceBlock.appendChild(code);
+      sourceSection.appendChild(sourceBlock);
+      detailContainer.appendChild(sourceSection);
+
+      if (window.hljs?.highlightElement) {
+        try {
+          window.hljs.highlightElement(code);
+        } catch (_) {}
+      }
+    } catch (error) {
+      console.error('读取微型 skill 源码失败:', error);
+      showNotification?.({
+        message: '读取微型 skill 源码失败',
+        description: String(error?.message || error),
+        type: 'error',
+        duration: 3200
+      });
+    }
+  }
+
+  function renderMicroSkillDetail(skillDetail) {
+    const { detailContainer } = getMicroSkillViewerRefs();
+    if (!detailContainer) return;
+
+    if (!skillDetail) {
+      renderMicroSkillViewerEmptyState(detailContainer, '没有可显示的详情', '请选择左侧列表中的一个微型 skill。');
+      return;
+    }
+
+    detailContainer.innerHTML = '';
+
+    const hero = document.createElement('div');
+    hero.className = 'micro-skill-detail-hero';
+
+    const heroText = document.createElement('div');
+    heroText.className = 'micro-skill-detail-hero-text';
+
+    const title = document.createElement('h3');
+    title.className = 'micro-skill-detail-title';
+    title.textContent = skillDetail.interface?.display_name || skillDetail.name;
+    heroText.appendChild(title);
+
+    const subtitle = document.createElement('div');
+    subtitle.className = 'micro-skill-detail-subtitle';
+    subtitle.textContent = skillDetail.interface?.short_description || skillDetail.description || '';
+    heroText.appendChild(subtitle);
+
+    hero.appendChild(heroText);
+
+    const heroActions = document.createElement('div');
+    heroActions.className = 'micro-skill-detail-actions';
+
+    const sourceBtn = document.createElement('button');
+    sourceBtn.type = 'button';
+    sourceBtn.className = 'micro-skill-action-button';
+    sourceBtn.textContent = microSkillViewerState.sourceByName.has(skillDetail.name) ? '重新查看源码' : '加载源码';
+    sourceBtn.addEventListener('click', () => {
+      void loadMicroSkillSourceIntoViewer(skillDetail.name);
+    });
+    heroActions.appendChild(sourceBtn);
+
+    const remountBtn = document.createElement('button');
+    remountBtn.type = 'button';
+    remountBtn.className = 'micro-skill-action-button';
+    remountBtn.textContent = '在当前页重挂载';
+    remountBtn.disabled = state.isStandalone === true;
+    remountBtn.title = state.isStandalone === true ? '独立聊天页面没有绑定宿主页，无法执行当前页重挂载。' : '把当前选中的微型 skill 重新挂载到绑定网页。';
+    remountBtn.addEventListener('click', async () => {
+      try {
+        remountBtn.disabled = true;
+        const result = await executeMicroSkillViewerAction({
+          action: 'refresh_current_document',
+          skill_name: skillDetail.name
+        });
+        const activeSkills = Array.isArray(result?.refresh_result?.matched_skills)
+          ? result.refresh_result.matched_skills.map((item) => item.name).join(', ')
+          : '';
+        showNotification?.({
+          message: '当前页微型 skill 已刷新',
+          description: activeSkills ? `当前命中的技能：${activeSkills}` : undefined,
+          type: 'success',
+          duration: 2400
+        });
+      } catch (error) {
+        console.error('刷新当前页微型 skill 挂载失败:', error);
+        showNotification?.({
+          message: '刷新当前页微型 skill 挂载失败',
+          description: String(error?.message || error),
+          type: 'error',
+          duration: 3200
+        });
+      } finally {
+        remountBtn.disabled = state.isStandalone === true;
+      }
+    });
+    heroActions.appendChild(remountBtn);
+
+    hero.appendChild(heroActions);
+    detailContainer.appendChild(hero);
+
+    const metaGrid = document.createElement('div');
+    metaGrid.className = 'micro-skill-meta-grid';
+    metaGrid.appendChild(createMicroSkillMetaRow('稳定 Key', skillDetail.name));
+    metaGrid.appendChild(createMicroSkillMetaRow('状态', skillDetail.enabled === true ? '启用' : '停用'));
+    metaGrid.appendChild(createMicroSkillMetaRow('Revision', `r${skillDetail.revision || 1}`));
+    metaGrid.appendChild(createMicroSkillMetaRow('创建时间', skillDetail.created_at || ''));
+    metaGrid.appendChild(createMicroSkillMetaRow('更新时间', skillDetail.updated_at || ''));
+    metaGrid.appendChild(createMicroSkillMetaRow('默认提示', skillDetail.interface?.default_prompt || ''));
+    detailContainer.appendChild(metaGrid);
+
+    detailContainer.appendChild(createMicroSkillChipList('@match', skillDetail.match));
+    detailContainer.appendChild(createMicroSkillTextSection('说明', skillDetail.details?.usage || ''));
+    detailContainer.appendChild(createMicroSkillTextSection('挂载方法', skillDetail.details?.mount_contract || ''));
+  }
+
+  async function loadMicroSkillDetailIntoViewer(skillName, options = {}) {
+    if (!skillName) return;
+    const seq = ++microSkillViewerState.requestSeq;
+    try {
+      let detail = microSkillViewerState.detailByName.get(skillName) || null;
+      if (!detail || options?.forceReload === true) {
+        const result = await executeMicroSkillViewerAction({
+          action: 'read_detail',
+          skill_name: skillName
+        });
+        detail = result?.skill || null;
+        if (detail) {
+          microSkillViewerState.detailByName.set(skillName, detail);
+        }
+      }
+      if (seq !== microSkillViewerState.requestSeq) return;
+      if (options?.resetSourceView === true) {
+        microSkillViewerState.sourceByName.delete(skillName);
+      }
+      renderMicroSkillDetail(detail);
+    } catch (error) {
+      if (seq !== microSkillViewerState.requestSeq) return;
+      console.error('读取微型 skill 详情失败:', error);
+      renderMicroSkillViewerEmptyState(
+        getMicroSkillViewerRefs().detailContainer,
+        '读取微型 skill 详情失败',
+        String(error?.message || error)
+      );
+    }
+  }
+
+  async function refreshMicroSkillViewerPanel(panel, options = {}) {
+    if (microSkillViewerState.refreshPromise) {
+      await microSkillViewerState.refreshPromise;
+      return;
+    }
+
+    microSkillViewerState.refreshPromise = (async () => {
+      const { refreshButton, detailContainer } = getMicroSkillViewerRefs();
+      const originalText = refreshButton?.textContent || '刷新';
+      if (refreshButton) {
+        refreshButton.disabled = true;
+        refreshButton.textContent = '刷新中...';
+      }
+
+      try {
+        const result = await executeMicroSkillViewerAction({ action: 'list' });
+        microSkillViewerState.summaries = Array.isArray(result?.skills) ? result.skills : [];
+
+        const filtered = getFilteredMicroSkillSummaries();
+        if (!filtered.some((item) => item.name === microSkillViewerState.selectedName)) {
+          microSkillViewerState.selectedName = filtered[0]?.name || '';
+        }
+
+        renderMicroSkillSummaryList();
+
+        if (microSkillViewerState.selectedName) {
+          await loadMicroSkillDetailIntoViewer(microSkillViewerState.selectedName, {
+            forceReload: options?.forceReloadDetail === true,
+            resetSourceView: options?.forceReloadDetail === true
+          });
+        } else {
+          renderMicroSkillViewerEmptyState(
+            detailContainer,
+            '还没有微型 skill',
+            '你已经有浏览器微型 skill 运行时了，但当前注册表里还没有任何技能。'
+          );
+        }
+      } catch (error) {
+        console.error('刷新微型 skill 查看器失败:', error);
+        renderMicroSkillSummaryList();
+        renderMicroSkillViewerEmptyState(
+          detailContainer,
+          '读取微型 skill 列表失败',
+          String(error?.message || error)
+        );
+      } finally {
+        if (refreshButton) {
+          refreshButton.disabled = false;
+          refreshButton.textContent = originalText;
+        }
+      }
+    })();
+
+    try {
+      await microSkillViewerState.refreshPromise;
+    } finally {
+      microSkillViewerState.refreshPromise = null;
+    }
+  }
+
+  function renderMicroSkillViewerPanel() {
+    const container = document.createElement('div');
+    container.className = 'micro-skill-viewer';
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'micro-skill-viewer-toolbar';
+
+    const titleWrap = document.createElement('div');
+    titleWrap.className = 'micro-skill-viewer-title-wrap';
+    const title = document.createElement('div');
+    title.className = 'micro-skill-viewer-title';
+    title.textContent = '微型技能';
+    titleWrap.appendChild(title);
+    const subtitle = document.createElement('div');
+    subtitle.className = 'micro-skill-viewer-subtitle';
+    subtitle.textContent = '查看当前扩展里已注册的浏览器微型 skill，点列表查看详情；源码按需加载。';
+    titleWrap.appendChild(subtitle);
+    toolbar.appendChild(titleWrap);
+
+    const toolbarActions = document.createElement('div');
+    toolbarActions.className = 'micro-skill-viewer-toolbar-actions';
+
+    const count = document.createElement('span');
+    count.className = 'micro-skill-viewer-count';
+    count.textContent = '0 / 0';
+    toolbarActions.appendChild(count);
+
+    const refreshButton = document.createElement('button');
+    refreshButton.type = 'button';
+    refreshButton.className = 'micro-skill-action-button';
+    refreshButton.textContent = '刷新';
+    refreshButton.addEventListener('click', () => {
+      void refreshMicroSkillViewerPanel(null, { forceReloadDetail: true });
+    });
+    toolbarActions.appendChild(refreshButton);
+
+    toolbar.appendChild(toolbarActions);
+    container.appendChild(toolbar);
+
+    const body = document.createElement('div');
+    body.className = 'micro-skill-viewer-body';
+
+    const listPane = document.createElement('div');
+    listPane.className = 'micro-skill-viewer-pane micro-skill-viewer-pane-list';
+
+    const searchWrap = document.createElement('div');
+    searchWrap.className = 'micro-skill-search-wrap';
+    const searchInput = document.createElement('input');
+    searchInput.type = 'search';
+    searchInput.className = 'micro-skill-search-input';
+    searchInput.placeholder = '筛选技能名称或说明';
+    searchInput.addEventListener('input', () => {
+      microSkillViewerState.filterText = searchInput.value || '';
+      renderMicroSkillSummaryList();
+      const filtered = getFilteredMicroSkillSummaries();
+      if (filtered.length > 0 && !filtered.some((item) => item.name === microSkillViewerState.selectedName)) {
+        microSkillViewerState.selectedName = filtered[0].name;
+        renderMicroSkillSummaryList();
+        void loadMicroSkillDetailIntoViewer(filtered[0].name, { forceReload: false, resetSourceView: false });
+      } else if (filtered.length <= 0) {
+        renderMicroSkillViewerEmptyState(
+          getMicroSkillViewerRefs().detailContainer,
+          '没有匹配的技能',
+          '调整左侧筛选条件，或刷新列表后重试。'
+        );
+      }
+    });
+    searchWrap.appendChild(searchInput);
+    listPane.appendChild(searchWrap);
+
+    const listContainer = document.createElement('div');
+    listContainer.className = 'micro-skill-list';
+    listPane.appendChild(listContainer);
+    body.appendChild(listPane);
+
+    const detailPane = document.createElement('div');
+    detailPane.className = 'micro-skill-viewer-pane micro-skill-viewer-pane-detail';
+    body.appendChild(detailPane);
+
+    container.appendChild(body);
+
+    microSkillViewerState.refs = {
+      searchInput,
+      countText: count,
+      listContainer,
+      detailContainer: detailPane,
+      refreshButton
+    };
+
+    renderMicroSkillSummaryList();
+    renderMicroSkillViewerEmptyState(detailPane, '选择一个技能', '左侧列表展示当前已注册的微型 skill。点击某条记录即可查看详细说明。');
+    return container;
+  }
+
+  async function ensureMicroSkillsTabInitialized(panel) {
+    const microSkillContent = panel?.querySelector('.history-tab-content[data-tab="micro-skills"]');
+    if (!microSkillContent) return;
+
+    if (microSkillContent.dataset.lazyReady !== '1') {
+      microSkillContent.innerHTML = '';
+      microSkillContent.appendChild(renderMicroSkillViewerPanel());
+      microSkillContent.dataset.lazyReady = '1';
+      microSkillViewerState.initialized = true;
+    }
+
+    await refreshMicroSkillViewerPanel(panel, { forceReloadDetail: true });
+  }
+
+  /**
+   * 确保 Esc 聊天历史面板中存在“微型技能”标签与内容容器。
+   * 这样即便当前面板是在旧代码路径下创建的，也能在后续打开时补齐新 tab。
+   */
+  function ensureMicroSkillsTabDom(panel) {
+    const tabBar = panel?.querySelector('.history-tab-bar');
+    const tabContents = panel?.querySelector('.history-tab-contents');
+    if (!tabBar || !tabContents) return;
+
+    let microSkillsTab = tabBar.querySelector('.history-tab[data-tab="micro-skills"]');
+    if (!microSkillsTab) {
+      microSkillsTab = document.createElement('div');
+      microSkillsTab.className = 'history-tab';
+      microSkillsTab.textContent = '微型技能';
+      microSkillsTab.dataset.tab = 'micro-skills';
+
+      const backupTab = tabBar.querySelector('.history-tab[data-tab="backup-settings"]');
+      if (backupTab) {
+        tabBar.insertBefore(microSkillsTab, backupTab);
+      } else {
+        tabBar.appendChild(microSkillsTab);
+      }
+    }
+
+    let microSkillContent = tabContents.querySelector('.history-tab-content[data-tab="micro-skills"]');
+    if (!microSkillContent) {
+      microSkillContent = document.createElement('div');
+      microSkillContent.className = 'history-tab-content';
+      microSkillContent.dataset.tab = 'micro-skills';
+      microSkillContent.dataset.lazyReady = '0';
+
+      const backupContent = tabContents.querySelector('.history-tab-content[data-tab="backup-settings"]');
+      if (backupContent) {
+        tabContents.insertBefore(microSkillContent, backupContent);
+      } else {
+        tabContents.appendChild(microSkillContent);
+      }
+    }
+  }
+
   /**
    * 显示聊天记录面板
    */
@@ -9089,6 +9668,11 @@ export function createChatHistoryUI(appContext) {
 
     if (resolvedTabName === 'stats') {
       ensureStatsTabInitialized(panel);
+      return;
+    }
+
+    if (resolvedTabName === 'micro-skills') {
+      await ensureMicroSkillsTabInitialized(panel);
       return;
     }
 
@@ -9895,6 +10479,7 @@ export function createChatHistoryUI(appContext) {
       tabContents.appendChild(statsContent);
       tabContents.appendChild(backupSettingsContent);
       panel.appendChild(tabContents);
+      ensureMicroSkillsTabDom(panel);
       
       // 设置标签切换事件（异步以支持 await 刷新）
       tabBar.addEventListener('click', async (e) => {
@@ -9928,6 +10513,7 @@ export function createChatHistoryUI(appContext) {
       setupChatHistoryPanelResize(panel);
       const filterContainer = panel.querySelector('.filter-container');
       ensureSearchSyntaxHelp(filterContainer);
+      ensureMicroSkillsTabDom(panel);
       // 迁移兼容：历史版本曾在搜索框下渲染关键词图例，这里统一移除，改为搜索摘要行内展示。
       panel.querySelector('.search-keyword-legend')?.remove();
       const urlFilterButton = panel.querySelector('.filter-container .url-filter-btn.url-filter-toggle');
