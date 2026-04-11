@@ -470,33 +470,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         await ensureMicroSkillManagerReady();
-        if (typeof sender?.url === 'string' && sender.url.includes('#standalone')) {
-          sendResponse({
-            success: true,
-            tab_id: null,
-            url: '',
-            title: '',
-            total_skills: 0,
-            skills: []
-          });
-          return;
-        }
-
-        const targetTabId = resolveSidebarRequestTargetTabId({
-          explicitTabId: message?.tabId,
-          senderTabId: sender?.tab?.id
-        });
-        if (!Number.isFinite(targetTabId)) {
-          sendResponse({
-            success: true,
-            tab_id: null,
-            url: '',
-            title: '',
-            total_skills: 0,
-            skills: []
-          });
-          return;
-        }
+        const standaloneSidebar = typeof sender?.url === 'string' && sender.url.includes('#standalone');
+        const targetTabId = standaloneSidebar
+          ? null
+          : resolveSidebarRequestTargetTabId({
+              explicitTabId: message?.tabId,
+              senderTabId: sender?.tab?.id
+            });
 
         const result = await microSkillManager.listMatchingSkillSummariesForTab(targetTabId);
         sendResponse({

@@ -7656,6 +7656,12 @@ body.chat-history-panel-resizing {
     color: color-mix(in srgb, var(--cerebr-status-warning) 86%, var(--cerebr-text-color));
 }
 
+.micro-skill-status-pill.is-builtin {
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 34%, transparent);
+    background: color-mix(in srgb, var(--cerebr-highlight) 10%, transparent);
+    color: color-mix(in srgb, var(--cerebr-highlight) 88%, var(--cerebr-text-color));
+}
+
 .micro-skill-list-empty,
 .micro-skill-detail-empty {
     display: flex;

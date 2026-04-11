@@ -12,6 +12,8 @@
  * - 模型既可以一次全读整份源码 bundle，也可以按单个“文件/片段”做 CRUD。
  */
 
+import { getBuiltinMicroSkillRecordByName, getBuiltinMicroSkillRecords } from './builtin_micro_skill_creator.js';
+
 export const MICRO_SKILL_REGISTRY_TOOL_NAME = 'micro_skill_registry';
 export const MICRO_SKILL_REGISTRY_STORAGE_KEY = 'micro_skill_registry_v1';
 export const MICRO_SKILL_REGISTRY_VERSION = 1;
@@ -384,9 +386,14 @@ export function buildMicroSkillSourceManifest(record, options = {}) {
 }
 
 export function buildMicroSkillSummary(record) {
+  const rawRecord = ensurePlainObject(record);
   const skill = normalizeStoredMicroSkillRecord(record);
   if (!skill) return null;
+  const builtin = rawRecord.builtin === true;
   return {
+    kind: builtin ? 'builtin_guidance' : 'page_runtime',
+    builtin,
+    read_only: builtin || rawRecord.read_only === true,
     name: skill.name,
     description: skill.description,
     interface: {
@@ -407,10 +414,11 @@ export function buildMicroSkillSummary(record) {
 }
 
 export function buildMicroSkillDetail(record) {
+  const rawRecord = ensurePlainObject(record);
   const skill = normalizeStoredMicroSkillRecord(record);
   if (!skill) return null;
   return {
-    ...buildMicroSkillSummary(skill),
+    ...buildMicroSkillSummary(rawRecord),
     details: {
       usage: skill.details.usage,
       mount_contract: skill.details.mount_contract
@@ -420,9 +428,13 @@ export function buildMicroSkillDetail(record) {
 }
 
 export function buildMicroSkillSourcePayload(record) {
+  const rawRecord = ensurePlainObject(record);
   const skill = normalizeStoredMicroSkillRecord(record);
   if (!skill) return null;
   return {
+    kind: rawRecord.builtin === true ? 'builtin_guidance' : 'page_runtime',
+    builtin: rawRecord.builtin === true,
+    read_only: rawRecord.builtin === true || rawRecord.read_only === true,
     name: skill.name,
     revision: skill.revision,
     source: buildMicroSkillSourceManifest(skill, { includeCode: true })
@@ -430,6 +442,7 @@ export function buildMicroSkillSourcePayload(record) {
 }
 
 export function buildMicroSkillSourceFilePayload(record, filePath) {
+  const rawRecord = ensurePlainObject(record);
   const skill = normalizeStoredMicroSkillRecord(record);
   if (!skill) return null;
   const normalizedPath = normalizeMicroSkillSourceFilePath(filePath);
@@ -437,6 +450,9 @@ export function buildMicroSkillSourceFilePayload(record, filePath) {
     throw new Error(`微型 skill ${skill.name} 中不存在源码文件 ${normalizedPath}。`);
   }
   return {
+    kind: rawRecord.builtin === true ? 'builtin_guidance' : 'page_runtime',
+    builtin: rawRecord.builtin === true,
+    read_only: rawRecord.builtin === true || rawRecord.read_only === true,
     name: skill.name,
     revision: skill.revision,
     requested_file_path: normalizedPath,
@@ -448,15 +464,29 @@ export function buildMicroSkillSourceFilePayload(record, filePath) {
 }
 
 export function buildMicroSkillContextSummary(record) {
+  const rawRecord = ensurePlainObject(record);
   const skill = normalizeStoredMicroSkillRecord(record);
   if (!skill) return null;
+  const builtin = rawRecord.builtin === true;
   return {
+    priority: builtin ? 0 : 1000,
+    kind: builtin ? 'builtin_guidance' : 'page_runtime',
     name: skill.name,
     display_name: skill.interface.display_name || skill.name,
     short_description: skill.interface.short_description || skill.description,
     default_prompt: skill.interface.default_prompt,
-    mount_surface: `${CEREBR_MICRO_SKILL_MOUNT_SURFACE}.skills["${skill.name}"] / ${CEREBR_MICRO_SKILL_MOUNT_SURFACE}.invoke("${skill.name}.method", ...args)`
+    mount_surface: builtin
+      ? 'Instruction-only built-in skill. Read detail via micro_skill_registry(action="read_detail", skill_name="skill-creator").'
+      : `${CEREBR_MICRO_SKILL_MOUNT_SURFACE}.skills["${skill.name}"] / ${CEREBR_MICRO_SKILL_MOUNT_SURFACE}.invoke("${skill.name}.method", ...args)`
   };
+}
+
+export function listBuiltinMicroSkillRecords() {
+  return getBuiltinMicroSkillRecords();
+}
+
+export function getBuiltinMicroSkillRecord(skillName) {
+  return getBuiltinMicroSkillRecordByName(skillName);
 }
 
 function ensureStorageArea(storageArea = null) {

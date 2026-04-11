@@ -9151,8 +9151,13 @@ export function createChatHistoryUI(appContext) {
       titleRow.appendChild(title);
 
       const status = document.createElement('span');
-      status.className = `micro-skill-status-pill${skill.enabled === true ? ' is-enabled' : ' is-disabled'}`;
-      status.textContent = skill.enabled === true ? '启用' : '停用';
+      if (skill.builtin === true) {
+        status.className = 'micro-skill-status-pill is-builtin';
+        status.textContent = '内置';
+      } else {
+        status.className = `micro-skill-status-pill${skill.enabled === true ? ' is-enabled' : ' is-disabled'}`;
+        status.textContent = skill.enabled === true ? '启用' : '停用';
+      }
       titleRow.appendChild(status);
 
       const meta = document.createElement('div');
@@ -9361,8 +9366,12 @@ export function createChatHistoryUI(appContext) {
     remountBtn.type = 'button';
     remountBtn.className = 'micro-skill-action-button';
     remountBtn.textContent = '在当前页重挂载';
-    remountBtn.disabled = state.isStandalone === true;
-    remountBtn.title = state.isStandalone === true ? '独立聊天页面没有绑定宿主页，无法执行当前页重挂载。' : '把当前选中的微型 skill 重新挂载到绑定网页。';
+    remountBtn.disabled = state.isStandalone === true || skillDetail.builtin === true;
+    remountBtn.title = skillDetail.builtin === true
+      ? '内置指导 skill 不会挂载到网页 runtime，它只提供制作 skill 的方法与模板。'
+      : (state.isStandalone === true
+          ? '独立聊天页面没有绑定宿主页，无法执行当前页重挂载。'
+          : '把当前选中的微型 skill 重新挂载到绑定网页。');
     remountBtn.addEventListener('click', async () => {
       try {
         remountBtn.disabled = true;
@@ -9388,7 +9397,7 @@ export function createChatHistoryUI(appContext) {
           duration: 3200
         });
       } finally {
-        remountBtn.disabled = state.isStandalone === true;
+        remountBtn.disabled = state.isStandalone === true || skillDetail.builtin === true;
       }
     });
     heroActions.appendChild(remountBtn);
@@ -9398,8 +9407,9 @@ export function createChatHistoryUI(appContext) {
 
     const metaGrid = document.createElement('div');
     metaGrid.className = 'micro-skill-meta-grid';
+    metaGrid.appendChild(createMicroSkillMetaRow('类型', skillDetail.builtin === true ? '内置指导 skill' : '页面 runtime skill'));
     metaGrid.appendChild(createMicroSkillMetaRow('稳定 Key', skillDetail.name));
-    metaGrid.appendChild(createMicroSkillMetaRow('状态', skillDetail.enabled === true ? '启用' : '停用'));
+    metaGrid.appendChild(createMicroSkillMetaRow('状态', skillDetail.builtin === true ? '只读 / 始终可用' : (skillDetail.enabled === true ? '启用' : '停用')));
     metaGrid.appendChild(createMicroSkillMetaRow('Revision', `r${skillDetail.revision || 1}`));
     metaGrid.appendChild(createMicroSkillMetaRow('创建时间', skillDetail.created_at || ''));
     metaGrid.appendChild(createMicroSkillMetaRow('更新时间', skillDetail.updated_at || ''));

@@ -1,6 +1,8 @@
 import {
   buildMicroSkillContextSummary,
   buildMicroSkillDetail,
+  getBuiltinMicroSkillRecord,
+  listBuiltinMicroSkillRecords,
   buildMicroSkillSourceFilePayload,
   buildMicroSkillSourceManifest,
   buildMicroSkillSourcePayload,
@@ -95,12 +97,31 @@ export function createMicroSkillManager(options = {}) {
 
   async function listSkillRecords() {
     const snapshot = await getSkillSnapshot();
-    return sortSkillRecords(Object.values(snapshot.skills_by_name));
+    return [
+      ...listBuiltinMicroSkillRecords(),
+      ...sortSkillRecords(Object.values(snapshot.skills_by_name))
+    ];
   }
 
   async function getSkillRecord(skillName) {
+    const builtin = getBuiltinMicroSkillRecord(skillName);
+    if (builtin) {
+      return builtin;
+    }
     const snapshot = await getSkillSnapshot();
     return snapshot.skills_by_name[String(skillName || '')] || null;
+  }
+
+  async function getMutableStoredSkillRecord(skillName, actionLabel) {
+    const builtin = getBuiltinMicroSkillRecord(skillName);
+    if (builtin) {
+      throw new Error(`微型 skill ${skillName} 是内置只读指导 skill，不能执行 ${actionLabel}。`);
+    }
+    const snapshot = await getSkillSnapshot();
+    return {
+      snapshot,
+      record: snapshot.skills_by_name[String(skillName || '')] || null
+    };
   }
 
   function buildRevisedSkillRecord(existingRecord, updates = {}) {
@@ -246,17 +267,36 @@ export function createMicroSkillManager(options = {}) {
   }
 
   async function listMatchingSkillSummariesForTab(tabId) {
-    const { url, title, tab_id } = await getTabUrl(tabId);
+    const normalizedTabId = normalizeTabId(tabId);
+    const builtinSummaries = listBuiltinMicroSkillRecords()
+      .map((record) => buildMicroSkillContextSummary(record))
+      .filter(Boolean);
+    if (normalizedTabId === null) {
+      return {
+        ok: true,
+        tab_id: null,
+        url: '',
+        title: '',
+        total_skills: builtinSummaries.length,
+        skills: builtinSummaries
+      };
+    }
+
+    const { url, title, tab_id } = await getTabUrl(normalizedTabId);
     const matchingRecords = await listMatchingMicroSkillRecordsForUrl(url, storageArea);
+    const pageSkillSummaries = matchingRecords
+      .map((record) => buildMicroSkillContextSummary(record))
+      .filter(Boolean);
     return {
       ok: true,
       tab_id,
       url,
       title,
-      total_skills: matchingRecords.length,
-      skills: matchingRecords
-        .map((record) => buildMicroSkillContextSummary(record))
-        .filter(Boolean)
+      total_skills: builtinSummaries.length + pageSkillSummaries.length,
+      skills: [
+        ...builtinSummaries,
+        ...pageSkillSummaries
+      ]
     };
   }
 
@@ -281,6 +321,9 @@ export function createMicroSkillManager(options = {}) {
   async function createSkill(skillInput, options = {}) {
     const snapshot = await getSkillSnapshot();
     const nextRecord = buildStoredMicroSkillRecord(skillInput, null);
+    if (getBuiltinMicroSkillRecord(nextRecord.name)) {
+      throw new Error(`微型 skill ${nextRecord.name} 是内置保留名称，不能 create。`);
+    }
     if (snapshot.skills_by_name[nextRecord.name]) {
       throw new Error(`微型 skill ${nextRecord.name} 已存在，不能重复 create。`);
     }
@@ -298,8 +341,7 @@ export function createMicroSkillManager(options = {}) {
   }
 
   async function updateSkill(skillInput, options = {}) {
-    const snapshot = await getSkillSnapshot();
-    const existing = snapshot.skills_by_name[skillInput?.name] || null;
+    const { snapshot, record: existing } = await getMutableStoredSkillRecord(skillInput?.name, 'update');
     if (!existing) {
       throw new Error(`微型 skill ${skillInput?.name || '(unknown)'} 不存在，无法 update。`);
     }
@@ -315,8 +357,7 @@ export function createMicroSkillManager(options = {}) {
   }
 
   async function setSkillEnabled(skillName, enabled, options = {}) {
-    const snapshot = await getSkillSnapshot();
-    const existing = snapshot.skills_by_name[String(skillName || '')] || null;
+    const { snapshot, record: existing } = await getMutableStoredSkillRecord(skillName, enabled === true ? 'enable' : 'disable');
     if (!existing) {
       throw new Error(`微型 skill ${skillName} 不存在，无法切换启用状态。`);
     }
@@ -334,8 +375,7 @@ export function createMicroSkillManager(options = {}) {
   }
 
   async function upsertSkillSourceFile(skillName, fileInput, options = {}) {
-    const snapshot = await getSkillSnapshot();
-    const existing = snapshot.skills_by_name[String(skillName || '')] || null;
+    const { snapshot, record: existing } = await getMutableStoredSkillRecord(skillName, 'upsert_source_file');
     const normalizedExisting = normalizeStoredMicroSkillRecord(existing);
     if (!normalizedExisting) {
       throw new Error(`微型 skill ${skillName} 不存在，无法写入源码文件。`);
@@ -376,8 +416,7 @@ export function createMicroSkillManager(options = {}) {
   }
 
   async function deleteSkillSourceFile(skillName, filePath, options = {}) {
-    const snapshot = await getSkillSnapshot();
-    const existing = snapshot.skills_by_name[String(skillName || '')] || null;
+    const { snapshot, record: existing } = await getMutableStoredSkillRecord(skillName, 'delete_source_file');
     const normalizedExisting = normalizeStoredMicroSkillRecord(existing);
     if (!normalizedExisting) {
       throw new Error(`微型 skill ${skillName} 不存在，无法删除源码文件。`);
@@ -426,8 +465,7 @@ export function createMicroSkillManager(options = {}) {
   }
 
   async function deleteSkill(skillName, options = {}) {
-    const snapshot = await getSkillSnapshot();
-    const existing = snapshot.skills_by_name[String(skillName || '')] || null;
+    const { snapshot, record: existing } = await getMutableStoredSkillRecord(skillName, 'delete');
     if (!existing) {
       throw new Error(`微型 skill ${skillName} 不存在，无法删除。`);
     }

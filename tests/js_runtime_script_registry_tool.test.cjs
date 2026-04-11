@@ -6,9 +6,7 @@ const { pathToFileURL } = require('node:url');
 
 async function loadMicroSkillRegistryToolModule() {
   const filePath = path.resolve(__dirname, '../src/agent_tools/micro_skill_registry_tool.js');
-  const source = await fs.readFile(filePath, 'utf8');
-  const dataUrl = `data:text/javascript;base64,${Buffer.from(source, 'utf8').toString('base64')}`;
-  return import(dataUrl);
+  return import(`${pathToFileURL(filePath).href}?test=${Date.now()}`);
 }
 
 async function loadLegacyCompatModule() {

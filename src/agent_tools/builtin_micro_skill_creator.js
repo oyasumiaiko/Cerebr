@@ -1,0 +1,189 @@
+export const BUILTIN_MICRO_SKILL_CREATOR_NAME = 'skill-creator';
+
+function buildSkillCreatorUsage() {
+  return [
+    '# Skill Creator',
+    '',
+    '这是 Cerebr 内置的只读指导 skill，用来教模型如何在当前扩展里正确创建或更新浏览器微型 skill。',
+    '它不是页面 runtime skill，不会自动挂载到 `globalThis.__cerebrMicroSkills`；它的作用是提供制作 skill 的方法论、字段分工和推荐编辑流程。',
+    '',
+    '## 什么时候应该先读这个 skill',
+    '- 用户要求创建、重构、拆分、修复、更新微型 skill。',
+    '- 你准备把一段重复执行的页面脚本沉淀成可复用 skill。',
+    '- 你不确定 `description`、`details.usage`、`mount_contract`、`source.files` 应该分别承载什么信息。',
+    '- 你需要把一个大脚本拆成多个文件/代码片段并保持后续易改。',
+    '',
+    '## 从 Codex skill-creator 适配到 Cerebr 的核心思想',
+    '1. 简洁优先：上下文窗口是公共资源。不要把模型本来就知道的常识、长篇外部文档、页面内容复述塞进 skill。只留下真正能改变行为的约束、流程和字段。',
+    '2. 渐进式披露：默认上下文只看 summary；需要工作流时再 `read_detail`；只有要改逻辑时才 `read_source` 或 `read_source_file`。不要一上来就把完整源码 bundle 灌进上下文。',
+    '3. 元数据负责触发，正文负责方法，源码负责确定性执行：把这三层分清楚，skill 才会稳定。',
+    '4. 低耦合文件组织：entry 负责 orchestration，helper 文件负责选择器、解析、动作、格式化，不要把所有东西塞在一个文件里。',
+    '5. 按文件编辑优先：如果只改一部分逻辑，优先读取并 `upsert_source_file` 那个文件，而不是整 skill 全量重写。',
+    '6. 挂载期尽量无副作用：skill 被装载时应该主要做导出和注册，不要在 mount 时立刻点击、提交表单或触发重网络副作用。',
+    '',
+    '## Cerebr 版 skill 字段分工',
+    '- `description`: 这是触发/发现元数据。写清“什么时候应该用这个 skill”，而不是写实现细节。',
+    '- `interface.display_name`: 面向 UI 和列表的可读名称。',
+    '- `interface.short_description`: 面向列表/摘要的一句话能力说明。应比 `description` 更短、更像 chip 文案。',
+    '- `interface.default_prompt`: 当用户想直接调用这个 skill 时，最自然的默认提问方式。',
+    '- `match[]`: 页面范围。只写真正需要的 URL 范围，不要默认滥用 `<all_urls>`。',
+    '- `details.usage`: 等价于 Codex skill 的 `SKILL.md` 正文。这里写工作流、选择原则、边界条件、文件读取策略、常见坑。',
+    '- `details.mount_contract`: 写清页面里可用的 runtime surface、`ctx` 的约定、entry/helper 的加载方式、调用示例。',
+    '- `source.entry`: 入口文件路径。它应该薄，负责组织 helper 和导出最终 methods。',
+    '- `source.files[]`: 代码片段集合。按职责拆分，方便后续单文件读取和增量修改。',
+    '',
+    '## 推荐的文件组织方式',
+    '- `main.js`: 入口文件，只负责编排 helper、导出 methods、必要时调用 `ctx.mount(...)`。',
+    '- `helpers/dom.js`: 选择器和基础 DOM 读取。',
+    '- `helpers/parse.js`: 文本解析、结构化抽取、格式化。',
+    '- `actions/*.js`: 点击、提交、展开面板等副作用动作。',
+    '- `adapters/*.js`: 对页面内已有对象、接口返回、埋点结构做兼容层。',
+    '',
+    '## 推荐工作流',
+    '1. 先 `list` 看是否已有类似 skill；如果是更新，先 `read_detail` + `read_source` 或 `read_source_file` 了解现状。',
+    '2. 创建新 skill 时，先定 metadata：`name`、`description`、`interface.*`、`match`、`details.usage`、`details.mount_contract`。',
+    '3. 先建一个最小可工作的源码 bundle，再继续拆 helper；不要一开始就过度设计。',
+    '4. 如果只是改一两个 helper，优先 `read_source_file` + `upsert_source_file`，不要整体覆写全部文件。',
+    '5. 改完后，如果当前会话绑定了宿主页且这个 skill 应该立即生效，再 `refresh_current_document`。',
+    '',
+    '## 什么时候该拆文件',
+    '- 同一个文件同时承担“选 DOM + 解析文本 + 点击动作 + 导出接口”时，应该拆。',
+    '- 某段解析/选择器逻辑可能在多个 methods 里复用时，应该拆。',
+    '- 页面结构非常脆弱、将来 likely 频繁修改时，应该把脆弱部分单独放到 helper 文件里。',
+    '- 只是 20 行以内的局部逻辑且不会复用时，不必为了形式而拆。',
+    '',
+    '## details.usage 应该写什么',
+    '- 触发场景：模型在什么用户请求下应该考虑这个 skill。',
+    '- 读取顺序：先看哪个 method、哪个文件、哪个 helper。',
+    '- 范围边界：哪个 URL、哪个页面状态、哪个 DOM 前置条件才可靠。',
+    '- 风险提示：哪些 DOM 选择器脆弱、哪些操作有副作用、哪些地方要先判空。',
+    '',
+    '## details.usage 不应该写什么',
+    '- 大段复制外部官网文档。',
+    '- 和 `source.files` 完全重复的长代码。',
+    '- 模型常识级 JavaScript 教程。',
+    '- 当前页面的一次性临时观察记录。',
+    '',
+    '## 编写源码 bundle 的约束',
+    '- 入口文件优先 `return { methods... }`；确实需要手动挂载时再用 `ctx.mount(exports)`。',
+    '- helper 文件通过 `await require("./helper.js")` 加载，避免把所有逻辑内联进 entry。',
+    '- 顶层尽量只做定义与导出，不要在文件加载时立刻执行动作。',
+    '- 导出面向模型的 method 名称要稳定、语义明确，例如 `readSummary`、`collectCards`、`openPanel`。',
+    '- 优先返回结构化对象，不要把重要信息只塞进一大段拼接字符串里。',
+    '',
+    '## 常见错误',
+    '- 用一个巨大的 `main.js` 承载全部逻辑，导致后续无法精确修改。',
+    '- `description` 写成实现细节，导致模型不会在正确场景触发 skill。',
+    '- 把 `details.usage` 写成冗长设计文档，而不是操作指导。',
+    '- 明明只改一个 helper，却整体 `update` 重写整 skill。',
+    '- 在 mount 时直接执行副作用，导致页面一加载就被点击或改 DOM。',
+    '',
+    '## 当你需要真正创建或更新 skill 时的推荐顺序',
+    '1. 先 `read_detail(skill_name="skill-creator")`，确认工作流和字段职责。',
+    '2. 如果是修改已有 skill，再读目标 skill 的 `read_detail`，必要时读相关 `read_source_file`。',
+    '3. 若只是修改局部逻辑，优先使用 `upsert_source_file`。',
+    '4. 若 metadata 或多个文件都要一起改，再用 `update`。',
+    '5. 改完仅在需要时 `refresh_current_document`，不要无意义刷新。',
+    '',
+    '## 判断一个 skill 是否“做对了”',
+    '- summary 足够短，但能让模型知道何时该触发它。',
+    '- detail 足够具体，但不会把上下文吃爆。',
+    '- source bundle 按职责拆开，能针对单个文件稳定迭代。',
+    '- 当前 URL 命中时，模型能从摘要得知它可用；需要细节时再主动读取。',
+    '- 后续维护者只看 `details.usage` + 文件列表，就能快速定位该改哪里。'
+  ].join('\n');
+}
+
+function buildSkillCreatorMountContract() {
+  return [
+    'Instruction-only built-in skill. It does not mount to the page runtime.',
+    'Read detail with `micro_skill_registry(action="read_detail", skill_name="skill-creator")`.',
+    'Read the template bundle with `micro_skill_registry(action="read_source", skill_name="skill-creator")` or `read_source_file`.',
+    'When authoring a real skill, manage it with `create`, `update`, `upsert_source_file`, `delete_source_file`, and `refresh_current_document`.'
+  ].join('\n');
+}
+
+function buildSkillCreatorSourceFiles() {
+  return [
+    {
+      path: 'template/main.js',
+      code: [
+        '// 入口文件应当尽量薄：负责组织 helper、导出最终 methods。',
+        '// 约定：helper 文件使用异步 require，而不是把所有逻辑堆进一个文件。',
+        '',
+        'const dom = await require("./helpers/dom.js");',
+        '',
+        'return {',
+        '  readSummary() {',
+        '    return {',
+        '      title: dom.readTitle(),',
+        '      href: location.href',
+        '    };',
+        '  }',
+        '};'
+      ].join('\n')
+    },
+    {
+      path: 'template/helpers/dom.js',
+      code: [
+        '// helper 文件负责脆弱的 DOM 选择器和可复用读取逻辑。',
+        '// 这样页面结构变化时，只需要局部读取/修改这个文件。',
+        '',
+        'module.exports = {',
+        '  readTitle() {',
+        '    return document.title;',
+        '  }',
+        '};'
+      ].join('\n')
+    }
+  ];
+}
+
+export function buildBuiltinSkillCreatorRecord() {
+  return {
+    builtin: true,
+    read_only: true,
+    name: BUILTIN_MICRO_SKILL_CREATOR_NAME,
+    description: 'Guide for creating or updating Cerebr browser micro skills with concise metadata, progressive disclosure, and multi-file source bundles.',
+    interface: {
+      display_name: 'Skill Creator',
+      short_description: '创建或更新微型 skill 时先读的内置指导 skill',
+      default_prompt: 'When asked to create or update a Cerebr micro skill, first read the built-in skill-creator detail, then inspect the target skill and edit only the necessary files.'
+    },
+    match: ['<all_urls>'],
+    enabled: true,
+    details: {
+      usage: buildSkillCreatorUsage(),
+      mount_contract: buildSkillCreatorMountContract()
+    },
+    source: {
+      entry: 'template/main.js',
+      files: buildSkillCreatorSourceFiles()
+    },
+    created_at: '2026-04-12T00:00:00.000Z',
+    updated_at: '2026-04-12T00:00:00.000Z',
+    revision: 1
+  };
+}
+
+export function getBuiltinMicroSkillRecords() {
+  return [buildBuiltinSkillCreatorRecord()];
+}
+
+export function getBuiltinMicroSkillRecordByName(skillName) {
+  const normalized = String(skillName || '').trim();
+  if (!normalized) return null;
+  return getBuiltinMicroSkillRecords().find((record) => record.name === normalized) || null;
+}
+
+export function buildBuiltinSkillCreatorContextSummary() {
+  return {
+    priority: 0,
+    kind: 'builtin_guidance',
+    name: BUILTIN_MICRO_SKILL_CREATOR_NAME,
+    display_name: 'Skill Creator',
+    short_description: '创建或更新微型 skill 时，先读这条内置指导 skill，再决定 metadata、detail 和源码 bundle 的改法。',
+    default_prompt: 'Before creating or updating a Cerebr micro skill, read the built-in skill-creator detail and then edit only the necessary files.',
+    mount_surface: 'Instruction-only skill. Read detail with micro_skill_registry(action="read_detail", skill_name="skill-creator"), then use create/update/upsert_source_file/delete_source_file to build the real skill.'
+  };
+}

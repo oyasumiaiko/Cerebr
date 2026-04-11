@@ -1263,25 +1263,15 @@ export function registerSidebarUtilities(appContext) {
   };
 
   /**
-   * 获取当前侧栏绑定网页下命中的微型 skill 摘要。
+   * 获取当前会话可见的微型 skill 摘要。
    *
    * 设计目标：
    * - 给隐藏 `micro_skill_context` 提供轻量摘要来源；
    * - 不返回源码或详细 usage，保持渐进式披露；
-   * - 独立页或无稳定宿主页时返回空列表，而不是报错中断主流程。
+   * - 宿主页模式下返回“内置指导 skill + 当前 URL 命中的页面 skill”；
+   * - 独立页/无稳定宿主页时至少返回内置指导 skill，而不是整组清空。
    */
   appContext.utils.getMatchingMicroSkillSummaries = async () => {
-    const pageToolEnvironment = resolveCurrentPageToolEnvironment();
-    if (pageToolEnvironment.jsRuntimeEnvironment !== JS_RUNTIME_ENV_BOUND_HOST_PAGE) {
-      return {
-        success: true,
-        tab_id: null,
-        url: '',
-        title: '',
-        total_skills: 0,
-        skills: []
-      };
-    }
     if (!chrome?.runtime?.sendMessage) {
       return {
         success: false,
@@ -1289,17 +1279,10 @@ export function registerSidebarUtilities(appContext) {
       };
     }
     try {
-      const targetTabId = await resolveBoundSidebarTargetTabId();
-      if (!Number.isFinite(targetTabId)) {
-        return {
-          success: true,
-          tab_id: null,
-          url: '',
-          title: '',
-          total_skills: 0,
-          skills: []
-        };
-      }
+      const pageToolEnvironment = resolveCurrentPageToolEnvironment();
+      const targetTabId = pageToolEnvironment.jsRuntimeEnvironment === JS_RUNTIME_ENV_BOUND_HOST_PAGE
+        ? await resolveBoundSidebarTargetTabId()
+        : null;
       return await raceWithTimeout(
         chrome.runtime.sendMessage({
           type: 'GET_MATCHING_MICRO_SKILL_SUMMARIES',

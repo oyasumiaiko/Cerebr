@@ -22,7 +22,17 @@ test('resolveMicroSkillContextAttachment 只注入摘要并在签名不变时跳
     url: 'https://example.com/app',
     skills: [
       {
+        name: 'skill-creator',
+        kind: 'builtin_guidance',
+        priority: 0,
+        display_name: 'Skill Creator',
+        short_description: '创建或更新微型 skill 时先读的内置指导 skill',
+        default_prompt: 'Read built-in skill creator detail first.',
+        mount_surface: 'Instruction-only skill.'
+      },
+      {
         name: 'dom-probe',
+        kind: 'page_runtime',
         display_name: 'DOM Probe',
         short_description: '读取页面标题和 URL',
         default_prompt: 'Read the current page title and URL.',
@@ -35,7 +45,9 @@ test('resolveMicroSkillContextAttachment 只注入摘要并在签名不变时跳
   assert.equal(items.length, 1);
   const text = items[0].content[0].text;
   assert.match(text, /<micro_skill_context/);
+  assert.match(text, /<kind>builtin_guidance<\/kind>/);
   assert.match(text, /DOM Probe/);
+  assert.ok(text.indexOf('Skill Creator') < text.indexOf('DOM Probe'));
   assert.doesNotMatch(text, /source\.code/);
 
   const first = resolveMicroSkillContextAttachment({ payload, previousEffectiveSignature: '' });

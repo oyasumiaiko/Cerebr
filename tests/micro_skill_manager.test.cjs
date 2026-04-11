@@ -195,6 +195,54 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   assert.equal(calls.execute.length, 7);
 });
 
+test('内置 skill-creator 会自动出现在列表中且保持只读', async () => {
+  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+
+  const manager = createMicroSkillManager({
+    storageArea: createMockStorageArea(),
+    userScriptsApi: {
+      async getScripts() { return []; },
+      async register() {},
+      async update() {},
+      async unregister() {}
+    },
+    tabsApi: {
+      async get() {
+        return {
+          url: 'https://app.example.com/path',
+          title: 'Example'
+        };
+      }
+    },
+    jsRuntimeManager: {
+      async execute() {
+        return { ok: true, tabId: 1, value: null, logs: [], items: [] };
+      }
+    }
+  });
+
+  const listed = await manager.executeRegistryAction({ action: 'list' });
+  assert.equal(listed.ok, true);
+  assert.equal(listed.skills[0].name, 'skill-creator');
+  assert.equal(listed.skills[0].builtin, true);
+
+  const detail = await manager.executeRegistryAction({
+    action: 'read_detail',
+    skill_name: 'skill-creator'
+  });
+  assert.equal(detail.ok, true);
+  assert.equal(detail.skill.builtin, true);
+  assert.match(detail.skill.details.usage, /Skill Creator/);
+
+  await assert.rejects(
+    () => manager.executeRegistryAction({
+      action: 'delete',
+      skill_name: 'skill-creator'
+    }),
+    /内置只读指导 skill/
+  );
+});
+
 test('reconcileRegisteredSkills 会对现有动态脚本做 register/update/unregister 分流', async () => {
   const { MICRO_SKILL_REGISTRY_STORAGE_KEY } = await import(pathToFileURL(path.resolve(__dirname, '../src/agent_tools/micro_skill_registry_tool.js')).href);
   const { createMicroSkillManager } = await loadMicroSkillManagerModule();
@@ -309,7 +357,9 @@ test('listMatchingSkillSummariesForTab 只返回当前 URL 命中的轻量摘要
 
   const result = await manager.listMatchingSkillSummariesForTab(7);
   assert.equal(result.ok, true);
-  assert.equal(result.total_skills, 1);
-  assert.equal(result.skills[0].name, 'dom-probe');
-  assert.ok(result.skills[0].mount_surface);
+  assert.equal(result.total_skills, 2);
+  assert.equal(result.skills[0].name, 'skill-creator');
+  assert.equal(result.skills[0].kind, 'builtin_guidance');
+  assert.equal(result.skills[1].name, 'dom-probe');
+  assert.ok(result.skills[1].mount_surface);
 });
