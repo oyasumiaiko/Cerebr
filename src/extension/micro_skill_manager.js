@@ -1,12 +1,15 @@
 import {
   buildMicroSkillContextSummary,
   buildMicroSkillDetail,
+  buildMicroSkillSourceFilePayload,
+  buildMicroSkillSourceManifest,
   buildMicroSkillSourcePayload,
   buildMicroSkillSummary,
   buildStoredMicroSkillRecord,
   listMatchingMicroSkillRecordsForUrl,
   loadMicroSkillRegistrySnapshot,
   normalizeMicroSkillRegistryToolArguments,
+  normalizeMicroSkillSource,
   normalizeStoredMicroSkillRecord,
   saveMicroSkillRegistrySnapshot
 } from '../agent_tools/micro_skill_registry_tool.js';
@@ -98,6 +101,43 @@ export function createMicroSkillManager(options = {}) {
   async function getSkillRecord(skillName) {
     const snapshot = await getSkillSnapshot();
     return snapshot.skills_by_name[String(skillName || '')] || null;
+  }
+
+  function buildRevisedSkillRecord(existingRecord, updates = {}) {
+    const existing = normalizeStoredMicroSkillRecord(existingRecord);
+    if (!existing) {
+      throw new Error('无法基于无效 skill 记录生成修订版本。');
+    }
+
+    return normalizeStoredMicroSkillRecord({
+      ...existing,
+      ...updates,
+      updated_at: new Date().toISOString(),
+      revision: Number(existing.revision || 0) + 1
+    });
+  }
+
+  async function persistMutatedSkillRecord(snapshot, existingRecord, nextRecord) {
+    const normalizedExisting = normalizeStoredMicroSkillRecord(existingRecord);
+    const normalizedNext = normalizeStoredMicroSkillRecord(nextRecord);
+    if (!normalizedNext) {
+      throw new Error('写入 skill 记录失败：新记录无效。');
+    }
+
+    snapshot.skills_by_name[normalizedNext.name] = normalizedNext;
+    await persistSnapshot(snapshot);
+
+    if (normalizedNext.enabled) {
+      if (normalizedExisting?.enabled === true) {
+        await updateSkillRecordRegistration(normalizedNext);
+      } else {
+        await registerSkillRecord(normalizedNext);
+      }
+    } else if (normalizedExisting?.enabled === true) {
+      await unregisterSkillName(normalizedNext.name);
+    }
+
+    return normalizedNext;
   }
 
   async function registerSkillRecord(record) {
@@ -264,23 +304,12 @@ export function createMicroSkillManager(options = {}) {
       throw new Error(`微型 skill ${skillInput?.name || '(unknown)'} 不存在，无法 update。`);
     }
     const nextRecord = buildStoredMicroSkillRecord(skillInput, existing);
-    snapshot.skills_by_name[nextRecord.name] = nextRecord;
-    await persistSnapshot(snapshot);
-
-    if (nextRecord.enabled) {
-      if (existing.enabled === true) {
-        await updateSkillRecordRegistration(nextRecord);
-      } else {
-        await registerSkillRecord(nextRecord);
-      }
-    } else if (existing.enabled === true) {
-      await unregisterSkillName(nextRecord.name);
-    }
+    const persistedRecord = await persistMutatedSkillRecord(snapshot, existing, nextRecord);
 
     return {
       ok: true,
       action: 'update',
-      skill: buildMicroSkillSummary(nextRecord),
+      skill: buildMicroSkillSummary(persistedRecord),
       ...(await maybeRefreshCurrentDocument(options?.tabId))
     };
   }
@@ -291,29 +320,107 @@ export function createMicroSkillManager(options = {}) {
     if (!existing) {
       throw new Error(`微型 skill ${skillName} 不存在，无法切换启用状态。`);
     }
-    const nextRecord = {
-      ...existing,
+    const nextRecord = buildRevisedSkillRecord(existing, {
       enabled: enabled === true,
-      updated_at: new Date().toISOString(),
-      revision: Number(existing.revision || 0) + 1
-    };
-    snapshot.skills_by_name[nextRecord.name] = normalizeStoredMicroSkillRecord(nextRecord);
-    await persistSnapshot(snapshot);
-
-    if (enabled === true) {
-      if (existing.enabled === true) {
-        await updateSkillRecordRegistration(nextRecord);
-      } else {
-        await registerSkillRecord(nextRecord);
-      }
-    } else if (existing.enabled === true) {
-      await unregisterSkillName(nextRecord.name);
-    }
+    });
+    const persistedRecord = await persistMutatedSkillRecord(snapshot, existing, nextRecord);
 
     return {
       ok: true,
       action: enabled === true ? 'enable' : 'disable',
-      skill: buildMicroSkillSummary(nextRecord),
+      skill: buildMicroSkillSummary(persistedRecord),
+      ...(await maybeRefreshCurrentDocument(options?.tabId))
+    };
+  }
+
+  async function upsertSkillSourceFile(skillName, fileInput, options = {}) {
+    const snapshot = await getSkillSnapshot();
+    const existing = snapshot.skills_by_name[String(skillName || '')] || null;
+    const normalizedExisting = normalizeStoredMicroSkillRecord(existing);
+    if (!normalizedExisting) {
+      throw new Error(`微型 skill ${skillName} 不存在，无法写入源码文件。`);
+    }
+
+    const incomingFile = {
+      path: fileInput.path,
+      code: fileInput.code
+    };
+    const nextFiles = normalizedExisting.source.files.map((file) => ({ ...file }));
+    const existingIndex = nextFiles.findIndex((file) => file.path === incomingFile.path);
+    if (existingIndex >= 0) {
+      nextFiles[existingIndex] = incomingFile;
+    } else {
+      nextFiles.push(incomingFile);
+    }
+
+    const nextSource = normalizeMicroSkillSource({
+      entry: options?.setAsEntry === true ? incomingFile.path : normalizedExisting.source.entry,
+      files: nextFiles
+    }, {
+      requireFiles: true,
+      requireCode: true
+    });
+    const nextRecord = buildRevisedSkillRecord(normalizedExisting, {
+      source: nextSource
+    });
+    const persistedRecord = await persistMutatedSkillRecord(snapshot, normalizedExisting, nextRecord);
+
+    return {
+      ok: true,
+      action: 'upsert_source_file',
+      skill: buildMicroSkillSummary(persistedRecord),
+      source: buildMicroSkillSourceManifest(persistedRecord, { includeCode: false }),
+      file: buildMicroSkillSourceFilePayload(persistedRecord, incomingFile.path)?.source?.files?.[0] || null,
+      ...(await maybeRefreshCurrentDocument(options?.tabId))
+    };
+  }
+
+  async function deleteSkillSourceFile(skillName, filePath, options = {}) {
+    const snapshot = await getSkillSnapshot();
+    const existing = snapshot.skills_by_name[String(skillName || '')] || null;
+    const normalizedExisting = normalizeStoredMicroSkillRecord(existing);
+    if (!normalizedExisting) {
+      throw new Error(`微型 skill ${skillName} 不存在，无法删除源码文件。`);
+    }
+
+    const existingFile = normalizedExisting.source.files.find((file) => file.path === filePath) || null;
+    if (!existingFile) {
+      throw new Error(`微型 skill ${skillName} 中不存在源码文件 ${filePath}。`);
+    }
+    if (normalizedExisting.source.files.length <= 1) {
+      throw new Error(`微型 skill ${skillName} 只剩最后一个源码文件，不能删除。`);
+    }
+
+    const nextFiles = normalizedExisting.source.files
+      .filter((file) => file.path !== filePath)
+      .map((file) => ({ ...file }));
+    const deletingEntry = normalizedExisting.source.entry === filePath;
+    const nextEntry = deletingEntry
+      ? (options?.nextEntryPath || nextFiles[0]?.path || null)
+      : normalizedExisting.source.entry;
+
+    if (!nextFiles.some((file) => file.path === nextEntry)) {
+      throw new Error(`删除源码文件 ${filePath} 后，新的 entry 文件 ${nextEntry || '(empty)'} 无效。`);
+    }
+
+    const nextSource = normalizeMicroSkillSource({
+      entry: nextEntry,
+      files: nextFiles
+    }, {
+      requireFiles: true,
+      requireCode: true
+    });
+    const nextRecord = buildRevisedSkillRecord(normalizedExisting, {
+      source: nextSource
+    });
+    const persistedRecord = await persistMutatedSkillRecord(snapshot, normalizedExisting, nextRecord);
+
+    return {
+      ok: true,
+      action: 'delete_source_file',
+      deleted_file_path: filePath,
+      skill: buildMicroSkillSummary(persistedRecord),
+      source: buildMicroSkillSourceManifest(persistedRecord, { includeCode: false }),
       ...(await maybeRefreshCurrentDocument(options?.tabId))
     };
   }
@@ -376,10 +483,31 @@ export function createMicroSkillManager(options = {}) {
           skill: buildMicroSkillSourcePayload(record)
         };
       }
+      case 'read_source_file': {
+        const record = await getSkillRecord(normalizedArgs.skill_name);
+        if (!record) {
+          throw new Error(`微型 skill ${normalizedArgs.skill_name} 不存在。`);
+        }
+        return {
+          ok: true,
+          action: 'read_source_file',
+          skill: buildMicroSkillSourceFilePayload(record, normalizedArgs.file_path)
+        };
+      }
       case 'create':
         return await createSkill(normalizedArgs.skill, { tabId: options?.tabId });
       case 'update':
         return await updateSkill(normalizedArgs.skill, { tabId: options?.tabId });
+      case 'upsert_source_file':
+        return await upsertSkillSourceFile(normalizedArgs.skill_name, normalizedArgs.file, {
+          tabId: options?.tabId,
+          setAsEntry: normalizedArgs.set_as_entry === true
+        });
+      case 'delete_source_file':
+        return await deleteSkillSourceFile(normalizedArgs.skill_name, normalizedArgs.file_path, {
+          tabId: options?.tabId,
+          nextEntryPath: normalizedArgs.next_entry_path
+        });
       case 'delete':
         return await deleteSkill(normalizedArgs.skill_name, { tabId: options?.tabId });
       case 'enable':

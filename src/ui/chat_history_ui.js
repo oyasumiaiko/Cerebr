@@ -9256,22 +9256,55 @@ export function createChatHistoryUI(appContext) {
 
       const heading = document.createElement('div');
       heading.className = 'micro-skill-section-title';
-      heading.textContent = '源码';
+      heading.textContent = '源码 Bundle';
       sourceSection.appendChild(heading);
 
-      const sourceBlock = document.createElement('pre');
-      sourceBlock.className = 'micro-skill-code-block';
-      const code = document.createElement('code');
-      code.textContent = sourcePayload?.source?.code || '';
-      sourceBlock.appendChild(code);
-      sourceSection.appendChild(sourceBlock);
-      detailContainer.appendChild(sourceSection);
+      const sourceManifest = sourcePayload?.source;
+      const sourceFiles = Array.isArray(sourceManifest?.files) ? sourceManifest.files : [];
+      if (sourceFiles.length <= 0) {
+        const empty = document.createElement('div');
+        empty.className = 'micro-skill-detail-empty-desc';
+        empty.textContent = '这个微型 skill 当前没有可显示的源码文件。';
+        sourceSection.appendChild(empty);
+      } else {
+        sourceFiles.forEach((file) => {
+          const fileSection = document.createElement('div');
+          fileSection.className = 'micro-skill-source-file';
 
-      if (window.hljs?.highlightElement) {
-        try {
-          window.hljs.highlightElement(code);
-        } catch (_) {}
+          const fileHeader = document.createElement('div');
+          fileHeader.className = 'micro-skill-source-file-header';
+
+          const filePath = document.createElement('code');
+          filePath.className = 'micro-skill-source-file-path';
+          filePath.textContent = file.path || '';
+          fileHeader.appendChild(filePath);
+
+          if (file.is_entry === true) {
+            const entryTag = document.createElement('span');
+            entryTag.className = 'micro-skill-source-file-entry';
+            entryTag.textContent = 'entry';
+            fileHeader.appendChild(entryTag);
+          }
+
+          fileSection.appendChild(fileHeader);
+
+          const sourceBlock = document.createElement('pre');
+          sourceBlock.className = 'micro-skill-code-block';
+          const code = document.createElement('code');
+          code.textContent = file.code || '';
+          sourceBlock.appendChild(code);
+          fileSection.appendChild(sourceBlock);
+          sourceSection.appendChild(fileSection);
+
+          if (window.hljs?.highlightElement) {
+            try {
+              window.hljs.highlightElement(code);
+            } catch (_) {}
+          }
+        });
       }
+
+      detailContainer.appendChild(sourceSection);
     } catch (error) {
       console.error('读取微型 skill 源码失败:', error);
       showNotification?.({
@@ -9371,9 +9404,17 @@ export function createChatHistoryUI(appContext) {
     metaGrid.appendChild(createMicroSkillMetaRow('创建时间', skillDetail.created_at || ''));
     metaGrid.appendChild(createMicroSkillMetaRow('更新时间', skillDetail.updated_at || ''));
     metaGrid.appendChild(createMicroSkillMetaRow('默认提示', skillDetail.interface?.default_prompt || ''));
+    metaGrid.appendChild(createMicroSkillMetaRow('入口文件', skillDetail.source?.entry || ''));
+    metaGrid.appendChild(createMicroSkillMetaRow('源码文件数', String(skillDetail.source?.file_count || 0)));
     detailContainer.appendChild(metaGrid);
 
     detailContainer.appendChild(createMicroSkillChipList('@match', skillDetail.match));
+    detailContainer.appendChild(createMicroSkillChipList(
+      '源码文件',
+      Array.isArray(skillDetail.source?.files)
+        ? skillDetail.source.files.map((file) => file.is_entry === true ? `${file.path} (entry)` : file.path)
+        : []
+    ));
     detailContainer.appendChild(createMicroSkillTextSection('说明', skillDetail.details?.usage || ''));
     detailContainer.appendChild(createMicroSkillTextSection('挂载方法', skillDetail.details?.mount_contract || ''));
   }

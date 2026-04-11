@@ -50,6 +50,36 @@ function createMockStorageArea(initial = {}) {
   };
 }
 
+function buildSkillInput(name = 'dom-probe') {
+  return {
+    name,
+    description: '读取页面标题和链接',
+    interface: {
+      display_name: 'DOM Probe',
+      short_description: '读取当前页面标题和 URL',
+      default_prompt: 'Read the current page title and URL.'
+    },
+    match: ['https://*.example.com/*'],
+    details: {
+      usage: '在需要读取页面基础信息时使用。',
+      mount_contract: 'Use globalThis.__cerebrMicroSkills.invoke("dom-probe.read")'
+    },
+    source: {
+      entry: 'main.js',
+      files: [
+        {
+          path: 'main.js',
+          code: 'const helpers = await require("./helpers/dom.js"); return { read() { return { title: helpers.readTitle(), href: location.href }; } };'
+        },
+        {
+          path: 'helpers/dom.js',
+          code: 'module.exports = { readTitle() { return document.title; } };'
+        }
+      ]
+    }
+  };
+}
+
 test('normalizeMicroSkillMatchPatterns 与 URL 匹配遵循第一阶段 Chrome/TM 风格约束', async () => {
   const {
     normalizeMicroSkillMatchPatterns,
@@ -100,26 +130,12 @@ test('buildStoredMicroSkillRecord / loadMicroSkillRegistrySnapshot / saveMicroSk
   } = await loadMicroSkillRegistryToolModule();
 
   const storageArea = createMockStorageArea();
-  const created = buildStoredMicroSkillRecord({
-    name: 'dom-probe',
-    description: '读取页面标题和链接',
-    interface: {
-      display_name: 'DOM Probe',
-      short_description: '读取当前页面标题和 URL',
-      default_prompt: 'Read the current page title and URL.'
-    },
-    match: ['https://*.example.com/*'],
-    details: {
-      usage: '在需要读取页面基础信息时使用。',
-      mount_contract: 'Use globalThis.__cerebrMicroSkills.invoke("dom-probe.read")'
-    },
-    source: {
-      code: 'return { read() { return { title: document.title, href: location.href }; } };'
-    }
-  });
+  const created = buildStoredMicroSkillRecord(buildSkillInput());
 
   assert.equal(created.revision, 1);
   assert.equal(created.interface.display_name, 'DOM Probe');
+  assert.equal(created.source.entry, 'main.js');
+  assert.equal(created.source.files.length, 2);
 
   await saveMicroSkillRegistrySnapshot({
     version: 1,
@@ -136,10 +152,14 @@ test('buildStoredMicroSkillRecord / loadMicroSkillRegistrySnapshot / saveMicroSk
 
   const detail = buildMicroSkillDetail(snapshot.skills_by_name['dom-probe']);
   assert.equal(detail.details.usage, '在需要读取页面基础信息时使用。');
-  assert.equal(detail.source, undefined);
+  assert.equal(detail.source.entry, 'main.js');
+  assert.equal(detail.source.file_count, 2);
+  assert.equal(detail.source.files[0].code, undefined);
 
   const source = buildMicroSkillSourcePayload(snapshot.skills_by_name['dom-probe']);
-  assert.match(source.source.code, /document\.title/);
+  assert.equal(source.source.entry, 'main.js');
+  assert.equal(source.source.files.length, 2);
+  assert.match(source.source.files[1].code, /document\.title/);
 
   assert.ok(storageArea.dump()[MICRO_SKILL_REGISTRY_STORAGE_KEY]);
 });
@@ -156,20 +176,40 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 micro skill ac
 
   const normalizedCreate = normalizeMicroSkillRegistryToolArguments({
     action: 'create',
-    skill: {
-      name: 'dom-probe',
-      description: '读取页面标题和链接',
-      match: ['https://*.example.com/*'],
-      details: {
-        usage: '在需要读取页面基础信息时使用。'
-      },
-      source: {
-        code: 'return { read() { return document.title; } };'
-      }
-    }
+    skill: buildSkillInput()
   });
   assert.equal(normalizedCreate.action, 'create');
   assert.equal(normalizedCreate.skill.name, 'dom-probe');
+  assert.equal(normalizedCreate.skill.source.entry, 'main.js');
+  assert.equal(normalizedCreate.skill.source.files.length, 2);
+
+  const normalizedReadSourceFile = normalizeMicroSkillRegistryToolArguments({
+    action: 'read_source_file',
+    skill_name: 'dom-probe',
+    file_path: './helpers/dom.js'
+  });
+  assert.deepEqual(normalizedReadSourceFile, {
+    action: 'read_source_file',
+    skill_name: 'dom-probe',
+    skill: null,
+    file_path: 'helpers/dom.js',
+    file: null,
+    set_as_entry: false,
+    next_entry_path: null
+  });
+
+  const normalizedUpsertFile = normalizeMicroSkillRegistryToolArguments({
+    action: 'upsert_source_file',
+    skill_name: 'dom-probe',
+    set_as_entry: true,
+    file: {
+      path: 'runtime/new-main.js',
+      code: 'module.exports = { read() { return document.title; } };'
+    }
+  });
+  assert.equal(normalizedUpsertFile.action, 'upsert_source_file');
+  assert.equal(normalizedUpsertFile.file.path, 'runtime/new-main.js');
+  assert.equal(normalizedUpsertFile.set_as_entry, true);
 
   const normalizedLegacy = normalizeMicroSkillRegistryToolArguments({
     action: 'get',
@@ -178,7 +218,11 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 micro skill ac
   assert.deepEqual(normalizedLegacy, {
     action: 'read_detail',
     skill_name: 'dom-probe',
-    skill: null
+    skill: null,
+    file_path: null,
+    file: null,
+    set_as_entry: false,
+    next_entry_path: null
   });
 });
 

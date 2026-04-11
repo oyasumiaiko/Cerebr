@@ -23,7 +23,17 @@ function buildSkill(name) {
       mount_contract: 'mount contract'
     },
     source: {
-      code: `return { ping() { return "${name}"; } };`
+      entry: 'main.js',
+      files: [
+        {
+          path: 'main.js',
+          code: `const helper = await require('./helper.js'); return { ping() { return helper.readValue(); } };`
+        },
+        {
+          path: 'helper.js',
+          code: `module.exports = { readValue() { return "${name}"; } };`
+        }
+      ]
     },
     created_at: '2026-01-01T00:00:00.000Z',
     updated_at: '2026-01-01T00:00:00.000Z',

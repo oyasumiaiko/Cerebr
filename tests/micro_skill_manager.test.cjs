@@ -51,7 +51,17 @@ function buildSkillInput(name = 'dom-probe') {
       usage: '在需要读取页面基础信息时使用。'
     },
     source: {
-      code: 'return { read() { return { title: document.title, href: location.href }; } };'
+      entry: 'main.js',
+      files: [
+        {
+          path: 'main.js',
+          code: 'const helpers = await require("./helpers/dom.js"); return { read() { return { title: helpers.readTitle(), href: location.href }; } };'
+        },
+        {
+          path: 'helpers/dom.js',
+          code: 'module.exports = { readTitle() { return document.title; } };'
+        }
+      ]
     }
   };
 }
@@ -109,12 +119,56 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     skill: {
       ...buildSkillInput(),
       details: { usage: '更新后的 usage' },
-      source: { code: 'return { read() { return document.title; } };' }
+      source: {
+        entry: 'main.js',
+        files: [
+          {
+            path: 'main.js',
+            code: 'const helpers = await require("./helpers/dom.js"); return { read() { return helpers.readTitle(); } };'
+          },
+          {
+            path: 'helpers/dom.js',
+            code: 'module.exports = { readTitle() { return document.title; } };'
+          }
+        ]
+      }
     }
   }, { tabId: 11 });
   assert.equal(updated.ok, true);
   assert.equal(calls.update.length, 1);
   assert.equal(calls.execute.length, 2);
+
+  const readSourceFile = await manager.executeRegistryAction({
+    action: 'read_source_file',
+    skill_name: 'dom-probe',
+    file_path: 'helpers/dom.js'
+  }, { tabId: 11 });
+  assert.equal(readSourceFile.ok, true);
+  assert.equal(readSourceFile.skill.source.files.length, 1);
+  assert.match(readSourceFile.skill.source.files[0].code, /document\.title/);
+
+  const upsertedFile = await manager.executeRegistryAction({
+    action: 'upsert_source_file',
+    skill_name: 'dom-probe',
+    file: {
+      path: 'helpers/url.js',
+      code: 'module.exports = { readUrl() { return location.href; } };'
+    }
+  }, { tabId: 11 });
+  assert.equal(upsertedFile.ok, true);
+  assert.equal(upsertedFile.source.file_count, 3);
+  assert.equal(calls.update.length, 2);
+  assert.equal(calls.execute.length, 3);
+
+  const deletedFile = await manager.executeRegistryAction({
+    action: 'delete_source_file',
+    skill_name: 'dom-probe',
+    file_path: 'helpers/url.js'
+  }, { tabId: 11 });
+  assert.equal(deletedFile.ok, true);
+  assert.equal(deletedFile.source.file_count, 2);
+  assert.equal(calls.update.length, 3);
+  assert.equal(calls.execute.length, 4);
 
   const disabled = await manager.executeRegistryAction({
     action: 'disable',
@@ -122,7 +176,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   }, { tabId: 11 });
   assert.equal(disabled.ok, true);
   assert.equal(calls.unregister.length, 1);
-  assert.equal(calls.execute.length, 3);
+  assert.equal(calls.execute.length, 5);
 
   const enabled = await manager.executeRegistryAction({
     action: 'enable',
@@ -130,7 +184,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   }, { tabId: 11 });
   assert.equal(enabled.ok, true);
   assert.equal(calls.register.length, 2);
-  assert.equal(calls.execute.length, 4);
+  assert.equal(calls.execute.length, 6);
 
   const removed = await manager.executeRegistryAction({
     action: 'delete',
@@ -138,7 +192,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   }, { tabId: 11 });
   assert.equal(removed.ok, true);
   assert.equal(calls.unregister.length, 2);
-  assert.equal(calls.execute.length, 5);
+  assert.equal(calls.execute.length, 7);
 });
 
 test('reconcileRegisteredSkills 会对现有动态脚本做 register/update/unregister 分流', async () => {
