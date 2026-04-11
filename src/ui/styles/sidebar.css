@@ -1653,6 +1653,8 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     flex: 1 1 auto;
     height: 1px;
     min-width: 18px;
+    position: relative;
+    overflow: hidden;
     background:
         linear-gradient(90deg,
             transparent 0%,
@@ -1669,6 +1671,23 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
             color-mix(in srgb, currentColor 24%, transparent) 44%,
             color-mix(in srgb, currentColor 8%, transparent) 74%,
             transparent 100%);
+}
+
+.context-compaction-divider__line::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+        linear-gradient(90deg,
+            transparent 0%,
+            color-mix(in srgb, currentColor 10%, transparent) 18%,
+            color-mix(in srgb, currentColor 88%, #ffffff 12%) 50%,
+            color-mix(in srgb, currentColor 10%, transparent) 82%,
+            transparent 100%);
+    background-repeat: no-repeat;
+    background-size: 42% 100%;
+    opacity: 0;
+    pointer-events: none;
 }
 
 .context-compaction-divider__pill {
@@ -1771,26 +1790,49 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 }
 
 .context-compaction-divider.is-pending .context-compaction-divider__line {
-    background-size: 220% 100%;
-    animation: contextCompactionLineSweep 2.4s ease-in-out infinite;
+    opacity: 0.9;
+}
+
+.context-compaction-divider.is-pending .context-compaction-divider__line::before {
+    opacity: 1;
+    animation: contextCompactionLineSweepToCenter 1.9s ease-in-out infinite;
+}
+
+.context-compaction-divider.is-pending .context-compaction-divider__row > .context-compaction-divider__line:last-child::before {
+    animation-name: contextCompactionLineSweepToCenterReverse;
 }
 
 .context-compaction-divider.is-pending .context-compaction-divider__pill {
     animation: contextCompactionPulse 1.8s ease-in-out infinite;
 }
 
-@keyframes contextCompactionLineSweep {
+@keyframes contextCompactionLineSweepToCenter {
     0% {
-        background-position: 100% 50%;
-        opacity: 0.55;
+        background-position: -55% 50%;
+        opacity: 0.16;
     }
-    50% {
-        background-position: 0% 50%;
-        opacity: 1;
+    58% {
+        background-position: 86% 50%;
+        opacity: 0.96;
     }
     100% {
-        background-position: -100% 50%;
-        opacity: 0.55;
+        background-position: 112% 50%;
+        opacity: 0.14;
+    }
+}
+
+@keyframes contextCompactionLineSweepToCenterReverse {
+    0% {
+        background-position: 155% 50%;
+        opacity: 0.16;
+    }
+    58% {
+        background-position: 14% 50%;
+        opacity: 0.96;
+    }
+    100% {
+        background-position: -12% 50%;
+        opacity: 0.14;
     }
 }
 
