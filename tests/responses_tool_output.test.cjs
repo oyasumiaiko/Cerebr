@@ -225,6 +225,24 @@ test('buildResponsesPageContentToolOutputContentItems 复用页面工具自身�
   assert.match(text, /\[\.\.\. truncated 2000 chars out of 12000 total chars \(16\.67%\); returned range \[0, 10000\) \.\.\.\]/);
 });
 
+test('buildResponsesGenericXmlToolOutputContentItems 在没有 value 字段时仍会显示其余 payload', async () => {
+  const { buildResponsesGenericXmlToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesGenericXmlToolOutputContentItems('tool_result', {
+    ok: true,
+    action: 'read_detail',
+    skill: {
+      name: 'skill-creator',
+      builtin: true
+    }
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<tool_result>/);
+  assert.match(text, /<metadata>/);
+  assert.match(text, /<result>/);
+  assert.match(text, /"action": "read_detail"/);
+  assert.match(text, /"name": "skill-creator"/);
+});
+
 test('buildResponsesPdfContentToolOutputContentItems 使用 overview / selection / content XML 分块', async () => {
   const { buildResponsesPdfContentToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesPdfContentToolOutputContentItems({
