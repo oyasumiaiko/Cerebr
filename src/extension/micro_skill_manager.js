@@ -4,6 +4,7 @@ import {
   buildMicroSkillFileManifest,
   buildMicroSkillFilePayload,
   buildMicroSkillPackagePayload,
+  validateMicroSkillRecord,
   buildMicroSkillSummary,
   buildStoredMicroSkillRecord,
   deleteStoredMicroSkillPackage,
@@ -71,6 +72,23 @@ async function normalizeRefreshExecutionResult(rawResult, matchedRecords) {
 
 function cloneFiles(files) {
   return (Array.isArray(files) ? files : []).map((file) => ({ ...file }));
+}
+
+function buildValidationFailureResult(action, validation) {
+  const firstErrorMessage = Array.isArray(validation?.errors) && validation.errors.length > 0
+    ? validation.errors[0]?.message
+    : '微型 skill 校验失败。';
+  return {
+    ok: false,
+    action,
+    valid: false,
+    validation,
+    error: {
+      name: 'MicroSkillValidationError',
+      message: firstErrorMessage || '微型 skill 校验失败。',
+      stack: ''
+    }
+  };
 }
 
 export function createMicroSkillManager(options = {}) {
@@ -279,6 +297,7 @@ export function createMicroSkillManager(options = {}) {
     const { url, title, tab_id } = await getTabUrl(normalizedTabId);
     const matchingRecords = (await listStoredRecords()).filter((record) => microSkillMatchesUrl(record, url));
     const pageSkillSummaries = matchingRecords
+      .filter((record) => record?.policy?.allow_implicit_invocation !== false)
       .map((record) => buildMicroSkillContextSummary(record))
       .filter(Boolean);
     return {
@@ -308,6 +327,10 @@ export function createMicroSkillManager(options = {}) {
     };
   }
 
+  function validatePersistedCandidate(record) {
+    return validateMicroSkillRecord(record);
+  }
+
   async function createSkill(skillInput, options = {}) {
     const nextRecord = buildStoredMicroSkillRecord(skillInput, null);
     if (getBuiltinMicroSkillRecord(nextRecord.name)) {
@@ -317,6 +340,10 @@ export function createMicroSkillManager(options = {}) {
     if (existing) {
       throw new Error(`微型 skill ${nextRecord.name} 已存在，不能重复 create。`);
     }
+    const validation = validatePersistedCandidate(nextRecord);
+    if (validation.valid !== true) {
+      return buildValidationFailureResult('create', validation);
+    }
     await saveStoredMicroSkillPackage(nextRecord, store);
     if (nextRecord.enabled && nextRecord.kind === 'page_runtime') {
       await registerSkillRecord(nextRecord);
@@ -325,6 +352,7 @@ export function createMicroSkillManager(options = {}) {
       ok: true,
       action: 'create',
       skill: buildMicroSkillSummary(nextRecord),
+      validation,
       ...(await maybeRefreshCurrentDocument(options?.tabId))
     };
   }
@@ -335,12 +363,17 @@ export function createMicroSkillManager(options = {}) {
       throw new Error(`微型 skill ${skillInput?.name || '(unknown)'} 不存在，无法 update。`);
     }
     const nextRecord = buildStoredMicroSkillRecord(skillInput, existing);
+    const validation = validatePersistedCandidate(nextRecord);
+    if (validation.valid !== true) {
+      return buildValidationFailureResult('update', validation);
+    }
     const persistedRecord = await persistMutatedSkillRecord(existing, nextRecord);
 
     return {
       ok: true,
       action: 'update',
       skill: buildMicroSkillSummary(persistedRecord),
+      validation,
       ...(await maybeRefreshCurrentDocument(options?.tabId))
     };
   }
@@ -398,12 +431,17 @@ export function createMicroSkillManager(options = {}) {
       },
       files: nextFiles
     }, normalizedExisting);
+    const validation = validatePersistedCandidate(nextRecord);
+    if (validation.valid !== true) {
+      return buildValidationFailureResult('write_file', validation);
+    }
     const persistedRecord = await persistMutatedSkillRecord(normalizedExisting, nextRecord);
 
     return {
       ok: true,
       action: 'write_file',
       skill: buildMicroSkillSummary(persistedRecord),
+      validation,
       files: buildMicroSkillFileManifest(persistedRecord, { includeContent: false }),
       file: buildMicroSkillFilePayload(persistedRecord, nextFile.path)?.file || null,
       ...(await maybeRefreshCurrentDocument(options?.tabId))
@@ -448,6 +486,10 @@ export function createMicroSkillManager(options = {}) {
       },
       files: nextFiles
     }, normalizedExisting);
+    const validation = validatePersistedCandidate(nextRecord);
+    if (validation.valid !== true) {
+      return buildValidationFailureResult('delete_file', validation);
+    }
     const persistedRecord = await persistMutatedSkillRecord(normalizedExisting, nextRecord);
 
     return {
@@ -455,6 +497,7 @@ export function createMicroSkillManager(options = {}) {
       action: 'delete_file',
       deleted_file_path: normalizedPath,
       skill: buildMicroSkillSummary(persistedRecord),
+      validation,
       files: buildMicroSkillFileManifest(persistedRecord, { includeContent: false }),
       ...(await maybeRefreshCurrentDocument(options?.tabId))
     };
@@ -503,6 +546,21 @@ export function createMicroSkillManager(options = {}) {
           ok: true,
           action: 'read_detail',
           skill: buildMicroSkillDetail(record)
+        };
+      }
+      case 'validate': {
+        const record = normalizedArgs.skill
+          ? normalizedArgs.skill
+          : await getSkillRecord(normalizedArgs.skill_name);
+        if (!record) {
+          throw new Error(`微型 skill ${normalizedArgs.skill_name} 不存在。`);
+        }
+        const validation = validateMicroSkillRecord(record);
+        return {
+          ok: true,
+          action: 'validate',
+          skill_name: normalizedArgs.skill_name || validation.normalized_skill?.name || null,
+          ...validation
         };
       }
       case 'read_package': {

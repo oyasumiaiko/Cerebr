@@ -9235,6 +9235,42 @@ export function createChatHistoryUI(appContext) {
     return section;
   }
 
+  function formatMicroSkillDependenciesText(dependencies) {
+    const tools = Array.isArray(dependencies?.tools) ? dependencies.tools : [];
+    if (tools.length <= 0) {
+      return '未声明 dependencies.tools';
+    }
+    return tools.map((tool, index) => {
+      const parts = [
+        `#${index + 1}`,
+        `type=${tool.type || ''}`,
+        `value=${tool.value || ''}`
+      ];
+      if (tool.description) parts.push(`description=${tool.description}`);
+      if (tool.transport) parts.push(`transport=${tool.transport}`);
+      if (tool.url) parts.push(`url=${tool.url}`);
+      return parts.join(' | ');
+    }).join('\n');
+  }
+
+  function formatMicroSkillValidationText(validation) {
+    if (!validation || typeof validation !== 'object') {
+      return '暂无校验结果';
+    }
+    const errors = Array.isArray(validation.errors) ? validation.errors : [];
+    const warnings = Array.isArray(validation.warnings) ? validation.warnings : [];
+    const checklist = Array.isArray(validation.checklist) ? validation.checklist : [];
+    const lines = [
+      `valid=${validation.valid === true}`,
+      `errors=${errors.length}`,
+      `warnings=${warnings.length}`
+    ];
+    checklist.forEach((item) => {
+      lines.push(`[${item.level || 'pass'}] ${item.key || 'unknown'}: ${item.message || ''}`);
+    });
+    return lines.join('\n');
+  }
+
   async function loadMicroSkillSourceIntoViewer(skillName) {
     const { detailContainer } = getMicroSkillViewerRefs();
     if (!detailContainer) return;
@@ -9425,7 +9461,16 @@ export function createChatHistoryUI(appContext) {
     metaGrid.appendChild(createMicroSkillMetaRow('Revision', `r${skillDetail.revision || 1}`));
     metaGrid.appendChild(createMicroSkillMetaRow('创建时间', skillDetail.created_at || ''));
     metaGrid.appendChild(createMicroSkillMetaRow('更新时间', skillDetail.updated_at || ''));
+    metaGrid.appendChild(createMicroSkillMetaRow('显示名称', skillDetail.interface?.display_name || ''));
+    metaGrid.appendChild(createMicroSkillMetaRow('短描述', skillDetail.interface?.short_description || ''));
     metaGrid.appendChild(createMicroSkillMetaRow('默认提示', skillDetail.interface?.default_prompt || ''));
+    metaGrid.appendChild(createMicroSkillMetaRow('小图标', skillDetail.interface?.icon_small || ''));
+    metaGrid.appendChild(createMicroSkillMetaRow('大图标', skillDetail.interface?.icon_large || ''));
+    metaGrid.appendChild(createMicroSkillMetaRow('品牌色', skillDetail.interface?.brand_color || ''));
+    metaGrid.appendChild(createMicroSkillMetaRow(
+      '隐式注入',
+      skillDetail.policy?.allow_implicit_invocation === false ? '关闭' : '开启'
+    ));
     metaGrid.appendChild(createMicroSkillMetaRow('SKILL.md', skillDetail.instruction?.path || ''));
     metaGrid.appendChild(createMicroSkillMetaRow('Runtime 入口', skillDetail.runtime?.entry_path || ''));
     metaGrid.appendChild(createMicroSkillMetaRow('文件总数', String(skillDetail.files?.total_count || 0)));
@@ -9445,6 +9490,8 @@ export function createChatHistoryUI(appContext) {
         : []
     ));
     detailContainer.appendChild(createMicroSkillTextSection('SKILL.md', skillDetail.instruction?.content || ''));
+    detailContainer.appendChild(createMicroSkillTextSection('Dependencies', formatMicroSkillDependenciesText(skillDetail.dependencies)));
+    detailContainer.appendChild(createMicroSkillTextSection('校验结果', formatMicroSkillValidationText(skillDetail.validation)));
   }
 
   async function loadMicroSkillDetailIntoViewer(skillName, options = {}) {

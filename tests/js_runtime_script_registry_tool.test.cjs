@@ -69,8 +69,23 @@ function buildSkillInput(name = 'dom-probe') {
     description: '读取页面标题和链接',
     interface: {
       display_name: 'DOM Probe',
-      short_description: '读取当前页面标题和 URL',
-      default_prompt: 'Read the current page title and URL.'
+      short_description: 'Read current page title, URL, and base page summary safely',
+      icon_small: 'assets/icon-small.svg',
+      icon_large: 'assets/icon-large.svg',
+      brand_color: '#3B82F6',
+      default_prompt: `Use $${name} to read the current page title and URL.`
+    },
+    dependencies: {
+      tools: [{
+        type: 'mcp',
+        value: 'github',
+        description: 'GitHub MCP server',
+        transport: 'streamable_http',
+        url: 'https://api.githubcopilot.com/mcp/'
+      }]
+    },
+    policy: {
+      allow_implicit_invocation: true
     },
     match: ['https://*.example.com/*'],
     instruction: {
@@ -83,7 +98,18 @@ function buildSkillInput(name = 'dom-probe') {
       {
         path: 'SKILL.md',
         kind: 'instruction',
-        content: '# DOM Probe\n\n在需要读取页面基础信息时使用。'
+        content: [
+          '---',
+          `name: ${name}`,
+          'description: 读取页面标题和链接',
+          'metadata:',
+          '  short-description: Read current page title, URL, and base page summary safely',
+          '---',
+          '',
+          '# DOM Probe',
+          '',
+          '在需要读取页面基础信息时使用。'
+        ].join('\n')
       },
       {
         path: 'src/main.js',
@@ -94,6 +120,16 @@ function buildSkillInput(name = 'dom-probe') {
         path: 'src/helpers/dom.js',
         kind: 'runtime_source',
         content: 'module.exports = { readTitle() { return document.title; } };'
+      },
+      {
+        path: 'assets/icon-small.svg',
+        kind: 'asset',
+        content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" fill="#3B82F6"/></svg>'
+      },
+      {
+        path: 'assets/icon-large.svg',
+        kind: 'asset',
+        content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" fill="#3B82F6"/></svg>'
       }
     ]
   };
@@ -154,15 +190,15 @@ test('buildStoredMicroSkillRecord / saveStoredMicroSkillPackage / getStoredMicro
   assert.equal(created.interface.display_name, 'DOM Probe');
   assert.equal(created.instruction.path, 'SKILL.md');
   assert.equal(created.runtime.entry_path, 'src/main.js');
-  assert.equal(created.files.length, 3);
+  assert.equal(created.files.length, 5);
 
   await saveStoredMicroSkillPackage(created, store);
   const loaded = await getStoredMicroSkillPackage('dom-probe', store);
   assert.equal(loaded.name, 'dom-probe');
 
   const summary = buildMicroSkillSummary(loaded);
-  assert.equal(summary.interface.short_description, '读取当前页面标题和 URL');
-  assert.equal(summary.files.total_count, 3);
+  assert.equal(summary.interface.short_description, 'Read current page title, URL, and base page summary safely');
+  assert.equal(summary.files.total_count, 5);
 
   const detail = buildMicroSkillDetail(loaded);
   assert.equal(detail.instruction.path, 'SKILL.md');
@@ -171,7 +207,7 @@ test('buildStoredMicroSkillRecord / saveStoredMicroSkillPackage / getStoredMicro
 
   const source = buildMicroSkillPackagePayload(loaded);
   assert.equal(source.runtime.entry_path, 'src/main.js');
-  assert.equal(source.files.files.length, 3);
+  assert.equal(source.files.files.length, 5);
   assert.match(source.files.files[2].content, /document\.title/);
 
   assert.equal(store.dump().length, 1);
@@ -194,7 +230,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
   assert.equal(normalizedCreate.action, 'create');
   assert.equal(normalizedCreate.skill.name, 'dom-probe');
   assert.equal(normalizedCreate.skill.instruction.path, 'SKILL.md');
-  assert.equal(normalizedCreate.skill.files.length, 3);
+  assert.equal(normalizedCreate.skill.files.length, 5);
 
   const normalizedReadFile = normalizeMicroSkillRegistryToolArguments({
     action: 'read_file',
@@ -243,6 +279,54 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     next_instruction_path: null,
     next_runtime_entry_path: null
   });
+
+  const normalizedValidate = normalizeMicroSkillRegistryToolArguments({
+    action: 'validate',
+    skill_name: 'dom-probe'
+  });
+  assert.equal(normalizedValidate.action, 'validate');
+  assert.equal(normalizedValidate.skill_name, 'dom-probe');
+});
+
+test('validateMicroSkillRecord 会校验 openai interface 语义、asset 路径与 SKILL.md frontmatter', async () => {
+  const {
+    validateMicroSkillRecord
+  } = await loadMicroSkillRegistryToolModule();
+
+  const validResult = validateMicroSkillRecord(buildSkillInput('dom-probe'));
+  assert.equal(validResult.valid, true);
+  assert.equal(validResult.errors.length, 0);
+  assert.equal(validResult.warnings.length, 0);
+
+  const invalid = buildSkillInput('broken-skill');
+  invalid.interface.short_description = 'too short';
+  invalid.interface.default_prompt = 'Read the page without naming the skill.';
+  invalid.interface.icon_small = 'src/main.js';
+  invalid.policy.allow_implicit_invocation = 'yes';
+  invalid.files[0].content = invalid.files[0].content.replace('name: broken-skill', 'name: other-skill');
+
+  const invalidResult = validateMicroSkillRecord(invalid);
+  assert.equal(invalidResult.valid, false);
+  assert.match(JSON.stringify(invalidResult.errors), /short_description/);
+  assert.match(JSON.stringify(invalidResult.errors), /default_prompt/);
+  assert.match(JSON.stringify(invalidResult.errors), /icon_small/);
+  assert.match(JSON.stringify(invalidResult.errors), /frontmatter/);
+});
+
+test('内置 skill-creator 提供模板文件与校验参考', async () => {
+  const {
+    getBuiltinMicroSkillRecord
+  } = await loadMicroSkillRegistryToolModule();
+
+  const record = getBuiltinMicroSkillRecord('skill-creator');
+  assert.ok(record);
+  const filePaths = record.files.map((file) => file.path);
+  assert.ok(filePaths.includes('references/openai-interface.md'));
+  assert.ok(filePaths.includes('references/testing-requirements.md'));
+  assert.ok(filePaths.includes('template/SKILL.md'));
+  assert.ok(filePaths.includes('template/src/main.js'));
+  assert.ok(filePaths.includes('template/assets/icon-small.svg'));
+  assert.match(record.interface.default_prompt, /\$skill-creator/);
 });
 
 test('旧 js_runtime_script_registry 兼容层会映射到新的 micro_skill_registry 能力', async () => {

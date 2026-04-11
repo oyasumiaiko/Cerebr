@@ -61,8 +61,23 @@ function buildSkillInput(name = 'dom-probe') {
     description: '读取页面标题和链接',
     interface: {
       display_name: 'DOM Probe',
-      short_description: '读取当前页面标题和 URL',
-      default_prompt: 'Read the current page title and URL.'
+      short_description: 'Read current page title, URL, and base page summary safely',
+      icon_small: 'assets/icon-small.svg',
+      icon_large: 'assets/icon-large.svg',
+      brand_color: '#3B82F6',
+      default_prompt: `Use $${name} to read the current page title and URL.`
+    },
+    dependencies: {
+      tools: [{
+        type: 'mcp',
+        value: 'github',
+        description: 'GitHub MCP server',
+        transport: 'streamable_http',
+        url: 'https://api.githubcopilot.com/mcp/'
+      }]
+    },
+    policy: {
+      allow_implicit_invocation: true
     },
     match: ['https://*.example.com/*'],
     instruction: {
@@ -75,7 +90,18 @@ function buildSkillInput(name = 'dom-probe') {
       {
         path: 'SKILL.md',
         kind: 'instruction',
-        content: '# DOM Probe\n\n在需要读取页面基础信息时使用。'
+        content: [
+          '---',
+          `name: ${name}`,
+          'description: 读取页面标题和链接',
+          'metadata:',
+          '  short-description: Read current page title, URL, and base page summary safely',
+          '---',
+          '',
+          '# DOM Probe',
+          '',
+          '在需要读取页面基础信息时使用。'
+        ].join('\n')
       },
       {
         path: 'src/main.js',
@@ -86,6 +112,16 @@ function buildSkillInput(name = 'dom-probe') {
         path: 'src/helpers/dom.js',
         kind: 'runtime_source',
         content: 'module.exports = { readTitle() { return document.title; } };'
+      },
+      {
+        path: 'assets/icon-small.svg',
+        kind: 'asset',
+        content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" fill="#3B82F6"/></svg>'
+      },
+      {
+        path: 'assets/icon-large.svg',
+        kind: 'asset',
+        content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" fill="#3B82F6"/></svg>'
       }
     ]
   };
@@ -147,7 +183,18 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
         {
           path: 'SKILL.md',
           kind: 'instruction',
-          content: '# DOM Probe\n\n更新后的说明。'
+          content: [
+            '---',
+            'name: dom-probe',
+            'description: 读取页面标题和链接',
+            'metadata:',
+            '  short-description: Read current page title, URL, and base page summary safely',
+            '---',
+            '',
+            '# DOM Probe',
+            '',
+            '更新后的说明。'
+          ].join('\n')
         },
         {
           path: 'src/main.js',
@@ -158,6 +205,16 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
           path: 'src/helpers/dom.js',
           kind: 'runtime_source',
           content: 'module.exports = { readTitle() { return document.title; } };'
+        },
+        {
+          path: 'assets/icon-small.svg',
+          kind: 'asset',
+          content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" fill="#3B82F6"/></svg>'
+        },
+        {
+          path: 'assets/icon-large.svg',
+          kind: 'asset',
+          content: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" fill="#3B82F6"/></svg>'
         }
       ]
     }
@@ -185,7 +242,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     }
   }, { tabId: 11 });
   assert.equal(writtenFile.ok, true);
-  assert.equal(writtenFile.files.total_count, 4);
+  assert.equal(writtenFile.files.total_count, 6);
   assert.equal(calls.update.length, 2);
   assert.equal(calls.execute.length, 3);
 
@@ -195,7 +252,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     file_path: 'src/helpers/url.js'
   }, { tabId: 11 });
   assert.equal(deletedFile.ok, true);
-  assert.equal(deletedFile.files.total_count, 3);
+  assert.equal(deletedFile.files.total_count, 5);
   assert.equal(calls.update.length, 3);
   assert.equal(calls.execute.length, 4);
 
@@ -374,4 +431,81 @@ test('listMatchingSkillSummariesForTab 只返回当前 URL 命中的轻量摘要
   assert.equal(result.skills.some((skill) => skill.name === 'dom-probe'), true);
   assert.equal(result.skills.some((skill) => skill.name === 'file-only'), false);
   assert.equal(result.skills[0].name, 'skill-creator');
+});
+
+test('allow_implicit_invocation=false 的技能不会进入自动匹配摘要，但 validate 可显式返回结果', async () => {
+  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+
+  const hiddenSkill = {
+    ...buildSkillInput('hidden-skill'),
+    policy: {
+      allow_implicit_invocation: false
+    }
+  };
+
+  const manager = createMicroSkillManager({
+    store: createMockStore([hiddenSkill]),
+    userScriptsApi: {
+      async getScripts() { return []; },
+      async register() {},
+      async update() {},
+      async unregister() {}
+    },
+    tabsApi: {
+      async get() {
+        return { url: 'https://a.example.com/path', title: 'Example' };
+      }
+    },
+    jsRuntimeManager: {
+      async execute() {
+        return { ok: true, tabId: 1, value: null, logs: [], items: [] };
+      }
+    }
+  });
+
+  const summaries = await manager.listMatchingSkillSummariesForTab(9);
+  assert.equal(summaries.skills.some((skill) => skill.name === 'hidden-skill'), false);
+
+  const validation = await manager.executeRegistryAction({
+    action: 'validate',
+    skill_name: 'hidden-skill'
+  });
+  assert.equal(validation.ok, true);
+  assert.equal(validation.valid, true);
+});
+
+test('create 在 validation 失败时拒绝写入并返回结构化校验结果', async () => {
+  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+
+  const manager = createMicroSkillManager({
+    store: createMockStore(),
+    userScriptsApi: {
+      async getScripts() { return []; },
+      async register() {},
+      async update() {},
+      async unregister() {}
+    },
+    tabsApi: {
+      async get() {
+        return { url: 'https://a.example.com/path', title: 'Example' };
+      }
+    },
+    jsRuntimeManager: {
+      async execute() {
+        return { ok: true, tabId: 1, value: null, logs: [], items: [] };
+      }
+    }
+  });
+
+  const invalidSkill = buildSkillInput('invalid-skill');
+  invalidSkill.interface.default_prompt = 'Read the page quickly.';
+
+  const result = await manager.executeRegistryAction({
+    action: 'create',
+    skill: invalidSkill
+  }, { tabId: 9 });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.valid, false);
+  assert.match(result.error.message, /default_prompt/);
 });

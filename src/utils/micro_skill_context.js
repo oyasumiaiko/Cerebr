@@ -27,6 +27,8 @@ function normalizeMicroSkillContextSkills(skills) {
       const mountSurface = typeof skill.mount_surface === 'string' ? skill.mount_surface.trim() : '';
       const kind = typeof skill.kind === 'string' ? skill.kind.trim() : '';
       const priority = Number.isFinite(Number(skill.priority)) ? Number(skill.priority) : 1000;
+      const allowImplicitInvocation = skill?.allow_implicit_invocation !== false;
+      if (!allowImplicitInvocation) return null;
       if (!name || !shortDescription || !mountSurface) return null;
       return {
         _index: index,
