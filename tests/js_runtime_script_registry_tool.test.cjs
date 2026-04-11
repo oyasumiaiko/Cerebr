@@ -1,6 +1,5 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs/promises');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
@@ -18,32 +17,48 @@ function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
-function createMockStorageArea(initial = {}) {
-  let store = clone(initial);
+function createMockStore(initialPackages = []) {
+  const packagesByName = new Map(
+    (Array.isArray(initialPackages) ? initialPackages : [])
+      .map((item) => [item.name, clone(item)])
+  );
+
   return {
-    async get(keys) {
-      if (Array.isArray(keys)) {
-        const result = {};
-        for (const key of keys) {
-          if (Object.prototype.hasOwnProperty.call(store, key)) {
-            result[key] = clone(store[key]);
-          }
-        }
-        return result;
-      }
-      return clone(store);
-    },
-    async set(payload) {
-      store = { ...store, ...clone(payload) };
-    },
-    async remove(keys) {
-      const list = Array.isArray(keys) ? keys : [keys];
-      list.forEach((key) => {
-        delete store[key];
+    async listManifests() {
+      return Array.from(packagesByName.values()).map((pkg) => {
+        const { files, ...manifest } = clone(pkg);
+        return {
+          ...manifest,
+          files_meta: Array.isArray(files)
+            ? files.map((file) => ({ path: file.path, kind: file.kind }))
+            : []
+        };
       });
     },
+    async getManifest(skillName) {
+      const pkg = packagesByName.get(String(skillName || ''));
+      if (!pkg) return null;
+      const { files, ...manifest } = clone(pkg);
+      return {
+        ...manifest,
+        files_meta: Array.isArray(files)
+          ? files.map((file) => ({ path: file.path, kind: file.kind }))
+          : []
+      };
+    },
+    async getPackage(skillName) {
+      return clone(packagesByName.get(String(skillName || '')) || null);
+    },
+    async savePackage(skillPackage) {
+      packagesByName.set(skillPackage.name, clone(skillPackage));
+      return clone(skillPackage);
+    },
+    async deletePackage(skillName) {
+      packagesByName.delete(String(skillName || ''));
+      return { ok: true };
+    },
     dump() {
-      return clone(store);
+      return Array.from(packagesByName.values()).map(clone);
     }
   };
 }
@@ -58,23 +73,29 @@ function buildSkillInput(name = 'dom-probe') {
       default_prompt: 'Read the current page title and URL.'
     },
     match: ['https://*.example.com/*'],
-    details: {
-      usage: '在需要读取页面基础信息时使用。',
-      mount_contract: 'Use globalThis.__cerebrMicroSkills.invoke("dom-probe.read")'
+    instruction: {
+      path: 'SKILL.md'
     },
-    source: {
-      entry: 'main.js',
-      files: [
-        {
-          path: 'main.js',
-          code: 'const helpers = await require("./helpers/dom.js"); return { read() { return { title: helpers.readTitle(), href: location.href }; } };'
-        },
-        {
-          path: 'helpers/dom.js',
-          code: 'module.exports = { readTitle() { return document.title; } };'
-        }
-      ]
-    }
+    runtime: {
+      entry_path: 'src/main.js'
+    },
+    files: [
+      {
+        path: 'SKILL.md',
+        kind: 'instruction',
+        content: '# DOM Probe\n\n在需要读取页面基础信息时使用。'
+      },
+      {
+        path: 'src/main.js',
+        kind: 'runtime_source',
+        content: 'const helpers = await require("./helpers/dom.js"); return { read() { return { title: helpers.readTitle(), href: location.href }; } };'
+      },
+      {
+        path: 'src/helpers/dom.js',
+        kind: 'runtime_source',
+        content: 'module.exports = { readTitle() { return document.title; } };'
+      }
+    ]
   };
 }
 
@@ -116,53 +137,47 @@ test('normalizeMicroSkillMatchPatterns 与 URL 匹配遵循第一阶段 Chrome/T
   );
 });
 
-test('buildStoredMicroSkillRecord / loadMicroSkillRegistrySnapshot / saveMicroSkillRegistrySnapshot 保持 revision 与渐进式字段结构', async () => {
+test('buildStoredMicroSkillRecord / saveStoredMicroSkillPackage / getStoredMicroSkillPackage 保持 package 结构与渐进式披露边界', async () => {
   const {
-    MICRO_SKILL_REGISTRY_STORAGE_KEY,
     buildMicroSkillDetail,
-    buildMicroSkillSourcePayload,
+    buildMicroSkillPackagePayload,
     buildMicroSkillSummary,
     buildStoredMicroSkillRecord,
-    loadMicroSkillRegistrySnapshot,
-    saveMicroSkillRegistrySnapshot
+    getStoredMicroSkillPackage,
+    saveStoredMicroSkillPackage
   } = await loadMicroSkillRegistryToolModule();
 
-  const storageArea = createMockStorageArea();
+  const store = createMockStore();
   const created = buildStoredMicroSkillRecord(buildSkillInput());
 
   assert.equal(created.revision, 1);
   assert.equal(created.interface.display_name, 'DOM Probe');
-  assert.equal(created.source.entry, 'main.js');
-  assert.equal(created.source.files.length, 2);
+  assert.equal(created.instruction.path, 'SKILL.md');
+  assert.equal(created.runtime.entry_path, 'src/main.js');
+  assert.equal(created.files.length, 3);
 
-  await saveMicroSkillRegistrySnapshot({
-    version: 1,
-    skills_by_name: {
-      'dom-probe': created
-    }
-  }, storageArea);
+  await saveStoredMicroSkillPackage(created, store);
+  const loaded = await getStoredMicroSkillPackage('dom-probe', store);
+  assert.equal(loaded.name, 'dom-probe');
 
-  const snapshot = await loadMicroSkillRegistrySnapshot(storageArea);
-  assert.equal(snapshot.skills_by_name['dom-probe'].name, 'dom-probe');
-
-  const summary = buildMicroSkillSummary(snapshot.skills_by_name['dom-probe']);
+  const summary = buildMicroSkillSummary(loaded);
   assert.equal(summary.interface.short_description, '读取当前页面标题和 URL');
+  assert.equal(summary.files.total_count, 3);
 
-  const detail = buildMicroSkillDetail(snapshot.skills_by_name['dom-probe']);
-  assert.equal(detail.details.usage, '在需要读取页面基础信息时使用。');
-  assert.equal(detail.source.entry, 'main.js');
-  assert.equal(detail.source.file_count, 2);
-  assert.equal(detail.source.files[0].code, undefined);
+  const detail = buildMicroSkillDetail(loaded);
+  assert.equal(detail.instruction.path, 'SKILL.md');
+  assert.match(detail.instruction.content, /DOM Probe/);
+  assert.equal(detail.files.files[0].content, undefined);
 
-  const source = buildMicroSkillSourcePayload(snapshot.skills_by_name['dom-probe']);
-  assert.equal(source.source.entry, 'main.js');
-  assert.equal(source.source.files.length, 2);
-  assert.match(source.source.files[1].code, /document\.title/);
+  const source = buildMicroSkillPackagePayload(loaded);
+  assert.equal(source.runtime.entry_path, 'src/main.js');
+  assert.equal(source.files.files.length, 3);
+  assert.match(source.files.files[2].content, /document\.title/);
 
-  assert.ok(storageArea.dump()[MICRO_SKILL_REGISTRY_STORAGE_KEY]);
+  assert.equal(store.dump().length, 1);
 });
 
-test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 micro skill action 集', async () => {
+test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file action 集', async () => {
   const {
     MICRO_SKILL_REGISTRY_TOOL_NAME,
     buildMicroSkillRegistryFunctionToolDefinition,
@@ -178,49 +193,55 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 micro skill ac
   });
   assert.equal(normalizedCreate.action, 'create');
   assert.equal(normalizedCreate.skill.name, 'dom-probe');
-  assert.equal(normalizedCreate.skill.source.entry, 'main.js');
-  assert.equal(normalizedCreate.skill.source.files.length, 2);
+  assert.equal(normalizedCreate.skill.instruction.path, 'SKILL.md');
+  assert.equal(normalizedCreate.skill.files.length, 3);
 
-  const normalizedReadSourceFile = normalizeMicroSkillRegistryToolArguments({
-    action: 'read_source_file',
+  const normalizedReadFile = normalizeMicroSkillRegistryToolArguments({
+    action: 'read_file',
     skill_name: 'dom-probe',
-    file_path: './helpers/dom.js'
+    file_path: './src/helpers/dom.js'
   });
-  assert.deepEqual(normalizedReadSourceFile, {
-    action: 'read_source_file',
+  assert.deepEqual(normalizedReadFile, {
+    action: 'read_file',
     skill_name: 'dom-probe',
     skill: null,
-    file_path: 'helpers/dom.js',
+    file_path: 'src/helpers/dom.js',
     file: null,
-    set_as_entry: false,
-    next_entry_path: null
+    set_as_instruction: false,
+    set_as_runtime_entry: false,
+    next_instruction_path: null,
+    next_runtime_entry_path: null
   });
 
-  const normalizedUpsertFile = normalizeMicroSkillRegistryToolArguments({
-    action: 'upsert_source_file',
+  const normalizedWriteFile = normalizeMicroSkillRegistryToolArguments({
+    action: 'write_file',
     skill_name: 'dom-probe',
-    set_as_entry: true,
+    set_as_runtime_entry: true,
     file: {
-      path: 'runtime/new-main.js',
-      code: 'module.exports = { read() { return document.title; } };'
+      path: 'src/runtime/new-main.js',
+      kind: 'runtime_source',
+      content: 'module.exports = { read() { return document.title; } };'
     }
   });
-  assert.equal(normalizedUpsertFile.action, 'upsert_source_file');
-  assert.equal(normalizedUpsertFile.file.path, 'runtime/new-main.js');
-  assert.equal(normalizedUpsertFile.set_as_entry, true);
+  assert.equal(normalizedWriteFile.action, 'write_file');
+  assert.equal(normalizedWriteFile.file.path, 'src/runtime/new-main.js');
+  assert.equal(normalizedWriteFile.set_as_runtime_entry, true);
 
   const normalizedLegacy = normalizeMicroSkillRegistryToolArguments({
-    action: 'get',
-    script_id: 'dom-probe'
+    action: 'read_source_file',
+    skill_name: 'dom-probe',
+    file_path: 'src/helpers/dom.js'
   });
   assert.deepEqual(normalizedLegacy, {
-    action: 'read_detail',
+    action: 'read_file',
     skill_name: 'dom-probe',
     skill: null,
-    file_path: null,
+    file_path: 'src/helpers/dom.js',
     file: null,
-    set_as_entry: false,
-    next_entry_path: null
+    set_as_instruction: false,
+    set_as_runtime_entry: false,
+    next_instruction_path: null,
+    next_runtime_entry_path: null
   });
 });
 

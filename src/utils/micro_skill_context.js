@@ -3,7 +3,7 @@
  *
  * 设计目标：
  * - 只向模型暴露“当前 URL 下有哪些微型 skill 可用”的轻量摘要；
- * - 不默认暴露完整 usage / mount_contract / 源码；
+ * - 不默认暴露完整 `SKILL.md`、references 或 runtime 源码；
  * - 使用与 page/environment context 一致的签名去重策略，避免每轮重复注入同样摘要。
  */
 

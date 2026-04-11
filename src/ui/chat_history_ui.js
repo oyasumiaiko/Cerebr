@@ -146,7 +146,7 @@ export function createChatHistoryUI(appContext) {
   // --- 数据趋势缓存（图表） ---
   const TREND_STATS_TTL = 5 * 60 * 1000; // 5分钟缓存趋势统计（会在清理/更新后失效）
   let trendStatsCache = { data: null, time: 0, promise: null };
-  // 微型 skill 查看器：缓存列表 / 详情 / 源码，并把 UI 控制引用放在一处，避免在多个事件处理器之间散落状态。
+  // 微型 skill 查看器：缓存列表 / 详情 / 文件包，并把 UI 控制引用放在一处，避免在多个事件处理器之间散落状态。
   const microSkillViewerState = {
     initialized: false,
     filterText: '',
@@ -9242,7 +9242,7 @@ export function createChatHistoryUI(appContext) {
       let sourcePayload = microSkillViewerState.sourceByName.get(skillName) || null;
       if (!sourcePayload) {
         const result = await executeMicroSkillViewerAction({
-          action: 'read_source',
+          action: 'read_package',
           skill_name: skillName
         });
         sourcePayload = result?.skill || null;
@@ -9261,15 +9261,15 @@ export function createChatHistoryUI(appContext) {
 
       const heading = document.createElement('div');
       heading.className = 'micro-skill-section-title';
-      heading.textContent = '源码 Bundle';
+      heading.textContent = '文件包';
       sourceSection.appendChild(heading);
 
-      const sourceManifest = sourcePayload?.source;
+      const sourceManifest = sourcePayload?.files;
       const sourceFiles = Array.isArray(sourceManifest?.files) ? sourceManifest.files : [];
       if (sourceFiles.length <= 0) {
         const empty = document.createElement('div');
         empty.className = 'micro-skill-detail-empty-desc';
-        empty.textContent = '这个微型 skill 当前没有可显示的源码文件。';
+        empty.textContent = '这个微型 skill 当前没有可显示的文件。';
         sourceSection.appendChild(empty);
       } else {
         sourceFiles.forEach((file) => {
@@ -9284,10 +9284,22 @@ export function createChatHistoryUI(appContext) {
           filePath.textContent = file.path || '';
           fileHeader.appendChild(filePath);
 
-          if (file.is_entry === true) {
+          const kindTag = document.createElement('span');
+          kindTag.className = 'micro-skill-source-file-entry';
+          kindTag.textContent = file.kind || 'file';
+          fileHeader.appendChild(kindTag);
+
+          if (file.is_instruction === true) {
+            const instructionTag = document.createElement('span');
+            instructionTag.className = 'micro-skill-source-file-entry';
+            instructionTag.textContent = 'SKILL';
+            fileHeader.appendChild(instructionTag);
+          }
+
+          if (file.is_runtime_entry === true) {
             const entryTag = document.createElement('span');
             entryTag.className = 'micro-skill-source-file-entry';
-            entryTag.textContent = 'entry';
+            entryTag.textContent = 'runtime-entry';
             fileHeader.appendChild(entryTag);
           }
 
@@ -9296,7 +9308,7 @@ export function createChatHistoryUI(appContext) {
           const sourceBlock = document.createElement('pre');
           sourceBlock.className = 'micro-skill-code-block';
           const code = document.createElement('code');
-          code.textContent = file.code || '';
+          code.textContent = file.content || '';
           sourceBlock.appendChild(code);
           fileSection.appendChild(sourceBlock);
           sourceSection.appendChild(fileSection);
@@ -9356,7 +9368,7 @@ export function createChatHistoryUI(appContext) {
     const sourceBtn = document.createElement('button');
     sourceBtn.type = 'button';
     sourceBtn.className = 'micro-skill-action-button';
-    sourceBtn.textContent = microSkillViewerState.sourceByName.has(skillDetail.name) ? '重新查看源码' : '加载源码';
+    sourceBtn.textContent = microSkillViewerState.sourceByName.has(skillDetail.name) ? '重新查看文件包' : '加载文件包';
     sourceBtn.addEventListener('click', () => {
       void loadMicroSkillSourceIntoViewer(skillDetail.name);
     });
@@ -9414,19 +9426,25 @@ export function createChatHistoryUI(appContext) {
     metaGrid.appendChild(createMicroSkillMetaRow('创建时间', skillDetail.created_at || ''));
     metaGrid.appendChild(createMicroSkillMetaRow('更新时间', skillDetail.updated_at || ''));
     metaGrid.appendChild(createMicroSkillMetaRow('默认提示', skillDetail.interface?.default_prompt || ''));
-    metaGrid.appendChild(createMicroSkillMetaRow('入口文件', skillDetail.source?.entry || ''));
-    metaGrid.appendChild(createMicroSkillMetaRow('源码文件数', String(skillDetail.source?.file_count || 0)));
+    metaGrid.appendChild(createMicroSkillMetaRow('SKILL.md', skillDetail.instruction?.path || ''));
+    metaGrid.appendChild(createMicroSkillMetaRow('Runtime 入口', skillDetail.runtime?.entry_path || ''));
+    metaGrid.appendChild(createMicroSkillMetaRow('文件总数', String(skillDetail.files?.total_count || 0)));
     detailContainer.appendChild(metaGrid);
 
     detailContainer.appendChild(createMicroSkillChipList('@match', skillDetail.match));
     detailContainer.appendChild(createMicroSkillChipList(
-      '源码文件',
-      Array.isArray(skillDetail.source?.files)
-        ? skillDetail.source.files.map((file) => file.is_entry === true ? `${file.path} (entry)` : file.path)
+      '文件树',
+      Array.isArray(skillDetail.files?.files)
+        ? skillDetail.files.files.map((file) => {
+            const tags = [];
+            if (file.kind) tags.push(file.kind);
+            if (file.is_instruction === true) tags.push('SKILL');
+            if (file.is_runtime_entry === true) tags.push('runtime-entry');
+            return tags.length > 0 ? `${file.path} [${tags.join(', ')}]` : file.path;
+          })
         : []
     ));
-    detailContainer.appendChild(createMicroSkillTextSection('说明', skillDetail.details?.usage || ''));
-    detailContainer.appendChild(createMicroSkillTextSection('挂载方法', skillDetail.details?.mount_contract || ''));
+    detailContainer.appendChild(createMicroSkillTextSection('SKILL.md', skillDetail.instruction?.content || ''));
   }
 
   async function loadMicroSkillDetailIntoViewer(skillName, options = {}) {

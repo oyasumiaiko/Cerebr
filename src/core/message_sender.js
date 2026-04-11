@@ -8561,7 +8561,7 @@ export function createMessageSender(appContext) {
    * 执行扩展侧 JS 脚本注册表工具。
    *
    * 设计说明：
-   * - 存储管理（save/get/list/delete）完全走扩展侧 `chrome.storage.local`；
+   * - 存储管理完全走扩展侧微型 skill package 层，当前默认落到 IndexedDB；
    * - refresh 仅在显式请求时发生，并复用现有 `utils.executeJsRuntime`；
    * - 默认 runtime 环境跟随当前页面工具模式，除非调用参数显式覆盖。
    *

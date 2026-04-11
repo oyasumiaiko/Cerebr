@@ -10,6 +10,7 @@ async function loadMicroSkillRuntimeModule() {
 
 function buildSkill(name) {
   return {
+    kind: 'page_runtime',
     name,
     description: `skill ${name}`,
     interface: {
@@ -18,23 +19,29 @@ function buildSkill(name) {
     },
     match: ['https://*.example.com/*'],
     enabled: true,
-    details: {
-      usage: `usage ${name}`,
-      mount_contract: 'mount contract'
+    instruction: {
+      path: 'SKILL.md'
     },
-    source: {
-      entry: 'main.js',
-      files: [
-        {
-          path: 'main.js',
-          code: `const helper = await require('./helper.js'); return { ping() { return helper.readValue(); } };`
-        },
-        {
-          path: 'helper.js',
-          code: `module.exports = { readValue() { return "${name}"; } };`
-        }
-      ]
+    runtime: {
+      entry_path: 'src/main.js'
     },
+    files: [
+      {
+        path: 'SKILL.md',
+        kind: 'instruction',
+        content: `# ${name}\n\nusage`
+      },
+      {
+        path: 'src/main.js',
+        kind: 'runtime_source',
+        content: `const helper = await require('./helper.js'); return { ping() { return helper.readValue(); } };`
+      },
+      {
+        path: 'src/helper.js',
+        kind: 'runtime_source',
+        content: `module.exports = { readValue() { return "${name}"; } };`
+      }
+    ],
     created_at: '2026-01-01T00:00:00.000Z',
     updated_at: '2026-01-01T00:00:00.000Z',
     revision: 1

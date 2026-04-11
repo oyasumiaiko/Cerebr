@@ -12,27 +12,45 @@ function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
-function createMockStorageArea(initial = {}) {
-  let store = clone(initial);
+function createMockStore(initialPackages = []) {
+  const packagesByName = new Map(
+    (Array.isArray(initialPackages) ? initialPackages : [])
+      .map((item) => [item.name, clone(item)])
+  );
+
   return {
-    async get(keys) {
-      if (Array.isArray(keys)) {
-        const result = {};
-        for (const key of keys) {
-          if (Object.prototype.hasOwnProperty.call(store, key)) {
-            result[key] = clone(store[key]);
-          }
-        }
-        return result;
-      }
-      return clone(store);
+    async listManifests() {
+      return Array.from(packagesByName.values()).map((pkg) => {
+        const { files, ...manifest } = clone(pkg);
+        return {
+          ...manifest,
+          files_meta: Array.isArray(files)
+            ? files.map((file) => ({ path: file.path, kind: file.kind }))
+            : []
+        };
+      });
     },
-    async set(payload) {
-      store = { ...store, ...clone(payload) };
+    async getManifest(skillName) {
+      const pkg = packagesByName.get(String(skillName || ''));
+      if (!pkg) return null;
+      const { files, ...manifest } = clone(pkg);
+      return {
+        ...manifest,
+        files_meta: Array.isArray(files)
+          ? files.map((file) => ({ path: file.path, kind: file.kind }))
+          : []
+      };
     },
-    async remove(keys) {
-      const list = Array.isArray(keys) ? keys : [keys];
-      list.forEach((key) => delete store[key]);
+    async getPackage(skillName) {
+      return clone(packagesByName.get(String(skillName || '')) || null);
+    },
+    async savePackage(skillPackage) {
+      packagesByName.set(skillPackage.name, clone(skillPackage));
+      return clone(skillPackage);
+    },
+    async deletePackage(skillName) {
+      packagesByName.delete(String(skillName || ''));
+      return { ok: true };
     }
   };
 }
@@ -47,22 +65,29 @@ function buildSkillInput(name = 'dom-probe') {
       default_prompt: 'Read the current page title and URL.'
     },
     match: ['https://*.example.com/*'],
-    details: {
-      usage: '在需要读取页面基础信息时使用。'
+    instruction: {
+      path: 'SKILL.md'
     },
-    source: {
-      entry: 'main.js',
-      files: [
-        {
-          path: 'main.js',
-          code: 'const helpers = await require("./helpers/dom.js"); return { read() { return { title: helpers.readTitle(), href: location.href }; } };'
-        },
-        {
-          path: 'helpers/dom.js',
-          code: 'module.exports = { readTitle() { return document.title; } };'
-        }
-      ]
-    }
+    runtime: {
+      entry_path: 'src/main.js'
+    },
+    files: [
+      {
+        path: 'SKILL.md',
+        kind: 'instruction',
+        content: '# DOM Probe\n\n在需要读取页面基础信息时使用。'
+      },
+      {
+        path: 'src/main.js',
+        kind: 'runtime_source',
+        content: 'const helpers = await require("./helpers/dom.js"); return { read() { return { title: helpers.readTitle(), href: location.href }; } };'
+      },
+      {
+        path: 'src/helpers/dom.js',
+        kind: 'runtime_source',
+        content: 'module.exports = { readTitle() { return document.title; } };'
+      }
+    ]
   };
 }
 
@@ -76,7 +101,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     execute: []
   };
   const manager = createMicroSkillManager({
-    storageArea: createMockStorageArea(),
+    store: createMockStore(),
     userScriptsApi: {
       async getScripts() { return []; },
       async register(definitions) { calls.register.push(clone(definitions)); },
@@ -118,55 +143,59 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     action: 'update',
     skill: {
       ...buildSkillInput(),
-      details: { usage: '更新后的 usage' },
-      source: {
-        entry: 'main.js',
-        files: [
-          {
-            path: 'main.js',
-            code: 'const helpers = await require("./helpers/dom.js"); return { read() { return helpers.readTitle(); } };'
-          },
-          {
-            path: 'helpers/dom.js',
-            code: 'module.exports = { readTitle() { return document.title; } };'
-          }
-        ]
-      }
+      files: [
+        {
+          path: 'SKILL.md',
+          kind: 'instruction',
+          content: '# DOM Probe\n\n更新后的说明。'
+        },
+        {
+          path: 'src/main.js',
+          kind: 'runtime_source',
+          content: 'const helpers = await require("./helpers/dom.js"); return { read() { return helpers.readTitle(); } };'
+        },
+        {
+          path: 'src/helpers/dom.js',
+          kind: 'runtime_source',
+          content: 'module.exports = { readTitle() { return document.title; } };'
+        }
+      ]
     }
   }, { tabId: 11 });
   assert.equal(updated.ok, true);
   assert.equal(calls.update.length, 1);
   assert.equal(calls.execute.length, 2);
 
-  const readSourceFile = await manager.executeRegistryAction({
-    action: 'read_source_file',
+  const readFile = await manager.executeRegistryAction({
+    action: 'read_file',
     skill_name: 'dom-probe',
-    file_path: 'helpers/dom.js'
+    file_path: 'src/helpers/dom.js'
   }, { tabId: 11 });
-  assert.equal(readSourceFile.ok, true);
-  assert.equal(readSourceFile.skill.source.files.length, 1);
-  assert.match(readSourceFile.skill.source.files[0].code, /document\.title/);
+  assert.equal(readFile.ok, true);
+  assert.equal(readFile.skill.file.path, 'src/helpers/dom.js');
+  assert.match(readFile.skill.file.content, /document\.title/);
 
-  const upsertedFile = await manager.executeRegistryAction({
-    action: 'upsert_source_file',
+  const writtenFile = await manager.executeRegistryAction({
+    action: 'write_file',
     skill_name: 'dom-probe',
     file: {
-      path: 'helpers/url.js',
-      code: 'module.exports = { readUrl() { return location.href; } };'
+      path: 'src/helpers/url.js',
+      kind: 'runtime_source',
+      content: 'module.exports = { readUrl() { return location.href; } };'
     }
   }, { tabId: 11 });
-  assert.equal(upsertedFile.ok, true);
-  assert.equal(upsertedFile.source.file_count, 3);
+  assert.equal(writtenFile.ok, true);
+  assert.equal(writtenFile.files.total_count, 4);
   assert.equal(calls.update.length, 2);
   assert.equal(calls.execute.length, 3);
 
   const deletedFile = await manager.executeRegistryAction({
-    action: 'delete_source_file',
+    action: 'delete_file',
     skill_name: 'dom-probe',
-    file_path: 'helpers/url.js'
+    file_path: 'src/helpers/url.js'
   }, { tabId: 11 });
   assert.equal(deletedFile.ok, true);
-  assert.equal(deletedFile.source.file_count, 2);
+  assert.equal(deletedFile.files.total_count, 3);
   assert.equal(calls.update.length, 3);
   assert.equal(calls.execute.length, 4);
 
@@ -199,7 +228,7 @@ test('内置 skill-creator 会自动出现在列表中且保持只读', async ()
   const { createMicroSkillManager } = await loadMicroSkillManagerModule();
 
   const manager = createMicroSkillManager({
-    storageArea: createMockStorageArea(),
+    store: createMockStore(),
     userScriptsApi: {
       async getScripts() { return []; },
       async register() {},
@@ -232,7 +261,7 @@ test('内置 skill-creator 会自动出现在列表中且保持只读', async ()
   });
   assert.equal(detail.ok, true);
   assert.equal(detail.skill.builtin, true);
-  assert.match(detail.skill.details.usage, /Skill Creator/);
+  assert.match(detail.skill.instruction.content, /Skill Creator/);
 
   await assert.rejects(
     () => manager.executeRegistryAction({
@@ -244,7 +273,6 @@ test('内置 skill-creator 会自动出现在列表中且保持只读', async ()
 });
 
 test('reconcileRegisteredSkills 会对现有动态脚本做 register/update/unregister 分流', async () => {
-  const { MICRO_SKILL_REGISTRY_STORAGE_KEY } = await import(pathToFileURL(path.resolve(__dirname, '../src/agent_tools/micro_skill_registry_tool.js')).href);
   const { createMicroSkillManager } = await loadMicroSkillManagerModule();
 
   const calls = {
@@ -252,28 +280,23 @@ test('reconcileRegisteredSkills 会对现有动态脚本做 register/update/unre
     update: [],
     unregister: []
   };
-  const storageArea = createMockStorageArea({
-    [MICRO_SKILL_REGISTRY_STORAGE_KEY]: {
-      version: 1,
-      skills_by_name: {
-        'dom-probe': {
-          ...buildSkillInput('dom-probe'),
-          created_at: '2026-01-01T00:00:00.000Z',
-          updated_at: '2026-01-02T00:00:00.000Z',
-          revision: 1
-        },
-        'api-reader': {
-          ...buildSkillInput('api-reader'),
-          created_at: '2026-01-01T00:00:00.000Z',
-          updated_at: '2026-01-02T00:00:00.000Z',
-          revision: 1
-        }
-      }
+  const store = createMockStore([
+    {
+      ...buildSkillInput('dom-probe'),
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-02T00:00:00.000Z',
+      revision: 1
+    },
+    {
+      ...buildSkillInput('api-reader'),
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-02T00:00:00.000Z',
+      revision: 1
     }
-  });
+  ]);
 
   const manager = createMicroSkillManager({
-    storageArea,
+    store,
     userScriptsApi: {
       async getScripts() {
         return [
@@ -308,32 +331,26 @@ test('reconcileRegisteredSkills 会对现有动态脚本做 register/update/unre
 });
 
 test('listMatchingSkillSummariesForTab 只返回当前 URL 命中的轻量摘要', async () => {
-  const { MICRO_SKILL_REGISTRY_STORAGE_KEY } = await import(pathToFileURL(path.resolve(__dirname, '../src/agent_tools/micro_skill_registry_tool.js')).href);
   const { createMicroSkillManager } = await loadMicroSkillManagerModule();
 
-  const storageArea = createMockStorageArea({
-    [MICRO_SKILL_REGISTRY_STORAGE_KEY]: {
-      version: 1,
-      skills_by_name: {
-        'dom-probe': {
-          ...buildSkillInput('dom-probe'),
-          created_at: '2026-01-01T00:00:00.000Z',
-          updated_at: '2026-01-02T00:00:00.000Z',
-          revision: 1
-        },
-        'file-only': {
-          ...buildSkillInput('file-only'),
-          match: ['file:///*'],
-          created_at: '2026-01-01T00:00:00.000Z',
-          updated_at: '2026-01-02T00:00:00.000Z',
-          revision: 1
-        }
-      }
+  const store = createMockStore([
+    {
+      ...buildSkillInput('dom-probe'),
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-02T00:00:00.000Z',
+      revision: 1
+    },
+    {
+      ...buildSkillInput('file-only'),
+      match: ['file:///*'],
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-02T00:00:00.000Z',
+      revision: 1
     }
-  });
+  ]);
 
   const manager = createMicroSkillManager({
-    storageArea,
+    store,
     userScriptsApi: {
       async getScripts() { return []; },
       async register() {},
@@ -342,10 +359,7 @@ test('listMatchingSkillSummariesForTab 只返回当前 URL 命中的轻量摘要
     },
     tabsApi: {
       async get() {
-        return {
-          url: 'https://app.example.com/path',
-          title: 'Example'
-        };
+        return { url: 'https://a.example.com/path', title: 'Example' };
       }
     },
     jsRuntimeManager: {
@@ -355,11 +369,9 @@ test('listMatchingSkillSummariesForTab 只返回当前 URL 命中的轻量摘要
     }
   });
 
-  const result = await manager.listMatchingSkillSummariesForTab(7);
+  const result = await manager.listMatchingSkillSummariesForTab(9);
   assert.equal(result.ok, true);
-  assert.equal(result.total_skills, 2);
+  assert.equal(result.skills.some((skill) => skill.name === 'dom-probe'), true);
+  assert.equal(result.skills.some((skill) => skill.name === 'file-only'), false);
   assert.equal(result.skills[0].name, 'skill-creator');
-  assert.equal(result.skills[0].kind, 'builtin_guidance');
-  assert.equal(result.skills[1].name, 'dom-probe');
-  assert.ok(result.skills[1].mount_surface);
 });

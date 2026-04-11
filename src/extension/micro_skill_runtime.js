@@ -94,10 +94,16 @@ const __cerebrMicroSkillRuntime = __cerebrEnsureMicroSkillRuntime();
 `.trim();
 }
 
+function getRuntimeFiles(skill) {
+  return Array.isArray(skill?.files)
+    ? skill.files.filter((file) => file.kind === 'runtime_source')
+    : [];
+}
+
 function buildMicroSkillModuleFactoriesSource(skill) {
   return `{
-${skill.source.files.map((file) => {
-    const body = indentCodeBlock(file.code, '      ');
+${getRuntimeFiles(skill).map((file) => {
+    const body = indentCodeBlock(file.content, '      ');
     return `  ${encodeInlineJson(file.path)}: async (ctx, module, exports, require) => {\n${body}\n  }`;
   }).join(',\n')}
 }`;
@@ -163,13 +169,19 @@ export function buildMicroSkillMountSource(record, options = {}) {
   if (!skill) {
     throw new Error('无法为无效的微型 skill 构造挂载源码。');
   }
+  if (skill.kind !== 'page_runtime') {
+    throw new Error(`微型 skill ${skill.name} 不是页面 runtime skill，不能构造挂载源码。`);
+  }
+  if (!skill.runtime?.entry_path) {
+    throw new Error(`微型 skill ${skill.name} 缺少 runtime.entry_path，不能构造挂载源码。`);
+  }
 
   const metaJson = encodeInlineJson({
     name: skill.name,
     revision: skill.revision,
     summary: buildMicroSkillContextSummary(skill),
-    entry: skill.source.entry,
-    files: skill.source.files.map((file) => file.path)
+    entry: skill.runtime.entry_path,
+    files: getRuntimeFiles(skill).map((file) => file.path)
   });
   const moduleFactoriesSource = buildMicroSkillModuleFactoriesSource(skill);
   const includeBootstrap = options?.includeBootstrap !== false;
@@ -279,6 +291,9 @@ export function buildRegisteredMicroSkillUserScript(record) {
   const skill = normalizeStoredMicroSkillRecord(record);
   if (!skill) {
     throw new Error('无法为无效的微型 skill 构造动态 userScripts 注册项。');
+  }
+  if (skill.kind !== 'page_runtime') {
+    throw new Error(`微型 skill ${skill.name} 不是页面 runtime skill，不能注册 userScripts。`);
   }
 
   return {
