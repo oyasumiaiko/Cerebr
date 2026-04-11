@@ -80,7 +80,7 @@ test('formatResponsesToolOutputForDisplay 能拼回 input_text 分块', async ()
 });
 
 test('formatResponsesToolOutputForDisplay 会把 input_image 输出压成摘要，避免直接展示 base64', async () => {
-  const { formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const { extractResponsesToolOutputInputImages, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const text = formatResponsesToolOutputForDisplay([
     {
       type: 'input_image',
@@ -91,8 +91,33 @@ test('formatResponsesToolOutputForDisplay 会把 input_image 输出压成摘要�
   assert.match(text, /\[input_image #1\]/);
   assert.match(text, /mime_type: image\/jpeg/);
   assert.match(text, /detail: original/);
-  assert.match(text, /image_url: \[data URL omitted\]/);
   assert.doesNotMatch(text, /aGVsbG8=/);
+  const images = extractResponsesToolOutputInputImages([
+    {
+      type: 'input_image',
+      image_url: 'data:image/jpeg;base64,aGVsbG8=',
+      detail: 'original'
+    }
+  ]);
+  assert.equal(images.length, 1);
+  assert.equal(images[0].imageUrl, 'data:image/jpeg;base64,aGVsbG8=');
+  assert.equal(images[0].detail, 'original');
+  assert.equal(images[0].mimeType, 'image/jpeg');
+  assert.equal(images[0].approxBytes > 0, true);
+  assert.equal(typeof images[0].signature, 'string');
+});
+
+test('formatResponsesToolOutputForDisplay 处理 JSON 字符串态 input_image 时也不会直接展示 base64', async () => {
+  const { formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const text = formatResponsesToolOutputForDisplay(JSON.stringify([
+    {
+      type: 'input_image',
+      image_url: 'data:image/png;base64,QUJDRA=='
+    }
+  ]));
+  assert.match(text, /\[input_image #1\]/);
+  assert.match(text, /mime_type: image\/png/);
+  assert.doesNotMatch(text, /QUJDRA==/);
 });
 
 test('buildResponsesJsRuntimeToolOutputText 使用 XML 分块且避免大 JSON 包裹主输出', async () => {

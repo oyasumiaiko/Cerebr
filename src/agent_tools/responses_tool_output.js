@@ -1126,23 +1126,85 @@ function estimateDataUrlBytes(value) {
   return Math.round((base64.length * 3) / 4);
 }
 
-function formatResponsesInputImageItemForDisplay(item, index = 0) {
+function normalizeResponsesInputImageItem(item, index = 0) {
   const imageUrl = (typeof item?.image_url === 'string') ? item.image_url.trim() : '';
+  if (!imageUrl) return null;
   const detail = (typeof item?.detail === 'string' && item.detail.trim()) ? item.detail.trim() : '';
   const mimeType = extractDataUrlMimeType(imageUrl) || 'image';
   const approxBytes = estimateDataUrlBytes(imageUrl);
-  const lines = [
-    `[input_image #${index + 1}]`,
-    `mime_type: ${mimeType}`,
-    `detail: ${detail || 'default'}`
+  return {
+    index,
+    imageUrl,
+    detail,
+    mimeType,
+    approxBytes
+  };
+}
+
+function buildResponsesInputImageSignature(value) {
+  const text = (typeof value === 'string') ? value : '';
+  if (!text) return '0:0:0:0';
+
+  // 这里只取头/中/尾三个窗口做签名，避免把整段超大 base64 再复制进快照签名里。
+  const windowSize = Math.min(256, text.length);
+  const middleStart = Math.max(0, Math.floor((text.length - windowSize) / 2));
+  const samples = [
+    text.slice(0, windowSize),
+    text.slice(middleStart, middleStart + windowSize),
+    text.slice(Math.max(0, text.length - windowSize))
   ];
-  if (approxBytes > 0) {
-    lines.push(`approx_bytes: ${approxBytes}`);
+
+  const hashSample = (sample) => {
+    let hash = 2166136261;
+    for (let index = 0; index < sample.length; index += 1) {
+      hash ^= sample.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
+  };
+
+  return `${text.length}:${samples.map(hashSample).join(':')}`;
+}
+
+function normalizeResponsesToolOutputBodyForInspection(body) {
+  if (Array.isArray(body)) return body;
+  if (typeof body !== 'string') return null;
+  const text = body.trim();
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch (_) {
+    return null;
   }
-  if (imageUrl.startsWith('data:')) {
-    lines.push('image_url: [data URL omitted]');
-  } else if (imageUrl) {
-    lines.push(`image_url: ${imageUrl}`);
+}
+
+export function extractResponsesToolOutputInputImages(body) {
+  const items = normalizeResponsesToolOutputBodyForInspection(body);
+  if (!Array.isArray(items) || items.length <= 0) return [];
+
+  const images = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const normalized = normalizeResponsesInputImageItem(items[index], index);
+    if (!normalized) continue;
+    images.push({
+      ...normalized,
+      signature: `${normalized.detail || 'default'}:${normalized.mimeType}:${normalized.approxBytes}:${buildResponsesInputImageSignature(normalized.imageUrl)}`
+    });
+  }
+  return images;
+}
+
+function formatResponsesInputImageItemForDisplay(item, index = 0) {
+  const normalized = normalizeResponsesInputImageItem(item, index);
+  if (!normalized) return '';
+  const lines = [
+    `[input_image #${normalized.index + 1}]`,
+    `mime_type: ${normalized.mimeType}`,
+    `detail: ${normalized.detail || 'default'}`
+  ];
+  if (normalized.approxBytes > 0) {
+    lines.push(`approx_bytes: ${normalized.approxBytes}`);
   }
   return lines.join('\n');
 }
@@ -1191,7 +1253,14 @@ export function formatResponsesToolOutputForDisplay(body) {
     const text = body.trim();
     if (!text) return '';
     try {
-      return stringifyResponsesToolOutputValue(JSON.parse(text));
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) {
+        const contentItemText = formatResponsesContentItemArrayForDisplay(parsed);
+        if (contentItemText) {
+          return contentItemText;
+        }
+      }
+      return stringifyResponsesToolOutputValue(parsed);
     } catch (_) {
       return text;
     }

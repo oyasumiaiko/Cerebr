@@ -9502,6 +9502,38 @@ body.chat-empty .empty-state-content {
     display: block;
 }
 
+.message .response-activity-tool-image-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.message .response-activity-tool-image-card {
+    margin: 0;
+    padding: 8px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--cerebr-bg-color) 90%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 28%, transparent);
+}
+
+.message .response-activity-tool-image {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 360px;
+    object-fit: contain;
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--cerebr-bg-color) 96%, transparent);
+    cursor: zoom-in;
+}
+
+.message .response-activity-tool-image-caption {
+    margin-top: 6px;
+    font-size: 12px;
+    line-height: 1.35;
+    color: color-mix(in srgb, var(--cerebr-text-color) 54%, transparent);
+}
+
 .message .response-activity-tool-sources > summary {
     list-style: none;
     cursor: pointer;

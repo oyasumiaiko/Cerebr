@@ -22,6 +22,7 @@ import { resolveResponseActivityPanelModeState } from '../utils/response_activit
 import { resolveResponseActivityToolExpansionState } from '../utils/response_activity_tool_auto_collapse.js';
 import { normalizeAssistantPreResponseStatus } from '../utils/assistant_pre_response_status.js';
 import {
+  extractResponsesToolOutputInputImages,
   formatResponsesToolOutputForDisplay,
   hasResponsesToolOutputBody
 } from '../agent_tools/responses_tool_output.js';
@@ -1491,6 +1492,67 @@ export function createMessageProcessor(appContext) {
     return formatResponsesToolOutputForDisplay(rawOutput);
   }
 
+  function extractResponseToolCallOutputImages(rawOutput) {
+    return extractResponsesToolOutputInputImages(rawOutput);
+  }
+
+  function appendResponseActivityToolOutput(toolBodyInner, outputText, outputImages) {
+    const normalizedText = (typeof outputText === 'string') ? outputText.trim() : '';
+    const normalizedImages = Array.isArray(outputImages)
+      ? outputImages.filter(image => image && typeof image.imageUrl === 'string' && image.imageUrl.trim())
+      : [];
+    if (!normalizedText && normalizedImages.length <= 0) {
+      return;
+    }
+
+    const outputTitle = document.createElement('div');
+    outputTitle.className = 'response-activity-tool-block-title';
+    outputTitle.textContent = '返回值';
+    toolBodyInner.appendChild(outputTitle);
+
+    if (normalizedText) {
+      const outputBlock = document.createElement('pre');
+      outputBlock.className = 'response-activity-tool-output';
+      setupResponseActivityExpandableTextBlock(outputBlock);
+      outputBlock.textContent = normalizedText;
+      toolBodyInner.appendChild(outputBlock);
+    }
+
+    if (normalizedImages.length > 0) {
+      const imageList = document.createElement('div');
+      imageList.className = 'response-activity-tool-image-list';
+
+      normalizedImages.forEach((image, imageIndex) => {
+        const figure = document.createElement('figure');
+        figure.className = 'response-activity-tool-image-card';
+
+        const img = document.createElement('img');
+        img.className = 'response-activity-tool-image';
+        img.loading = 'lazy';
+        img.decoding = 'async';
+        img.src = image.imageUrl;
+        img.alt = `工具返回图片 ${image.index + 1}`;
+        img.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          imageHandler.showImagePreview(image.imageUrl);
+        });
+        figure.appendChild(img);
+
+        if (normalizedImages.length > 1) {
+          const caption = document.createElement('figcaption');
+          caption.className = 'response-activity-tool-image-caption';
+          caption.textContent = `图片 ${imageIndex + 1}`;
+          figure.appendChild(caption);
+        }
+
+        imageList.appendChild(figure);
+      });
+
+      toolBodyInner.appendChild(imageList);
+    }
+  }
+
   function buildResponseActivityJsRuntimeSummaryParts(record) {
     const meta = getResponseActivityJsRuntimeMeta(record);
     const codePreview = formatResponseActivityJsCodePreview(meta.code) || 'JavaScript';
@@ -1507,10 +1569,13 @@ export function createMessageProcessor(appContext) {
     };
   }
 
-  function renderResponseActivityJsRuntimeBody(toolBodyInner, entry) {
+  function renderResponseActivityJsRuntimeBody(toolBodyInner, entry, snapshot = null) {
     if (!toolBodyInner || !entry) return;
     const meta = getResponseActivityJsRuntimeMeta(entry);
-    const formattedOutput = formatResponseToolCallOutput(entry.output);
+    const formattedOutput = snapshot?.outputText || formatResponseToolCallOutput(entry.output);
+    const outputImages = Array.isArray(snapshot?.outputImages)
+      ? snapshot.outputImages
+      : extractResponseToolCallOutputImages(entry.output);
 
     const codeTitle = document.createElement('div');
     codeTitle.className = 'response-activity-tool-block-title';
@@ -1526,18 +1591,7 @@ export function createMessageProcessor(appContext) {
     codeBlock.appendChild(codeInner);
     toolBodyInner.appendChild(codeBlock);
 
-    if (formattedOutput) {
-      const outputTitle = document.createElement('div');
-      outputTitle.className = 'response-activity-tool-block-title';
-      outputTitle.textContent = '返回值';
-      toolBodyInner.appendChild(outputTitle);
-
-      const outputBlock = document.createElement('pre');
-      outputBlock.className = 'response-activity-tool-output';
-      setupResponseActivityExpandableTextBlock(outputBlock);
-      outputBlock.textContent = formattedOutput;
-      toolBodyInner.appendChild(outputBlock);
-    }
+    appendResponseActivityToolOutput(toolBodyInner, formattedOutput, outputImages);
   }
 
   /**
@@ -1551,7 +1605,7 @@ export function createMessageProcessor(appContext) {
    * @param {HTMLElement} toolBodyInner
    * @param {Object} entry
    */
-  function renderResponseActivityGenericToolBody(toolBodyInner, entry) {
+  function renderResponseActivityGenericToolBody(toolBodyInner, entry, snapshot = null) {
     if (!toolBodyInner || !entry) return;
 
     getResponseActivityToolSecondaryLines(entry).forEach((line) => {
@@ -1569,19 +1623,11 @@ export function createMessageProcessor(appContext) {
       toolBodyInner.appendChild(pre);
     }
 
-    const formattedOutput = formatResponseToolCallOutput(entry.output);
-    if (formattedOutput) {
-      const outputTitle = document.createElement('div');
-      outputTitle.className = 'response-activity-tool-block-title';
-      outputTitle.textContent = '返回值';
-      toolBodyInner.appendChild(outputTitle);
-
-      const outputBlock = document.createElement('pre');
-      outputBlock.className = 'response-activity-tool-output';
-      setupResponseActivityExpandableTextBlock(outputBlock);
-      outputBlock.textContent = formattedOutput;
-      toolBodyInner.appendChild(outputBlock);
-    }
+    const formattedOutput = snapshot?.outputText || formatResponseToolCallOutput(entry.output);
+    const outputImages = Array.isArray(snapshot?.outputImages)
+      ? snapshot.outputImages
+      : extractResponseToolCallOutputImages(entry.output);
+    appendResponseActivityToolOutput(toolBodyInner, formattedOutput, outputImages);
 
     if (Array.isArray(entry.sources) && entry.sources.length > 0) {
       const sources = document.createElement('details');
@@ -2321,6 +2367,7 @@ export function createMessageProcessor(appContext) {
       ? formatResponseToolCallArguments(entry.arguments)
       : '';
     const outputText = formatResponseToolCallOutput(entry.output) || '';
+    const outputImages = extractResponseToolCallOutputImages(entry.output);
     const statusLabel = getResponseActivityStatusLabel(entry.status);
     const jsMeta = isResponseActivityJsRuntimeEntry(entry) ? getResponseActivityJsRuntimeMeta(entry) : null;
     const normalizedSources = Array.isArray(entry.sources)
@@ -2345,6 +2392,7 @@ export function createMessageProcessor(appContext) {
       secondaryLines,
       argumentsText,
       outputText,
+      outputImages,
       statusLabel,
       jsMeta,
       sources: normalizedSources,
@@ -2359,6 +2407,7 @@ export function createMessageProcessor(appContext) {
         secondaryLines,
         argumentsText,
         outputText,
+        outputImageSignatures: outputImages.map((image) => image.signature),
         sources: normalizedSources,
         jsMeta
       })
@@ -2698,10 +2747,10 @@ export function createMessageProcessor(appContext) {
 
   function renderResponseActivityToolBodyContent(toolBodyInner, snapshot) {
     if (isResponseActivityJsRuntimeEntry(snapshot.entry)) {
-      renderResponseActivityJsRuntimeBody(toolBodyInner, snapshot.entry);
+      renderResponseActivityJsRuntimeBody(toolBodyInner, snapshot.entry, snapshot);
       return;
     }
-    renderResponseActivityGenericToolBody(toolBodyInner, snapshot.entry);
+    renderResponseActivityGenericToolBody(toolBodyInner, snapshot.entry, snapshot);
   }
 
   function reconcileResponseActivityNarrativeEntry(item, snapshot, previousSnapshot) {

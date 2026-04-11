@@ -103,6 +103,125 @@ function buildStorageSeed(baseUrl) {
   };
 }
 
+async function writeResultSnapshot(outputDir, result) {
+  await fsp.mkdir(outputDir, { recursive: true });
+  await fsp.writeFile(
+    path.join(outputDir, 'result.json'),
+    JSON.stringify(result, null, 2),
+    'utf8'
+  );
+}
+
+async function runBestEffortScreenshotAttempts({ sidebarFrame, page, outputDir, result }) {
+  const attempts = [
+    {
+      label: 'sidebar-body-default',
+      run: () => sidebarFrame.locator('body').screenshot({
+        path: path.join(outputDir, 'sidebar-body-final.png'),
+        timeout: 5_000
+      })
+    },
+    {
+      label: 'sidebar-body-animations-disabled',
+      run: () => sidebarFrame.locator('body').screenshot({
+        path: path.join(outputDir, 'sidebar-body-final-animations-disabled.png'),
+        timeout: 5_000,
+        animations: 'disabled'
+      })
+    },
+    {
+      label: 'host-page-default',
+      run: () => page.screenshot({
+        path: path.join(outputDir, 'host-page-final.png'),
+        timeout: 5_000
+      })
+    }
+  ];
+
+  result.screenshotAttempts = [];
+
+  for (const attempt of attempts) {
+    const startedAt = Date.now();
+    try {
+      await attempt.run();
+      result.screenshotAttempts.push({
+        label: attempt.label,
+        ok: true,
+        elapsedMs: Date.now() - startedAt
+      });
+    } catch (error) {
+      result.screenshotAttempts.push({
+        label: attempt.label,
+        ok: false,
+        elapsedMs: Date.now() - startedAt,
+        error: String(error && (error.stack || error.message || error))
+      });
+    }
+  }
+
+  const savedCount = result.screenshotAttempts.filter((attempt) => attempt.ok === true).length;
+  result.screenshotSavedCount = savedCount;
+  result.screenshotAttemptCount = result.screenshotAttempts.length;
+  result.steps.push(savedCount > 0 ? 'screenshots_saved' : 'screenshots_skipped');
+}
+
+async function settleWithTimeout(label, task, timeoutMs) {
+  const startedAt = Date.now();
+  try {
+    await Promise.race([
+      Promise.resolve().then(task),
+      new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timeout after ${timeoutMs}ms`)), timeoutMs))
+    ]);
+    return {
+      label,
+      ok: true,
+      elapsedMs: Date.now() - startedAt
+    };
+  } catch (error) {
+    return {
+      label,
+      ok: false,
+      elapsedMs: Date.now() - startedAt,
+      error: String(error && (error.stack || error.message || error))
+    };
+  }
+}
+
+function getBrowserProcessControllerFromContext(context) {
+  try {
+    const browser = typeof context?.browser === 'function' ? context.browser() : null;
+    const impl = browser?._connection?.toImpl?.(browser);
+    const browserProcess = impl?.options?.browserProcess || null;
+    if (!browserProcess || typeof browserProcess.kill !== 'function') return null;
+    return browserProcess;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function teardownPersistentContext({ context, mockServer, outputDir, result }) {
+  result.teardown = [];
+
+  if (mockServer) {
+    result.teardown.push(await settleWithTimeout('mock_server_close', () => mockServer.close(), 5_000));
+  }
+
+  if (context) {
+    const closeAttempt = await settleWithTimeout('browser_context_close', () => context.close(), 10_000);
+    result.teardown.push(closeAttempt);
+
+    if (!closeAttempt.ok) {
+      const browserProcess = getBrowserProcessControllerFromContext(context);
+      if (browserProcess) {
+        result.teardown.push(await settleWithTimeout('browser_process_kill', () => browserProcess.kill(), 10_000));
+      }
+    }
+  }
+
+  result.teardownFinishedAt = new Date().toISOString();
+  await writeResultSnapshot(outputDir, result);
+}
+
 function createPageHtml() {
   return `<!doctype html>
 <html lang="en">
@@ -256,7 +375,7 @@ async function runMockResponsesServer() {
           res.writeHead(200, {
             'content-type': 'text/event-stream; charset=utf-8',
             'cache-control': 'no-store',
-            connection: 'keep-alive',
+            connection: 'close',
             'access-control-allow-origin': '*'
           });
 
@@ -360,6 +479,8 @@ async function runMockResponsesServer() {
       return screenshotOutputSummary ? { ...screenshotOutputSummary } : null;
     },
     async close() {
+      try { server.closeIdleConnections?.(); } catch (_) {}
+      try { server.closeAllConnections?.(); } catch (_) {}
       await new Promise((resolve) => server.close(() => resolve()));
     }
   };
@@ -478,14 +599,28 @@ async function main() {
     result.finalAssistantText = finalAssistantText;
     result.steps.push('assistant_completed');
 
-    await sidebarFrame.locator('body').screenshot({
-      path: path.join(outputDir, 'sidebar-body-final.png')
+    const toolPreview = await waitFor(async () => {
+      const previewState = await sidebarFrame.evaluate(() => {
+        const previews = Array.from(document.querySelectorAll('.response-activity-tool-image'));
+        if (previews.length <= 0) return null;
+        const first = previews[0];
+        return {
+          count: previews.length,
+          firstSrcPrefix: String(first.getAttribute('src') || '').slice(0, 32),
+          firstNaturalWidth: Number(first.naturalWidth || 0),
+          firstNaturalHeight: Number(first.naturalHeight || 0)
+        };
+      });
+      return (previewState && previewState.firstNaturalWidth > 0 && previewState.firstNaturalHeight > 0)
+        ? previewState
+        : null;
+    }, {
+      timeoutMs: 30_000,
+      intervalMs: 250,
+      label: 'tool output image preview'
     });
-    await page.screenshot({
-      path: path.join(outputDir, 'host-page-final.png'),
-      fullPage: true
-    });
-    result.steps.push('screenshots_saved');
+    result.toolPreview = toolPreview;
+    result.steps.push('tool_preview_ready');
 
     result.firstRequestToolNames = mockServer.getFirstRequestToolNames();
     result.screenshotOutputSummary = mockServer.getScreenshotOutputSummary();
@@ -496,23 +631,37 @@ async function main() {
     if (!result.screenshotOutputSummary || result.screenshotOutputSummary.firstType !== 'input_image') {
       throw new Error(`follow-up request did not include expected input_image output: ${JSON.stringify(result.screenshotOutputSummary)}`);
     }
-
-    await fsp.writeFile(
-      path.join(outputDir, 'result.json'),
-      JSON.stringify(result, null, 2),
-      'utf8'
-    );
-  } finally {
-    try {
-      await mockServer.close();
-    } catch (_) {}
-    if (context) {
-      await context.close().catch(() => {});
+    if (!result.toolPreview || !String(result.toolPreview.firstSrcPrefix || '').startsWith('data:image/jpeg;base64,')) {
+      throw new Error(`tool output preview image missing or unexpected: ${JSON.stringify(result.toolPreview)}`);
     }
+
+    result.ok = true;
+    result.validatedAt = new Date().toISOString();
+    await writeResultSnapshot(outputDir, result);
+
+    // 先持久化“逻辑已验证通过”的结果，再做截图。
+    // 这样即使 Playwright 对 iframe body 截图再次遇到“等待稳定”问题，
+    // 也不会让整条回归在模型已完成后看起来像“卡死没结果”。
+    await runBestEffortScreenshotAttempts({ sidebarFrame, page, outputDir, result });
+    result.finishedAt = new Date().toISOString();
+    await writeResultSnapshot(outputDir, result);
+  } finally {
+    await teardownPersistentContext({ context, mockServer, outputDir, result }).catch(async (error) => {
+      result.teardown = Array.isArray(result.teardown) ? result.teardown : [];
+      result.teardown.push({
+        label: 'teardown_unhandled_error',
+        ok: false,
+        error: String(error && (error.stack || error.message || error))
+      });
+      result.teardownFinishedAt = new Date().toISOString();
+      await writeResultSnapshot(outputDir, result).catch(() => {});
+    });
   }
 }
 
-main().catch(async (error) => {
+main().then(() => {
+  process.exit(0);
+}).catch(async (error) => {
   const failure = {
     ok: false,
     error: String(error && (error.stack || error.message || error))
@@ -526,5 +675,5 @@ main().catch(async (error) => {
     );
   } catch (_) {}
   console.error(error);
-  process.exitCode = 1;
+  process.exit(1);
 });
