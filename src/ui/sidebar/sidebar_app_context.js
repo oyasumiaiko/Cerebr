@@ -18,6 +18,7 @@ import {
 const JS_RUNTIME_STATUS_TIMEOUT_MS = 5000;
 const JS_RUNTIME_FRAME_SNAPSHOT_TIMEOUT_MS = 5000;
 const JS_RUNTIME_EXECUTION_TIMEOUT_MS = 30000;
+const MICRO_SKILL_REGISTRY_TIMEOUT_MS = 10000;
 
 function raceWithTimeout(promise, timeoutMs, timeoutMessage) {
   const normalizedTimeout = Number.isFinite(Number(timeoutMs)) ? Math.max(1, Math.trunc(Number(timeoutMs))) : 0;
@@ -1257,6 +1258,93 @@ export function registerSidebarUtilities(appContext) {
       return {
         success: false,
         error: error?.message || '获取 JS Runtime frame 快照失败'
+      };
+    }
+  };
+
+  /**
+   * 获取当前侧栏绑定网页下命中的微型 skill 摘要。
+   *
+   * 设计目标：
+   * - 给隐藏 `micro_skill_context` 提供轻量摘要来源；
+   * - 不返回源码或详细 usage，保持渐进式披露；
+   * - 独立页或无稳定宿主页时返回空列表，而不是报错中断主流程。
+   */
+  appContext.utils.getMatchingMicroSkillSummaries = async () => {
+    const pageToolEnvironment = resolveCurrentPageToolEnvironment();
+    if (pageToolEnvironment.jsRuntimeEnvironment !== JS_RUNTIME_ENV_BOUND_HOST_PAGE) {
+      return {
+        success: true,
+        tab_id: null,
+        url: '',
+        title: '',
+        total_skills: 0,
+        skills: []
+      };
+    }
+    if (!chrome?.runtime?.sendMessage) {
+      return {
+        success: false,
+        error: '当前环境不支持 chrome.runtime.sendMessage'
+      };
+    }
+    try {
+      const targetTabId = await resolveBoundSidebarTargetTabId();
+      if (!Number.isFinite(targetTabId)) {
+        return {
+          success: true,
+          tab_id: null,
+          url: '',
+          title: '',
+          total_skills: 0,
+          skills: []
+        };
+      }
+      return await raceWithTimeout(
+        chrome.runtime.sendMessage({
+          type: 'GET_MATCHING_MICRO_SKILL_SUMMARIES',
+          tabId: targetTabId
+        }),
+        MICRO_SKILL_REGISTRY_TIMEOUT_MS,
+        '读取当前页面匹配的微型 skill 摘要超时'
+      );
+    } catch (error) {
+      return {
+        success: false,
+        error: error?.message || '读取当前页面匹配的微型 skill 摘要失败'
+      };
+    }
+  };
+
+  /**
+   * 统一执行扩展侧微型 skill 注册表动作。
+   *
+   * 说明：
+   * - 所有真正会改 registry / 动态 userScripts 的动作都交给 background；
+   * - sidebar 只负责把当前绑定 tabId 一并传过去，供 refresh 当前文档使用。
+   */
+  appContext.utils.executeMicroSkillRegistryAction = async (payload = {}) => {
+    if (!chrome?.runtime?.sendMessage) {
+      return {
+        success: false,
+        error: '当前环境不支持 chrome.runtime.sendMessage'
+      };
+    }
+    try {
+      const targetTabId = await resolveBoundSidebarTargetTabId();
+      return await raceWithTimeout(
+        chrome.runtime.sendMessage({
+          type: 'MICRO_SKILL_REGISTRY_ACTION',
+          tabId: Number.isFinite(targetTabId) ? targetTabId : null,
+          payload: (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {}
+        }),
+        MICRO_SKILL_REGISTRY_TIMEOUT_MS,
+        '执行微型 skill 注册表操作超时'
+      );
+    } catch (error) {
+      return {
+        success: false,
+        error: error?.message || '执行微型 skill 注册表操作失败'
       };
     }
   };

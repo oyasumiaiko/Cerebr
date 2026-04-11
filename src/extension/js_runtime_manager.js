@@ -8,6 +8,8 @@
  * 4. 遇到 Chrome 版本 / 用户侧开关不满足时，返回明确错误，而不是偷偷 fallback。
  */
 
+import { CEREBR_MICRO_SKILL_WORLD_ID } from './micro_skill_runtime.js';
+
 /**
  * 将错误对象压缩成适合 UI 展示的轻量结构。
  * @param {any} error
@@ -362,6 +364,8 @@ export function createJsRuntimeManager() {
     const rawItems = await chrome.userScripts.execute({
       target,
       injectImmediately: request?.injectImmediately === true,
+      world: 'USER_SCRIPT',
+      worldId: CEREBR_MICRO_SKILL_WORLD_ID,
       js: [
         {
           code: buildUserScriptSource(code)

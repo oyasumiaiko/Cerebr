@@ -2,12 +2,18 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
-async function loadJsRuntimeScriptRegistryToolModule() {
-  const filePath = path.resolve(__dirname, '../src/agent_tools/js_runtime_script_registry_tool.js');
+async function loadMicroSkillRegistryToolModule() {
+  const filePath = path.resolve(__dirname, '../src/agent_tools/micro_skill_registry_tool.js');
   const source = await fs.readFile(filePath, 'utf8');
   const dataUrl = `data:text/javascript;base64,${Buffer.from(source, 'utf8').toString('base64')}`;
   return import(dataUrl);
+}
+
+async function loadLegacyCompatModule() {
+  const filePath = path.resolve(__dirname, '../src/agent_tools/js_runtime_script_registry_tool.js');
+  return import(pathToFileURL(filePath).href);
 }
 
 function clone(value) {
@@ -27,14 +33,6 @@ function createMockStorageArea(initial = {}) {
         }
         return result;
       }
-      if (typeof keys === 'string') {
-        return Object.prototype.hasOwnProperty.call(store, keys)
-          ? { [keys]: clone(store[keys]) }
-          : {};
-      }
-      if (keys && typeof keys === 'object') {
-        return clone(store);
-      }
       return clone(store);
     },
     async set(payload) {
@@ -42,9 +40,9 @@ function createMockStorageArea(initial = {}) {
     },
     async remove(keys) {
       const list = Array.isArray(keys) ? keys : [keys];
-      for (const key of list) {
+      list.forEach((key) => {
         delete store[key];
-      }
+      });
     },
     dump() {
       return clone(store);
@@ -52,167 +50,145 @@ function createMockStorageArea(initial = {}) {
   };
 }
 
-test('normalizeJsRuntimeScriptRegistryArguments 支持 save + refresh 参数并校验必填字段', async () => {
-  const { normalizeJsRuntimeScriptRegistryArguments } = await loadJsRuntimeScriptRegistryToolModule();
-
-  const normalized = normalizeJsRuntimeScriptRegistryArguments({
-    action: 'save',
-    script: {
-      id: 'helper_bootstrap',
-      name: 'Helper Bootstrap',
-      description: 'bootstrap helpers',
-      scope: 'https://example.com/*',
-      enabled: true,
-      code: 'globalThis.__x = 1;'
-    },
-    refresh_after_save: true,
-    frame_ids: [0, '2'],
-    inject_immediately: true,
-    runtime_environment: 'bound_host_page'
-  });
-
-  assert.deepEqual(normalized, {
-    action: 'save',
-    scriptId: null,
-    script: {
-      id: 'helper_bootstrap',
-      name: 'Helper Bootstrap',
-      description: 'bootstrap helpers',
-      scope: 'https://example.com/*',
-      enabled: true,
-      code: 'globalThis.__x = 1;'
-    },
-    refreshAfterSave: true,
-    frameIds: [0, 2],
-    injectImmediately: true,
-    runtimeEnvironment: 'bound_host_page'
-  });
-
-  assert.throws(
-    () => normalizeJsRuntimeScriptRegistryArguments({ action: 'refresh' }),
-    /script_id 不能为空/
-  );
-  assert.throws(
-    () => normalizeJsRuntimeScriptRegistryArguments({ action: 'save', script: { id: 'x', code: '   ' } }),
-    /code 不能为空/
-  );
-});
-
-test('executeJsRuntimeScriptRegistryTool 可以 save/list/get/delete 并维护 revision', async () => {
+test('normalizeMicroSkillMatchPatterns 与 URL 匹配遵循第一阶段 Chrome/TM 风格约束', async () => {
   const {
-    JS_RUNTIME_SCRIPT_REGISTRY_STORAGE_KEY,
-    executeJsRuntimeScriptRegistryTool
-  } = await loadJsRuntimeScriptRegistryToolModule();
+    normalizeMicroSkillMatchPatterns,
+    microSkillMatchPatternMatchesUrl
+  } = await loadMicroSkillRegistryToolModule();
 
-  const storageArea = createMockStorageArea();
-  global.chrome = { storage: { local: storageArea } };
+  assert.deepEqual(
+    normalizeMicroSkillMatchPatterns(['https://*.example.com/*', 'file:///*']),
+    ['https://*.example.com/*', 'file:///*']
+  );
 
-  const savedFirst = await executeJsRuntimeScriptRegistryTool({
-    action: 'save',
-    script: {
-      id: 'dom_probe',
-      name: 'DOM Probe',
-      description: 'probe dom',
-      scope: 'https://example.com/*',
-      code: 'return document.title;'
-    }
-  });
-  assert.equal(savedFirst.ok, true);
-  assert.equal(savedFirst.script.id, 'dom_probe');
-  assert.equal(savedFirst.script.revision, 1);
+  assert.equal(
+    microSkillMatchPatternMatchesUrl('https://*.example.com/*', 'https://a.example.com/path?q=1'),
+    true
+  );
+  assert.equal(
+    microSkillMatchPatternMatchesUrl('https://*.example.com/*', 'https://example.com/root'),
+    true
+  );
+  assert.equal(
+    microSkillMatchPatternMatchesUrl('*://*.example.com/*', 'http://b.example.com/path'),
+    true
+  );
+  assert.equal(
+    microSkillMatchPatternMatchesUrl('*://*.example.com/*', 'https://b.example.com/path'),
+    true
+  );
+  assert.equal(
+    microSkillMatchPatternMatchesUrl('*://*.example.com/*', 'file:///tmp/a.txt'),
+    false
+  );
 
-  const savedSecond = await executeJsRuntimeScriptRegistryTool({
-    action: 'save',
-    script: {
-      id: 'dom_probe',
-      name: 'DOM Probe V2',
-      description: 'probe dom again',
-      scope: 'https://example.com/*',
-      code: 'return location.href;'
-    }
-  });
-  assert.equal(savedSecond.script.revision, 2);
-  assert.equal(savedSecond.script.name, 'DOM Probe V2');
-
-  const listed = await executeJsRuntimeScriptRegistryTool({ action: 'list' });
-  assert.equal(listed.ok, true);
-  assert.equal(listed.total_scripts, 1);
-  assert.equal(listed.scripts[0].id, 'dom_probe');
-  assert.equal(listed.scripts[0].code_length, 'return location.href;'.length);
-
-  const fetched = await executeJsRuntimeScriptRegistryTool({
-    action: 'get',
-    script_id: 'dom_probe'
-  });
-  assert.equal(fetched.ok, true);
-  assert.equal(fetched.script.code, 'return location.href;');
-  assert.equal(fetched.script.revision, 2);
-
-  const removed = await executeJsRuntimeScriptRegistryTool({
-    action: 'delete',
-    script_id: 'dom_probe'
-  });
-  assert.equal(removed.ok, true);
-  assert.equal(removed.deleted, true);
-  assert.equal(removed.script.id, 'dom_probe');
-
-  const snapshot = storageArea.dump();
-  assert.deepEqual(snapshot[JS_RUNTIME_SCRIPT_REGISTRY_STORAGE_KEY], {
-    version: 1,
-    scripts_by_id: {}
-  });
-
-  delete global.chrome;
+  assert.throws(
+    () => normalizeMicroSkillMatchPatterns(['https://exa*mple.com/*']),
+    /不支持的 match 规则/
+  );
 });
 
-test('executeJsRuntimeScriptRegistryTool 的 refresh 会调用 executeJsRuntime 并透传执行选项', async () => {
-  const { executeJsRuntimeScriptRegistryTool } = await loadJsRuntimeScriptRegistryToolModule();
+test('buildStoredMicroSkillRecord / loadMicroSkillRegistrySnapshot / saveMicroSkillRegistrySnapshot 保持 revision 与渐进式字段结构', async () => {
+  const {
+    MICRO_SKILL_REGISTRY_STORAGE_KEY,
+    buildMicroSkillDetail,
+    buildMicroSkillSourcePayload,
+    buildMicroSkillSummary,
+    buildStoredMicroSkillRecord,
+    loadMicroSkillRegistrySnapshot,
+    saveMicroSkillRegistrySnapshot
+  } = await loadMicroSkillRegistryToolModule();
 
   const storageArea = createMockStorageArea();
-  global.chrome = { storage: { local: storageArea } };
-
-  await executeJsRuntimeScriptRegistryTool({
-    action: 'save',
-    script: {
-      id: 'helper_bootstrap',
-      name: 'Helper Bootstrap',
-      code: 'globalThis.__helperReady = true; return "ready";'
+  const created = buildStoredMicroSkillRecord({
+    name: 'dom-probe',
+    description: '读取页面标题和链接',
+    interface: {
+      display_name: 'DOM Probe',
+      short_description: '读取当前页面标题和 URL',
+      default_prompt: 'Read the current page title and URL.'
+    },
+    match: ['https://*.example.com/*'],
+    details: {
+      usage: '在需要读取页面基础信息时使用。',
+      mount_contract: 'Use globalThis.__cerebrMicroSkills.invoke("dom-probe.read")'
+    },
+    source: {
+      code: 'return { read() { return { title: document.title, href: location.href }; } };'
     }
   });
 
-  let receivedCode = null;
-  let receivedOptions = null;
-  const refreshed = await executeJsRuntimeScriptRegistryTool({
-    action: 'refresh',
-    script_id: 'helper_bootstrap',
-    frame_ids: [3],
-    inject_immediately: true,
-    runtime_environment: 'isolated_sandbox_iframe'
-  }, {
-    executeJsRuntime: async (code, options) => {
-      receivedCode = code;
-      receivedOptions = clone(options);
-      return {
-        success: true,
-        ok: true,
-        tabId: 99,
-        value: 'ready',
-        logs: [{ level: 'info', text: 'bootstrapped' }],
-        items: []
-      };
+  assert.equal(created.revision, 1);
+  assert.equal(created.interface.display_name, 'DOM Probe');
+
+  await saveMicroSkillRegistrySnapshot({
+    version: 1,
+    skills_by_name: {
+      'dom-probe': created
+    }
+  }, storageArea);
+
+  const snapshot = await loadMicroSkillRegistrySnapshot(storageArea);
+  assert.equal(snapshot.skills_by_name['dom-probe'].name, 'dom-probe');
+
+  const summary = buildMicroSkillSummary(snapshot.skills_by_name['dom-probe']);
+  assert.equal(summary.interface.short_description, '读取当前页面标题和 URL');
+
+  const detail = buildMicroSkillDetail(snapshot.skills_by_name['dom-probe']);
+  assert.equal(detail.details.usage, '在需要读取页面基础信息时使用。');
+  assert.equal(detail.source, undefined);
+
+  const source = buildMicroSkillSourcePayload(snapshot.skills_by_name['dom-probe']);
+  assert.match(source.source.code, /document\.title/);
+
+  assert.ok(storageArea.dump()[MICRO_SKILL_REGISTRY_STORAGE_KEY]);
+});
+
+test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 micro skill action 集', async () => {
+  const {
+    MICRO_SKILL_REGISTRY_TOOL_NAME,
+    buildMicroSkillRegistryFunctionToolDefinition,
+    normalizeMicroSkillRegistryToolArguments
+  } = await loadMicroSkillRegistryToolModule();
+
+  const definition = buildMicroSkillRegistryFunctionToolDefinition();
+  assert.equal(definition.name, MICRO_SKILL_REGISTRY_TOOL_NAME);
+
+  const normalizedCreate = normalizeMicroSkillRegistryToolArguments({
+    action: 'create',
+    skill: {
+      name: 'dom-probe',
+      description: '读取页面标题和链接',
+      match: ['https://*.example.com/*'],
+      details: {
+        usage: '在需要读取页面基础信息时使用。'
+      },
+      source: {
+        code: 'return { read() { return document.title; } };'
+      }
     }
   });
+  assert.equal(normalizedCreate.action, 'create');
+  assert.equal(normalizedCreate.skill.name, 'dom-probe');
 
-  assert.equal(receivedCode, 'globalThis.__helperReady = true; return "ready";');
-  assert.deepEqual(receivedOptions, {
-    frameIds: [3],
-    injectImmediately: true,
-    runtimeEnvironment: 'isolated_sandbox_iframe'
+  const normalizedLegacy = normalizeMicroSkillRegistryToolArguments({
+    action: 'get',
+    script_id: 'dom-probe'
   });
-  assert.equal(refreshed.ok, true);
-  assert.equal(refreshed.refresh_result.ok, true);
-  assert.equal(refreshed.refresh_result.tab_id, 99);
-  assert.equal(refreshed.refresh_result.value, 'ready');
+  assert.deepEqual(normalizedLegacy, {
+    action: 'read_detail',
+    skill_name: 'dom-probe',
+    skill: null
+  });
+});
 
-  delete global.chrome;
+test('旧 js_runtime_script_registry 兼容层会映射到新的 micro_skill_registry 能力', async () => {
+  const legacy = await loadLegacyCompatModule();
+  const modern = await loadMicroSkillRegistryToolModule();
+
+  assert.equal(legacy.JS_RUNTIME_SCRIPT_REGISTRY_TOOL_NAME, modern.MICRO_SKILL_REGISTRY_TOOL_NAME);
+  assert.equal(
+    legacy.buildJsRuntimeScriptRegistryFunctionToolDefinition().name,
+    modern.MICRO_SKILL_REGISTRY_TOOL_NAME
+  );
 });

@@ -92,10 +92,9 @@ import {
   normalizeRequestUserInputArguments
 } from '../agent_tools/request_user_input_tool.js';
 import {
-  JS_RUNTIME_SCRIPT_REGISTRY_TOOL_NAME,
-  buildJsRuntimeScriptRegistryFunctionToolDefinition,
-  executeJsRuntimeScriptRegistryTool
-} from '../agent_tools/js_runtime_script_registry_tool.js';
+  MICRO_SKILL_REGISTRY_TOOL_NAME,
+  buildMicroSkillRegistryFunctionToolDefinition
+} from '../agent_tools/micro_skill_registry_tool.js';
 import {
   JS_RUNTIME_ENV_BOUND_HOST_PAGE,
   JS_RUNTIME_ENV_ISOLATED_SANDBOX,
@@ -112,6 +111,10 @@ import {
   buildPageRuntimeContextPayload,
   resolvePageRuntimeContextAttachment
 } from '../utils/page_runtime_context.js';
+import {
+  buildMicroSkillContextPayload,
+  resolveMicroSkillContextAttachment
+} from '../utils/micro_skill_context.js';
 import {
   buildEnvironmentContextPayload,
   resolveEnvironmentContextAttachment
@@ -135,7 +138,8 @@ const RESPONSES_HISTORY_READ_TOOL_NAME = 'history_read';
 const RESPONSES_REQUEST_USER_INPUT_TOOL_NAME = REQUEST_USER_INPUT_TOOL_NAME;
 const RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME = LIST_ASKABLE_MODELS_TOOL_NAME;
 const RESPONSES_ASK_OTHER_AI_TOOL_NAME = ASK_OTHER_AI_TOOL_NAME;
-const RESPONSES_JS_RUNTIME_SCRIPT_REGISTRY_TOOL_NAME = JS_RUNTIME_SCRIPT_REGISTRY_TOOL_NAME;
+const RESPONSES_MICRO_SKILL_REGISTRY_TOOL_NAME = MICRO_SKILL_REGISTRY_TOOL_NAME;
+const RESPONSES_LEGACY_JS_RUNTIME_SCRIPT_REGISTRY_TOOL_NAME = 'js_runtime_script_registry';
 const RESPONSES_LOCAL_COMPACTION_MARKER_TEXT = '已压缩上下文（基于上一轮上下文大小）';
 const RESPONSES_LOCAL_COMPACTION_PENDING_TEXT = '上下文压缩中';
 const RESPONSES_LOCAL_COMPACTION_ERROR_TEXT = '上下文压缩失败';
@@ -7089,6 +7093,7 @@ export function createMessageSender(appContext) {
    *   conversationChain?: Array<any>,
    *   targetUserNode?: any,
    *   pageRuntimeContextPayload?: Object|null,
+   *   microSkillContextPayload?: Object|null,
    *   environmentContextPayload?: Object|null
    * }} options
    * @returns {boolean}
@@ -7105,6 +7110,9 @@ export function createMessageSender(appContext) {
       : null;
     const environmentContextPayload = (options?.environmentContextPayload && typeof options.environmentContextPayload === 'object')
       ? options.environmentContextPayload
+      : null;
+    const microSkillContextPayload = (options?.microSkillContextPayload && typeof options.microSkillContextPayload === 'object')
+      ? options.microSkillContextPayload
       : null;
 
     const targetIndex = chain.findIndex((node) => node && node.id === targetUserNode.id);
@@ -7124,6 +7132,14 @@ export function createMessageSender(appContext) {
         'environmentContextSignature'
       )
     });
+    const microSkillAttachment = resolveMicroSkillContextAttachment({
+      payload: microSkillContextPayload,
+      previousEffectiveSignature: findPreviousEffectiveUserContextSignature(
+        chain,
+        targetIndex,
+        'microSkillContextSignature'
+      )
+    });
 
     const contextualItems = [];
     if (Array.isArray(environmentAttachment.inputItems) && environmentAttachment.inputItems.length > 0) {
@@ -7132,12 +7148,16 @@ export function createMessageSender(appContext) {
     if (Array.isArray(pageAttachment.inputItems) && pageAttachment.inputItems.length > 0) {
       contextualItems.push(...pageAttachment.inputItems);
     }
+    if (Array.isArray(microSkillAttachment.inputItems) && microSkillAttachment.inputItems.length > 0) {
+      contextualItems.push(...microSkillAttachment.inputItems);
+    }
 
     targetUserNode.contextual_input_items_before = contextualItems.length > 0
       ? cloneResponsesInputItems(contextualItems)
       : null;
     targetUserNode.pageRuntimeContextSignature = pageAttachment.signature || null;
     targetUserNode.environmentContextSignature = environmentAttachment.signature || null;
+    targetUserNode.microSkillContextSignature = microSkillAttachment.signature || null;
     return true;
   }
 
@@ -7590,7 +7610,7 @@ export function createMessageSender(appContext) {
   function getResponsesCustomFunctionTools(usedApiConfig, pageToolEnvironment = resolveResponsesPageToolEnvironment()) {
     if (!isOpenAIResponsesApiConfig(usedApiConfig)) return [];
     const tools = [
-      buildJsRuntimeScriptRegistryFunctionToolDefinition(),
+      buildMicroSkillRegistryFunctionToolDefinition(),
       buildRequestUserInputFunctionToolDefinition(),
       buildListAskableModelsFunctionToolDefinition(),
       buildAskOtherAiFunctionToolDefinition(),
@@ -8549,20 +8569,20 @@ export function createMessageSender(appContext) {
    * @param {{attemptState?:any}} [options]
    * @returns {Promise<Object>}
    */
-  async function executeResponsesJsRuntimeScriptRegistryFunction(rawArgs, options = {}) {
+  async function executeResponsesMicroSkillRegistryFunction(rawArgs, options = {}) {
     try {
-      const defaultRuntimeEnvironment = resolveResponsesPageToolEnvironment(options?.attemptState).jsRuntimeEnvironment;
-      return await executeJsRuntimeScriptRegistryTool(rawArgs, {
-        executeJsRuntime: (typeof utils?.executeJsRuntime === 'function')
-          ? ((code, executionOptions = {}) => utils.executeJsRuntime(code, {
-              frameIds: Array.isArray(executionOptions?.frameIds) ? executionOptions.frameIds : null,
-              injectImmediately: executionOptions?.injectImmediately === true,
-              runtimeEnvironment: (typeof executionOptions?.runtimeEnvironment === 'string' && executionOptions.runtimeEnvironment.trim())
-                ? executionOptions.runtimeEnvironment.trim()
-                : defaultRuntimeEnvironment
-            }))
-          : null
-      });
+      if (typeof utils?.executeMicroSkillRegistryAction !== 'function') {
+        throw new Error('当前客户端没有可用的 micro_skill_registry 执行入口。');
+      }
+      const result = await utils.executeMicroSkillRegistryAction(rawArgs);
+      if (result?.success === true) {
+        const payload = { ...result };
+        delete payload.success;
+        return payload;
+      }
+      throw new Error((typeof result?.error === 'string' && result.error.trim())
+        ? result.error.trim()
+        : 'micro_skill_registry 执行失败。');
     } catch (error) {
       return {
         ok: false,
@@ -8616,8 +8636,11 @@ export function createMessageSender(appContext) {
     let outputPayload = null;
     if (functionName === RESPONSES_JS_RUNTIME_TOOL_NAME) {
       outputPayload = await executeResponsesJsRuntimeFunction(parsedArgs, options);
-    } else if (functionName === RESPONSES_JS_RUNTIME_SCRIPT_REGISTRY_TOOL_NAME) {
-      outputPayload = await executeResponsesJsRuntimeScriptRegistryFunction(parsedArgs, options);
+    } else if (
+      functionName === RESPONSES_MICRO_SKILL_REGISTRY_TOOL_NAME
+      || functionName === RESPONSES_LEGACY_JS_RUNTIME_SCRIPT_REGISTRY_TOOL_NAME
+    ) {
+      outputPayload = await executeResponsesMicroSkillRegistryFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME) {
       outputPayload = await executeResponsesRequestUserInputFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME) {
@@ -8653,7 +8676,10 @@ export function createMessageSender(appContext) {
       output:
         functionName === RESPONSES_JS_RUNTIME_TOOL_NAME
           ? serializeResponsesJsRuntimeFunctionToolOutput(outputPayload)
-          : functionName === RESPONSES_JS_RUNTIME_SCRIPT_REGISTRY_TOOL_NAME
+          : (
+              functionName === RESPONSES_MICRO_SKILL_REGISTRY_TOOL_NAME
+              || functionName === RESPONSES_LEGACY_JS_RUNTIME_SCRIPT_REGISTRY_TOOL_NAME
+            )
             ? serializeResponsesFunctionToolOutput(outputPayload)
           : functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME
             ? serializeResponsesRequestUserInputFunctionToolOutput(outputPayload)
@@ -9832,7 +9858,12 @@ export function createMessageSender(appContext) {
         isOpenAIResponsesApiConfig(effectiveApiConfig)
         && typeof utils?.executeJsRuntime === 'function'
       );
+      const shouldPrepareMicroSkillContext = (
+        isOpenAIResponsesApiConfig(effectiveApiConfig)
+        && typeof utils?.getMatchingMicroSkillSummaries === 'function'
+      );
       let pageRuntimeContextPayload = null;
+      let microSkillContextPayload = null;
       if (shouldPreparePageRuntimeContext) {
         let jsRuntimeFrames = null;
         if (
@@ -9850,11 +9881,22 @@ export function createMessageSender(appContext) {
           frames: jsRuntimeFrames
         });
       }
+      if (shouldPrepareMicroSkillContext) {
+        const microSkillSummaryResult = await utils.getMatchingMicroSkillSummaries();
+        microSkillContextPayload = buildMicroSkillContextPayload({
+          mode: responsesPageToolEnvironment?.jsRuntimeEnvironment === JS_RUNTIME_ENV_BOUND_HOST_PAGE
+            ? 'host_page'
+            : 'isolated_sandbox',
+          url: microSkillSummaryResult?.success === true ? microSkillSummaryResult.url : '',
+          skills: microSkillSummaryResult?.success === true ? microSkillSummaryResult.skills : []
+        });
+      }
       if (shouldPrepareEnvironmentContext) {
         syncUserContextualInputsForConversationTurn({
           conversationChain: filteredConversationChain,
           targetUserNode: findLatestUserNodeInConversationChain(filteredConversationChain),
           pageRuntimeContextPayload,
+          microSkillContextPayload,
           environmentContextPayload: buildEnvironmentContextPayload()
         });
       }
