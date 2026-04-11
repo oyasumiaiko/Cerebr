@@ -271,6 +271,9 @@ class CerebrSidebar {
     // 1. 是否暴露宿主页增强工具；
     // 2. JS 工具默认连接宿主页，还是退回侧栏内部隔离沙箱。
     this.isTemporaryMode = false;
+    // 宿主页侧维护 Alt 是否按下，用来把“父页面焦点下的修饰键状态”同步给 iframe。
+    // 这样侧栏滚轮加速不再要求 iframe 自己先拿到键盘焦点，但我们仍不拦截宿主页原有 Alt 行为。
+    this.isAltKeyPressed = false;
     this.isDocked = false;
     this.sidebarPosition = 'right'; // 默认侧边栏位置为右侧
     this.dockStyleElement = null;
@@ -725,6 +728,11 @@ class CerebrSidebar {
         } catch (e) {
           console.warn('同步 iframe 临时模式状态失败（忽略）:', e);
         }
+        try {
+          this.notifyIframeAltKeyState(this.isAltKeyPressed);
+        } catch (e) {
+          console.warn('同步 iframe Alt 状态失败（忽略）:', e);
+        }
       });
 
       content.appendChild(iframe);
@@ -821,6 +829,13 @@ class CerebrSidebar {
   setupEventListeners(resizer) {
     let startX, startWidth;
 
+    const syncHostAltKeyState = (isPressed) => {
+      const nextPressed = !!isPressed;
+      if (this.isAltKeyPressed === nextPressed) return;
+      this.isAltKeyPressed = nextPressed;
+      this.notifyIframeAltKeyState(nextPressed);
+    };
+
     resizer.addEventListener('mousedown', (e) => {
       // 如果是全屏模式，不允许调整大小
       if (this.isFullscreen) return;
@@ -850,6 +865,28 @@ class CerebrSidebar {
       document.addEventListener('mouseup', handleMouseUp);
     });
 
+    // 说明：
+    // - 这里只做“观察并同步”父页面的 Alt 状态，不做 preventDefault / stopPropagation；
+    // - 这样可以让 iframe 内部在未聚焦时也提前挂上非 passive 的滚轮监听，
+    //   同时不破坏网页自身的 Alt 菜单、快捷键或浏览器默认行为。
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Alt') {
+        syncHostAltKeyState(true);
+      }
+    }, true);
+    window.addEventListener('keyup', (event) => {
+      if (event.key === 'Alt') {
+        syncHostAltKeyState(false);
+      }
+    }, true);
+    window.addEventListener('blur', () => {
+      syncHostAltKeyState(false);
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') {
+        syncHostAltKeyState(false);
+      }
+    });
 
     // 监听来自 iframe 的消息
     window.addEventListener('message', (event) => {
@@ -906,6 +943,9 @@ class CerebrSidebar {
           break;
         case 'REQUEST_TEMP_MODE_STATE':
           this.notifyIframeTempModeState(this.isTemporaryMode);
+          break;
+        case 'REQUEST_ALT_KEY_STATE':
+          this.notifyIframeAltKeyState(this.isAltKeyPressed);
           break;
         case 'TEMP_MODE_STATE_CHANGED':
           this.isTemporaryMode = !!event.data?.isOn;
@@ -1216,6 +1256,22 @@ class CerebrSidebar {
         }, '*');
       } catch (error) {
         console.log('通知iframe临时模式状态失败:', error);
+      }
+    }
+  }
+
+  // 通知 iframe 当前从宿主页观察到的 Alt 状态。
+  // iframe 侧只据此切换滚轮监听模式，不会反向修改宿主页事件流。
+  notifyIframeAltKeyState(isPressed) {
+    const iframe = this.sidebar.querySelector('.cerebr-sidebar__iframe');
+    if (iframe && iframe.contentWindow) {
+      try {
+        iframe.contentWindow.postMessage({
+          type: 'ALT_KEY_STATE_SYNC',
+          isPressed: !!isPressed
+        }, '*');
+      } catch (error) {
+        console.log('通知 iframe Alt 状态失败:', error);
       }
     }
   }

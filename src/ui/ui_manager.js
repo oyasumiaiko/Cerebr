@@ -49,6 +49,7 @@ export function createUIManager(appContext) {
   const settingsManager = services.settingsManager; // 预留：后续需要时再使用
 
   let settingsMenuTimeout = null; // Timeout for hover-based closing
+  const externalAltWheelStateUpdaters = new Set();
   const SETTINGS_MENU_VIEWPORT_MARGIN_PX = 8;
   const SETTINGS_MENU_CLOSE_DELAY_MS = 220;
   const SETTINGS_MENU_SAFE_ZONE_PADDING_PX = 16;
@@ -656,6 +657,8 @@ export function createUIManager(appContext) {
     };
 
     let altWheelCaptureEnabled = false;
+    let localAltKeyPressed = false;
+    let externalAltKeyPressed = false;
     const enableAltWheelCapture = () => {
       if (altWheelCaptureEnabled) return;
       container.addEventListener('wheel', handleAltAcceleratedWheel, { passive: false });
@@ -666,23 +669,41 @@ export function createUIManager(appContext) {
       container.removeEventListener('wheel', handleAltAcceleratedWheel, { passive: false });
       altWheelCaptureEnabled = false;
     };
+    const syncAltWheelCaptureState = () => {
+      if (localAltKeyPressed || externalAltKeyPressed) {
+        enableAltWheelCapture();
+        return;
+      }
+      disableAltWheelCapture();
+    };
+    const setExternalAltKeyPressedForContainer = (isPressed) => {
+      externalAltKeyPressed = !!isPressed;
+      syncAltWheelCaptureState();
+    };
+    externalAltWheelStateUpdaters.add(setExternalAltKeyPressedForContainer);
 
     const handleWindowKeyDownForAltWheel = (event) => {
       if (event.key === 'Alt') {
-        enableAltWheelCapture();
+        localAltKeyPressed = true;
+        syncAltWheelCaptureState();
       }
     };
     const handleWindowKeyUpForAltWheel = (event) => {
       if (event.key === 'Alt') {
-        disableAltWheelCapture();
+        localAltKeyPressed = false;
+        syncAltWheelCaptureState();
       }
+    };
+    const handleWindowBlurForAltWheel = () => {
+      localAltKeyPressed = false;
+      syncAltWheelCaptureState();
     };
 
     // 默认滚动路径始终 passive，仅在 Alt 按下时临时启用非被动监听。
     container.addEventListener('wheel', handleRegularWheel, { passive: true });
     window.addEventListener('keydown', handleWindowKeyDownForAltWheel, { passive: true });
     window.addEventListener('keyup', handleWindowKeyUpForAltWheel, { passive: true });
-    window.addEventListener('blur', disableAltWheelCapture, { passive: true });
+    window.addEventListener('blur', handleWindowBlurForAltWheel, { passive: true });
 
     container.addEventListener('mousedown', (e) => {
       stopMainAltScrollAnimation();
@@ -750,6 +771,13 @@ export function createUIManager(appContext) {
     updateSendButtonState,
     toggleSettingsMenu,
     closeExclusivePanels,
-    resetInputHeight
+    resetInputHeight,
+    // 父页面 Alt 状态通过 postMessage 同步到这里后，统一广播给主聊天区与线程区，
+    // 从而实现“无论当前焦点在哪，只要在侧栏上滚轮就能加速”。
+    setExternalAltKeyPressed(isPressed) {
+      for (const updateState of externalAltWheelStateUpdaters) {
+        updateState(isPressed);
+      }
+    }
   };
 } 

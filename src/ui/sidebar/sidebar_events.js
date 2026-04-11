@@ -1170,6 +1170,14 @@ function setupWindowMessageHandlers(appContext) {
         }
         applyTemporaryModeState(appContext, data.isOn);
         break;
+      case 'ALT_KEY_STATE_SYNC':
+        if (appContext.state.isStandalone) {
+          break;
+        }
+        // 只同步“父页面当前是否按着 Alt”，真正的滚轮逻辑仍由 iframe 内部自己处理，
+        // 这样既能跨焦点生效，也不会把宿主页 Alt 行为劫持到侧栏里。
+        appContext.services.uiManager?.setExternalAltKeyPressed?.(data.isPressed);
+        break;
       default:
         break;
     }
@@ -1810,6 +1818,7 @@ function scheduleInitialRequests(appContext) {
       window.parent.postMessage({ type: 'REQUEST_PAGE_INFO' }, '*');
       window.parent.postMessage({ type: 'REQUEST_FULLSCREEN_STATE' }, '*');
       window.parent.postMessage({ type: 'REQUEST_TEMP_MODE_STATE' }, '*');
+      window.parent.postMessage({ type: 'REQUEST_ALT_KEY_STATE' }, '*');
     }
 
     if (appContext.state.isFullscreen) {
