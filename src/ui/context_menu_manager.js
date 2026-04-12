@@ -916,15 +916,13 @@ export function createContextMenuManager(appContext) {
    * 复制消息内容
    */
   function copyMessageContent() {
-    if (currentMessageElement) {
-      // 获取存储的原始文本
-      const originalText = currentMessageElement.getAttribute('data-original-text');
-      navigator.clipboard.writeText(originalText).then(() => {
-        hideContextMenu();
-      }).catch(err => {
-        console.error('复制失败:', err);
-      });
-    }
+    const messageElement = currentMessageElement;
+    if (!messageElement) return;
+    const originalText = messageElement.getAttribute('data-original-text') || '';
+    hideContextMenu();
+    navigator.clipboard.writeText(originalText).catch(err => {
+      console.error('复制失败:', err);
+    });
   }
 
   /**
@@ -1036,14 +1034,13 @@ export function createContextMenuManager(appContext) {
    * 复制代码块内容
    */
   function copyCodeContent() {
-    if (currentCodeBlock) {
-      const codeContent = currentCodeBlock.textContent;
-      navigator.clipboard.writeText(codeContent).then(() => {
-        hideContextMenu();
-      }).catch(err => {
-        console.error('复制失败:', err);
-      });
-    }
+    const codeBlock = currentCodeBlock;
+    if (!codeBlock) return;
+    const codeContent = codeBlock.textContent || '';
+    hideContextMenu();
+    navigator.clipboard.writeText(codeContent).catch(err => {
+      console.error('复制失败:', err);
+    });
   }
   /**
    * 重新生成消息
@@ -1055,9 +1052,9 @@ export function createContextMenuManager(appContext) {
       ? targetMessageElement
       : null;
     const baseElement = elementArg || currentMessageElement;
+    hideContextMenu();
     const regenTarget = resolveRegenerateTarget(baseElement);
     if (!regenTarget) {
-      hideContextMenu();
       return;
     }
 
@@ -1081,8 +1078,6 @@ export function createContextMenuManager(appContext) {
       });
     } catch (err) {
       console.error('准备重新生成消息时出错:', err);
-    } finally {
-      hideContextMenu();
     }
   }
 
@@ -1524,16 +1519,16 @@ export function createContextMenuManager(appContext) {
    * 将消息元素复制为图片并复制到剪贴板
    */
   async function copyMessageAsImage() {
-    if (currentMessageElement) {
+    const messageElement = currentMessageElement;
+    if (messageElement) {
       let snapshot = null;
+      const originalText = copyAsImageButton.innerHTML;
+      hideContextMenu();
       try {
-        // 显示加载状态
-        const originalText = copyAsImageButton.innerHTML;
-        copyAsImageButton.innerHTML = '<i class="far fa-spinner fa-spin"></i> 处理中...';
         const exportOptions = resolveMessageImageExportOptions();
 
         // --- 1. 构建离屏快照（移除思考块）并生成原始 Canvas ---
-        snapshot = createMessageScreenshotSnapshot(currentMessageElement, exportOptions);
+        snapshot = createMessageScreenshotSnapshot(messageElement, exportOptions);
         const originalCanvas = await domtoimage.toCanvas(snapshot.node, {
           width: snapshot.width,
           height: snapshot.height,
@@ -1552,7 +1547,7 @@ export function createContextMenuManager(appContext) {
 
         // --- 3. 填充新 Canvas 背景色 ---
         // 尝试获取元素的计算背景色，如果透明或无效，则默认为白色
-        let bgColor = window.getComputedStyle(currentMessageElement).backgroundColor;
+        let bgColor = window.getComputedStyle(messageElement).backgroundColor;
         if (!bgColor || bgColor === 'rgba(0, 0, 0, 0)' || bgColor === 'transparent') {
           bgColor = '#ffffff'; // 默认白色背景
         }
@@ -1575,11 +1570,7 @@ export function createContextMenuManager(appContext) {
         newCanvas.toBlob(async (blob) => {
           if (!blob) {
              console.error('Failed to convert canvas to Blob.');
-             copyAsImageButton.innerHTML = '<i class="far fa-times"></i> 失败';
-             setTimeout(() => {
-               copyAsImageButton.innerHTML = '<i class="far fa-image"></i> 复制为图片'; 
-               hideContextMenu();
-             }, 1000);
+             copyAsImageButton.innerHTML = originalText;
              return;
           }
           // --- 6. 后续处理 Blob --- 
@@ -1592,11 +1583,7 @@ export function createContextMenuManager(appContext) {
             ]);
             
             // 显示成功提示
-            copyAsImageButton.innerHTML = '<i class="far fa-check"></i> 已复制';
-            setTimeout(() => {
-              copyAsImageButton.innerHTML = originalText; // 恢复按钮原始文本
-              hideContextMenu();
-            }, 1000);
+            copyAsImageButton.innerHTML = originalText;
           } catch (err) {
             console.error('复制图片到剪贴板失败:', err);
             // 如果复制失败，提供下载选项
@@ -1609,22 +1596,14 @@ export function createContextMenuManager(appContext) {
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
             
-            copyAsImageButton.innerHTML = '<i class="far fa-download"></i> 已下载';
-            setTimeout(() => {
-              copyAsImageButton.innerHTML = originalText; // 恢复按钮原始文本
-              hideContextMenu();
-            }, 1000);
+            copyAsImageButton.innerHTML = originalText;
           }
           // --- Blob 处理结束 ---
         }, 'image/png'); // 指定输出格式
 
       } catch (err) {
         console.error('生成图片过程中出错:', err); 
-        copyAsImageButton.innerHTML = '<i class="far fa-times"></i> 失败';
-        setTimeout(() => {
-          copyAsImageButton.innerHTML = '<i class="far fa-image"></i> 复制为图片'; 
-          hideContextMenu();
-        }, 1000);
+        copyAsImageButton.innerHTML = originalText;
       } finally {
         if (snapshot?.cleanup) {
           snapshot.cleanup();
@@ -1854,8 +1833,8 @@ export function createContextMenuManager(appContext) {
     }
 
     clearChatContextButton.addEventListener(MENU_ACTIVATE_EVENT, async () => {
-      await clearChatHistory();
       hideContextMenu();
+      await clearChatHistory();
     });
     
     // 添加复制为图片按钮点击事件
