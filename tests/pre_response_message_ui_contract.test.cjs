@@ -10,11 +10,32 @@ async function readWorkspaceFile(relativePath) {
 
 test('预正文消息使用独立状态层渲染，并在删除时先中止对应请求', async () => {
   const messageProcessorSource = await readWorkspaceFile('src/core/message_processor.js');
+  const messageSenderSource = await readWorkspaceFile('src/core/message_sender.js');
   const sidebarAppContextSource = await readWorkspaceFile('src/ui/sidebar/sidebar_app_context.js');
+  const previewResponsesActivityTimelineOnLoadingMessageBody = (
+    messageSenderSource.match(/function previewResponsesActivityTimelineOnLoadingMessage[\s\S]*?\n  }\n\n  function ensureAttemptOpenSteerWindowId/)
+    || ['']
+  )[0];
+  const syncResponsesActivityPreviewToLoadingMessageBody = (
+    messageSenderSource.match(/function syncResponsesActivityPreviewToLoadingMessage\(\)[\s\S]*?\n    }\n\n    \/\*\*/)
+    || ['']
+  )[0];
+  const hasVisibleAssistantOutputBody = (
+    messageSenderSource.match(/function hasVisibleAssistantOutput[\s\S]*?\n  }\n\n  \/\*\*/)
+    || ['']
+  )[0];
 
   assert.match(messageProcessorSource, /assistant-pre-response-status/);
+  assert.match(messageProcessorSource, /response-activity-panel-status/);
+  assert.match(messageProcessorSource, /syncResponseActivityPanelStatus/);
+  assert.match(messageProcessorSource, /removeAssistantPreResponseStatusSurface/);
   assert.match(messageProcessorSource, /messageWrapperDiv\.classList\.add\('assistant-pre-response'\)/);
   assert.match(messageProcessorSource, /messageWrapperDiv\.classList\.remove\('assistant-pre-response'\)/);
+  assert.match(messageSenderSource, /function renderAttemptPreResponseStatus[\s\S]*?response_activity_timeline/);
+  assert.equal(hasVisibleAssistantOutputBody.includes('responseActivityTimeline.length > 0'), false);
+  assert.equal(hasVisibleAssistantOutputBody.includes('input?.thoughts'), false);
+  assert.equal(previewResponsesActivityTimelineOnLoadingMessageBody.includes('clearAttemptPreResponseStatus'), false);
+  assert.equal(syncResponsesActivityPreviewToLoadingMessageBody.includes('clearAttemptPreResponseStatus'), false);
 
   assert.match(sidebarAppContextSource, /const isPreResponseMessage = messageElement\.classList\.contains\('assistant-pre-response'\)/);
   assert.match(sidebarAppContextSource, /messageSender\.abortCurrentRequest\?\.\(messageElement\);/);

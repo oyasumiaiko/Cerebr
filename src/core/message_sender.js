@@ -5652,10 +5652,25 @@ export function createMessageSender(appContext) {
     const liveElement = resolveLiveLoadingStatusElement(loadingMessage, attemptState);
     if (!liveElement) return;
     const runtimeSnapshot = attemptState ? getAttemptRuntimeSnapshot(attemptState) : null;
+    const accumulatedTimeline = Array.isArray(runtimeSnapshot?.responses?.accumulatedTimeline)
+      ? cloneResponsesActivityTimeline(runtimeSnapshot.responses.accumulatedTimeline)
+      : [];
+    const previewNode = {
+      role: 'assistant',
+      timestamp: Number.isFinite(Number(attemptState?.startedAt))
+        ? Number(attemptState.startedAt)
+        : Date.now()
+    };
+    if (accumulatedTimeline.length > 0) {
+      // loadingMessage 在 reasoning 阶段会被 pulse 反复重绘。
+      // 这里把当前累计的 response_activity_timeline 一并带过去，
+      // 避免 pulse 把已经出现的思考面板又回退成顶部占位状态条。
+      previewNode.response_activity_timeline = accumulatedTimeline;
+    }
     if (typeof messageProcessor?.syncAssistantMessageMetadata === 'function') {
       messageProcessor.syncAssistantMessageMetadata(
         liveElement.getAttribute?.('data-message-id') || null,
-        { role: 'assistant' },
+        previewNode,
         {
           fallbackElement: liveElement,
           runtimeSnapshot
@@ -5834,26 +5849,20 @@ export function createMessageSender(appContext) {
   }
 
   /**
-   * 判定当前 assistant 是否已经出现任何“用户可见内容”。
+   * 判定当前 assistant 是否已经出现“真实 answer 正文”。
    *
    * 范围：
-   * - 正文答案；
-   * - 思考文本；
-   * - Responses 的 reasoning / commentary / tool timeline。
+   * - 只认最终 assistant answer；
+   * - 明确不把 thinking / commentary / tool timeline / 状态占位文案算进去。
    *
-   * 一旦这些任意一种已经开始可见，就不应该继续显示“等待首个 token”之类的纯占位状态。
+   * 这样 reasoning 阶段可以继续保留“模型正在思考...”这类状态行，
+   * 直到真正的正文开始出现为止。
    *
    * @param {{answer?: string, thoughts?: string, responseActivityTimeline?: Array<any>}} input
    * @returns {boolean}
    */
   function hasVisibleAssistantOutput(input = {}) {
-    if (typeof input?.answer === 'string' && input.answer.trim() !== '') {
-      return true;
-    }
-    if (typeof input?.thoughts === 'string' && input.thoughts.trim() !== '') {
-      return true;
-    }
-    return Array.isArray(input?.responseActivityTimeline) && input.responseActivityTimeline.length > 0;
+    return typeof input?.answer === 'string' && input.answer.trim() !== '';
   }
 
   /**
@@ -9094,7 +9103,6 @@ export function createMessageSender(appContext) {
     const previewTarget = resolveLiveLoadingStatusElement(attemptState?.loadingMessage || null, attemptState);
     if (!previewTarget || typeof messageProcessor?.syncAssistantMessageMetadata !== 'function') return false;
     syncAttemptResponsesRuntimeState(attemptState, { timeline });
-    clearAttemptPreResponseStatus(attemptState, previewTarget);
     try {
       messageProcessor.syncAssistantMessageMetadata(
         null,
@@ -11611,8 +11619,6 @@ export function createMessageSender(appContext) {
       const previewTarget = resolveLoadingStatusTarget() || loadingMessage || null;
       if (!previewTarget || typeof messageProcessor?.syncAssistantMessageMetadata !== 'function') return;
       if (!Array.isArray(latestResponsesActivityTimeline) || latestResponsesActivityTimeline.length <= 0) return;
-
-      clearAttemptPreResponseStatus(attemptState, previewTarget);
 
       try {
         messageProcessor.syncAssistantMessageMetadata(

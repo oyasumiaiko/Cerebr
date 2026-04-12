@@ -2743,6 +2743,8 @@ export function createMessageProcessor(appContext) {
       panelBody.appendChild(panelBodyInner);
     }
 
+    let panelStatus = timelineRoot.querySelector(':scope > .response-activity-panel-status');
+
     return {
       timelineRoot,
       panelToggle,
@@ -2751,8 +2753,60 @@ export function createMessageProcessor(appContext) {
       panelMeta,
       panelChevron,
       panelBody,
-      panelBodyInner
+      panelBodyInner,
+      panelStatus
     };
+  }
+
+  function ensureResponseActivityPanelStatusSurface(timelineRoot) {
+    if (!timelineRoot) return null;
+    let surface = timelineRoot.querySelector(':scope > .response-activity-panel-status');
+    if (surface) return surface;
+
+    surface = document.createElement('div');
+    surface.className = 'response-activity-panel-status';
+
+    const spinner = document.createElement('span');
+    spinner.className = 'response-activity-panel-status__spinner';
+    spinner.setAttribute('aria-hidden', 'true');
+    surface.appendChild(spinner);
+
+    const text = document.createElement('span');
+    text.className = 'response-activity-panel-status__text';
+    surface.appendChild(text);
+
+    timelineRoot.appendChild(surface);
+    return surface;
+  }
+
+  function syncResponseActivityPanelStatus(shell, messageId, messageWrapperDiv, runtimeSnapshot, isThinkingRuntimeActive) {
+    if (!shell?.timelineRoot || !messageWrapperDiv) return false;
+    const runtimeStatus = String(runtimeSnapshot?.activeTurn?.status || '').trim().toLowerCase();
+    const status = (isThinkingRuntimeActive && runtimeStatus && !['idle', 'completed', 'aborted', 'error'].includes(runtimeStatus))
+      ? normalizeAssistantPreResponseStatus(runtimeSnapshot?.activeTurn?.preResponseStatus || null)
+      : null;
+    const existingSurface = shell.panelStatus
+      || shell.timelineRoot.querySelector(':scope > .response-activity-panel-status');
+
+    if (!status) {
+      existingSurface?.remove?.();
+      shell.panelStatus = null;
+      return false;
+    }
+
+    const surface = existingSurface || ensureResponseActivityPanelStatusSurface(shell.timelineRoot);
+    if (!surface) return false;
+    shell.panelStatus = surface;
+    const textElement = surface.querySelector('.response-activity-panel-status__text');
+    if (textElement) {
+      textElement.textContent = status.text;
+    } else {
+      surface.textContent = status.text;
+    }
+    surface.classList.toggle('response-activity-panel-status--spinnerless', status.showSpinner === false);
+    surface.setAttribute('data-stage', status.stage || '');
+    surface.setAttribute('data-note', status.note || '');
+    return true;
   }
 
   function reconcileResponseActivityPanelHeader(shell, panelSummary, options = {}) {
@@ -3110,6 +3164,11 @@ export function createMessageProcessor(appContext) {
     const previousUiState = captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot);
     restoreResponseActivityDatasetState(messageWrapperDiv, timelineRoot);
     const panelMode = reconcileResponseActivityPanelHeader(shell, nextSnapshot.panelSummary);
+    const resolvedMessageId = String(
+      node?.id
+      || messageWrapperDiv.getAttribute?.('data-message-id')
+      || ''
+    ).trim();
 
     const manualExpandedToolKeys = readManuallyExpandedResponseActivityToolKeys(timelineRoot);
     const manualCollapsedToolKeys = readManuallyCollapsedResponseActivityToolKeys(timelineRoot);
@@ -3222,6 +3281,14 @@ export function createMessageProcessor(appContext) {
       if (!key || nextByKey[key]) return;
       item.remove();
     });
+
+    syncResponseActivityPanelStatus(
+      shell,
+      resolvedMessageId,
+      messageWrapperDiv,
+      normalizedOptions.runtimeSnapshot || null,
+      isThinkingRuntimeActive
+    );
 
     writeAutoCollapsedResponseActivityToolKeys(timelineRoot, autoCollapsedToolKeys);
     captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot);
@@ -3540,15 +3607,12 @@ export function createMessageProcessor(appContext) {
   function syncAssistantPreResponseStatus(messageId, messageWrapperDiv, runtimeSnapshot) {
     if (!messageWrapperDiv) return false;
     const status = resolveAssistantPreResponseStatus(messageId, messageWrapperDiv, runtimeSnapshot);
-    const existingSurface = messageWrapperDiv.querySelector('.assistant-pre-response-status');
-
     if (!status) {
-      messageWrapperDiv.classList.remove('assistant-pre-response');
-      delete messageWrapperDiv.dataset.preResponseStage;
-      existingSurface?.remove?.();
+      removeAssistantPreResponseStatusSurface(messageWrapperDiv);
       return false;
     }
 
+    const existingSurface = messageWrapperDiv.querySelector('.assistant-pre-response-status');
     const surface = existingSurface || ensureAssistantPreResponseStatusSurface(messageWrapperDiv);
     if (!surface) return false;
     const textElement = surface.querySelector('.assistant-pre-response-status__text');
@@ -3563,6 +3627,22 @@ export function createMessageProcessor(appContext) {
     messageWrapperDiv.classList.add('assistant-pre-response');
     messageWrapperDiv.dataset.preResponseStage = status.stage || '';
     return true;
+  }
+
+  /**
+   * 在“思考时间线”接管展示时，移除独立的预正文状态条。
+   *
+   * 这里故意只清 DOM 展示，不碰 runtimeSnapshot：
+   * - runtime 里的 preResponseStatus 仍然要继续作为响应活动面板底部状态行的数据源；
+   * - 否则会出现“思考记录里状态闪一下就消失”的回归。
+   *
+   * @param {HTMLElement|null} messageWrapperDiv
+   */
+  function removeAssistantPreResponseStatusSurface(messageWrapperDiv) {
+    if (!messageWrapperDiv) return;
+    messageWrapperDiv.classList.remove('assistant-pre-response');
+    delete messageWrapperDiv.dataset.preResponseStage;
+    messageWrapperDiv.querySelectorAll('.assistant-pre-response-status').forEach((statusEl) => statusEl.remove());
   }
 
   function normalizeResponsesLocalCompactionStatus(status) {
@@ -3854,6 +3934,7 @@ export function createMessageProcessor(appContext) {
     if (!isAssistantLike) return false;
     try { messageWrapperDiv.removeAttribute('title'); } catch (_) {}
     const hasPreResponseStatus = syncAssistantPreResponseStatus(messageId, messageWrapperDiv, runtimeSnapshot);
+    const responseTimeline = node ? getAssistantActivityTimeline(node) : [];
 
     if (!node) {
       if (hasPreResponseStatus) {
@@ -3862,7 +3943,7 @@ export function createMessageProcessor(appContext) {
       return hasPreResponseStatus;
     }
 
-    if (hasPreResponseStatus) {
+    if (hasPreResponseStatus && responseTimeline.length === 0) {
       removeResponseActivityTimelineDisplay(messageWrapperDiv, {
         preserveAutoCollapseSchedules: true
       });
@@ -3871,6 +3952,12 @@ export function createMessageProcessor(appContext) {
       syncResponsesLocalCompactionDisplay(messageWrapperDiv, null);
       messageVirtualizer.scheduleUpdate(resolveMessageListContainer(messageWrapperDiv));
       return true;
+    }
+
+    if (responseTimeline.length > 0) {
+      // 一旦进入 response_activity 时间线展示，就只保留面板底部的状态行，
+      // 不再让顶部独立状态条与之重复显示。
+      removeAssistantPreResponseStatusSurface(messageWrapperDiv);
     }
 
     const hasCompactionDisplay = syncResponsesLocalCompactionDisplay(messageWrapperDiv, node);
@@ -3884,7 +3971,6 @@ export function createMessageProcessor(appContext) {
       return true;
     }
 
-    const responseTimeline = getAssistantActivityTimeline(node);
     if (responseTimeline.length > 0) {
       setupThoughtsDisplay(messageWrapperDiv, null, processMathAndMarkdown);
       setupResponseToolCallsDisplay(messageWrapperDiv, null);

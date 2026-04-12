@@ -9750,6 +9750,35 @@ body.chat-empty .empty-state-content {
     padding-bottom: 4px;
 }
 
+.message .response-activity-panel-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px 8px;
+    border-top: 1px solid color-mix(in srgb, var(--cerebr-border-color) 20%, transparent);
+    color: color-mix(in srgb, var(--cerebr-text-color) 66%, transparent);
+    background: color-mix(in srgb, var(--cerebr-message-ai-bg) 90%, transparent);
+}
+
+.message .response-activity-panel-status__spinner {
+    flex: 0 0 auto;
+    width: 10px;
+    height: 10px;
+    border: 2px solid color-mix(in srgb, var(--cerebr-text-color) 60%, transparent);
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: loading-spin 0.8s linear infinite;
+}
+
+.message .response-activity-panel-status--spinnerless .response-activity-panel-status__spinner {
+    display: none;
+}
+
+.message .response-activity-panel-status__text {
+    min-width: 0;
+    word-break: break-word;
+}
+
 .message .response-activity-entry {
     display: flex;
     flex-direction: column;

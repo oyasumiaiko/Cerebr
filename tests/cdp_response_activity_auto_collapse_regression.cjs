@@ -329,6 +329,7 @@ async function main() {
         if (!latest || !chatContainer) return null;
         const timeline = latest.querySelector('.response-activity-timeline');
         const statusText = latest.querySelector('.text-content')?.innerText || '';
+        const panelStatusText = timeline?.querySelector('.response-activity-panel-status__text')?.innerText || '';
         const panelBodyInner = timeline?.querySelector('.response-activity-panel-body-inner') || null;
         const chatRect = chatContainer.getBoundingClientRect();
         const latestRect = latest.getBoundingClientRect();
@@ -343,6 +344,7 @@ async function main() {
         }
         return {
           statusText,
+          panelStatusText,
           panelExpanded: timeline.classList.contains('is-expanded'),
           isUpdating: latest.classList.contains('updating'),
           timelineClassName: timeline.className || '',
@@ -511,6 +513,9 @@ async function main() {
 
     if (!result.reasoningState.isUpdating) {
       throw new Error('Expected reasoning state to still be updating');
+    }
+    if (String(result.reasoningState.panelStatusText || '').trim() !== '模型正在思考...') {
+      throw new Error(`Expected response activity footer status during reasoning, got: ${JSON.stringify(result.reasoningState)}`);
     }
     if (result.reasoningState.panelExpanded) {
       throw new Error('Expected response activity panel to stay in peek mode while reasoning is visible');
