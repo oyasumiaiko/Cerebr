@@ -7486,6 +7486,10 @@ export function createMessageSender(appContext) {
         type: ['string', 'null'],
         description: '可选。只返回 URL 中包含该子串的会话。'
       },
+      current_page_only: {
+        type: ['boolean', 'null'],
+        description: '可选。true 时只返回与当前页面 URL 前缀匹配的会话。'
+      },
       min_message_count: {
         type: ['integer', 'null'],
         description: '可选。只返回消息条数不少于该值的会话。'
@@ -7526,6 +7530,7 @@ export function createMessageSender(appContext) {
         '搜索已保存的聊天记录。',
         '默认搜索全库会话，包含主线与线程消息，结果按最近会话优先返回。',
         '它只搜索用户可见聊天正文，不搜索 tool output、hidden contextual items、footer 元数据或 replay items。',
+        '若只想列出当前页面相关会话，可传 current_page_only=true',
         '返回的每条结果都会带会话元数据，例如创建时间、最近时间、消息条数、线程数量等。',
         'result_mode=matches 时返回会话级结果与命中位置：主线命中使用 msg_index，线程命中使用 thread_ref + thread_msg_index；result_mode=metadata_only 时只返回元数据列表。',
         'conv_ref 是当前聊天记录快照中的 1-based 会话编号，最新会话编号最大；若要继续读取正文窗口，请使用 history_read。'
@@ -8088,8 +8093,10 @@ export function createMessageSender(appContext) {
   async function executeResponsesHistorySearchFunction(rawArgs, options = {}) {
     try {
       const snapshot = await getHistoryToolSnapshot(options?.attemptState || null);
+      const currentPageMeta = buildCurrentPageMetaSnapshot();
       return await executeHistorySearchTool(rawArgs, {
         snapshot,
+        currentPageUrl: currentPageMeta?.url || '',
         loadConversationsByIds: async (ids) => {
           return getConversationsByIds(ids, false);
         }

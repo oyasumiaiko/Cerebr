@@ -53,3 +53,34 @@ export function generateCandidateUrls(urlString) {
   return Array.from(candidates);
 }
 
+/**
+ * 在候选前缀列表中寻找“最严格”的 URL 前缀命中。
+ *
+ * 设计说明：
+ * - 复用 `generateCandidateUrls()` 生成的“从严格到宽松”顺序；
+ * - 返回值沿用聊天记录 UI 里的 `urlMatchLevel / urlMatchPrefix` 语义，
+ *   方便工具层与列表层保持同一套解释；
+ * - 若没有任何命中，则直接返回 null，不做隐式回退。
+ *
+ * @param {string} urlString
+ * @param {string[]} candidateUrls
+ * @returns {{urlMatchLevel:number, urlMatchPrefix:string}|null}
+ */
+export function findBestCandidateUrlPrefixMatch(urlString, candidateUrls) {
+  const normalizedUrl = typeof urlString === 'string' ? urlString.trim() : '';
+  if (!normalizedUrl) return null;
+
+  const candidates = Array.isArray(candidateUrls)
+    ? candidateUrls.filter((item) => typeof item === 'string' && item.length > 0)
+    : [];
+  for (let level = 0; level < candidates.length; level += 1) {
+    const prefix = candidates[level];
+    if (normalizedUrl.startsWith(prefix)) {
+      return {
+        urlMatchLevel: level,
+        urlMatchPrefix: prefix
+      };
+    }
+  }
+  return null;
+}

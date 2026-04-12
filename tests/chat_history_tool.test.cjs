@@ -15,6 +15,10 @@ async function loadChatHistoryToolModule() {
     path.join(tempDir, 'src', 'utils', 'chat_history_search_shared.js')
   );
   await fs.copyFile(
+    path.resolve(__dirname, '../src/utils/url_candidates.js'),
+    path.join(tempDir, 'src', 'utils', 'url_candidates.js')
+  );
+  await fs.copyFile(
     path.resolve(__dirname, '../src/agent_tools/chat_history_tool.js'),
     path.join(tempDir, 'src', 'agent_tools', 'chat_history_tool.js')
   );
@@ -296,6 +300,118 @@ test('executeHistorySearchTool 支持 metadata_only 模式列出最近对话元�
   assert.equal(typeof result.results[0].match, 'undefined');
 });
 
+test('executeHistorySearchTool 支持 current_page_only 复用本页 URL 前缀匹配并回传匹配等级', async () => {
+  const {
+    buildConversationReferenceSnapshot,
+    executeHistorySearchTool
+  } = await loadChatHistoryToolModule();
+  const conversations = [
+    {
+      id: 'conv_origin',
+      title: 'Origin match',
+      url: 'https://example.com/other',
+      summary: 'origin summary',
+      startTime: 1700000100000,
+      endTime: 1700000101000,
+      messageCount: 2,
+      mainMessageCount: 2,
+      threadCount: 0,
+      messages: [
+        { id: 'o1', role: 'user', timestamp: 1700000100000, content: 'origin' },
+        { id: 'o2', role: 'assistant', timestamp: 1700000100100, content: 'match' }
+      ]
+    },
+    {
+      id: 'conv_path',
+      title: 'Path match',
+      url: 'https://example.com/docs/guide',
+      summary: 'path summary',
+      startTime: 1700000102000,
+      endTime: 1700000103000,
+      messageCount: 2,
+      mainMessageCount: 2,
+      threadCount: 0,
+      messages: [
+        { id: 'p1', role: 'user', timestamp: 1700000102000, content: 'path' },
+        { id: 'p2', role: 'assistant', timestamp: 1700000102100, content: 'match' }
+      ]
+    },
+    {
+      id: 'conv_exact',
+      title: 'Exact match',
+      url: 'https://example.com/docs/guide?tab=1#frag',
+      summary: 'exact summary',
+      startTime: 1700000104000,
+      endTime: 1700000105000,
+      messageCount: 2,
+      mainMessageCount: 2,
+      threadCount: 0,
+      messages: [
+        { id: 'e1', role: 'user', timestamp: 1700000104000, content: 'exact' },
+        { id: 'e2', role: 'assistant', timestamp: 1700000104100, content: 'match' }
+      ]
+    },
+    {
+      id: 'conv_other_site',
+      title: 'Other site',
+      url: 'https://other.example.com/docs/guide',
+      summary: 'other summary',
+      startTime: 1700000106000,
+      endTime: 1700000107000,
+      messageCount: 2,
+      mainMessageCount: 2,
+      threadCount: 0,
+      messages: [
+        { id: 'x1', role: 'user', timestamp: 1700000106000, content: 'other' },
+        { id: 'x2', role: 'assistant', timestamp: 1700000106100, content: 'site' }
+      ]
+    }
+  ];
+  const snapshot = buildConversationReferenceSnapshot(toMetas(conversations));
+
+  const result = await executeHistorySearchTool(
+    {
+      current_page_only: true,
+      result_mode: 'metadata_only',
+      max_results: 10
+    },
+    {
+      snapshot,
+      currentPageUrl: 'https://example.com/docs/guide?tab=1#frag',
+      loadConversationsByIds: async (ids) => conversations.filter(item => ids.includes(item.id))
+    }
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.total_matches, 3);
+  assert.equal(result.query.current_page_only, true);
+  assert.equal(result.query.current_page_url, 'https://example.com/docs/guide?tab=1#frag');
+  assert.deepEqual(
+    result.results.map((item) => ({
+      conv_ref: item.conv_ref,
+      url_match_level: item.url_match_level,
+      url_match_prefix: item.url_match_prefix
+    })),
+    [
+      {
+        conv_ref: 3,
+        url_match_level: 0,
+        url_match_prefix: 'https://example.com/docs/guide?tab=1#frag'
+      },
+      {
+        conv_ref: 2,
+        url_match_level: 2,
+        url_match_prefix: 'https://example.com/docs/guide'
+      },
+      {
+        conv_ref: 1,
+        url_match_level: 4,
+        url_match_prefix: 'https://example.com'
+      }
+    ]
+  );
+});
+
 test('executeHistorySearchTool 在没有任何条件时会报明确错误', async () => {
   const {
     buildConversationReferenceSnapshot,
@@ -313,6 +429,26 @@ test('executeHistorySearchTool 在没有任何条件时会报明确错误', asyn
       }
     ),
     /至少需要提供一个搜索条件/
+  );
+});
+
+test('executeHistorySearchTool 在 current_page_only=true 且当前页面 URL 不可用时会报明确错误', async () => {
+  const {
+    buildConversationReferenceSnapshot,
+    executeHistorySearchTool
+  } = await loadChatHistoryToolModule();
+  const conversations = buildSampleConversations();
+  const snapshot = buildConversationReferenceSnapshot(toMetas(conversations));
+
+  await assert.rejects(
+    () => executeHistorySearchTool(
+      { current_page_only: true, max_results: 10 },
+      {
+        snapshot,
+        loadConversationsByIds: async (ids) => conversations.filter(item => ids.includes(item.id))
+      }
+    ),
+    /current_page_only=true 时当前页面 URL 不可用/
   );
 });
 

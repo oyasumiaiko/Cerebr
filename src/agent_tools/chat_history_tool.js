@@ -8,6 +8,10 @@ import {
   isThreadMessageLike,
   scanConversationMessagesForSearch
 } from '../utils/chat_history_search_shared.js';
+import {
+  findBestCandidateUrlPrefixMatch,
+  generateCandidateUrls
+} from '../utils/url_candidates.js';
 
 export const HISTORY_SEARCH_TOOL_DEFAULT_MAX_RESULTS = 20;
 export const HISTORY_SEARCH_TOOL_MAX_RESULTS = 100;
@@ -67,6 +71,7 @@ function normalizeHistorySearchArguments(rawArgs) {
   const textAll = normalizeStringArray(args.text_all);
   const textNot = normalizeStringArray(args.text_not);
   const urlContains = typeof args.url_contains === 'string' ? args.url_contains.trim() : '';
+  const currentPageOnly = args.current_page_only === true;
   const recentWithinRaw = typeof args.recent_within === 'string' ? args.recent_within.trim() : '';
   const scope = (typeof args.scope === 'string' ? args.scope.trim().toLowerCase() : '');
   const resultMode = (typeof args.result_mode === 'string' ? args.result_mode.trim().toLowerCase() : '');
@@ -104,6 +109,7 @@ function normalizeHistorySearchArguments(rawArgs) {
     textAll.length > 0
     || textNot.length > 0
     || !!urlContains
+    || currentPageOnly
     || minMessageCount != null
     || maxMessageCount != null
     || !!dateFrom
@@ -118,6 +124,7 @@ function normalizeHistorySearchArguments(rawArgs) {
     textAll,
     textNot,
     urlContains,
+    currentPageOnly,
     minMessageCount,
     maxMessageCount,
     dateFrom,
@@ -597,7 +604,52 @@ function buildConversationMetadataResult(meta, snapshot, visibleCounts = null) {
     has_threads: counts.thread_count > 0,
     is_branch: !!parentConversationId,
     parent_conv_ref: parentConvRef,
-    has_api_lock: !!(meta?.apiLock && typeof meta.apiLock === 'object')
+    has_api_lock: !!(meta?.apiLock && typeof meta.apiLock === 'object'),
+    ...(Number.isFinite(Number(meta?.urlMatchLevel))
+      ? { url_match_level: Math.max(0, Math.trunc(Number(meta.urlMatchLevel))) }
+      : {}),
+    ...((typeof meta?.urlMatchPrefix === 'string' && meta.urlMatchPrefix)
+      ? { url_match_prefix: meta.urlMatchPrefix }
+      : {})
+  };
+}
+
+function buildCurrentPageUrlFilter(normalizedArgs, dependencies) {
+  if (!normalizedArgs?.currentPageOnly) {
+    return {
+      active: false,
+      currentPageUrl: '',
+      candidateUrls: []
+    };
+  }
+
+  const currentPageUrl = typeof dependencies?.currentPageUrl === 'string'
+    ? dependencies.currentPageUrl.trim()
+    : '';
+  if (!currentPageUrl) {
+    throw new Error('history_search 参数错误：current_page_only=true 时当前页面 URL 不可用。');
+  }
+
+  const candidateUrls = generateCandidateUrls(currentPageUrl);
+  if (!candidateUrls.length) {
+    throw new Error('history_search 参数错误：current_page_only=true 时未生成可用的 URL 匹配前缀。');
+  }
+
+  return {
+    active: true,
+    currentPageUrl,
+    candidateUrls
+  };
+}
+
+function applyCurrentPageUrlFilter(meta, currentPageFilter) {
+  if (!currentPageFilter?.active) return meta;
+  const match = findBestCandidateUrlPrefixMatch(meta?.url, currentPageFilter.candidateUrls);
+  if (!match) return null;
+  return {
+    ...meta,
+    urlMatchLevel: match.urlMatchLevel,
+    urlMatchPrefix: match.urlMatchPrefix
   };
 }
 
@@ -605,7 +657,7 @@ function buildConversationMetadataResult(meta, snapshot, visibleCounts = null) {
  * 基于快照搜索历史会话。
  *
  * @param {any} rawArgs
- * @param {{snapshot:Object, loadConversationsByIds:(ids:string[]) => Promise<Array<Object>>}} dependencies
+ * @param {{snapshot:Object, currentPageUrl?:string, loadConversationsByIds:(ids:string[]) => Promise<Array<Object>>}} dependencies
  * @returns {Promise<Object>}
  */
 export async function executeHistorySearchTool(rawArgs, dependencies = {}) {
@@ -621,6 +673,7 @@ export async function executeHistorySearchTool(rawArgs, dependencies = {}) {
 
   const searchPlan = buildHistorySearchPlanFromStructuredArgs(normalizedArgs);
   const textPlan = buildChatHistoryTextPlan(searchPlan);
+  const currentPageFilter = buildCurrentPageUrlFilter(normalizedArgs, dependencies);
   const resolvedScope = textPlan.hasPositive || textPlan.hasNegative
     ? (searchPlan.scope === 'message' ? 'message' : 'session')
     : 'session';
@@ -630,7 +683,9 @@ export async function executeHistorySearchTool(rawArgs, dependencies = {}) {
   const pendingMessageScans = [];
   const matchedConversationById = new Map();
 
-  for (const meta of snapshot.orderedMetas) {
+  for (const rawMeta of snapshot.orderedMetas) {
+    const meta = applyCurrentPageUrlFilter(rawMeta, currentPageFilter);
+    if (!meta) continue;
     if (!evaluateChatHistoryFilters(meta, searchPlan.filters)) continue;
 
     if (!searchPlan.hasText) {
@@ -745,6 +800,8 @@ export async function executeHistorySearchTool(rawArgs, dependencies = {}) {
       text_all: normalizedArgs.textAll,
       text_not: normalizedArgs.textNot,
       url_contains: normalizedArgs.urlContains || null,
+      current_page_only: normalizedArgs.currentPageOnly,
+      current_page_url: currentPageFilter.active ? currentPageFilter.currentPageUrl : null,
       min_message_count: normalizedArgs.minMessageCount,
       max_message_count: normalizedArgs.maxMessageCount,
       date_from: rawArgs?.date_from ?? null,
