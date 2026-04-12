@@ -46,6 +46,10 @@ export function getResponsesActivityTimelineEntryKey(entry, fallbackIndex = 0) {
     const id = (typeof entry.id === 'string' && entry.id) ? entry.id : `commentary_${fallbackIndex}`;
     return `commentary:${id}`;
   }
+  if (kind === 'steer') {
+    const id = (typeof entry.id === 'string' && entry.id) ? entry.id : `steer_${fallbackIndex}`;
+    return `steer:${id}`;
+  }
   if (kind === 'reasoning_summary') {
     const id = (typeof entry.id === 'string' && entry.id) ? entry.id : `reasoning_${fallbackIndex}`;
     return `reasoning:${id}`;

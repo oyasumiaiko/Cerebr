@@ -1110,6 +1110,18 @@ export function createMessageSender(appContext) {
     });
   }
 
+  function createResponsesSteerTimelineEntry(steer, options = {}) {
+    const normalizedSteer = normalizePendingConversationSteer(steer);
+    const text = String(normalizedSteer.textPreview || normalizedSteer.rawText || '').trim();
+    if (!text) return null;
+    return normalizeResponsesActivityTimelineEntry({
+      kind: 'steer',
+      id: normalizedSteer.id || options.id || 'steer',
+      status: options.status || normalizedSteer.status || 'pending',
+      text
+    });
+  }
+
   function preferResponsesCommentaryTimeline(timeline) {
     const normalizedList = Array.isArray(timeline) ? timeline : [];
     const hasCommentary = normalizedList.some(entry => entry?.kind === 'commentary');
@@ -1133,6 +1145,19 @@ export function createMessageSender(appContext) {
       if (id) normalized.id = id;
       if (status) normalized.status = status;
       if (phase) normalized.phase = phase;
+      return normalized;
+    }
+    if (kind === 'steer') {
+      const text = normalizeResponsesCommentaryText((typeof entry.text === 'string') ? entry.text : '');
+      if (!text) return null;
+      const normalized = {
+        kind: 'steer',
+        text
+      };
+      const id = (typeof entry.id === 'string' && entry.id.trim()) ? entry.id.trim() : '';
+      const status = (typeof entry.status === 'string' && entry.status.trim()) ? entry.status.trim() : '';
+      if (id) normalized.id = id;
+      if (status) normalized.status = status;
       return normalized;
     }
     if (kind === 'reasoning_summary') {
@@ -1277,7 +1302,11 @@ export function createMessageSender(appContext) {
       if (keyToIndex.has(key)) {
         const existingIndex = keyToIndex.get(key);
         const previous = merged[existingIndex] || {};
-        if (normalized.kind === 'reasoning_summary' || normalized.kind === 'commentary') {
+        if (
+          normalized.kind === 'reasoning_summary'
+          || normalized.kind === 'commentary'
+          || normalized.kind === 'steer'
+        ) {
           const mergedText = mergeResponsesNarrativeEntryText(previous, normalized);
           merged[existingIndex] = normalizeResponsesActivityTimelineEntry({
             ...previous,
@@ -1318,6 +1347,12 @@ export function createMessageSender(appContext) {
       status: options.status || payload?.status || '',
       phase: options.phase || payload?.phase || 'commentary'
     });
+    if (!entry) return Array.isArray(existingTimeline) ? existingTimeline : [];
+    return mergeResponsesActivityTimeline(existingTimeline, [entry]);
+  }
+
+  function upsertResponsesSteerTimeline(existingTimeline, steer, options = {}) {
+    const entry = createResponsesSteerTimelineEntry(steer, options);
     if (!entry) return Array.isArray(existingTimeline) ? existingTimeline : [];
     return mergeResponsesActivityTimeline(existingTimeline, [entry]);
   }
@@ -1384,6 +1419,10 @@ export function createMessageSender(appContext) {
       return isResponsesActivityEntryCompleted(normalized)
         ? next
         : normalizeResponsesCommentaryText(mergeStreamingThoughts(prev, next));
+    }
+
+    if (normalized.kind === 'steer') {
+      return next;
     }
 
     return next;
@@ -4343,6 +4382,7 @@ export function createMessageSender(appContext) {
     }
 
     appendConversationPendingSteer(runtimeConversationKey, normalizedSteer, resolvedTargetAttempt);
+    appendPendingSteerActivityTimelineToAttempt(resolvedTargetAttempt, normalizedSteer);
     return {
       ok: true,
       pending: true,
@@ -4367,6 +4407,11 @@ export function createMessageSender(appContext) {
       attemptState.completedSuccessfully
         ? 'completed'
         : (attemptState.manualAbort ? 'interrupted' : 'error')
+    );
+    updatePendingSteerActivityTimelineStatus(
+      attemptState,
+      pendingSteers,
+      restoreDisposition.status === 'queued' ? 'queued' : 'paused'
     );
     const restoredJobs = buildRestoredQueueJobsFromPendingSteers(pendingSteers, {
       createJobId: createQueuedConversationTaskId,
@@ -8966,6 +9011,66 @@ export function createMessageSender(appContext) {
     return true;
   }
 
+  function previewResponsesActivityTimelineOnLoadingMessage(attemptState, timeline) {
+    const previewTarget = resolveLiveLoadingStatusElement(attemptState?.loadingMessage || null, attemptState);
+    if (!previewTarget || typeof messageProcessor?.syncAssistantMessageMetadata !== 'function') return false;
+    clearAttemptPreResponseStatus(attemptState, previewTarget);
+    try {
+      messageProcessor.syncAssistantMessageMetadata(
+        null,
+        {
+          role: 'assistant',
+          timestamp: Number.isFinite(Number(attemptState?.startedAt))
+            ? Number(attemptState.startedAt)
+            : Date.now(),
+          response_activity_timeline: cloneResponsesActivityTimeline(timeline)
+        },
+        {
+          fallbackElement: previewTarget,
+          runtimeSnapshot: getAttemptRuntimeSnapshot(attemptState) || null
+        }
+      );
+      return true;
+    } catch (error) {
+      console.warn('预渲染 steer 活动到 loadingMessage 失败:', error);
+      return false;
+    }
+  }
+
+  function appendPendingSteerActivityTimelineToAttempt(attemptState, pendingSteer) {
+    if (!attemptState) return false;
+    const currentTimeline = Array.isArray(attemptState.responsesToolLoopAccumulatedTimeline)
+      ? cloneResponsesActivityTimeline(attemptState.responsesToolLoopAccumulatedTimeline)
+      : [];
+    const nextTimeline = upsertResponsesSteerTimeline(currentTimeline, pendingSteer, {
+      status: 'pending'
+    });
+    if (!Array.isArray(nextTimeline) || nextTimeline.length <= 0) return false;
+    const appliedToAssistantNode = applyResponsesActivityTimelineToAttempt(attemptState, nextTimeline);
+    if (appliedToAssistantNode) return true;
+    return previewResponsesActivityTimelineOnLoadingMessage(attemptState, nextTimeline);
+  }
+
+  function updatePendingSteerActivityTimelineStatus(attemptState, pendingSteers, status = 'completed') {
+    if (!attemptState) return false;
+    const steerList = Array.isArray(pendingSteers)
+      ? pendingSteers.map((steer) => normalizePendingConversationSteer(steer)).filter(Boolean)
+      : [];
+    if (steerList.length <= 0) return false;
+
+    let nextTimeline = Array.isArray(attemptState.responsesToolLoopAccumulatedTimeline)
+      ? cloneResponsesActivityTimeline(attemptState.responsesToolLoopAccumulatedTimeline)
+      : [];
+    steerList.forEach((steer) => {
+      nextTimeline = upsertResponsesSteerTimeline(nextTimeline, steer, { status });
+    });
+    if (!Array.isArray(nextTimeline) || nextTimeline.length <= 0) return false;
+
+    const appliedToAssistantNode = applyResponsesActivityTimelineToAttempt(attemptState, nextTimeline);
+    if (appliedToAssistantNode) return true;
+    return previewResponsesActivityTimelineOnLoadingMessage(attemptState, nextTimeline);
+  }
+
   function applyResponsesInputItemsToAttempt(attemptState, items) {
     if (!attemptState) return false;
     const normalizedItems = cloneResponsesReplayOutputItems(items);
@@ -9151,6 +9256,9 @@ export function createMessageSender(appContext) {
       });
 
       if (pendingSteerIdsAwaitingRequestAcceptance.length > 0) {
+        const acceptedPendingSteers = getConversationPendingSteersForAttempt(attemptState)
+          .filter((steer) => pendingSteerIdsAwaitingRequestAcceptance.includes(String(steer?.id || '').trim()));
+        updatePendingSteerActivityTimelineStatus(attemptState, acceptedPendingSteers, 'completed');
         removeConversationPendingSteersByIds(
           getAttemptRuntimeConversationKey(attemptState),
           pendingSteerIdsAwaitingRequestAcceptance,

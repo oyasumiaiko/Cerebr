@@ -76,3 +76,18 @@ test('response_activity_timeline 优先于 legacy 字段', async () => {
     { kind: 'commentary', id: 'resp_commentary', status: 'streaming', text: 'responses commentary' }
   ]);
 });
+
+test('response_activity_timeline 中的 steer entry 会被原样保留', async () => {
+  const { getAssistantActivityTimeline } = await loadModule();
+  const timeline = getAssistantActivityTimeline({
+    response_activity_timeline: [
+      { kind: 'steer', id: 'steer_1', status: 'pending', text: '请转向到新的约束' },
+      { kind: 'reasoning_summary', id: 'reasoning_1', status: 'completed', text: 'summary text' }
+    ]
+  });
+
+  assert.deepEqual(timeline, [
+    { kind: 'steer', id: 'steer_1', status: 'pending', text: '请转向到新的约束' },
+    { kind: 'reasoning_summary', id: 'reasoning_1', status: 'completed', text: 'summary text' }
+  ]);
+});

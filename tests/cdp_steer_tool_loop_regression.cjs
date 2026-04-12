@@ -491,6 +491,23 @@ async function main() {
       const panel = document.querySelector('.conversation-send-queue-preview');
       return panel ? (panel.innerText || '').trim() : '';
     });
+    result.steerTimelineEntry = await waitFor(async () => {
+      return await sidebarFrame.evaluate((targetMessageId) => {
+        const aiMessages = Array.from(document.querySelectorAll('.message.ai-message[data-message-id]'));
+        const target = aiMessages.find((el) => (el.getAttribute('data-message-id') || '') === targetMessageId)
+          || aiMessages[aiMessages.length - 1]
+          || null;
+        if (!target) return null;
+        const steerEntry = target.querySelector('.response-activity-entry--steer');
+        if (!steerEntry) return null;
+        return {
+          className: steerEntry.className || '',
+          text: (steerEntry.innerText || '').trim(),
+          label: (steerEntry.querySelector('.response-activity-entry-label--steer')?.innerText || '').trim(),
+          title: (steerEntry.querySelector('.response-activity-entry-title--steer')?.innerText || '').trim()
+        };
+      }, result.toolStateBeforeWrapperReplace.messageId);
+    }, { timeoutMs: 10000, intervalMs: 150, label: 'steer timeline entry visible' });
     result.toastTextsAfterSteer = await sidebarFrame.evaluate(() => (
       Array.from(document.querySelectorAll('.notification-toast, .notification, .toast'))
         .map((el) => (el.innerText || '').trim())
@@ -547,6 +564,9 @@ async function main() {
     }
     if (!String(settled || '').includes('STEER_APPLIED_20260408')) {
       throw new Error(`final assistant text did not confirm steer application: ${settled}`);
+    }
+    if (!String(result.steerTimelineEntry?.text || '').includes('STEER_TOOL_HOP_OK_20260408')) {
+      throw new Error(`steer timeline entry did not render the steer text: ${JSON.stringify(result.steerTimelineEntry)}`);
     }
     if (!result.wrapperReplaceResult?.replaced) {
       throw new Error(`failed to replace assistant wrapper for regression probe: ${JSON.stringify(result.wrapperReplaceResult)}`);

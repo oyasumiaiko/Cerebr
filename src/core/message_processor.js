@@ -1885,7 +1885,7 @@ export function createMessageProcessor(appContext) {
   function buildResponseActivityPanelSummary(node, timeline, options = {}) {
     const narrativeCount = timeline.filter((entry) => {
       const kind = String(entry?.kind || '').toLowerCase();
-      return kind === 'reasoning_summary' || kind === 'commentary';
+      return kind === 'reasoning_summary' || kind === 'commentary' || kind === 'steer';
     }).length;
     const toolCount = timeline.filter(entry => entry?.kind === 'tool_call').length;
     // 这里的 in-progress 指“思考阶段仍在进行中”，不是“整条消息是否还在流”。
@@ -2464,7 +2464,7 @@ export function createMessageProcessor(appContext) {
 
   function buildResponseActivityEntrySnapshot(entry, index, processMathAndMarkdownFn, isThinkingRuntimeActive) {
     const key = getResponseActivityEntrySnapshotKey(entry, index);
-    if (entry.kind === 'reasoning_summary' || entry.kind === 'commentary') {
+    if (entry.kind === 'reasoning_summary' || entry.kind === 'commentary' || entry.kind === 'steer') {
       const rawText = (typeof entry.text === 'string') ? entry.text : '';
       const normalizedText = entry.kind === 'reasoning_summary'
         ? normalizeResponsesReasoningText(rawText)
@@ -2474,11 +2474,24 @@ export function createMessageProcessor(appContext) {
         key,
         entryKind: 'narrative',
         narrativeKind: entry.kind,
+        narrativeStatus: String(entry?.status || '').trim().toLowerCase(),
         markdown: buildMarkdownSurfaceSnapshot(normalizedText, renderedHtml),
-        signature: renderedHtml
+        signature: JSON.stringify({
+          renderedHtml,
+          narrativeKind: entry.kind,
+          narrativeStatus: String(entry?.status || '').trim().toLowerCase()
+        })
       };
     }
     return buildResponseActivityToolEntrySnapshot(entry, index, isThinkingRuntimeActive);
+  }
+
+  function getResponseActivitySteerStatusLabel(snapshot) {
+    const status = String(snapshot?.narrativeStatus || '').trim().toLowerCase();
+    if (status === 'completed' || status === 'accepted') return '已并入当前轮';
+    if (status === 'queued') return '未吸收，已转为队列';
+    if (status === 'paused') return '未吸收，已暂停';
+    return '待提交到当前轮';
   }
 
   function buildResponseActivitySnapshot(node, timeline, processMathAndMarkdownFn, isThinkingRuntimeActive) {
@@ -2802,13 +2815,48 @@ export function createMessageProcessor(appContext) {
   }
 
   function reconcileResponseActivityNarrativeEntry(item, snapshot, previousSnapshot) {
-    item.className = 'response-activity-entry response-activity-entry--reasoning';
+    const isSteerEntry = snapshot.narrativeKind === 'steer';
+    item.className = isSteerEntry
+      ? 'response-activity-entry response-activity-entry--reasoning response-activity-entry--steer'
+      : 'response-activity-entry response-activity-entry--reasoning';
+    let summary = item.querySelector(':scope > .response-activity-entry-summary');
+    if (isSteerEntry) {
+      if (!summary) {
+        summary = document.createElement('div');
+        summary.className = 'response-activity-entry-summary response-activity-entry-summary--steer';
+        item.insertBefore(summary, item.firstChild);
+      }
+      let label = summary.querySelector(':scope > .response-activity-entry-label');
+      if (!label) {
+        label = document.createElement('span');
+        label.className = 'response-activity-entry-label response-activity-entry-label--steer';
+        summary.appendChild(label);
+      }
+      let title = summary.querySelector(':scope > .response-activity-entry-title');
+      if (!title) {
+        title = document.createElement('span');
+        title.className = 'response-activity-entry-title response-activity-entry-title--steer';
+        summary.appendChild(title);
+      }
+      label.replaceChildren();
+      const icon = document.createElement('i');
+      icon.className = 'fa-solid fa-forward-step response-activity-entry-label-icon';
+      icon.setAttribute('aria-hidden', 'true');
+      label.appendChild(icon);
+      const labelText = document.createElement('span');
+      labelText.textContent = '转向';
+      label.appendChild(labelText);
+      title.textContent = getResponseActivitySteerStatusLabel(snapshot);
+    } else if (summary) {
+      summary.remove();
+    }
     let content = item.querySelector(':scope > .response-activity-content--reasoning');
     if (!content) {
       content = document.createElement('div');
       content.className = 'response-activity-content response-activity-content--reasoning';
       item.appendChild(content);
     }
+    content.classList.toggle('response-activity-content--steer', isSteerEntry);
 
     reconcileRenderedSurfaceBlocks(
       content,
