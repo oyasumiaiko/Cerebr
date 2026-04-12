@@ -1090,21 +1090,23 @@ export function buildResponsesRequestUserInputToolOutputContentItems(result, opt
   return buildResponsesToolOutputContentItems(payload, options);
 }
 
-function extractMicroSkillMountedSkillNames(refreshResult) {
+function extractMicroSkillActiveSkillNames(refreshResult) {
   const names = new Set();
-  if (Array.isArray(refreshResult?.matched_skills)) {
-    for (const item of refreshResult.matched_skills) {
-      const name = typeof item?.name === 'string' ? item.name.trim() : '';
-      if (name) names.add(name);
-    }
-  }
-  if (Array.isArray(refreshResult?.value?.active_skills)) {
-    for (const item of refreshResult.value.active_skills) {
-      const name = typeof item === 'string' ? item.trim() : '';
-      if (name) names.add(name);
-    }
+  const activeSkills = Array.isArray(refreshResult?.active_skills)
+    ? refreshResult.active_skills
+    : (Array.isArray(refreshResult?.value?.active_skills) ? refreshResult.value.active_skills : []);
+  for (const item of activeSkills) {
+    const name = typeof item === 'string' ? item.trim() : '';
+    if (name) names.add(name);
   }
   return Array.from(names);
+}
+
+function extractMicroSkillRefreshErrorMessage(refreshResult) {
+  const message = typeof refreshResult?.error?.message === 'string'
+    ? refreshResult.error.message.trim()
+    : '';
+  return message || '微型 skill 当前文档 refresh 失败。';
 }
 
 function buildMicroSkillApplyPatchSummaryText(result) {
@@ -1136,7 +1138,7 @@ function buildMicroSkillMutationSummaryText(result) {
     ? normalized.file.path.trim()
     : (typeof normalized.deleted_file_path === 'string' ? normalized.deleted_file_path.trim() : '');
   const totalFiles = Number.isFinite(Number(normalized?.files?.total_count)) ? Number(normalized.files.total_count) : null;
-  const mountedSkillNames = extractMicroSkillMountedSkillNames(normalized.refresh_result);
+  const activeSkillNames = extractMicroSkillActiveSkillNames(normalized.refresh_result);
 
   let summary = '';
   switch (action) {
@@ -1164,16 +1166,19 @@ function buildMicroSkillMutationSummaryText(result) {
       summary = `Deleted skill ${skillName || '(unknown)'}.`;
       break;
     case 'refresh_current_document':
-      summary = mountedSkillNames.length > 0
-        ? `Refreshed current document. Active skills: ${mountedSkillNames.join(', ')}.`
-        : 'Refreshed current document.';
+      summary = activeSkillNames.length > 0
+        ? `Refreshed current document. Active skills: ${activeSkillNames.join(', ')}.`
+        : 'Refreshed current document. No active skills are mounted.';
       break;
     default:
       return null;
   }
 
-  if (action !== 'refresh_current_document' && normalized.refreshed_current_document === true && mountedSkillNames.length > 0) {
-    return `${summary}\n\nMounted on current document: ${mountedSkillNames.join(', ')}`;
+  if (normalized.refreshed_current_document === true && normalized.refresh_result?.ok !== true) {
+    return `${summary}\n\nCurrent document refresh failed: ${extractMicroSkillRefreshErrorMessage(normalized.refresh_result)}`;
+  }
+  if (action !== 'refresh_current_document' && normalized.refreshed_current_document === true && activeSkillNames.length > 0) {
+    return `${summary}\n\nMounted on current document: ${activeSkillNames.join(', ')}`;
   }
   return summary;
 }

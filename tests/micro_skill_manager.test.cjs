@@ -334,6 +334,119 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   assert.equal(calls.execute.length, 11);
 });
 
+test('refresh_current_document 会区分 URL 命中的技能与实际 active skills', async () => {
+  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+
+  const manager = createMicroSkillManager({
+    store: createMockStore([
+      {
+        ...buildSkillInput('worldquant-brain-knowledge-cache'),
+        match: ['https://platform.worldquantbrain.com/*'],
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-02T00:00:00.000Z',
+        revision: 1
+      },
+      {
+        ...buildSkillInput('worldquant-brain-sim-state'),
+        match: ['https://platform.worldquantbrain.com/*'],
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-03T00:00:00.000Z',
+        revision: 2
+      }
+    ]),
+    userScriptsApi: {
+      async getScripts() { return []; },
+      async register() {},
+      async update() {},
+      async unregister() {}
+    },
+    tabsApi: {
+      async get() {
+        return { id: 11, url: 'https://platform.worldquantbrain.com/research', title: 'BRAIN' };
+      }
+    },
+    jsRuntimeManager: {
+      async execute() {
+        return {
+          ok: true,
+          tabId: 11,
+          value: {
+            active_skills: ['worldquant-brain-sim-state']
+          },
+          logs: [],
+          items: []
+        };
+      }
+    }
+  });
+
+  const result = await manager.executeRegistryAction({
+    action: 'refresh_current_document'
+  }, { tabId: 11 });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(
+    result.refresh_result.matched_skills.map((item) => item.name).sort(),
+    ['worldquant-brain-knowledge-cache', 'worldquant-brain-sim-state']
+  );
+  assert.deepEqual(result.refresh_result.active_skills, ['worldquant-brain-sim-state']);
+});
+
+test('refresh_current_document 失败时返回 ok=false 并透传首个 frame 错误', async () => {
+  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+
+  const manager = createMicroSkillManager({
+    store: createMockStore([
+      {
+        ...buildSkillInput('worldquant-brain-knowledge-cache'),
+        match: ['https://platform.worldquantbrain.com/*'],
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-02T00:00:00.000Z',
+        revision: 1
+      }
+    ]),
+    userScriptsApi: {
+      async getScripts() { return []; },
+      async register() {},
+      async update() {},
+      async unregister() {}
+    },
+    tabsApi: {
+      async get() {
+        return { id: 11, url: 'https://platform.worldquantbrain.com/research', title: 'BRAIN' };
+      }
+    },
+    jsRuntimeManager: {
+      async execute() {
+        return {
+          ok: false,
+          tabId: 11,
+          value: null,
+          logs: [],
+          items: [
+            {
+              frameId: 0,
+              error: {
+                message: 'Micro skill not mounted: worldquant-brain-knowledge-cache'
+              }
+            }
+          ]
+        };
+      }
+    }
+  });
+
+  const result = await manager.executeRegistryAction({
+    action: 'refresh_current_document',
+    skill_name: 'worldquant-brain-knowledge-cache'
+  }, { tabId: 11 });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.refresh_result.ok, false);
+  assert.equal(result.error.message, 'Micro skill not mounted: worldquant-brain-knowledge-cache');
+  assert.deepEqual(result.refresh_result.active_skills, []);
+});
+
 test('内置 skill-creator 会自动出现在列表中且保持只读', async () => {
   const { createMicroSkillManager } = await loadMicroSkillManagerModule();
 

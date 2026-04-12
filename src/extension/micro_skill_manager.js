@@ -46,6 +46,17 @@ function sortSkillRecords(records) {
     });
 }
 
+// 这里单独提取 runtime 回报的 active skill 名单，避免后续把“URL 命中”误当成“真实已挂载”。
+function extractActiveSkillNamesFromRefreshValue(value) {
+  const names = [];
+  const activeSkills = Array.isArray(value?.active_skills) ? value.active_skills : [];
+  for (const item of activeSkills) {
+    const name = typeof item === 'string' ? item.trim() : '';
+    if (name) names.push(name);
+  }
+  return Array.from(new Set(names));
+}
+
 async function normalizeRefreshExecutionResult(rawResult, matchedRecords) {
   const matchedSkills = sortSkillRecords(matchedRecords)
     .map((record) => buildMicroSkillSummary(record))
@@ -53,11 +64,20 @@ async function normalizeRefreshExecutionResult(rawResult, matchedRecords) {
   const result = (rawResult && typeof rawResult === 'object' && !Array.isArray(rawResult))
     ? rawResult
     : {};
+  const activeSkillNames = extractActiveSkillNamesFromRefreshValue(result?.value);
+  const firstItemErrorMessage = (() => {
+    for (const item of Array.isArray(result?.items) ? result.items : []) {
+      const message = typeof item?.error?.message === 'string' ? item.error.message.trim() : '';
+      if (message) return message;
+    }
+    return '';
+  })();
 
   return {
     ok: result.ok === true,
     tab_id: normalizeTabId(result?.tabId),
     matched_skills: matchedSkills,
+    active_skills: activeSkillNames,
     value: result?.value ?? null,
     logs: Array.isArray(result?.logs) ? result.logs : [],
     items: Array.isArray(result?.items) ? result.items : [],
@@ -65,6 +85,8 @@ async function normalizeRefreshExecutionResult(rawResult, matchedRecords) {
       ? {
           message: (typeof result?.error === 'string' && result.error.trim())
             ? result.error.trim()
+            : firstItemErrorMessage
+              ? firstItemErrorMessage
             : '微型 skill 当前文档 refresh 失败。',
           name: 'MicroSkillRefreshError',
           stack: ''
@@ -640,12 +662,14 @@ export function createMicroSkillManager(options = {}) {
             throw new Error(`微型 skill ${normalizedArgs.skill_name} 不存在。`);
           }
         }
+        const refreshResult = await syncCurrentDocumentSkills(options?.tabId);
         return {
-          ok: true,
+          ok: refreshResult.ok === true,
           action: 'refresh_current_document',
           requested_skill_name: normalizedArgs.skill_name,
           refreshed_current_document: true,
-          refresh_result: await syncCurrentDocumentSkills(options?.tabId)
+          refresh_result: refreshResult,
+          error: refreshResult.ok === true ? null : refreshResult.error
         };
       }
       default:

@@ -298,6 +298,59 @@ test('buildResponsesMicroSkillRegistryToolOutputContentItems 会把 apply_patch 
   assert.doesNotMatch(text, /"match": \[/);
 });
 
+test('buildResponsesMicroSkillRegistryToolOutputContentItems 只把真实 active skills 渲染为 mounted', async () => {
+  const { buildResponsesMicroSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesMicroSkillRegistryToolOutputContentItems({
+    ok: true,
+    action: 'create',
+    skill: {
+      name: 'worldquant-brain-knowledge-cache',
+      revision: 1
+    },
+    refreshed_current_document: true,
+    refresh_result: {
+      ok: true,
+      matched_skills: [
+        { name: 'worldquant-brain-knowledge-cache' },
+        { name: 'worldquant-brain-sim-state' }
+      ],
+      active_skills: ['worldquant-brain-sim-state'],
+      value: {
+        active_skills: ['worldquant-brain-sim-state']
+      }
+    }
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /Created skill worldquant-brain-knowledge-cache/);
+  assert.match(text, /Mounted on current document: worldquant-brain-sim-state/);
+  assert.doesNotMatch(text, /Mounted on current document: .*worldquant-brain-knowledge-cache/);
+});
+
+test('buildResponsesMicroSkillRegistryToolOutputContentItems 会显式提示 refresh 失败而不是伪造 mounted', async () => {
+  const { buildResponsesMicroSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesMicroSkillRegistryToolOutputContentItems({
+    ok: true,
+    action: 'create',
+    skill: {
+      name: 'worldquant-brain-knowledge-cache',
+      revision: 1
+    },
+    refreshed_current_document: true,
+    refresh_result: {
+      ok: false,
+      matched_skills: [
+        { name: 'worldquant-brain-knowledge-cache' }
+      ],
+      error: {
+        message: 'Micro skill not mounted: worldquant-brain-knowledge-cache'
+      }
+    }
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /Current document refresh failed: Micro skill not mounted: worldquant-brain-knowledge-cache/);
+  assert.doesNotMatch(text, /Mounted on current document:/);
+});
+
 test('buildResponsesMicroSkillRegistryToolOutputContentItems 对 read_file 仍保留结构化详情', async () => {
   const { buildResponsesMicroSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesMicroSkillRegistryToolOutputContentItems({
