@@ -58,6 +58,7 @@ import {
   buildResponsesAskableModelsToolOutputContentItems,
   buildResponsesAskOtherAiToolOutputContentItems,
   buildResponsesRequestUserInputToolOutputContentItems,
+  buildResponsesMicroSkillRegistryToolOutputContentItems,
   buildResponsesGenericXmlToolOutputContentItems
 } from '../agent_tools/responses_tool_output.js';
 import {
@@ -7769,14 +7770,14 @@ export function createMessageSender(appContext) {
 
   function serializeResponsesMicroSkillRegistryFunctionToolOutput(value) {
     try {
-      return buildResponsesGenericXmlToolOutputContentItems('micro_skill_registry_result', value, {
+      return buildResponsesMicroSkillRegistryToolOutputContentItems(value, {
         blockTruncation: {
           maxChars: MICRO_SKILL_READ_MAX_CHARS,
           mode: 'tail'
         }
       });
     } catch (error) {
-      return buildResponsesGenericXmlToolOutputContentItems('micro_skill_registry_result', {
+      return buildResponsesMicroSkillRegistryToolOutputContentItems({
         ok: false,
         error: normalizeResponsesCustomToolError(error)
       }, {

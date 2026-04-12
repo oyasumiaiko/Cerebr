@@ -266,6 +266,57 @@ test('buildResponsesGenericXmlToolOutputContentItems 支持按调用方放宽正
   assert.match(text, /returned range \[0, \d+\)/);
 });
 
+test('buildResponsesMicroSkillRegistryToolOutputContentItems 会把 apply_patch 压成简洁变更摘要', async () => {
+  const { buildResponsesMicroSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesMicroSkillRegistryToolOutputContentItems({
+    ok: true,
+    action: 'apply_patch',
+    skill: {
+      name: 'worldquant-brain-sim-state',
+      revision: 8
+    },
+    affected_files: {
+      added: ['references/experiment-loop.md'],
+      modified: ['SKILL.md'],
+      deleted: []
+    },
+    refreshed_current_document: true,
+    refresh_result: {
+      ok: true,
+      value: {
+        active_skills: ['worldquant-brain-sim-state']
+      }
+    }
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<micro_skill_registry_result>/);
+  assert.match(text, /Success\. Updated the following files:/);
+  assert.match(text, /A references\/experiment-loop\.md/);
+  assert.match(text, /M SKILL\.md/);
+  assert.match(text, /Mounted on current document: worldquant-brain-sim-state/);
+  assert.doesNotMatch(text, /"affected_files"/);
+  assert.doesNotMatch(text, /"match": \[/);
+});
+
+test('buildResponsesMicroSkillRegistryToolOutputContentItems 对 read_file 仍保留结构化详情', async () => {
+  const { buildResponsesMicroSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesMicroSkillRegistryToolOutputContentItems({
+    ok: true,
+    action: 'read_file',
+    skill: {
+      name: 'skill-creator',
+      file: {
+        path: 'SKILL.md',
+        content: 'Alpha'
+      }
+    }
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /"action": "read_file"/);
+  assert.match(text, /"path": "SKILL\.md"/);
+  assert.match(text, /"content": "Alpha"/);
+});
+
 test('buildResponsesPdfContentToolOutputContentItems 使用 overview / selection / content XML 分块', async () => {
   const { buildResponsesPdfContentToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesPdfContentToolOutputContentItems({

@@ -1090,6 +1090,113 @@ export function buildResponsesRequestUserInputToolOutputContentItems(result, opt
   return buildResponsesToolOutputContentItems(payload, options);
 }
 
+function extractMicroSkillMountedSkillNames(refreshResult) {
+  const names = new Set();
+  if (Array.isArray(refreshResult?.matched_skills)) {
+    for (const item of refreshResult.matched_skills) {
+      const name = typeof item?.name === 'string' ? item.name.trim() : '';
+      if (name) names.add(name);
+    }
+  }
+  if (Array.isArray(refreshResult?.value?.active_skills)) {
+    for (const item of refreshResult.value.active_skills) {
+      const name = typeof item === 'string' ? item.trim() : '';
+      if (name) names.add(name);
+    }
+  }
+  return Array.from(names);
+}
+
+function buildMicroSkillApplyPatchSummaryText(result) {
+  const affected = (result?.affected_files && typeof result.affected_files === 'object') ? result.affected_files : {};
+  const lines = [];
+  const pushFiles = (prefix, values) => {
+    for (const value of Array.isArray(values) ? values : []) {
+      const path = typeof value === 'string' ? value.trim() : '';
+      if (path) lines.push(`${prefix} ${path}`);
+    }
+  };
+  pushFiles('A', affected.added);
+  pushFiles('M', affected.modified);
+  pushFiles('D', affected.deleted);
+  if (lines.length <= 0) {
+    return 'Patch applied successfully.';
+  }
+  return `Success. Updated the following files:\n${lines.join('\n')}`;
+}
+
+function buildMicroSkillMutationSummaryText(result) {
+  const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
+  const action = typeof normalized.action === 'string' ? normalized.action.trim() : '';
+  const skillName = typeof normalized?.skill?.name === 'string'
+    ? normalized.skill.name.trim()
+    : (typeof normalized.skill_name === 'string' ? normalized.skill_name.trim() : '');
+  const revision = Number.isFinite(Number(normalized?.skill?.revision)) ? Number(normalized.skill.revision) : null;
+  const filePath = typeof normalized?.file?.path === 'string'
+    ? normalized.file.path.trim()
+    : (typeof normalized.deleted_file_path === 'string' ? normalized.deleted_file_path.trim() : '');
+  const totalFiles = Number.isFinite(Number(normalized?.files?.total_count)) ? Number(normalized.files.total_count) : null;
+  const mountedSkillNames = extractMicroSkillMountedSkillNames(normalized.refresh_result);
+
+  let summary = '';
+  switch (action) {
+    case 'apply_patch':
+      summary = buildMicroSkillApplyPatchSummaryText(normalized);
+      break;
+    case 'write_file':
+      summary = filePath
+        ? `Updated file ${filePath}${skillName ? ` in skill ${skillName}` : ''}${revision ? ` (revision ${revision})` : ''}.`
+        : `Updated skill ${skillName || '(unknown)'}${revision ? ` to revision ${revision}` : ''}.`;
+      break;
+    case 'delete_file':
+      summary = filePath
+        ? `Deleted file ${filePath}${skillName ? ` from skill ${skillName}` : ''}${revision ? ` (revision ${revision})` : ''}.`
+        : `Deleted file from skill ${skillName || '(unknown)'}.`;
+      break;
+    case 'create':
+      summary = `Created skill ${skillName || '(unknown)'}${revision ? ` (revision ${revision})` : ''}${totalFiles ? ` with ${totalFiles} files` : ''}.`;
+      break;
+    case 'update':
+      summary = `Updated skill ${skillName || '(unknown)'}${revision ? ` to revision ${revision}` : ''}.`;
+      break;
+    case 'enable':
+      summary = `Enabled skill ${skillName || '(unknown)'}${revision ? ` (revision ${revision})` : ''}.`;
+      break;
+    case 'disable':
+      summary = `Disabled skill ${skillName || '(unknown)'}${revision ? ` (revision ${revision})` : ''}.`;
+      break;
+    case 'delete':
+      summary = `Deleted skill ${skillName || '(unknown)'}.`;
+      break;
+    case 'refresh_current_document':
+      summary = mountedSkillNames.length > 0
+        ? `Refreshed current document. Active skills: ${mountedSkillNames.join(', ')}.`
+        : 'Refreshed current document.';
+      break;
+    default:
+      return null;
+  }
+
+  if (action !== 'refresh_current_document' && normalized.refreshed_current_document === true && mountedSkillNames.length > 0) {
+    return `${summary}\n\nMounted on current document: ${mountedSkillNames.join(', ')}`;
+  }
+  return summary;
+}
+
+export function buildResponsesMicroSkillRegistryToolOutputContentItems(result, options = {}) {
+  const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
+  if (normalized.ok === true) {
+    const summaryText = buildMicroSkillMutationSummaryText(normalized);
+    if (summaryText) {
+      return buildResponsesGenericXmlToolOutputContentItems('micro_skill_registry_result', {
+        ok: true,
+        value: summaryText
+      }, options);
+    }
+  }
+  return buildResponsesGenericXmlToolOutputContentItems('micro_skill_registry_result', normalized, options);
+}
+
 export function buildResponsesGenericXmlToolOutputContentItems(rootTag, result, options = {}) {
   const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : { value: result };
   const metadata = {
