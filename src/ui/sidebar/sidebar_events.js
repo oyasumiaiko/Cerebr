@@ -830,7 +830,7 @@ function setupGlobalEscapeHandler(appContext) {
 }
 
 function setupClickAwayHandler(appContext) {
-  document.addEventListener('click', (e) => {
+  document.addEventListener('mousedown', (e) => {
     // 若存在统一确认对话框，避免点击外部逻辑误关面板
     if (document.querySelector('.confirm-overlay')) {
       return;
@@ -846,7 +846,9 @@ function setupClickAwayHandler(appContext) {
     ) {
       return;
     }
-    // 恢复经典交互：当聊天记录（Esc）面板打开时，点击面板外部应自动关闭。
+    // 只在 mousedown 时判定“点击外部关闭”：
+    // - 避免鼠标先在面板内按下、移到外部松开时被误关；
+    // - 避免面板内部点击触发重渲染后，document click 再把已脱离 DOM 的旧节点误判成“点在外部”。
     // 具体“是否点在面板内/触发按钮上”的判断由下方 managed 元素命中逻辑统一处理。
 
     const panelsAndToggles = [

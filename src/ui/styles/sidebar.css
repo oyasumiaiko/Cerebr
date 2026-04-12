@@ -6293,6 +6293,14 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     transition: opacity 0.2s cubic-bezier(0.4, 0, 0.2, 1), transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+html:not(.fullscreen-mode) body:not(.standalone-mode) #chat-history-panel {
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-width: none;
+    margin: 0;
+}
+
 #chat-history-panel.visible {
     opacity: 1;
     transform: translateY(0);
