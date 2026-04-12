@@ -130,6 +130,11 @@ import {
   getResponsesToolCallRecordKey
 } from '../utils/responses_activity_keys.js';
 import {
+  buildMergedResponsesSteerInputItem,
+  buildSteerWindowMarkdown,
+  buildSteerWindowPreviewItems
+} from '../utils/steer_window.js';
+import {
   getAllConversationMetadata,
   getConversationById,
   getConversationsByIds
@@ -1110,14 +1115,18 @@ export function createMessageSender(appContext) {
     });
   }
 
-  function createResponsesSteerTimelineEntry(steer, options = {}) {
-    const normalizedSteer = normalizePendingConversationSteer(steer);
-    const text = String(normalizedSteer.textPreview || normalizedSteer.rawText || '').trim();
+  function createResponsesSteerTimelineEntry(steers, options = {}) {
+    const steerList = Array.isArray(steers)
+      ? steers.map((steer) => normalizePendingConversationSteer(steer)).filter(Boolean)
+      : [normalizePendingConversationSteer(steers)].filter(Boolean);
+    const text = buildSteerWindowMarkdown(steerList);
     if (!text) return null;
+    const count = steerList.length;
     return normalizeResponsesActivityTimelineEntry({
       kind: 'steer',
-      id: normalizedSteer.id || options.id || 'steer',
-      status: options.status || normalizedSteer.status || 'pending',
+      id: options.id || steerList[0]?.id || 'steer',
+      status: options.status || steerList[0]?.status || 'pending',
+      count,
       text
     });
   }
@@ -1156,8 +1165,12 @@ export function createMessageSender(appContext) {
       };
       const id = (typeof entry.id === 'string' && entry.id.trim()) ? entry.id.trim() : '';
       const status = (typeof entry.status === 'string' && entry.status.trim()) ? entry.status.trim() : '';
+      const count = Number.isFinite(Number(entry.count))
+        ? Math.max(0, Math.floor(Number(entry.count)))
+        : 0;
       if (id) normalized.id = id;
       if (status) normalized.status = status;
+      if (count > 0) normalized.count = count;
       return normalized;
     }
     if (kind === 'reasoning_summary') {
@@ -1351,8 +1364,8 @@ export function createMessageSender(appContext) {
     return mergeResponsesActivityTimeline(existingTimeline, [entry]);
   }
 
-  function upsertResponsesSteerTimeline(existingTimeline, steer, options = {}) {
-    const entry = createResponsesSteerTimelineEntry(steer, options);
+  function upsertResponsesSteerTimeline(existingTimeline, steers, options = {}) {
+    const entry = createResponsesSteerTimelineEntry(steers, options);
     if (!entry) return Array.isArray(existingTimeline) ? existingTimeline : [];
     return mergeResponsesActivityTimeline(existingTimeline, [entry]);
   }
@@ -2879,17 +2892,20 @@ export function createMessageSender(appContext) {
   }
 
   function buildPendingSteerPreview(pendingSteer) {
-    const normalizedSteer = normalizePendingConversationSteer(pendingSteer);
-    const text = (normalizedSteer.textPreview || '').trim();
-    const fallbackText = normalizedSteer.imageCount > 0
-      ? '（等待吸收的转向图片消息）'
-      : '（等待吸收的转向消息）';
-    return {
-      id: normalizedSteer.id,
-      text: text || fallbackText,
-      imageCount: normalizedSteer.imageCount,
-      hasScreenshot: normalizedSteer.hasScreenshot
+    return buildSteerWindowPreviewItems([
+      normalizePendingConversationSteer(pendingSteer)
+    ])[0] || {
+      id: '',
+      text: '（等待吸收的转向消息）',
+      imageCount: 0,
+      hasScreenshot: false
     };
+  }
+
+  function buildPendingSteerWindowPreview(pendingSteers) {
+    return Array.isArray(pendingSteers)
+      ? pendingSteers.map((steer) => buildPendingSteerPreview(steer))
+      : [];
   }
 
   function getConversationQueuedSendPreviewMountPoint() {
@@ -3248,9 +3264,7 @@ export function createMessageSender(appContext) {
       ? runtimeQueueSnapshot.jobs.map((job) => normalizeConversationQueuedTask(job))
       : getConversationSendQueue(activeQueueKey);
     const pendingMutation = runtimeQueueSnapshot?.pendingMutation || summarizePendingConversationMutation(activeQueueKey);
-    const pendingSteers = Array.isArray(runtimeSnapshot?.steer?.pendingSteers)
-      ? runtimeSnapshot.steer.pendingSteers.map((steer) => buildPendingSteerPreview(steer))
-      : [];
+    const pendingSteers = buildPendingSteerWindowPreview(runtimeSnapshot?.steer?.pendingSteers);
 
     if ((!Array.isArray(queue) || queue.length === 0) && !pendingMutation && pendingSteers.length === 0) {
       existingContainer?.remove();
@@ -3273,16 +3287,48 @@ export function createMessageSender(appContext) {
       list.appendChild(pendingNotice);
     }
 
-    pendingSteers.forEach((steer, index) => {
-      const pendingSteerNotice = document.createElement('div');
-      pendingSteerNotice.className = 'conversation-send-queue-preview__pending-mutation';
-      const steerTags = [];
-      if (steer.hasScreenshot) steerTags.push('截图');
-      if (steer.imageCount > 0) steerTags.push(`${steer.imageCount} 图`);
-      const suffix = steerTags.length > 0 ? ` · ${steerTags.join(' · ')}` : '';
-      pendingSteerNotice.textContent = `转向 ${index + 1}：${steer.text}${suffix}`;
-      list.appendChild(pendingSteerNotice);
-    });
+    if (pendingSteers.length > 0) {
+      const pendingSteerWindow = document.createElement('section');
+      pendingSteerWindow.className = 'conversation-send-queue-preview__pending-mutation conversation-send-queue-preview__pending-steer-window';
+
+      const pendingSteerTitle = document.createElement('div');
+      pendingSteerTitle.className = 'conversation-send-queue-preview__pending-steer-title';
+      pendingSteerTitle.textContent = pendingSteers.length > 1
+        ? `转向 ×${pendingSteers.length}`
+        : '转向';
+      pendingSteerWindow.appendChild(pendingSteerTitle);
+
+      const pendingSteerList = document.createElement('div');
+      pendingSteerList.className = 'conversation-send-queue-preview__pending-steer-list';
+      pendingSteers.forEach((steer, index) => {
+        const pendingSteerItem = document.createElement('div');
+        pendingSteerItem.className = 'conversation-send-queue-preview__pending-steer-item';
+
+        const steerOrder = document.createElement('span');
+        steerOrder.className = 'conversation-send-queue-preview__pending-steer-order';
+        steerOrder.textContent = `${index + 1}.`;
+        pendingSteerItem.appendChild(steerOrder);
+
+        const steerText = document.createElement('span');
+        steerText.className = 'conversation-send-queue-preview__pending-steer-text';
+        steerText.textContent = steer.text;
+        pendingSteerItem.appendChild(steerText);
+
+        const steerTags = [];
+        if (steer.hasScreenshot) steerTags.push('截图');
+        if (steer.imageCount > 0) steerTags.push(`${steer.imageCount} 图`);
+        if (steerTags.length > 0) {
+          const steerMeta = document.createElement('span');
+          steerMeta.className = 'conversation-send-queue-preview__pending-steer-meta';
+          steerMeta.textContent = steerTags.join(' · ');
+          pendingSteerItem.appendChild(steerMeta);
+        }
+
+        pendingSteerList.appendChild(pendingSteerItem);
+      });
+      pendingSteerWindow.appendChild(pendingSteerList);
+      list.appendChild(pendingSteerWindow);
+    }
 
     queue.forEach((task, index) => {
       const preview = buildQueuedTaskPreview(task);
@@ -9037,12 +9083,38 @@ export function createMessageSender(appContext) {
     }
   }
 
+  function ensureAttemptOpenSteerWindowId(attemptState) {
+    if (!attemptState) return 'steer_window';
+    const existingWindowId = (typeof attemptState.pendingSteerWindowId === 'string' && attemptState.pendingSteerWindowId.trim())
+      ? attemptState.pendingSteerWindowId.trim()
+      : '';
+    if (existingWindowId) return existingWindowId;
+
+    const nextSerial = Number.isFinite(Number(attemptState.pendingSteerWindowSerial))
+      ? Math.max(0, Math.floor(Number(attemptState.pendingSteerWindowSerial))) + 1
+      : 1;
+    attemptState.pendingSteerWindowSerial = nextSerial;
+    const targetTurnId = normalizeConversationId(getAttemptSteerTargetIdentity(attemptState).turnId || '');
+    attemptState.pendingSteerWindowId = targetTurnId
+      ? `steer_window:${targetTurnId}:${nextSerial}`
+      : `steer_window:${attemptState.id || 'attempt'}:${nextSerial}`;
+    return attemptState.pendingSteerWindowId;
+  }
+
+  function closeAttemptOpenSteerWindow(attemptState) {
+    if (!attemptState) return;
+    attemptState.pendingSteerWindowId = null;
+  }
+
   function appendPendingSteerActivityTimelineToAttempt(attemptState, pendingSteer) {
     if (!attemptState) return false;
+    const currentPendingSteers = getConversationPendingSteersForAttempt(attemptState);
+    const steerWindowId = ensureAttemptOpenSteerWindowId(attemptState);
     const currentTimeline = Array.isArray(attemptState.responsesToolLoopAccumulatedTimeline)
       ? cloneResponsesActivityTimeline(attemptState.responsesToolLoopAccumulatedTimeline)
       : [];
-    const nextTimeline = upsertResponsesSteerTimeline(currentTimeline, pendingSteer, {
+    const nextTimeline = upsertResponsesSteerTimeline(currentTimeline, currentPendingSteers, {
+      id: steerWindowId,
       status: 'pending'
     });
     if (!Array.isArray(nextTimeline) || nextTimeline.length <= 0) return false;
@@ -9057,16 +9129,21 @@ export function createMessageSender(appContext) {
       ? pendingSteers.map((steer) => normalizePendingConversationSteer(steer)).filter(Boolean)
       : [];
     if (steerList.length <= 0) return false;
+    const steerWindowId = ensureAttemptOpenSteerWindowId(attemptState);
 
     let nextTimeline = Array.isArray(attemptState.responsesToolLoopAccumulatedTimeline)
       ? cloneResponsesActivityTimeline(attemptState.responsesToolLoopAccumulatedTimeline)
       : [];
-    steerList.forEach((steer) => {
-      nextTimeline = upsertResponsesSteerTimeline(nextTimeline, steer, { status });
+    nextTimeline = upsertResponsesSteerTimeline(nextTimeline, steerList, {
+      id: steerWindowId,
+      status
     });
     if (!Array.isArray(nextTimeline) || nextTimeline.length <= 0) return false;
 
     const appliedToAssistantNode = applyResponsesActivityTimelineToAttempt(attemptState, nextTimeline);
+    if (status !== 'pending') {
+      closeAttemptOpenSteerWindow(attemptState);
+    }
     if (appliedToAssistantNode) return true;
     return previewResponsesActivityTimelineOnLoadingMessage(attemptState, nextTimeline);
   }
@@ -9334,11 +9411,16 @@ export function createMessageSender(appContext) {
        *
        * 如果在执行工具前就把 pending steer 提前 drain 掉，第二类 steer 会被错误地延后到再下一轮边界，
        * 表现上就不像 Codex 的真正 steer。
+       *
+       * 另外这里故意把当前窗口内积累的多条 steer 合并成一次 user message 注入：
+       * - UI 上它们属于同一个 steer window；
+       * - 发送上也应作为一次同边界插入，而不是拆成多条独立 user message。
        */
       const pendingSteersForFollowUp = getConversationPendingSteersForAttempt(attemptState);
-      const pendingSteerInputItemsForFollowUp = pendingSteersForFollowUp
-        .map((steer) => cloneDataSafely(steer?.responseInputItem))
-        .filter((item) => item && typeof item === 'object');
+      const mergedPendingSteerInputItemForFollowUp = buildMergedResponsesSteerInputItem(pendingSteersForFollowUp);
+      const pendingSteerInputItemsForFollowUp = mergedPendingSteerInputItemForFollowUp
+        ? [cloneDataSafely(mergedPendingSteerInputItemForFollowUp)].filter(Boolean)
+        : [];
 
       if (attemptState) {
         updateAttemptRuntimeState(attemptState, (draft) => {
@@ -9675,7 +9757,9 @@ export function createMessageSender(appContext) {
           ? normalizeConversationHistoryRevision(conversationRevisionSnapshot)
           : normalizedConversationRevisionAtStart,
         retryPolicy: normalizedConversationRetryPolicy,
-        pendingSteers: []
+        pendingSteers: [],
+        pendingSteerWindowId: null,
+        pendingSteerWindowSerial: 0
       };
       activeAttempts.set(attemptState.id, attemptState);
       updateAttemptRuntimeState(attemptState, (draft) => {

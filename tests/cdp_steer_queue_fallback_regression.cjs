@@ -351,8 +351,13 @@ async function main() {
     result.pendingSteerPreview = await waitFor(async () => {
       return await sidebarFrame.evaluate(() => {
         const panel = document.querySelector('.conversation-send-queue-preview');
-        const text = panel ? (panel.innerText || '').trim() : '';
-        return text.includes('转向 1：') ? text : null;
+        if (!panel) return null;
+        const snapshot = {
+          text: (panel.innerText || '').trim(),
+          steerWindowCount: panel.querySelectorAll('.conversation-send-queue-preview__pending-steer-window').length,
+          steerItemCount: panel.querySelectorAll('.conversation-send-queue-preview__pending-steer-item').length
+        };
+        return snapshot.steerWindowCount === 1 && snapshot.steerItemCount === 1 ? snapshot : null;
       });
     }, { timeoutMs: 8_000, intervalMs: 150, label: 'pending steer preview visible' });
     result.steps.push('pending_steer_preview_visible');

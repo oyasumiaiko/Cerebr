@@ -145,7 +145,10 @@ function writeSseEvent(res, payload) {
 
 async function runMockResponsesServer() {
   const requestLog = [];
-  const steerText = 'STEER_TOOL_HOP_OK_20260408';
+  const steerTexts = [
+    'STEER_TOOL_HOP_A_20260413',
+    'STEER_TOOL_HOP_B_20260413'
+  ];
   const stage2VisibleText = 'SECOND_HOP_VISIBLE_TEXT_20260408';
   const pageHtml = createPageHtml();
   const server = http.createServer(async (req, res) => {
@@ -187,7 +190,8 @@ async function runMockResponsesServer() {
           const allText = inputTexts.join('\n');
           const hasTool1Output = inputItems.some((item) => item?.type === 'function_call_output' && item?.call_id === 'call_1');
           const hasTool2Output = inputItems.some((item) => item?.type === 'function_call_output' && item?.call_id === 'call_2');
-          const hasSteer = allText.includes(steerText);
+          const steerTextsInRequest = steerTexts.filter((text) => allText.includes(text));
+          const hasAllSteers = steerTextsInRequest.length === steerTexts.length;
 
           res.writeHead(200, {
             'content-type': 'text/event-stream; charset=utf-8',
@@ -272,8 +276,8 @@ async function runMockResponsesServer() {
             return;
           }
 
-          const finalText = hasSteer
-            ? `STEER_APPLIED_20260408 ${steerText}`
+          const finalText = hasAllSteers
+            ? `STEER_APPLIED_20260408 ${steerTextsInRequest.join(' | ')}`
             : 'STEER_MISSING_20260408';
           const messageItem = createMessageItem('msg_3', finalText);
           writeSseEvent(res, { type: 'response.created', response: { id: 'resp_3' } });
@@ -484,12 +488,20 @@ async function main() {
     result.steps.push('assistant_wrapper_replaced');
 
     await sleep(300);
-    await sendSidebarMessage('STEER_TOOL_HOP_OK_20260408', 'Control+Enter');
-    result.steps.push('steer_sent');
+    await sendSidebarMessage('STEER_TOOL_HOP_A_20260413', 'Control+Enter');
+    result.steps.push('steer_a_sent');
+    await sleep(180);
+    await sendSidebarMessage('STEER_TOOL_HOP_B_20260413', 'Control+Enter');
+    result.steps.push('steer_b_sent');
     await sleep(500);
     result.pendingSteerPreview = await sidebarFrame.evaluate(() => {
       const panel = document.querySelector('.conversation-send-queue-preview');
-      return panel ? (panel.innerText || '').trim() : '';
+      if (!panel) return null;
+      return {
+        text: (panel.innerText || '').trim(),
+        steerWindowCount: panel.querySelectorAll('.conversation-send-queue-preview__pending-steer-window').length,
+        steerItemCount: panel.querySelectorAll('.conversation-send-queue-preview__pending-steer-item').length
+      };
     });
     result.steerTimelineEntry = await waitFor(async () => {
       return await sidebarFrame.evaluate((targetMessageId) => {
@@ -504,7 +516,8 @@ async function main() {
           className: steerEntry.className || '',
           text: (steerEntry.innerText || '').trim(),
           label: (steerEntry.querySelector('.response-activity-entry-label--steer')?.innerText || '').trim(),
-          title: (steerEntry.querySelector('.response-activity-entry-title--steer')?.innerText || '').trim()
+          title: (steerEntry.querySelector('.response-activity-entry-title--steer')?.innerText || '').trim(),
+          itemCount: steerEntry.querySelectorAll('li').length
         };
       }, result.toolStateBeforeWrapperReplace.messageId);
     }, { timeoutMs: 10000, intervalMs: 150, label: 'steer timeline entry visible' });
@@ -558,15 +571,24 @@ async function main() {
 
     await hostPage.screenshot({ path: path.join(outputDir, '01-final.png'), fullPage: true });
 
-    const hasSteerInThirdRequest = result.thirdRequestInputTexts.some((text) => text.includes('STEER_TOOL_HOP_OK_20260408'));
-    if (!hasSteerInThirdRequest) {
-      throw new Error('third follow-up request did not include steer input text');
+    const thirdRequestCombinedText = result.thirdRequestInputTexts.join('\n');
+    if (!thirdRequestCombinedText.includes('STEER_TOOL_HOP_A_20260413\nSTEER_TOOL_HOP_B_20260413')) {
+      throw new Error(`third follow-up request did not include merged steer window text in order: ${JSON.stringify(result.thirdRequestInputTexts)}`);
     }
     if (!String(settled || '').includes('STEER_APPLIED_20260408')) {
       throw new Error(`final assistant text did not confirm steer application: ${settled}`);
     }
-    if (!String(result.steerTimelineEntry?.text || '').includes('STEER_TOOL_HOP_OK_20260408')) {
+    if (!String(result.steerTimelineEntry?.text || '').includes('STEER_TOOL_HOP_A_20260413')) {
       throw new Error(`steer timeline entry did not render the steer text: ${JSON.stringify(result.steerTimelineEntry)}`);
+    }
+    if (!String(result.steerTimelineEntry?.text || '').includes('STEER_TOOL_HOP_B_20260413')) {
+      throw new Error(`steer timeline entry did not render the second steer text: ${JSON.stringify(result.steerTimelineEntry)}`);
+    }
+    if (String(result.steerTimelineEntry?.label || '').trim() !== '转向 ×2') {
+      throw new Error(`steer timeline entry did not aggregate into one steer window label: ${JSON.stringify(result.steerTimelineEntry)}`);
+    }
+    if ((result.pendingSteerPreview?.steerWindowCount || 0) !== 1 || (result.pendingSteerPreview?.steerItemCount || 0) !== 2) {
+      throw new Error(`queue preview did not aggregate pending steers into one window: ${JSON.stringify(result.pendingSteerPreview)}`);
     }
     if (!result.wrapperReplaceResult?.replaced) {
       throw new Error(`failed to replace assistant wrapper for regression probe: ${JSON.stringify(result.wrapperReplaceResult)}`);
