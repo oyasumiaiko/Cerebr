@@ -3061,6 +3061,7 @@ export function createMessageProcessor(appContext) {
       const currentToolState = captureResponseActivityToolTransientUiState(item) || preservedToolState || null;
       toolBodyInner.replaceChildren();
       renderResponseActivityToolBodyContent(toolBodyInner, snapshot);
+      enhanceMarkdownContent(item);
       if (currentToolState) {
         restoreResponseActivityToolTransientUiState(item, currentToolState);
       }
@@ -3868,7 +3869,6 @@ export function createMessageProcessor(appContext) {
       setupThoughtsDisplay(messageWrapperDiv, null, processMathAndMarkdown);
       setupResponseToolCallsDisplay(messageWrapperDiv, null);
       syncResponsesLocalCompactionDisplay(messageWrapperDiv, null);
-      enhanceMarkdownContent(messageWrapperDiv);
       messageVirtualizer.scheduleUpdate(resolveMessageListContainer(messageWrapperDiv));
       return true;
     }
@@ -3880,7 +3880,6 @@ export function createMessageProcessor(appContext) {
       });
       setupThoughtsDisplay(messageWrapperDiv, null, processMathAndMarkdown);
       setupResponseToolCallsDisplay(messageWrapperDiv, null);
-      enhanceMarkdownContent(messageWrapperDiv);
       messageVirtualizer.scheduleUpdate(resolveMessageListContainer(messageWrapperDiv));
       return true;
     }
@@ -3905,7 +3904,6 @@ export function createMessageProcessor(appContext) {
       setupThoughtsDisplay(messageWrapperDiv, null, processMathAndMarkdown);
       setupResponseToolCallsDisplay(messageWrapperDiv, null);
     }
-    enhanceMarkdownContent(messageWrapperDiv);
     // metadata 同步阶段只允许刷新 assistant 自身附加展示，
     // 绝不能顺手改外层聊天容器的 scrollTop。
     // 否则 reasoning / tool timeline 的高度波动会把整个对话列表错误地滚动到旧消息。
@@ -4078,6 +4076,84 @@ export function createMessageProcessor(appContext) {
     return distance <= threshold;
   }
 
+  function normalizeHighlightClassName(value) {
+    return String(value || '')
+      .split(/\s+/)
+      .map(token => token.trim())
+      .filter(token => token && token !== 'hljs')
+      .sort()
+      .join(' ');
+  }
+
+  function resolveDeclaredHighlightLanguage(block) {
+    if (!block?.classList) return '';
+    const tokens = Array.from(block.classList.values())
+      .map(token => String(token || '').trim())
+      .filter(Boolean);
+    const languageToken = tokens.find((token) => (
+      token.startsWith('language-') || token.startsWith('lang-')
+    )) || '';
+    if (!languageToken) return '';
+    return languageToken
+      .replace(/^language-/, '')
+      .replace(/^lang-/, '')
+      .trim()
+      .toLowerCase();
+  }
+
+  function markCodeBlockHighlightState(block, signature, state) {
+    if (!block?.dataset) return;
+    block.dataset.cerebrHighlightSignature = signature;
+    block.dataset.cerebrHighlightState = state;
+  }
+
+  function enhanceCodeHighlightBlocks(rootElement) {
+    if (!rootElement || typeof rootElement.querySelectorAll !== 'function') return;
+    rootElement.querySelectorAll('pre code').forEach((block) => {
+      if (block.closest('.mermaid-diagram__source')) return;
+      try {
+        if (typeof hljs === 'undefined' || typeof hljs.highlightElement !== 'function') return;
+
+        const normalizedClassName = normalizeHighlightClassName(block.getAttribute('class') || '');
+        const sourceText = typeof block.textContent === 'string' ? block.textContent : '';
+        if (!sourceText.trim()) return;
+
+        const nextSignature = `${normalizedClassName}::${sourceText}`;
+        const currentSignature = String(block.dataset.cerebrHighlightSignature || '').trim();
+        const currentState = String(block.dataset.cerebrHighlightState || '').trim().toLowerCase();
+        if (
+          currentSignature === nextSignature
+          && ['done', 'rendered', 'unsupported'].includes(currentState)
+        ) {
+          return;
+        }
+
+        // renderMarkdownSafe 已经在字符串阶段完成过一次 fenced code 高亮。
+        // 若当前 code 内已经存在 hljs token span，只补充容器 class 和我们的幂等标记，
+        // 不再重复调用 highlight.js，避免长对话重载时对同一块代码反复走高亮热点。
+        if (block.querySelector('[class*="hljs-"]')) {
+          block.classList.add('hljs');
+          markCodeBlockHighlightState(block, nextSignature, 'rendered');
+          return;
+        }
+
+        const declaredLanguage = resolveDeclaredHighlightLanguage(block);
+        if (declaredLanguage && !hljs.getLanguage(declaredLanguage)) {
+          // 彻底绕开 highlight.js 的 unknown-language warning。
+          // 只记录“这个语言当前不支持”，后续同签名内容直接跳过，不再刷屏。
+          markCodeBlockHighlightState(block, nextSignature, 'unsupported');
+          return;
+        }
+
+        block.textContent = sourceText;
+        block.classList.remove('hljs');
+        delete block.dataset.highlighted;
+        hljs.highlightElement(block);
+        markCodeBlockHighlightState(block, nextSignature, 'done');
+      } catch (_) {}
+    });
+  }
+
   /**
    * 对已经写入 DOM 的 Markdown 内容做统一增强。
    * 这里集中处理所有“必须依赖真实 DOM 才能完成”的步骤：
@@ -4099,35 +4175,7 @@ export function createMessageProcessor(appContext) {
       bindStableToggleDetails(detailsElement, detailsElement);
     });
 
-    rootElement.querySelectorAll('pre code').forEach((block) => {
-      if (block.closest('.mermaid-diagram__source')) return;
-      try {
-        if (typeof hljs === 'undefined' || typeof hljs.highlightElement !== 'function') return;
-        const normalizedClassName = String(block.getAttribute('class') || '')
-          .split(/\s+/)
-          .map(token => token.trim())
-          .filter(token => token && token !== 'hljs')
-          .sort()
-          .join(' ');
-        const sourceText = typeof block.textContent === 'string' ? block.textContent : '';
-        if (!sourceText.trim()) return;
-        const nextSignature = `${normalizedClassName}::${sourceText}`;
-        if (
-          block.dataset.highlighted === 'yes'
-          && block.dataset.cerebrHighlightSignature === nextSignature
-        ) {
-          return;
-        }
-        // highlight.js 再次处理已高亮节点时会刷 warning。
-        // 这里用“代码文本 + 语言 class”的签名判定是否真的发生变化；
-        // 若内容未变则直接跳过，若内容变了则先还原为纯文本后再重新高亮。
-        block.textContent = sourceText;
-        block.classList.remove('hljs');
-        delete block.dataset.highlighted;
-        hljs.highlightElement(block);
-        block.dataset.cerebrHighlightSignature = nextSignature;
-      } catch (_) {}
-    });
+    enhanceCodeHighlightBlocks(rootElement);
 
     bindInlineImagePreviews(rootElement);
 
