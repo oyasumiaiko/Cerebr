@@ -29,6 +29,8 @@ const MICRO_SKILL_FILE_KIND_RUNTIME_SOURCE = 'runtime_source';
 const MICRO_SKILL_FILE_KIND_REFERENCE = 'reference';
 const MICRO_SKILL_FILE_KIND_UI_METADATA = 'ui_metadata';
 const MICRO_SKILL_FILE_KIND_TEMPLATE = 'template';
+const MICRO_SKILL_DEFAULT_INSTRUCTION_PATH = 'SKILL.md';
+const MICRO_SKILL_DEFAULT_RUNTIME_ENTRY_PATH = 'src/main.js';
 
 function normalizeString(value) {
   return (typeof value === 'string') ? value.trim() : '';
@@ -83,7 +85,7 @@ function normalizeMicroSkillKind(value, fallback = MICRO_SKILL_KIND_PAGE_RUNTIME
   throw new Error(`micro_skill_registry 参数错误：不支持的 skill.kind \`${value}\`。`);
 }
 
-function normalizeMicroSkillFileKind(value) {
+export function normalizeMicroSkillFileKind(value) {
   const text = normalizeString(value).toLowerCase();
   const supportedKinds = new Set([
     MICRO_SKILL_FILE_KIND_INSTRUCTION,
@@ -96,6 +98,72 @@ function normalizeMicroSkillFileKind(value) {
     throw new Error(`micro_skill_registry 参数错误：不支持的文件 kind \`${value}\`。`);
   }
   return text;
+}
+
+function getMicroSkillFileExtension(filePath) {
+  const normalizedPath = normalizeMicroSkillFilePath(filePath);
+  const lastSlashIndex = normalizedPath.lastIndexOf('/');
+  const filename = lastSlashIndex >= 0 ? normalizedPath.slice(lastSlashIndex + 1) : normalizedPath;
+  const lastDotIndex = filename.lastIndexOf('.');
+  return lastDotIndex >= 0 ? filename.slice(lastDotIndex).toLowerCase() : '';
+}
+
+function pathStartsWithAnyPrefix(filePath, prefixes) {
+  const normalizedPath = normalizeMicroSkillFilePath(filePath).toLowerCase();
+  return prefixes.some((prefix) => normalizedPath.startsWith(String(prefix || '').toLowerCase()));
+}
+
+export function isMicroSkillRuntimeSourcePath(filePath) {
+  const extension = getMicroSkillFileExtension(filePath);
+  return extension === '.js' || extension === '.mjs' || extension === '.cjs';
+}
+
+export function pickDefaultMicroSkillInstructionPath(files) {
+  const normalizedFiles = Array.isArray(files) ? files : [];
+  const exactDefault = normalizedFiles.find((file) => file.path === MICRO_SKILL_DEFAULT_INSTRUCTION_PATH);
+  if (exactDefault) return exactDefault.path;
+  const markdownFile = normalizedFiles.find((file) => {
+    const extension = getMicroSkillFileExtension(file.path);
+    return extension === '.md' || extension === '.markdown';
+  });
+  if (markdownFile) return markdownFile.path;
+  return normalizedFiles[0]?.path || null;
+}
+
+export function pickDefaultMicroSkillRuntimeEntryPath(files) {
+  const normalizedFiles = Array.isArray(files) ? files : [];
+  const exactDefault = normalizedFiles.find((file) => file.path === MICRO_SKILL_DEFAULT_RUNTIME_ENTRY_PATH);
+  if (exactDefault) return exactDefault.path;
+  const srcRuntimeFile = normalizedFiles.find((file) => (
+    pathStartsWithAnyPrefix(file.path, ['src/']) && isMicroSkillRuntimeSourcePath(file.path)
+  ));
+  if (srcRuntimeFile) return srcRuntimeFile.path;
+  const anyRuntimeFile = normalizedFiles.find((file) => isMicroSkillRuntimeSourcePath(file.path));
+  return anyRuntimeFile?.path || null;
+}
+
+export function inferMicroSkillFileKindForPath(filePath, options = {}) {
+  const normalizedPath = normalizeMicroSkillFilePath(filePath);
+  const instructionPath = options?.instructionPath ? normalizeMicroSkillFilePath(options.instructionPath) : null;
+  const runtimeEntryPath = options?.runtimeEntryPath ? normalizeMicroSkillFilePath(options.runtimeEntryPath) : null;
+  const explicitKind = options?.explicitKind ? normalizeMicroSkillFileKind(options.explicitKind) : null;
+
+  if (instructionPath && normalizedPath === instructionPath) {
+    return MICRO_SKILL_FILE_KIND_INSTRUCTION;
+  }
+  if (runtimeEntryPath && normalizedPath === runtimeEntryPath) {
+    return MICRO_SKILL_FILE_KIND_RUNTIME_SOURCE;
+  }
+  if (pathStartsWithAnyPrefix(normalizedPath, ['template/', 'templates/'])) {
+    return MICRO_SKILL_FILE_KIND_TEMPLATE;
+  }
+  if (pathStartsWithAnyPrefix(normalizedPath, ['ui/', 'meta/', 'metadata/'])) {
+    return MICRO_SKILL_FILE_KIND_UI_METADATA;
+  }
+  if (isMicroSkillRuntimeSourcePath(normalizedPath)) {
+    return MICRO_SKILL_FILE_KIND_RUNTIME_SOURCE;
+  }
+  return explicitKind || MICRO_SKILL_FILE_KIND_REFERENCE;
 }
 
 function normalizeMicroSkillInterface(rawInterface, fallbackDescription = '') {
@@ -138,14 +206,9 @@ function normalizeMicroSkillFile(rawFile, options = {}) {
     ? file.content
     : ((typeof file.code === 'string') ? file.code : '');
   const requireContent = options?.requireContent !== false;
-  const requireKind = options?.requireKind !== false;
-  const inferredKind = (() => {
-    if (typeof file.kind === 'string' && file.kind.trim()) {
-      return normalizeMicroSkillFileKind(file.kind);
-    }
-    if (!requireKind) return null;
-    throw new Error(`micro_skill_registry 参数错误：files[\`${path}\`].kind 不能为空。`);
-  })();
+  const explicitKind = (typeof file.kind === 'string' && file.kind.trim())
+    ? normalizeMicroSkillFileKind(file.kind)
+    : null;
 
   if (requireContent && !content.trim()) {
     throw new Error(`micro_skill_registry 参数错误：files[\`${path}\`].content 不能为空。`);
@@ -153,7 +216,7 @@ function normalizeMicroSkillFile(rawFile, options = {}) {
 
   return {
     path,
-    kind: inferredKind,
+    kind: explicitKind,
     content
   };
 }
@@ -169,8 +232,7 @@ function normalizeMicroSkillFiles(rawFiles, options = {}) {
   const seenPaths = new Set();
   input.forEach((rawFile) => {
     const file = normalizeMicroSkillFile(rawFile, {
-      requireContent: options?.requireContent !== false,
-      requireKind: options?.requireKind !== false
+      requireContent: options?.requireContent !== false
     });
     if (seenPaths.has(file.path)) {
       throw new Error(`micro_skill_registry 参数错误：files 中存在重复路径 \`${file.path}\`。`);
@@ -188,13 +250,10 @@ function normalizeMicroSkillInstruction(rawInstruction, files) {
     : null;
   const instructionFile = requestedPath
     ? files.find((file) => file.path === requestedPath)
-    : (files.find((file) => file.kind === MICRO_SKILL_FILE_KIND_INSTRUCTION) || null);
+    : (files.find((file) => file.path === pickDefaultMicroSkillInstructionPath(files)) || null);
 
   if (!instructionFile) {
-    throw new Error('micro_skill_registry 参数错误：skill.instruction.path 必须指向 files 中的 instruction 文件。');
-  }
-  if (instructionFile.kind !== MICRO_SKILL_FILE_KIND_INSTRUCTION) {
-    throw new Error(`micro_skill_registry 参数错误：instruction.path \`${instructionFile.path}\` 必须指向 instruction 文件。`);
+    throw new Error('micro_skill_registry 参数错误：skill.instruction.path 必须指向 files 中的说明文件。');
   }
 
   return {
@@ -207,17 +266,16 @@ function normalizeMicroSkillRuntime(rawRuntime, files, kind) {
   const requestedPath = normalizeOptionalString(input.entry_path || input.entry)
     ? normalizeMicroSkillFilePath(input.entry_path || input.entry)
     : null;
-  const runtimeFiles = files.filter((file) => file.kind === MICRO_SKILL_FILE_KIND_RUNTIME_SOURCE);
   const runtimeEntryFile = requestedPath
     ? files.find((file) => file.path === requestedPath)
-    : (runtimeFiles[0] || null);
+    : (files.find((file) => file.path === pickDefaultMicroSkillRuntimeEntryPath(files)) || null);
 
   if (kind === MICRO_SKILL_KIND_PAGE_RUNTIME) {
     if (!runtimeEntryFile) {
       throw new Error('micro_skill_registry 参数错误：page runtime skill 必须提供 runtime.entry_path。');
     }
-    if (runtimeEntryFile.kind !== MICRO_SKILL_FILE_KIND_RUNTIME_SOURCE) {
-      throw new Error(`micro_skill_registry 参数错误：runtime.entry_path \`${runtimeEntryFile.path}\` 必须指向 runtime_source 文件。`);
+    if (!isMicroSkillRuntimeSourcePath(runtimeEntryFile.path)) {
+      throw new Error(`micro_skill_registry 参数错误：runtime.entry_path \`${runtimeEntryFile.path}\` 必须指向可执行的 JS runtime 文件。`);
     }
   }
 
@@ -355,11 +413,20 @@ export function normalizeMicroSkillInput(rawSkill, options = {}) {
   const rawFiles = Array.isArray(skill.files) ? skill.files : (
     Array.isArray(skill.files_meta) ? skill.files_meta : []
   );
-  const files = normalizeMicroSkillFiles(rawFiles, {
+  const rawNormalizedFiles = normalizeMicroSkillFiles(rawFiles, {
     requireFiles: options?.requireFiles !== false,
-    requireContent: options?.requireContent !== false,
-    requireKind: true
+    requireContent: options?.requireContent !== false
   });
+  const instruction = normalizeMicroSkillInstruction(skill.instruction, rawNormalizedFiles);
+  const runtime = normalizeMicroSkillRuntime(skill.runtime, rawNormalizedFiles, kind);
+  const files = rawNormalizedFiles.map((file) => ({
+    ...file,
+    kind: inferMicroSkillFileKindForPath(file.path, {
+      instructionPath: instruction.path,
+      runtimeEntryPath: runtime.entry_path,
+      explicitKind: file.kind
+    })
+  }));
 
   return {
     kind,
@@ -370,8 +437,8 @@ export function normalizeMicroSkillInput(rawSkill, options = {}) {
       allowEmpty: kind !== MICRO_SKILL_KIND_PAGE_RUNTIME
     }),
     enabled: normalizeBoolean(skill.enabled, true),
-    instruction: normalizeMicroSkillInstruction(skill.instruction, files),
-    runtime: normalizeMicroSkillRuntime(skill.runtime, files, kind),
+    instruction,
+    runtime,
     files
   };
 }
@@ -719,10 +786,9 @@ function buildMicroSkillRecordInputSchemaDescription() {
           additionalProperties: false,
           properties: {
             path: { type: 'string' },
-            kind: { type: 'string' },
             content: { type: 'string' }
           },
-          required: ['path', 'kind', 'content']
+          required: ['path', 'content']
         }
       }
     },
@@ -738,7 +804,7 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
       '管理 Cerebr 扩展侧持久化保存的浏览器微型 skill package。',
       '每个 skill 由 manifest + 虚拟文件树组成，底层默认使用 IndexedDB 持久化。',
       '摘要/详情/整包源码遵循渐进式披露：默认只注入 summary，详细说明和具体文件需要按需读取。',
-      '支持整包 create/update，也支持按文件 read/write/delete，并在需要时刷新当前网页的挂载。'
+      '支持整包 create/update，也支持按文件 read/write/delete/apply_patch，并在需要时刷新当前网页的挂载。'
     ].join(' '),
     strict: false,
     parameters: {
@@ -747,7 +813,7 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
       properties: {
         action: {
           type: 'string',
-          description: '必填。支持 list、read_detail、read_package、read_file、write_file、create、update、delete_file、delete、enable、disable、refresh_current_document。旧别名 read_source/read_source_file/upsert_source_file/delete_source_file 也可用。'
+          description: '必填。支持 list、read_detail、read_package、read_file、write_file、apply_patch、create、update、delete_file、delete、enable、disable、refresh_current_document。旧别名 read_source/read_source_file/upsert_source_file/delete_source_file 也可用。'
         },
         skill_name: {
           type: ['string', 'null'],
@@ -779,10 +845,13 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
           additionalProperties: false,
           properties: {
             path: { type: 'string' },
-            kind: { type: ['string', 'null'] },
             content: { type: 'string' }
           },
           required: ['path', 'content']
+        },
+        patch: {
+          type: ['string', 'null'],
+          description: 'apply_patch 时使用的补丁文本。语法与 Codex apply_patch 一致；文件用途由 manifest 指针路径与常见目录约定自动推断。'
         },
         skill: buildMicroSkillRecordInputSchemaDescription()
       },
@@ -817,6 +886,7 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
     'read_package',
     'read_file',
     'write_file',
+    'apply_patch',
     'create',
     'update',
     'delete_file',
@@ -836,6 +906,7 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       skill: null,
       file_path: null,
       file: null,
+      patch: null,
       set_as_instruction: false,
       set_as_runtime_entry: false,
       next_instruction_path: null,
@@ -853,6 +924,7 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       }),
       file_path: null,
       file: null,
+      patch: null,
       set_as_instruction: false,
       set_as_runtime_entry: false,
       next_instruction_path: null,
@@ -867,6 +939,7 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       skill: null,
       file_path: null,
       file: null,
+      patch: null,
       set_as_instruction: false,
       set_as_runtime_entry: false,
       next_instruction_path: null,
@@ -888,6 +961,7 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       skill: null,
       file_path: normalizeMicroSkillFilePath(filePath),
       file: null,
+      patch: null,
       set_as_instruction: false,
       set_as_runtime_entry: false,
       next_instruction_path: normalizeOptionalString(args.next_instruction_path)
@@ -909,8 +983,28 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       skill: null,
       file_path: null,
       file: buildNormalizedWriteFileInput(args.file),
+      patch: null,
       set_as_instruction: normalizeBoolean(args.set_as_instruction, false),
       set_as_runtime_entry: normalizeBoolean(args.set_as_runtime_entry || args.set_as_entry, false),
+      next_instruction_path: null,
+      next_runtime_entry_path: null
+    };
+  }
+
+  if (action === 'apply_patch') {
+    const patch = (typeof args.patch === 'string') ? args.patch : '';
+    if (!patch.trim()) {
+      throw new Error('micro_skill_registry 参数错误：apply_patch 时 patch 不能为空。');
+    }
+    return {
+      action,
+      skill_name: skillName,
+      skill: null,
+      file_path: null,
+      file: null,
+      patch,
+      set_as_instruction: false,
+      set_as_runtime_entry: false,
       next_instruction_path: null,
       next_runtime_entry_path: null
     };
@@ -922,6 +1016,7 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
     skill: null,
     file_path: null,
     file: null,
+    patch: null,
     set_as_instruction: false,
     set_as_runtime_entry: false,
     next_instruction_path: null,

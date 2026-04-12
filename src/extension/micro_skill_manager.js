@@ -18,6 +18,7 @@ import {
   normalizeStoredMicroSkillRecord,
   saveStoredMicroSkillPackage
 } from '../agent_tools/micro_skill_registry_tool.js';
+import { applyMicroSkillPackagePatch } from '../agent_tools/micro_skill_apply_patch.js';
 import {
   buildMicroSkillDocumentRefreshSource,
   buildRegisteredMicroSkillScriptId,
@@ -378,9 +379,6 @@ export function createMicroSkillManager(options = {}) {
       kind: fileInput.kind || existingFile?.kind || null,
       content: fileInput.content
     };
-    if (!nextFile.kind) {
-      throw new Error(`微型 skill ${skillName} 的新文件 ${fileInput.path} 必须显式提供 kind。`);
-    }
 
     if (existingIndex >= 0) {
       nextFiles[existingIndex] = nextFile;
@@ -432,10 +430,10 @@ export function createMicroSkillManager(options = {}) {
     const deletingInstruction = normalizedExisting.instruction.path === normalizedPath;
     const deletingRuntimeEntry = normalizedExisting.runtime.entry_path === normalizedPath;
     const nextInstructionPath = deletingInstruction
-      ? (options?.nextInstructionPath || nextFiles.find((file) => file.kind === 'instruction')?.path || null)
+      ? (options?.nextInstructionPath || null)
       : normalizedExisting.instruction.path;
     const nextRuntimeEntryPath = deletingRuntimeEntry
-      ? (options?.nextRuntimeEntryPath || nextFiles.find((file) => file.kind === 'runtime_source')?.path || null)
+      ? (options?.nextRuntimeEntryPath || null)
       : normalizedExisting.runtime.entry_path;
 
     const nextRecord = buildStoredMicroSkillRecord({
@@ -456,6 +454,26 @@ export function createMicroSkillManager(options = {}) {
       deleted_file_path: normalizedPath,
       skill: buildMicroSkillSummary(persistedRecord),
       files: buildMicroSkillFileManifest(persistedRecord, { includeContent: false }),
+      ...(await maybeRefreshCurrentDocument(options?.tabId))
+    };
+  }
+
+  async function applySkillPatch(skillName, patch, options = {}) {
+    const existing = await getMutableStoredSkillRecord(skillName, 'apply_patch');
+    const normalizedExisting = normalizeStoredMicroSkillRecord(existing);
+    if (!normalizedExisting) {
+      throw new Error(`微型 skill ${skillName} 不存在，无法应用补丁。`);
+    }
+
+    const patched = applyMicroSkillPackagePatch(normalizedExisting, patch);
+    const persistedRecord = await persistMutatedSkillRecord(normalizedExisting, patched.record);
+
+    return {
+      ok: true,
+      action: 'apply_patch',
+      skill: buildMicroSkillSummary(persistedRecord),
+      files: buildMicroSkillFileManifest(persistedRecord, { includeContent: false }),
+      affected_files: patched.affected_files,
       ...(await maybeRefreshCurrentDocument(options?.tabId))
     };
   }
@@ -536,6 +554,10 @@ export function createMicroSkillManager(options = {}) {
           tabId: options?.tabId,
           setAsInstruction: normalizedArgs.set_as_instruction === true,
           setAsRuntimeEntry: normalizedArgs.set_as_runtime_entry === true
+        });
+      case 'apply_patch':
+        return await applySkillPatch(normalizedArgs.skill_name, normalizedArgs.patch, {
+          tabId: options?.tabId
         });
       case 'delete_file':
         return await deleteSkillFile(normalizedArgs.skill_name, normalizedArgs.file_path, {

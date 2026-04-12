@@ -82,17 +82,14 @@ function buildSkillInput(name = 'dom-probe') {
     files: [
       {
         path: 'SKILL.md',
-        kind: 'instruction',
         content: '# DOM Probe\n\n在需要读取页面基础信息时使用。'
       },
       {
         path: 'src/main.js',
-        kind: 'runtime_source',
         content: 'const helpers = await require("./helpers/dom.js"); return { read() { return { title: helpers.readTitle(), href: location.href }; } };'
       },
       {
         path: 'src/helpers/dom.js',
-        kind: 'runtime_source',
         content: 'module.exports = { readTitle() { return document.title; } };'
       }
     ]
@@ -207,6 +204,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     skill: null,
     file_path: 'src/helpers/dom.js',
     file: null,
+    patch: null,
     set_as_instruction: false,
     set_as_runtime_entry: false,
     next_instruction_path: null,
@@ -219,7 +217,6 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     set_as_runtime_entry: true,
     file: {
       path: 'src/runtime/new-main.js',
-      kind: 'runtime_source',
       content: 'module.exports = { read() { return document.title; } };'
     }
   });
@@ -238,6 +235,25 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     skill: null,
     file_path: 'src/helpers/dom.js',
     file: null,
+    patch: null,
+    set_as_instruction: false,
+    set_as_runtime_entry: false,
+    next_instruction_path: null,
+    next_runtime_entry_path: null
+  });
+
+  const normalizedApplyPatch = normalizeMicroSkillRegistryToolArguments({
+    action: 'apply_patch',
+    skill_name: 'dom-probe',
+    patch: '*** Begin Patch\n*** Update File: src/main.js\n@@\n-old\n+new\n*** End Patch'
+  });
+  assert.deepEqual(normalizedApplyPatch, {
+    action: 'apply_patch',
+    skill_name: 'dom-probe',
+    skill: null,
+    file_path: null,
+    file: null,
+    patch: '*** Begin Patch\n*** Update File: src/main.js\n@@\n-old\n+new\n*** End Patch',
     set_as_instruction: false,
     set_as_runtime_entry: false,
     next_instruction_path: null,

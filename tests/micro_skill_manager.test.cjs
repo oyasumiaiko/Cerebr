@@ -74,17 +74,14 @@ function buildSkillInput(name = 'dom-probe') {
     files: [
       {
         path: 'SKILL.md',
-        kind: 'instruction',
         content: '# DOM Probe\n\n在需要读取页面基础信息时使用。'
       },
       {
         path: 'src/main.js',
-        kind: 'runtime_source',
         content: 'const helpers = await require("./helpers/dom.js"); return { read() { return { title: helpers.readTitle(), href: location.href }; } };'
       },
       {
         path: 'src/helpers/dom.js',
-        kind: 'runtime_source',
         content: 'module.exports = { readTitle() { return document.title; } };'
       }
     ]
@@ -180,7 +177,6 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     skill_name: 'dom-probe',
     file: {
       path: 'src/helpers/url.js',
-      kind: 'runtime_source',
       content: 'module.exports = { readUrl() { return location.href; } };'
     }
   }, { tabId: 11 });
@@ -189,6 +185,27 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   assert.equal(calls.update.length, 2);
   assert.equal(calls.execute.length, 3);
 
+  const patchedFile = await manager.executeRegistryAction({
+    action: 'apply_patch',
+    skill_name: 'dom-probe',
+    patch: [
+      '*** Begin Patch',
+      '*** Update File: src/helpers/url.js',
+      '@@',
+      '-module.exports = { readUrl() { return location.href; } };',
+      '+module.exports = { readUrl() { return location.pathname; } };',
+      '*** End Patch'
+    ].join('\n')
+  }, { tabId: 11 });
+  assert.equal(patchedFile.ok, true);
+  assert.deepEqual(patchedFile.affected_files, {
+    added: [],
+    modified: ['src/helpers/url.js'],
+    deleted: []
+  });
+  assert.equal(calls.update.length, 3);
+  assert.equal(calls.execute.length, 4);
+
   const deletedFile = await manager.executeRegistryAction({
     action: 'delete_file',
     skill_name: 'dom-probe',
@@ -196,8 +213,8 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   }, { tabId: 11 });
   assert.equal(deletedFile.ok, true);
   assert.equal(deletedFile.files.total_count, 3);
-  assert.equal(calls.update.length, 3);
-  assert.equal(calls.execute.length, 4);
+  assert.equal(calls.update.length, 4);
+  assert.equal(calls.execute.length, 5);
 
   const disabled = await manager.executeRegistryAction({
     action: 'disable',
@@ -205,7 +222,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   }, { tabId: 11 });
   assert.equal(disabled.ok, true);
   assert.equal(calls.unregister.length, 1);
-  assert.equal(calls.execute.length, 5);
+  assert.equal(calls.execute.length, 6);
 
   const enabled = await manager.executeRegistryAction({
     action: 'enable',
@@ -213,7 +230,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   }, { tabId: 11 });
   assert.equal(enabled.ok, true);
   assert.equal(calls.register.length, 2);
-  assert.equal(calls.execute.length, 6);
+  assert.equal(calls.execute.length, 7);
 
   const removed = await manager.executeRegistryAction({
     action: 'delete',
@@ -221,7 +238,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   }, { tabId: 11 });
   assert.equal(removed.ok, true);
   assert.equal(calls.unregister.length, 2);
-  assert.equal(calls.execute.length, 7);
+  assert.equal(calls.execute.length, 8);
 });
 
 test('内置 skill-creator 会自动出现在列表中且保持只读', async () => {
