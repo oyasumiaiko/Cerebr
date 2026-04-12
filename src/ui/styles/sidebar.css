@@ -790,6 +790,9 @@ body.standalone-mode #empty-state-repomix {
 }
 
 .conversation-send-queue-preview__action {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
     border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 55%, transparent);
     background: color-mix(in srgb, var(--cerebr-bg-color) 38%, transparent);
     color: var(--cerebr-text-color);
@@ -802,15 +805,30 @@ body.standalone-mode #empty-state-repomix {
     transition: background-color 0.2s ease, border-color 0.2s ease, opacity 0.2s ease;
 }
 
+.conversation-send-queue-preview__action-icon {
+    font-size: 11px;
+    line-height: 1;
+}
+
+.conversation-send-queue-preview__action-label {
+    line-height: 1.2;
+}
+
 .conversation-send-queue-preview__action:hover {
     background: color-mix(in srgb, var(--cerebr-bg-color) 58%, transparent);
     border-color: color-mix(in srgb, var(--cerebr-border-color) 72%, transparent);
+}
+
+.conversation-send-queue-preview__action--steer {
+    background: color-mix(in srgb, var(--cerebr-highlight) 12%, transparent);
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 32%, transparent);
 }
 
 .conversation-send-queue-preview__action--pause {
     background: color-mix(in srgb, var(--cerebr-highlight) 10%, transparent);
 }
 
+.conversation-send-queue-preview__action--cancel,
 .conversation-send-queue-preview__action--remove {
     color: color-mix(in srgb, var(--cerebr-status-error, #d93025) 80%, var(--cerebr-text-color) 20%);
 }

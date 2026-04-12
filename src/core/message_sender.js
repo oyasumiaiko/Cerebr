@@ -2484,6 +2484,47 @@ export function createMessageSender(appContext) {
     };
   }
 
+  /**
+   * 基于已经冻结好的 queue payload，直接构建一条 pending steer。
+   *
+   * 这层用于“把排队项改成当前 turn 的 steer”：
+   * - 不再重新读取输入框，避免把用户后续编辑过的草稿误带进 steer；
+   * - 直接复用 queue 时已经冻结好的文本/图片快照；
+   * - 这样 queue -> steer 的语义才是“改送达方式”，而不是“重新采样当前输入框”。
+   *
+   * @param {Object|null|undefined} payload
+   * @param {{createdAt?: number|null}} [options]
+   * @returns {Object|null}
+   */
+  function buildPendingConversationSteerFromPayload(payload, options = {}) {
+    const normalizedPayload = (payload && typeof payload === 'object')
+      ? cloneDataSafely(payload)
+      : null;
+    if (!normalizedPayload) return null;
+
+    const responseInputItem = buildResponsesUserMessageInputItemFromPayload(normalizedPayload);
+    if (!responseInputItem) return null;
+
+    const rawText = (typeof normalizedPayload.originalMessageText === 'string')
+      ? normalizedPayload.originalMessageText
+      : '';
+    const previewText = rawText.trim();
+    const imageCount = extractQueuedPreviewImages(normalizedPayload.inputImagesHtmlSnapshot || '').length;
+
+    return normalizePendingConversationSteer({
+      id: createPendingConversationSteerId(),
+      createdAt: Number.isFinite(Number(options?.createdAt))
+        ? Number(options.createdAt)
+        : Date.now(),
+      payload: normalizedPayload,
+      responseInputItem,
+      rawText,
+      textPreview: previewText || (imageCount > 0 ? '（转向中的图片消息）' : '（转向中的消息）'),
+      imageCount,
+      hasScreenshot: normalizedPayload.inputHasScreenshotSnapshot === true
+    });
+  }
+
   function summarizePendingConversationMutation(queueKey) {
     const normalizedQueueKey = resolveConversationQueueKey(queueKey);
     const pendingList = pendingConversationMutations.get(normalizedQueueKey);
@@ -2768,6 +2809,11 @@ export function createMessageSender(appContext) {
     const staleReasonText = staleReasonTextMap[normalizedTask.staleReason]
       || normalizedTask.staleReason
       || '';
+    const isQueuedUserMessage = (
+      normalizedTask.kind === 'append_user_message'
+      && normalizedTask.status === 'queued'
+      && normalizedTask.paused !== true
+    );
 
     return {
       id: normalizedTask.id,
@@ -2783,6 +2829,7 @@ export function createMessageSender(appContext) {
       paused: normalizedTask.paused === true,
       staleReasonText,
       failureMessage: normalizedTask.failureMessage || '',
+      canSteer: isQueuedUserMessage,
       canPauseToggle: normalizedTask.status === 'queued'
         || normalizedTask.status === 'paused'
         || normalizedTask.status === 'delayed_retry',
@@ -2972,6 +3019,54 @@ export function createMessageSender(appContext) {
     await continueQueuedConversationTask(queueKey, taskId);
   }
 
+  async function handleQueuePreviewSteer(queueKey, taskId) {
+    const queuedTask = getQueuedConversationTask(queueKey, taskId);
+    if (!queuedTask) return;
+
+    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+    const normalizedTask = normalizeConversationQueuedTask(queuedTask);
+    if (normalizedTask.kind !== 'append_user_message') {
+      showNotification?.({ message: '当前队列项不支持改为 steer', type: 'warning', duration: 1800 });
+      return;
+    }
+
+    const targetAttempt = getLatestRunningAttemptForConversationQueue(normalizedQueueKey);
+    if (!targetAttempt) {
+      showNotification?.({ message: '当前没有可接收 steer 的生成', type: 'warning', duration: 1800 });
+      return;
+    }
+
+    const pendingSteer = buildPendingConversationSteerFromPayload(normalizedTask.payload, {
+      createdAt: Date.now()
+    });
+    if (!pendingSteer) {
+      showNotification?.({ message: '该队列项无法构造成 steer', type: 'warning', duration: 1800 });
+      return;
+    }
+
+    const result = await requestConversationSteer({
+      queueKey: normalizedQueueKey,
+      pendingSteer,
+      targetAttempt
+    });
+    if (!result?.ok) {
+      showNotification?.({
+        message: `改为 steer 失败：${result?.error?.message || '未知错误'}`,
+        type: 'warning',
+        duration: 2200
+      });
+      return;
+    }
+
+    removeConversationQueuedTask(normalizedQueueKey, taskId);
+    scheduleConversationQueueFlush(normalizedQueueKey);
+    showNotification?.({
+      message: '已从队列改为当前生成的 steer',
+      type: 'info',
+      duration: 1800
+    });
+  }
+
   function handleQueuePreviewTogglePaused(queueKey, taskId) {
     const task = getQueuedConversationTask(queueKey, taskId);
     if (!task) return;
@@ -2985,11 +3080,20 @@ export function createMessageSender(appContext) {
     scheduleConversationQueueFlush(queueKey);
   }
 
-  function createQueuePreviewActionButton(label, className, title, onClick) {
+  function createQueuePreviewActionButton({ label, className = '', title = '', iconClass = '', onClick = null } = {}) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `conversation-send-queue-preview__action ${className}`.trim();
-    button.textContent = label;
+    if (iconClass) {
+      const icon = document.createElement('i');
+      icon.className = `conversation-send-queue-preview__action-icon ${iconClass}`.trim();
+      icon.setAttribute('aria-hidden', 'true');
+      button.appendChild(icon);
+    }
+    const labelSpan = document.createElement('span');
+    labelSpan.className = 'conversation-send-queue-preview__action-label';
+    labelSpan.textContent = label || '';
+    button.appendChild(labelSpan);
     button.title = title || label;
     button.setAttribute('aria-label', title || label);
     if (typeof onClick === 'function') {
@@ -3228,34 +3332,62 @@ export function createMessageSender(appContext) {
 
       const actions = document.createElement('div');
       actions.className = 'conversation-send-queue-preview__actions';
-      if (preview.canContinue) {
-        actions.appendChild(createQueuePreviewActionButton(
-          '继续',
-          'conversation-send-queue-preview__action--pause',
-          '基于当前最新历史，重新创建一条新的发送任务',
-          () => { void handleQueuePreviewContinue(activeQueueKey, preview.id); }
-        ));
+      if (preview.canSteer) {
+        actions.appendChild(createQueuePreviewActionButton({
+          label: 'Steer',
+          className: 'conversation-send-queue-preview__action--steer',
+          title: '改为当前生成的 steer',
+          iconClass: 'fa-solid fa-turn-down-left',
+          onClick: () => { void handleQueuePreviewSteer(activeQueueKey, preview.id); }
+        }));
+        actions.appendChild(createQueuePreviewActionButton({
+          label: '修改',
+          className: 'conversation-send-queue-preview__action--edit',
+          title: '移出队列并放回输入框',
+          iconClass: 'fa-regular fa-pen-to-square',
+          onClick: () => handleQueuePreviewEdit(activeQueueKey, preview.id)
+        }));
+        actions.appendChild(createQueuePreviewActionButton({
+          label: '取消',
+          className: 'conversation-send-queue-preview__action--cancel',
+          title: '从队列中取消这条消息',
+          iconClass: 'fa-solid fa-xmark',
+          onClick: () => handleQueuePreviewRemove(activeQueueKey, preview.id)
+        }));
+      } else {
+        if (preview.canContinue) {
+          actions.appendChild(createQueuePreviewActionButton({
+            label: '继续',
+            className: 'conversation-send-queue-preview__action--pause',
+            title: '基于当前最新历史，重新创建一条新的发送任务',
+            iconClass: 'fa-solid fa-play',
+            onClick: () => { void handleQueuePreviewContinue(activeQueueKey, preview.id); }
+          }));
+        }
+        actions.appendChild(createQueuePreviewActionButton({
+          label: '修改',
+          className: 'conversation-send-queue-preview__action--edit',
+          title: '移出队列并放回输入框',
+          iconClass: 'fa-regular fa-pen-to-square',
+          onClick: () => handleQueuePreviewEdit(activeQueueKey, preview.id)
+        }));
+        if (preview.canPauseToggle) {
+          actions.appendChild(createQueuePreviewActionButton({
+            label: preview.paused ? '继续' : '暂停',
+            className: 'conversation-send-queue-preview__action--pause',
+            title: preview.paused ? '取消暂停，允许轮到时自动发送' : '暂停自动发送，轮到时保留在队列中',
+            iconClass: preview.paused ? 'fa-solid fa-play' : 'fa-solid fa-pause',
+            onClick: () => handleQueuePreviewTogglePaused(activeQueueKey, preview.id)
+          }));
+        }
+        actions.appendChild(createQueuePreviewActionButton({
+          label: '移除',
+          className: 'conversation-send-queue-preview__action--remove',
+          title: '从队列中删除这条消息',
+          iconClass: 'fa-solid fa-trash-can',
+          onClick: () => handleQueuePreviewRemove(activeQueueKey, preview.id)
+        }));
       }
-      actions.appendChild(createQueuePreviewActionButton(
-        '修改',
-        'conversation-send-queue-preview__action--edit',
-        '移出队列并放回输入框',
-        () => handleQueuePreviewEdit(activeQueueKey, preview.id)
-      ));
-      if (preview.canPauseToggle) {
-        actions.appendChild(createQueuePreviewActionButton(
-          preview.paused ? '继续' : '暂停',
-          'conversation-send-queue-preview__action--pause',
-          preview.paused ? '取消暂停，允许轮到时自动发送' : '暂停自动发送，轮到时保留在队列中',
-          () => handleQueuePreviewTogglePaused(activeQueueKey, preview.id)
-        ));
-      }
-      actions.appendChild(createQueuePreviewActionButton(
-        '移除',
-        'conversation-send-queue-preview__action--remove',
-        '从队列中删除这条消息',
-        () => handleQueuePreviewRemove(activeQueueKey, preview.id)
-      ));
 
       item.appendChild(handle);
       item.appendChild(body);
@@ -10530,25 +10662,7 @@ export function createMessageSender(appContext) {
       hasImages: hasImagesInInput,
       hasScreenshot: hasScreenshotSnapshot
     });
-    const responseInputItem = buildResponsesUserMessageInputItemFromPayload(payload);
-    if (!responseInputItem) return null;
-
-    const rawText = (typeof payload.originalMessageText === 'string')
-      ? payload.originalMessageText
-      : '';
-    const previewText = rawText.trim();
-    const imageCount = extractQueuedPreviewImages(payload.inputImagesHtmlSnapshot || '').length;
-
-    return normalizePendingConversationSteer({
-      id: createPendingConversationSteerId(),
-      createdAt: Date.now(),
-      payload,
-      responseInputItem,
-      rawText,
-      textPreview: previewText || (imageCount > 0 ? '（转向中的图片消息）' : '（转向中的消息）'),
-      imageCount,
-      hasScreenshot: payload.inputHasScreenshotSnapshot === true
-    });
+    return buildPendingConversationSteerFromPayload(payload, { createdAt: Date.now() });
   }
 
   /**
