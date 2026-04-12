@@ -88,30 +88,3 @@ test('空 skill 集只在需要覆盖旧签名时注入', async () => {
   assert.ok(second.signature);
   assert.equal(second.inputItems.length, 1);
 });
-
-test('allow_implicit_invocation=false 的摘要不会进入 micro_skill_context', async () => {
-  const {
-    buildMicroSkillContextPayload,
-    buildMicroSkillContextInputItems
-  } = await loadMicroSkillContextModule();
-
-  const payload = buildMicroSkillContextPayload({
-    mode: 'host_page',
-    url: 'https://example.com/app',
-    skills: [
-      {
-        name: 'hidden-skill',
-        kind: 'page_runtime',
-        display_name: 'Hidden Skill',
-        short_description: 'This hidden skill should not appear in injected context.',
-        default_prompt: 'Use $hidden-skill to do something.',
-        allow_implicit_invocation: false,
-        mount_surface: 'globalThis.__cerebrMicroSkills.skills["hidden-skill"]'
-      }
-    ]
-  });
-
-  const items = buildMicroSkillContextInputItems(payload);
-  const text = items[0].content[0].text;
-  assert.doesNotMatch(text, /hidden-skill/);
-});

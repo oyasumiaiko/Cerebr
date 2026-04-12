@@ -29,10 +29,6 @@ const MICRO_SKILL_FILE_KIND_RUNTIME_SOURCE = 'runtime_source';
 const MICRO_SKILL_FILE_KIND_REFERENCE = 'reference';
 const MICRO_SKILL_FILE_KIND_UI_METADATA = 'ui_metadata';
 const MICRO_SKILL_FILE_KIND_TEMPLATE = 'template';
-const MICRO_SKILL_FILE_KIND_ASSET = 'asset';
-const MICRO_SKILL_DEFAULT_ALLOW_IMPLICIT_INVOCATION = true;
-const OPENAI_INTERFACE_SHORT_DESCRIPTION_MIN_LENGTH = 25;
-const OPENAI_INTERFACE_SHORT_DESCRIPTION_MAX_LENGTH = 64;
 
 function normalizeString(value) {
   return (typeof value === 'string') ? value.trim() : '';
@@ -94,8 +90,7 @@ function normalizeMicroSkillFileKind(value) {
     MICRO_SKILL_FILE_KIND_RUNTIME_SOURCE,
     MICRO_SKILL_FILE_KIND_REFERENCE,
     MICRO_SKILL_FILE_KIND_UI_METADATA,
-    MICRO_SKILL_FILE_KIND_TEMPLATE,
-    MICRO_SKILL_FILE_KIND_ASSET
+    MICRO_SKILL_FILE_KIND_TEMPLATE
   ]);
   if (!supportedKinds.has(text)) {
     throw new Error(`micro_skill_registry 参数错误：不支持的文件 kind \`${value}\`。`);
@@ -108,54 +103,7 @@ function normalizeMicroSkillInterface(rawInterface, fallbackDescription = '') {
   return {
     display_name: normalizeOptionalString(input.display_name),
     short_description: normalizeOptionalString(input.short_description) || normalizeOptionalString(fallbackDescription),
-    icon_small: normalizeOptionalString(input.icon_small)
-      ? normalizeMicroSkillFilePath(input.icon_small)
-      : null,
-    icon_large: normalizeOptionalString(input.icon_large)
-      ? normalizeMicroSkillFilePath(input.icon_large)
-      : null,
-    brand_color: normalizeOptionalString(input.brand_color),
     default_prompt: normalizeOptionalString(input.default_prompt)
-  };
-}
-
-function normalizeMicroSkillDependencies(rawDependencies) {
-  const input = ensurePlainObject(rawDependencies);
-  const rawTools = Array.isArray(input.tools) ? input.tools : [];
-  return {
-    tools: rawTools.map((rawTool, index) => {
-      const tool = ensurePlainObject(rawTool);
-      const type = normalizeString(tool.type).toLowerCase();
-      const value = normalizeString(tool.value);
-      if (!type) {
-        throw new Error(`micro_skill_registry 参数错误：dependencies.tools[${index}].type 不能为空。`);
-      }
-      if (type !== 'mcp') {
-        throw new Error(`micro_skill_registry 参数错误：dependencies.tools[${index}].type 目前只支持 \`mcp\`。`);
-      }
-      if (!value) {
-        throw new Error(`micro_skill_registry 参数错误：dependencies.tools[${index}].value 不能为空。`);
-      }
-      const transport = normalizeOptionalString(tool.transport);
-      const url = normalizeOptionalString(tool.url);
-      return {
-        type,
-        value,
-        description: normalizeOptionalString(tool.description),
-        transport,
-        url
-      };
-    })
-  };
-}
-
-function normalizeMicroSkillPolicy(rawPolicy) {
-  const input = ensurePlainObject(rawPolicy);
-  return {
-    allow_implicit_invocation: normalizeBoolean(
-      input.allow_implicit_invocation,
-      MICRO_SKILL_DEFAULT_ALLOW_IMPLICIT_INVOCATION
-    )
   };
 }
 
@@ -298,369 +246,6 @@ export function buildDefaultMicroSkillMountContract() {
   ].join('\n');
 }
 
-function getUnicodeLength(value) {
-  return Array.from(String(value || '')).length;
-}
-
-function normalizeValidationIssue(issue, fallbackLevel = 'error') {
-  const input = ensurePlainObject(issue);
-  return {
-    key: normalizeString(input.key) || 'unknown',
-    level: normalizeString(input.level) || fallbackLevel,
-    message: normalizeString(input.message) || '校验失败。'
-  };
-}
-
-function createValidationCollector() {
-  const checklist = [];
-  const errors = [];
-  const warnings = [];
-
-  function push(level, key, message) {
-    const issue = normalizeValidationIssue({ level, key, message }, level);
-    checklist.push(issue);
-    if (level === 'warning') {
-      warnings.push(issue);
-    } else if (level === 'error') {
-      errors.push(issue);
-    }
-  }
-
-  return {
-    pass(key, message) {
-      checklist.push(normalizeValidationIssue({ level: 'pass', key, message }, 'pass'));
-    },
-    warn(key, message) {
-      push('warning', key, message);
-    },
-    error(key, message) {
-      push('error', key, message);
-    },
-    build(extra = {}) {
-      return {
-        valid: errors.length <= 0,
-        errors,
-        warnings,
-        checklist,
-        ...extra
-      };
-    }
-  };
-}
-
-function stripYamlScalarQuotes(value) {
-  const text = String(value || '').trim();
-  if (!text) return '';
-  if ((text.startsWith('"') && text.endsWith('"')) || (text.startsWith('\'') && text.endsWith('\''))) {
-    return text.slice(1, -1);
-  }
-  return text;
-}
-
-export function parseMicroSkillInstructionFrontmatter(markdownText) {
-  const text = (typeof markdownText === 'string') ? markdownText : '';
-  if (!text.startsWith('---\n') && !text.startsWith('---\r\n')) {
-    return {
-      ok: false,
-      error: 'SKILL.md 缺少 YAML frontmatter 开始标记 `---`。'
-    };
-  }
-
-  const lines = text.split(/\r?\n/);
-  let closingIndex = -1;
-  for (let i = 1; i < lines.length; i += 1) {
-    if (lines[i].trim() === '---') {
-      closingIndex = i;
-      break;
-    }
-  }
-  if (closingIndex <= 0) {
-    return {
-      ok: false,
-      error: 'SKILL.md 缺少 YAML frontmatter 结束标记 `---`。'
-    };
-  }
-
-  const frontmatterLines = lines.slice(1, closingIndex);
-  const data = {};
-  let currentSection = null;
-  for (const rawLine of frontmatterLines) {
-    const line = rawLine.replace(/\t/g, '  ');
-    if (!line.trim()) continue;
-    const nestedMatch = line.match(/^\s+([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
-    if (nestedMatch && currentSection) {
-      const [, key, value] = nestedMatch;
-      data[currentSection] ||= {};
-      data[currentSection][key] = stripYamlScalarQuotes(value);
-      continue;
-    }
-
-    const topLevelMatch = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
-    if (!topLevelMatch) {
-      return {
-        ok: false,
-        error: `SKILL.md frontmatter 含有无法解析的行：${rawLine}`
-      };
-    }
-    const [, key, value] = topLevelMatch;
-    if (!value.trim()) {
-      data[key] ||= {};
-      currentSection = key;
-      continue;
-    }
-    data[key] = stripYamlScalarQuotes(value);
-    currentSection = null;
-  }
-
-  return {
-    ok: true,
-    frontmatter: data,
-    body: lines.slice(closingIndex + 1).join('\n')
-  };
-}
-
-function validateMicroSkillInstructionFile(skill, collector) {
-  const instructionPath = skill?.instruction?.path || '';
-  const instructionFile = Array.isArray(skill?.files)
-    ? skill.files.find((file) => file.path === instructionPath)
-    : null;
-  if (!instructionFile) {
-    collector.error('instruction.file', 'instruction.path 指向的 SKILL.md 文件不存在。');
-    return null;
-  }
-
-  collector.pass('instruction.file', `已找到 instruction 文件：${instructionPath}`);
-  const parsed = parseMicroSkillInstructionFrontmatter(instructionFile.content);
-  if (parsed.ok !== true) {
-    collector.error('instruction.frontmatter', parsed.error || 'SKILL.md frontmatter 无法解析。');
-    return null;
-  }
-
-  collector.pass('instruction.frontmatter', 'SKILL.md frontmatter 结构有效。');
-  const frontmatterName = normalizeString(parsed.frontmatter?.name);
-  const frontmatterDescription = normalizeString(parsed.frontmatter?.description);
-  if (!frontmatterName) {
-    collector.error('instruction.frontmatter.name', 'SKILL.md frontmatter 缺少 `name`。');
-  } else if (frontmatterName !== skill.name) {
-    collector.error('instruction.frontmatter.name', `SKILL.md frontmatter 的 name (${frontmatterName}) 与 manifest.name (${skill.name}) 不一致。`);
-  } else {
-    collector.pass('instruction.frontmatter.name', 'SKILL.md frontmatter.name 与 manifest.name 一致。');
-  }
-
-  if (!frontmatterDescription) {
-    collector.error('instruction.frontmatter.description', 'SKILL.md frontmatter 缺少 `description`。');
-  } else if (frontmatterDescription !== skill.description) {
-    collector.error('instruction.frontmatter.description', 'SKILL.md frontmatter.description 与 manifest.description 不一致。');
-  } else {
-    collector.pass('instruction.frontmatter.description', 'SKILL.md frontmatter.description 与 manifest.description 一致。');
-  }
-
-  const frontmatterShortDescription = normalizeString(parsed.frontmatter?.metadata?.['short-description']);
-  if (!frontmatterShortDescription) {
-    collector.warn('instruction.frontmatter.metadata.short-description', 'SKILL.md frontmatter 未声明 metadata.short-description。');
-  } else if (skill.interface.short_description && frontmatterShortDescription !== skill.interface.short_description) {
-    collector.warn('instruction.frontmatter.metadata.short-description', 'SKILL.md frontmatter.metadata.short-description 与 interface.short_description 不一致。');
-  } else {
-    collector.pass('instruction.frontmatter.metadata.short-description', 'SKILL.md frontmatter.metadata.short-description 与 manifest.interface.short_description 一致。');
-  }
-
-  const bodyLineCount = parsed.body.split(/\r?\n/).length;
-  if (bodyLineCount > 500) {
-    collector.warn('instruction.body.length', `SKILL.md 正文共 ${bodyLineCount} 行，超过 500 行的建议上限。`);
-  } else {
-    collector.pass('instruction.body.length', `SKILL.md 正文行数为 ${bodyLineCount}。`);
-  }
-  return instructionFile;
-}
-
-function validateOpenAiAlignedInterface(skill, collector) {
-  const input = ensurePlainObject(skill?.interface);
-  const shortDescription = normalizeString(input.short_description);
-  const defaultPrompt = normalizeString(input.default_prompt);
-  const displayName = normalizeString(input.display_name);
-  const brandColor = normalizeString(input.brand_color);
-
-  if (!displayName) {
-    collector.error('interface.display_name', 'interface.display_name 不能为空。');
-  } else {
-    collector.pass('interface.display_name', 'interface.display_name 已设置。');
-  }
-
-  if (!shortDescription) {
-    collector.error('interface.short_description', 'interface.short_description 不能为空。');
-  } else {
-    const length = getUnicodeLength(shortDescription);
-    if (length < OPENAI_INTERFACE_SHORT_DESCRIPTION_MIN_LENGTH || length > OPENAI_INTERFACE_SHORT_DESCRIPTION_MAX_LENGTH) {
-      collector.error(
-        'interface.short_description',
-        `interface.short_description 长度需在 ${OPENAI_INTERFACE_SHORT_DESCRIPTION_MIN_LENGTH} 到 ${OPENAI_INTERFACE_SHORT_DESCRIPTION_MAX_LENGTH} 个字符之间，当前为 ${length}。`
-      );
-    } else {
-      collector.pass('interface.short_description', `interface.short_description 长度为 ${length}，符合约束。`);
-    }
-  }
-
-  if (!defaultPrompt) {
-    collector.error('interface.default_prompt', 'interface.default_prompt 不能为空。');
-  } else if (!(defaultPrompt.includes(`$${skill.name}`) || defaultPrompt.includes('$skill-name'))) {
-    collector.error('interface.default_prompt', `interface.default_prompt 必须显式提到 \`$${skill.name}\`（或占位写法 \`$skill-name\`）。`);
-  } else {
-    collector.pass('interface.default_prompt', 'interface.default_prompt 已显式提到 skill 名称。');
-  }
-
-  if (brandColor) {
-    if (!/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(brandColor)) {
-      collector.error('interface.brand_color', 'interface.brand_color 必须是合法的 hex 颜色，例如 `#3B82F6`。');
-    } else {
-      collector.pass('interface.brand_color', 'interface.brand_color 格式有效。');
-    }
-  } else {
-    collector.pass('interface.brand_color', 'interface.brand_color 未设置，可选。');
-  }
-
-  ['icon_small', 'icon_large'].forEach((fieldName) => {
-    const iconPath = normalizeOptionalString(input[fieldName]);
-    if (!iconPath) {
-      collector.pass(`interface.${fieldName}`, `interface.${fieldName} 未设置，可选。`);
-      return;
-    }
-    const file = Array.isArray(skill?.files)
-      ? skill.files.find((item) => item.path === iconPath)
-      : null;
-    if (!file) {
-      collector.error(`interface.${fieldName}`, `interface.${fieldName} 指向的文件不存在：${iconPath}`);
-      return;
-    }
-    if (file.kind !== MICRO_SKILL_FILE_KIND_ASSET) {
-      collector.error(`interface.${fieldName}`, `interface.${fieldName} 必须指向 kind=\`${MICRO_SKILL_FILE_KIND_ASSET}\` 的文件：${iconPath}`);
-      return;
-    }
-    collector.pass(`interface.${fieldName}`, `interface.${fieldName} 指向有效 asset 文件：${iconPath}`);
-  });
-}
-
-function validateDependenciesAndPolicy(skill, collector) {
-  const dependencies = ensurePlainObject(skill?.dependencies);
-  const tools = Array.isArray(dependencies.tools) ? dependencies.tools : [];
-  if (tools.length <= 0) {
-    collector.pass('dependencies.tools', '未声明 dependencies.tools，可选。');
-  } else {
-    tools.forEach((tool, index) => {
-      const keyPrefix = `dependencies.tools[${index}]`;
-      if (tool.type !== 'mcp') {
-        collector.error(`${keyPrefix}.type`, 'dependencies.tools[].type 当前只支持 `mcp`。');
-      } else {
-        collector.pass(`${keyPrefix}.type`, 'dependencies.tools[].type 为 `mcp`。');
-      }
-      if (!normalizeString(tool.value)) {
-        collector.error(`${keyPrefix}.value`, 'dependencies.tools[].value 不能为空。');
-      } else {
-        collector.pass(`${keyPrefix}.value`, `dependencies.tools[].value 已设置为 ${tool.value}。`);
-      }
-      if (tool.transport && !normalizeString(tool.url)) {
-        collector.warn(`${keyPrefix}.url`, '声明了 transport 但没有提供 url。');
-      }
-    });
-  }
-
-  if (typeof skill?.policy?.allow_implicit_invocation !== 'boolean') {
-    collector.error('policy.allow_implicit_invocation', 'policy.allow_implicit_invocation 必须是布尔值。');
-  } else {
-    collector.pass('policy.allow_implicit_invocation', `policy.allow_implicit_invocation=${skill.policy.allow_implicit_invocation}.`);
-  }
-}
-
-function validateRuntimeShape(skill, collector) {
-  if (skill.kind !== MICRO_SKILL_KIND_PAGE_RUNTIME) {
-    collector.pass('runtime.entry_path', '当前 skill 不是 page runtime skill，不要求 runtime.entry_path。');
-    return;
-  }
-
-  const runtimeEntryPath = normalizeString(skill?.runtime?.entry_path);
-  if (!runtimeEntryPath) {
-    collector.error('runtime.entry_path', 'page runtime skill 必须提供 runtime.entry_path。');
-    return;
-  }
-
-  const runtimeEntryFile = Array.isArray(skill?.files)
-    ? skill.files.find((file) => file.path === runtimeEntryPath)
-    : null;
-  if (!runtimeEntryFile) {
-    collector.error('runtime.entry_path', `runtime.entry_path 指向的文件不存在：${runtimeEntryPath}`);
-    return;
-  }
-  if (runtimeEntryFile.kind !== MICRO_SKILL_FILE_KIND_RUNTIME_SOURCE) {
-    collector.error('runtime.entry_path', `runtime.entry_path 必须指向 kind=\`${MICRO_SKILL_FILE_KIND_RUNTIME_SOURCE}\` 的文件。`);
-    return;
-  }
-
-  const runtimeFileCount = Array.isArray(skill?.files)
-    ? skill.files.filter((file) => file.kind === MICRO_SKILL_FILE_KIND_RUNTIME_SOURCE).length
-    : 0;
-  if (runtimeFileCount <= 0) {
-    collector.error('runtime.files', 'page runtime skill 至少需要 1 个 runtime_source 文件。');
-  } else {
-    collector.pass('runtime.files', `已找到 ${runtimeFileCount} 个 runtime_source 文件。`);
-  }
-}
-
-export function validateMicroSkillRecord(record, options = {}) {
-  const collector = createValidationCollector();
-  let normalizedRecord = null;
-  let normalizeErrorMessage = '';
-  try {
-    const existingRecord = ensurePlainObject(record);
-    const hasPersistenceFields = !!(
-      existingRecord?.created_at
-      || existingRecord?.updated_at
-      || existingRecord?.revision
-      || existingRecord?.builtin === true
-      || existingRecord?.read_only === true
-    );
-    normalizedRecord = hasPersistenceFields
-      ? normalizeStoredMicroSkillRecord(record)
-      : buildStoredMicroSkillRecord(record, null);
-  } catch (error) {
-    normalizeErrorMessage = normalizeString(error?.message) || 'skill 结构无效，无法完成规范化。';
-  }
-
-  if (!normalizedRecord) {
-    const issue = normalizeValidationIssue({
-      key: 'skill.normalize',
-      level: 'error',
-      message: normalizeErrorMessage || 'skill 结构无效，无法完成规范化。'
-    });
-    return {
-      ok: true,
-      valid: false,
-      errors: [issue],
-      warnings: [],
-      checklist: [issue],
-      normalized_skill: null
-    };
-  }
-
-  validateMicroSkillInstructionFile(normalizedRecord, collector);
-  validateOpenAiAlignedInterface(normalizedRecord, collector);
-  validateDependenciesAndPolicy(normalizedRecord, collector);
-  validateRuntimeShape(normalizedRecord, collector);
-
-  if (options?.requireMatch !== false && normalizedRecord.kind === MICRO_SKILL_KIND_PAGE_RUNTIME) {
-    if (Array.isArray(normalizedRecord.match) && normalizedRecord.match.length > 0) {
-      collector.pass('match', `已声明 ${normalizedRecord.match.length} 条 @match 规则。`);
-    } else {
-      collector.error('match', 'page runtime skill 必须声明至少 1 条 @match 规则。');
-    }
-  }
-
-  return {
-    ok: true,
-    ...collector.build({
-      normalized_skill: normalizedRecord
-    })
-  };
-}
-
 /**
  * 校验并规范化 Chrome/TM 风格 `@match`。
  */
@@ -781,8 +366,6 @@ export function normalizeMicroSkillInput(rawSkill, options = {}) {
     name: normalizeMicroSkillName(skill.name),
     description,
     interface: normalizeMicroSkillInterface(skill.interface, description),
-    dependencies: normalizeMicroSkillDependencies(skill.dependencies),
-    policy: normalizeMicroSkillPolicy(skill.policy),
     match: normalizeMicroSkillMatchPatterns(skill.match, {
       allowEmpty: kind !== MICRO_SKILL_KIND_PAGE_RUNTIME
     }),
@@ -908,16 +491,7 @@ export function buildMicroSkillSummary(record) {
     interface: {
       display_name: skill.interface.display_name || skill.name,
       short_description: skill.interface.short_description || skill.description,
-      icon_small: skill.interface.icon_small,
-      icon_large: skill.interface.icon_large,
-      brand_color: skill.interface.brand_color,
       default_prompt: skill.interface.default_prompt
-    },
-    dependencies: {
-      tools: Array.isArray(skill.dependencies?.tools) ? skill.dependencies.tools.map((tool) => ({ ...tool })) : []
-    },
-    policy: {
-      allow_implicit_invocation: skill.policy?.allow_implicit_invocation !== false
     },
     match: [...skill.match],
     enabled: skill.enabled,
@@ -941,44 +515,24 @@ export function buildMicroSkillSummary(record) {
 export function buildMicroSkillDetail(record) {
   const skill = normalizeStoredMicroSkillRecord(record);
   if (!skill) return null;
-  const { normalized_skill, ...validation } = validateMicroSkillRecord(skill);
   return {
     ...buildMicroSkillSummary(skill),
     instruction: {
       path: skill.instruction.path,
       content: readInstructionContent(skill)
     },
-    files: buildMicroSkillFileManifest(skill, { includeContent: false }),
-    validation
+    files: buildMicroSkillFileManifest(skill, { includeContent: false })
   };
 }
 
 export function buildMicroSkillPackagePayload(record) {
   const skill = normalizeStoredMicroSkillRecord(record);
   if (!skill) return null;
-  const { normalized_skill, ...validation } = validateMicroSkillRecord(skill);
   return {
     kind: skill.kind,
     builtin: skill.builtin === true,
     read_only: skill.read_only === true,
     name: skill.name,
-    description: skill.description,
-    interface: {
-      display_name: skill.interface.display_name || skill.name,
-      short_description: skill.interface.short_description || skill.description,
-      icon_small: skill.interface.icon_small,
-      icon_large: skill.interface.icon_large,
-      brand_color: skill.interface.brand_color,
-      default_prompt: skill.interface.default_prompt
-    },
-    dependencies: {
-      tools: Array.isArray(skill.dependencies?.tools) ? skill.dependencies.tools.map((tool) => ({ ...tool })) : []
-    },
-    policy: {
-      allow_implicit_invocation: skill.policy?.allow_implicit_invocation !== false
-    },
-    match: [...skill.match],
-    enabled: skill.enabled,
     revision: skill.revision,
     instruction: {
       path: skill.instruction.path
@@ -986,8 +540,7 @@ export function buildMicroSkillPackagePayload(record) {
     runtime: {
       entry_path: skill.runtime.entry_path
     },
-    files: buildMicroSkillFileManifest(skill, { includeContent: true }),
-    validation
+    files: buildMicroSkillFileManifest(skill, { includeContent: true })
   };
 }
 
@@ -1032,7 +585,6 @@ export function buildMicroSkillContextSummary(record) {
     display_name: skill.interface.display_name || skill.name,
     short_description: skill.interface.short_description || skill.description,
     default_prompt: skill.interface.default_prompt,
-    allow_implicit_invocation: skill.policy?.allow_implicit_invocation !== false,
     mount_surface: skill.kind === MICRO_SKILL_KIND_BUILTIN_GUIDANCE
       ? 'Instruction-only built-in skill. Read detail via micro_skill_registry(action="read_detail", skill_name="skill-creator").'
       : `${CEREBR_MICRO_SKILL_MOUNT_SURFACE}.skills["${skill.name}"] / ${CEREBR_MICRO_SKILL_MOUNT_SURFACE}.invoke("${skill.name}.method", ...args)`
@@ -1137,38 +689,7 @@ function buildMicroSkillRecordInputSchemaDescription() {
         properties: {
           display_name: { type: ['string', 'null'] },
           short_description: { type: ['string', 'null'] },
-          icon_small: { type: ['string', 'null'] },
-          icon_large: { type: ['string', 'null'] },
-          brand_color: { type: ['string', 'null'] },
           default_prompt: { type: ['string', 'null'] }
-        }
-      },
-      dependencies: {
-        type: ['object', 'null'],
-        additionalProperties: false,
-        properties: {
-          tools: {
-            type: 'array',
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              properties: {
-                type: { type: 'string' },
-                value: { type: 'string' },
-                description: { type: ['string', 'null'] },
-                transport: { type: ['string', 'null'] },
-                url: { type: ['string', 'null'] }
-              },
-              required: ['type', 'value']
-            }
-          }
-        }
-      },
-      policy: {
-        type: ['object', 'null'],
-        additionalProperties: false,
-        properties: {
-          allow_implicit_invocation: { type: ['boolean', 'null'] }
         }
       },
       match: {
@@ -1217,7 +738,7 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
       '管理 Cerebr 扩展侧持久化保存的浏览器微型 skill package。',
       '每个 skill 由 manifest + 虚拟文件树组成，底层默认使用 IndexedDB 持久化。',
       '摘要/详情/整包源码遵循渐进式披露：默认只注入 summary，详细说明和具体文件需要按需读取。',
-      '支持整包 create/update，也支持按文件 read/write/delete，并在需要时刷新当前网页的挂载；另外提供 validate 动作用于显式校验模板、OpenAI interface 语义和运行时约束。'
+      '支持整包 create/update，也支持按文件 read/write/delete，并在需要时刷新当前网页的挂载。'
     ].join(' '),
     strict: false,
     parameters: {
@@ -1226,7 +747,7 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
       properties: {
         action: {
           type: 'string',
-          description: '必填。支持 list、read_detail、read_package、read_file、write_file、create、update、validate、delete_file、delete、enable、disable、refresh_current_document。旧别名 read_source/read_source_file/upsert_source_file/delete_source_file 也可用。'
+          description: '必填。支持 list、read_detail、read_package、read_file、write_file、create、update、delete_file、delete、enable、disable、refresh_current_document。旧别名 read_source/read_source_file/upsert_source_file/delete_source_file 也可用。'
         },
         skill_name: {
           type: ['string', 'null'],
@@ -1298,7 +819,6 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
     'write_file',
     'create',
     'update',
-    'validate',
     'delete_file',
     'delete',
     'enable',
@@ -1331,24 +851,6 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
         requireFiles: true,
         requireContent: true
       }),
-      file_path: null,
-      file: null,
-      set_as_instruction: false,
-      set_as_runtime_entry: false,
-      next_instruction_path: null,
-      next_runtime_entry_path: null
-    };
-  }
-
-  if (action === 'validate') {
-    const hasInlineSkill = !!(args.skill && typeof args.skill === 'object' && !Array.isArray(args.skill));
-    if (!skillName && !hasInlineSkill) {
-      throw new Error('micro_skill_registry 参数错误：action=validate 时必须提供 skill_name 或 skill。');
-    }
-    return {
-      action,
-      skill_name: skillName,
-      skill: hasInlineSkill ? args.skill : null,
       file_path: null,
       file: null,
       set_as_instruction: false,
