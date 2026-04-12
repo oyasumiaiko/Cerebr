@@ -21,6 +21,7 @@ import { getAssistantActivityTimeline } from '../utils/assistant_activity_timeli
 import { resolveResponseActivityPanelModeState } from '../utils/response_activity_panel_mode.js';
 import { resolveResponseActivityToolExpansionState } from '../utils/response_activity_tool_auto_collapse.js';
 import { normalizeAssistantPreResponseStatus } from '../utils/assistant_pre_response_status.js';
+import { buildMicroSkillApplyPatchPreview } from '../utils/micro_skill_patch_preview.js';
 import {
   extractResponsesToolOutputInputImages,
   formatResponsesToolOutputForDisplay,
@@ -1443,6 +1444,7 @@ export function createMessageProcessor(appContext) {
   }
 
   const RESPONSE_ACTIVITY_JS_RUNTIME_TOOL_NAME = 'js_runtime_execute';
+  const RESPONSE_ACTIVITY_MICRO_SKILL_REGISTRY_TOOL_NAME = 'micro_skill_registry';
 
   function parseResponseToolCallArgumentsObject(rawArguments) {
     const text = (typeof rawArguments === 'string') ? rawArguments.trim() : '';
@@ -1458,6 +1460,11 @@ export function createMessageProcessor(appContext) {
   function isResponseActivityJsRuntimeEntry(record) {
     return String(record?.type || '').toLowerCase() === 'function_call'
       && String(record?.name || '').trim().toLowerCase() === RESPONSE_ACTIVITY_JS_RUNTIME_TOOL_NAME;
+  }
+
+  function isResponseActivityMicroSkillRegistryEntry(record) {
+    return String(record?.type || '').toLowerCase() === 'function_call'
+      && String(record?.name || '').trim().toLowerCase() === RESPONSE_ACTIVITY_MICRO_SKILL_REGISTRY_TOOL_NAME;
   }
 
   function getResponseActivityJsRuntimeMeta(record) {
@@ -1597,6 +1604,137 @@ export function createMessageProcessor(appContext) {
     appendResponseActivityToolOutput(toolBodyInner, formattedOutput, outputImages);
   }
 
+  function getMicroSkillDiffOperationLabel(operation) {
+    switch (String(operation || '').trim().toLowerCase()) {
+      case 'add':
+        return '新增';
+      case 'delete':
+        return '删除';
+      case 'move':
+        return '移动';
+      default:
+        return '修改';
+    }
+  }
+
+  function renderResponseActivityMicroSkillApplyPatchPreview(toolBodyInner, entry) {
+    if (!toolBodyInner || !isResponseActivityMicroSkillRegistryEntry(entry)) return false;
+    const preview = buildMicroSkillApplyPatchPreview(entry.arguments);
+    if (!preview || !Array.isArray(preview.files) || preview.files.length <= 0) return false;
+
+    const summary = document.createElement('div');
+    summary.className = 'response-activity-tool-diff-summary';
+
+    const summaryPrimary = document.createElement('div');
+    summaryPrimary.className = 'response-activity-tool-diff-summary-primary';
+    summaryPrimary.textContent = `${preview.totalFiles} 个文件变更`;
+    summary.appendChild(summaryPrimary);
+
+    const summaryMeta = document.createElement('div');
+    summaryMeta.className = 'response-activity-tool-diff-summary-meta';
+    const metaParts = [];
+    if (preview.totalAdditions > 0) metaParts.push(`+${preview.totalAdditions}`);
+    if (preview.totalDeletions > 0) metaParts.push(`-${preview.totalDeletions}`);
+    if (preview.skillName) metaParts.push(`skill ${preview.skillName}`);
+    if (preview.truncatedFiles > 0) metaParts.push(`另有 ${preview.truncatedFiles} 个文件未展开`);
+    if (metaParts.length > 0) {
+      summaryMeta.textContent = metaParts.join(' · ');
+      summary.appendChild(summaryMeta);
+    }
+    toolBodyInner.appendChild(summary);
+
+    const previewRoot = document.createElement('div');
+    previewRoot.className = 'response-activity-tool-diff-preview';
+
+    preview.files.forEach((file) => {
+      const fileCard = document.createElement('section');
+      fileCard.className = 'response-activity-tool-diff-file';
+
+      const fileHeader = document.createElement('div');
+      fileHeader.className = 'response-activity-tool-diff-file-header';
+
+      const badge = document.createElement('span');
+      badge.className = `response-activity-tool-diff-badge is-${file.operation || 'update'}`;
+      badge.textContent = getMicroSkillDiffOperationLabel(file.operation);
+      fileHeader.appendChild(badge);
+
+      const pathWrap = document.createElement('div');
+      pathWrap.className = 'response-activity-tool-diff-path-wrap';
+
+      const pathText = document.createElement('div');
+      pathText.className = 'response-activity-tool-diff-path';
+      pathText.textContent = file.path || '(unknown)';
+      pathWrap.appendChild(pathText);
+
+      if (file.movePath) {
+        const moveText = document.createElement('div');
+        moveText.className = 'response-activity-tool-diff-move-path';
+        moveText.textContent = `→ ${file.movePath}`;
+        pathWrap.appendChild(moveText);
+      }
+
+      fileHeader.appendChild(pathWrap);
+
+      const statText = document.createElement('div');
+      statText.className = 'response-activity-tool-diff-file-stats';
+      const fileMetaParts = [];
+      if (file.additions > 0) fileMetaParts.push(`+${file.additions}`);
+      if (file.deletions > 0) fileMetaParts.push(`-${file.deletions}`);
+      if (fileMetaParts.length <= 0) {
+        fileMetaParts.push(file.operation === 'delete' ? '文件已删除' : '结构变更');
+      }
+      statText.textContent = fileMetaParts.join(' ');
+      fileHeader.appendChild(statText);
+
+      fileCard.appendChild(fileHeader);
+
+      const lines = Array.isArray(file.lines) ? file.lines : [];
+      if (lines.length > 0) {
+        const fileBody = document.createElement('div');
+        fileBody.className = 'response-activity-tool-diff-file-body';
+
+        lines.forEach((line) => {
+          const row = document.createElement('div');
+          row.className = `response-activity-tool-diff-line is-${line.kind || 'context'}`;
+
+          const marker = document.createElement('span');
+          marker.className = 'response-activity-tool-diff-line-marker';
+          marker.textContent = line.kind === 'add'
+            ? '+'
+            : line.kind === 'delete'
+              ? '-'
+              : line.kind === 'hunk'
+                ? '@'
+                : line.kind === 'meta'
+                  ? '·'
+                  : ' ';
+          row.appendChild(marker);
+
+          const code = document.createElement('span');
+          code.className = 'response-activity-tool-diff-line-text';
+          code.textContent = line.text || '';
+          row.appendChild(code);
+
+          fileBody.appendChild(row);
+        });
+
+        if (file.truncated === true && file.omittedLineCount > 0) {
+          const truncated = document.createElement('div');
+          truncated.className = 'response-activity-tool-diff-truncated';
+          truncated.textContent = `… 省略 ${file.omittedLineCount} 行`;
+          fileBody.appendChild(truncated);
+        }
+
+        fileCard.appendChild(fileBody);
+      }
+
+      previewRoot.appendChild(fileCard);
+    });
+
+    toolBodyInner.appendChild(previewRoot);
+    return true;
+  }
+
   /**
    * 渲染“非 JS 自定义/内置工具”的详情体。
    *
@@ -1610,6 +1748,7 @@ export function createMessageProcessor(appContext) {
    */
   function renderResponseActivityGenericToolBody(toolBodyInner, entry, snapshot = null) {
     if (!toolBodyInner || !entry) return;
+    const renderedPatchPreview = renderResponseActivityMicroSkillApplyPatchPreview(toolBodyInner, entry);
 
     getResponseActivityToolSecondaryLines(entry).forEach((line) => {
       const secondary = document.createElement('div');
@@ -1618,7 +1757,7 @@ export function createMessageProcessor(appContext) {
       toolBodyInner.appendChild(secondary);
     });
 
-    if (typeof entry.arguments === 'string' && entry.arguments.trim()) {
+    if (!renderedPatchPreview && typeof entry.arguments === 'string' && entry.arguments.trim()) {
       const pre = document.createElement('pre');
       pre.className = 'response-activity-tool-arguments';
       setupResponseActivityExpandableTextBlock(pre);
