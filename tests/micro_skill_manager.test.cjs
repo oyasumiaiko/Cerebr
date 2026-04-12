@@ -388,6 +388,15 @@ test('内置 skill-creator 会自动出现在列表中且保持只读', async ()
     }),
     /内置只读指导 skill/
   );
+
+  const builtinSearch = await manager.executeRegistryAction({
+    action: 'search_files',
+    skill_name: 'skill-creator',
+    pattern: 'search_files'
+  });
+  assert.equal(builtinSearch.ok, true);
+  assert.equal(builtinSearch.total_matches > 0, true);
+  assert.equal(builtinSearch.matches[0].skill_name, 'skill-creator');
 });
 
 test('read_detail/read_file 支持截断预览、字符偏移与按行续读', async () => {
@@ -434,7 +443,8 @@ test('read_detail/read_file 支持截断预览、字符偏移与按行续读', a
     action: 'read_detail',
     skill_name: 'long-dom-probe',
     start_line: 3,
-    end_line: 4
+    end_line: 4,
+    include_line_numbers: true
   });
   assert.equal(detailByLine.ok, true);
   assert.equal(detailByLine.skill.instruction.content_read.mode, 'line_range');
@@ -442,13 +452,15 @@ test('read_detail/read_file 支持截断预览、字符偏移与按行续读', a
   assert.equal(detailByLine.skill.instruction.content_read.end_line, 4);
   assert.match(detailByLine.skill.instruction.content, /^Line 1:/m);
   assert.doesNotMatch(detailByLine.skill.instruction.content, /^Line 3:/m);
+  assert.match(detailByLine.skill.instruction.numbered_content, /^3 \| Line 1:/m);
 
   const fileByChars = await manager.executeRegistryAction({
     action: 'read_file',
     skill_name: 'long-dom-probe',
     file_path: 'src/main.js',
     skip_chars: 200,
-    max_chars: 150
+    max_chars: 150,
+    include_line_numbers: true
   });
   assert.equal(fileByChars.ok, true);
   assert.equal(fileByChars.skill.file.content_read.mode, 'char_range');
@@ -456,6 +468,77 @@ test('read_detail/read_file 支持截断预览、字符偏移与按行续读', a
   assert.equal(fileByChars.skill.file.content_read.max_chars, 150);
   assert.equal(fileByChars.skill.file.content.length, 150);
   assert.equal(fileByChars.skill.file.content_read.has_more_after_range, true);
+  assert.match(fileByChars.skill.file.numbered_content, /^\d+ \| /m);
+});
+
+test('list_files/search_files 支持单 skill 与全局搜索闭环', async () => {
+  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+
+  const manager = createMicroSkillManager({
+    store: createMockStore([
+      {
+        ...buildSkillInput('dom-probe'),
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-02T00:00:00.000Z',
+        revision: 1
+      },
+      {
+        ...buildSkillInput('dom-probe-2'),
+        created_at: '2026-01-03T00:00:00.000Z',
+        updated_at: '2026-01-04T00:00:00.000Z',
+        revision: 1
+      }
+    ]),
+    userScriptsApi: {
+      async getScripts() { return []; },
+      async register() {},
+      async update() {},
+      async unregister() {}
+    },
+    tabsApi: {
+      async get() {
+        return { url: 'https://app.example.com/path', title: 'Example' };
+      }
+    },
+    jsRuntimeManager: {
+      async execute() {
+        return { ok: true, tabId: 1, value: null, logs: [], items: [] };
+      }
+    }
+  });
+
+  const listFiles = await manager.executeRegistryAction({
+    action: 'list_files',
+    skill_name: 'dom-probe'
+  });
+  assert.equal(listFiles.ok, true);
+  assert.equal(listFiles.total_files, 4);
+  assert.equal(listFiles.files[0].path, 'manifest.json');
+  assert.equal(listFiles.files[0].skill_name, 'dom-probe');
+
+  const globalSearch = await manager.executeRegistryAction({
+    action: 'search_files',
+    pattern: 'readTitle',
+    path_glob: 'src/**/*.js',
+    context_before: 1,
+    context_after: 1,
+    max_results: 10
+  });
+  assert.equal(globalSearch.ok, true);
+  assert.equal(globalSearch.total_matches >= 4, true);
+  assert.equal(globalSearch.matches.every((item) => item.file_path.startsWith('src/')), true);
+  assert.equal(globalSearch.matches.every((item) => item.before.length <= 1 && item.after.length <= 1), true);
+
+  const targetedRead = await manager.executeRegistryAction({
+    action: 'read_file',
+    skill_name: globalSearch.matches[0].skill_name,
+    file_path: globalSearch.matches[0].file_path,
+    start_line: globalSearch.matches[0].line_number,
+    end_line: globalSearch.matches[0].line_number,
+    include_line_numbers: true
+  });
+  assert.equal(targetedRead.ok, true);
+  assert.match(targetedRead.skill.file.numbered_content, new RegExp(`^${globalSearch.matches[0].line_number} \\| `, 'm'));
 });
 
 test('reconcileRegisteredSkills 会对现有动态脚本做 register/update/unregister 分流', async () => {

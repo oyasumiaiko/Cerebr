@@ -28,6 +28,8 @@ export const CEREBR_MICRO_SKILL_MOUNT_SURFACE = 'globalThis.__cerebrMicroSkills'
 export const MICRO_SKILL_VIRTUAL_MANIFEST_PATH = 'manifest.json';
 export const MICRO_SKILL_READ_DEFAULT_RANGE_CHARS = PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS;
 export const MICRO_SKILL_READ_MAX_CHARS = PAGE_CONTENT_READ_MAX_CHARS;
+export const MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS = 50;
+export const MICRO_SKILL_SEARCH_MAX_RESULTS = 200;
 
 const MICRO_SKILL_KIND_PAGE_RUNTIME = 'page_runtime';
 const MICRO_SKILL_KIND_BUILTIN_GUIDANCE = 'builtin_guidance';
@@ -398,6 +400,12 @@ function countLogicalLines(text) {
   return splitLogicalLines(text).lines.length;
 }
 
+function countLogicalLinesBeforeChar(text, offset) {
+  const normalized = normalizeReadTextLineEndings(String(text ?? '').slice(0, Math.max(0, Math.trunc(Number(offset) || 0))));
+  if (!normalized) return 1;
+  return normalized.split('\n').length;
+}
+
 function buildMicroSkillTextReadResult(text, rawArgs, options = {}) {
   const sourceText = String(text ?? '');
   const range = normalizeMicroSkillReadRangeArgs(rawArgs, {
@@ -461,6 +469,200 @@ function buildMicroSkillTextReadResult(text, rawArgs, options = {}) {
     has_more_after_range: end < totalChars,
     content
   };
+}
+
+function buildMicroSkillNumberedContent(text, readResult) {
+  const sourceText = String(text ?? '');
+  const returnedText = normalizeReadTextLineEndings(readResult?.content || '');
+  if (!returnedText) return '';
+
+  const lines = returnedText.split('\n');
+  if (lines.length > 0 && lines[lines.length - 1] === '') {
+    lines.pop();
+  }
+  if (lines.length <= 0) return '';
+
+  let firstLineNumber = 1;
+  if (readResult?.mode === 'line_range' && Number.isFinite(Number(readResult?.start_line))) {
+    firstLineNumber = Math.max(1, Math.trunc(Number(readResult.start_line)));
+  } else if (Number.isFinite(Number(readResult?.skip_chars))) {
+    firstLineNumber = countLogicalLinesBeforeChar(sourceText, readResult.skip_chars);
+  }
+
+  const width = String(firstLineNumber + lines.length - 1).length;
+  return lines
+    .map((line, index) => `${String(firstLineNumber + index).padStart(width, ' ')} | ${line}`)
+    .join('\n');
+}
+
+function buildMicroSkillResolvedFiles(record, options = {}) {
+  const skill = normalizeStoredMicroSkillRecord(record);
+  if (!skill) return [];
+  const includeContent = options?.includeContent !== false;
+  const files = skill.files.map((file) => ({
+    skill_name: skill.name,
+    path: file.path,
+    kind: file.kind,
+    is_manifest: false,
+    is_instruction: file.path === skill.instruction.path,
+    is_runtime_entry: !!skill.runtime.entry_path && file.path === skill.runtime.entry_path,
+    ...(includeContent ? { content: file.content } : {})
+  }));
+  const manifestFile = buildMicroSkillVirtualManifestFile(skill, { includeContent });
+  if (manifestFile) {
+    files.unshift({
+      skill_name: skill.name,
+      path: manifestFile.path,
+      kind: null,
+      is_manifest: true,
+      is_instruction: false,
+      is_runtime_entry: false,
+      ...(includeContent ? { content: manifestFile.content } : {})
+    });
+  }
+  return files;
+}
+
+function normalizeMicroSkillSearchCaseMode(value) {
+  const text = normalizeString(value).toLowerCase();
+  if (!text || text === 'smart') return 'smart';
+  if (text === 'sensitive' || text === 'insensitive') return text;
+  throw new Error(`micro_skill_registry 参数错误：不支持的 case_mode \`${value}\`。`);
+}
+
+function normalizeMicroSkillSearchMaxResults(value) {
+  if (value == null) return MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS;
+  return Math.max(1, Math.min(MICRO_SKILL_SEARCH_MAX_RESULTS, clampPositiveInt(value, MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS)));
+}
+
+function normalizeMicroSkillContextLineCount(value) {
+  if (value == null) return 0;
+  return Math.max(0, Math.min(10, clampNonNegativeInt(value, 0)));
+}
+
+function normalizeMicroSkillSearchPathGlob(value) {
+  const rawGlob = normalizeString(value).replace(/\\/g, '/');
+  const withoutLeadingDot = rawGlob.replace(/^(?:\.\/)+/, '');
+  const normalizedGlob = withoutLeadingDot.startsWith('/')
+    ? withoutLeadingDot.slice(1)
+    : withoutLeadingDot;
+  if (!normalizedGlob) return null;
+  if (normalizedGlob.length > 256) {
+    throw new Error('micro_skill_registry 参数错误：path_glob 长度不能超过 256。');
+  }
+  if (!/^[a-zA-Z0-9._/*?-]+$/.test(normalizedGlob)) {
+    throw new Error(`micro_skill_registry 参数错误：不支持的 path_glob \`${normalizedGlob}\`。`);
+  }
+  const segments = normalizedGlob.split('/');
+  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
+    throw new Error(`micro_skill_registry 参数错误：path_glob \`${normalizedGlob}\` 不能包含空段、"." 或 ".."。`);
+  }
+  return normalizedGlob;
+}
+
+function buildPathGlobRegExp(pathGlob) {
+  if (!pathGlob) return null;
+  const normalized = normalizeMicroSkillSearchPathGlob(pathGlob);
+  let pattern = '^';
+  for (let index = 0; index < normalized.length; index += 1) {
+    const char = normalized[index];
+    const next = normalized[index + 1];
+    const afterNext = normalized[index + 2];
+    if (char === '*' && next === '*' && afterNext === '/') {
+      pattern += '(?:[^/]+/)*';
+      index += 2;
+      continue;
+    }
+    if (char === '*' && next === '*') {
+      pattern += '.*';
+      index += 1;
+      continue;
+    }
+    if (char === '*') {
+      pattern += '[^/]*';
+      continue;
+    }
+    if (char === '?') {
+      pattern += '[^/]';
+      continue;
+    }
+    pattern += escapeRegExp(char);
+  }
+  pattern += '$';
+  return new RegExp(pattern);
+}
+
+function resolveMicroSkillSearchFlags(pattern, options = {}) {
+  const regex = options?.regex === true;
+  const caseMode = normalizeMicroSkillSearchCaseMode(options?.case_mode);
+  const hasUppercase = /[A-Z]/.test(pattern);
+  const caseSensitive = caseMode === 'sensitive' || (caseMode === 'smart' && hasUppercase);
+  return {
+    regex,
+    case_mode: caseMode,
+    case_sensitive: caseSensitive
+  };
+}
+
+function buildSearchContextSlice(lines, startIndex, endExclusive) {
+  const slice = [];
+  for (let index = startIndex; index < endExclusive; index += 1) {
+    if (index < 0 || index >= lines.length) continue;
+    slice.push({
+      line_number: index + 1,
+      text: lines[index]
+    });
+  }
+  return slice;
+}
+
+function findFixedStringMatches(lineText, needle, caseSensitive) {
+  const matches = [];
+  if (!needle) return matches;
+  const source = String(lineText ?? '');
+  const haystack = caseSensitive ? source : source.toLocaleLowerCase();
+  const searchNeedle = caseSensitive ? needle : needle.toLocaleLowerCase();
+  let startIndex = 0;
+  while (startIndex <= haystack.length) {
+    const foundIndex = haystack.indexOf(searchNeedle, startIndex);
+    if (foundIndex < 0) break;
+    matches.push({
+      start: foundIndex,
+      end: foundIndex + searchNeedle.length,
+      text: source.slice(foundIndex, foundIndex + searchNeedle.length)
+    });
+    startIndex = foundIndex + Math.max(1, searchNeedle.length);
+  }
+  return matches;
+}
+
+function findRegexMatches(lineText, pattern, caseSensitive) {
+  const source = String(lineText ?? '');
+  const flags = caseSensitive ? 'g' : 'gi';
+  const regex = new RegExp(pattern, flags);
+  const matches = [];
+  let match = regex.exec(source);
+  while (match) {
+    const fullMatch = String(match[0] ?? '');
+    const start = Number(match.index) || 0;
+    matches.push({
+      start,
+      end: start + fullMatch.length,
+      text: fullMatch
+    });
+    if (fullMatch.length <= 0) {
+      regex.lastIndex = start + 1;
+    }
+    match = regex.exec(source);
+  }
+  return matches;
+}
+
+function collectMatchesForLine(lineText, pattern, options = {}) {
+  if (options?.regex === true) {
+    return findRegexMatches(lineText, pattern, options.case_sensitive === true);
+  }
+  return findFixedStringMatches(lineText, pattern, options.case_sensitive === true);
 }
 
 function normalizeMicroSkillFile(rawFile, options = {}) {
@@ -876,7 +1078,10 @@ export function buildMicroSkillDetail(record, options = {}) {
     instruction: {
       path: skill.instruction.path,
       content: instructionRead.content,
-      content_read: instructionRead
+      content_read: instructionRead,
+      ...(options?.includeLineNumbers === true
+        ? { numbered_content: buildMicroSkillNumberedContent(readInstructionContent(skill), instructionRead) }
+        : {})
     },
     files: buildMicroSkillFileManifest(skill, { includeContent: false })
   };
@@ -916,6 +1121,9 @@ export function buildMicroSkillFilePayload(record, filePath, options = {}) {
     });
     manifestFile.content = contentRead.content;
     manifestFile.content_read = contentRead;
+    if (options?.includeLineNumbers === true) {
+      manifestFile.numbered_content = buildMicroSkillNumberedContent(serializeMicroSkillVirtualManifest(skill), contentRead);
+    }
     return {
       kind: skill.kind,
       builtin: skill.builtin === true,
@@ -958,8 +1166,111 @@ export function buildMicroSkillFilePayload(record, filePath, options = {}) {
       is_instruction: file.path === skill.instruction.path,
       is_runtime_entry: !!skill.runtime.entry_path && file.path === skill.runtime.entry_path,
       content: contentRead.content,
-      content_read: contentRead
+      content_read: contentRead,
+      ...(options?.includeLineNumbers === true
+        ? { numbered_content: buildMicroSkillNumberedContent(file.content, contentRead) }
+        : {})
     }
+  };
+}
+
+export function buildMicroSkillFileIndexPayload(records, options = {}) {
+  const normalizedRecords = (Array.isArray(records) ? records : [records])
+    .map((record) => normalizeStoredMicroSkillRecord(record))
+    .filter(Boolean);
+  const files = normalizedRecords.flatMap((record) => (
+    buildMicroSkillResolvedFiles(record, { includeContent: false })
+      .map((file) => ({
+        skill_name: record.name,
+        path: file.path,
+        size_chars: file.is_manifest
+          ? serializeMicroSkillVirtualManifest(record).length
+          : (record.files.find((item) => item.path === file.path)?.content || '').length,
+        is_manifest: file.is_manifest === true,
+        is_instruction: file.is_instruction === true,
+        is_runtime_entry: file.is_runtime_entry === true
+      }))
+  ));
+  return {
+    requested_skill_name: options?.requestedSkillName || null,
+    total_files: files.length,
+    returned_file_count: files.length,
+    files
+  };
+}
+
+export function searchMicroSkillFiles(records, rawOptions = {}) {
+  const normalizedRecords = (Array.isArray(records) ? records : [records])
+    .map((record) => normalizeStoredMicroSkillRecord(record))
+    .filter(Boolean);
+  const pattern = normalizeString(rawOptions.pattern);
+  if (!pattern) {
+    throw new Error('micro_skill_registry 参数错误：search_files 时 pattern 不能为空。');
+  }
+
+  const searchFlags = resolveMicroSkillSearchFlags(pattern, rawOptions);
+  if (searchFlags.regex === true) {
+    try {
+      new RegExp(pattern, searchFlags.case_sensitive ? 'g' : 'gi');
+    } catch (error) {
+      throw new Error(`micro_skill_registry 参数错误：无效的正则 pattern：${error?.message || error}`);
+    }
+  }
+  const maxResults = normalizeMicroSkillSearchMaxResults(rawOptions.max_results);
+  const contextBefore = normalizeMicroSkillContextLineCount(rawOptions.context_before);
+  const contextAfter = normalizeMicroSkillContextLineCount(rawOptions.context_after);
+  const pathGlob = normalizeMicroSkillSearchPathGlob(rawOptions.path_glob);
+  const pathGlobRegExp = buildPathGlobRegExp(pathGlob);
+
+  const matches = [];
+  let totalMatches = 0;
+
+  for (const record of normalizedRecords) {
+    const files = buildMicroSkillResolvedFiles(record, { includeContent: true });
+    for (const file of files) {
+      if (pathGlobRegExp && !pathGlobRegExp.test(file.path)) {
+        continue;
+      }
+      const { lines } = splitLogicalLines(file.content || '');
+      for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+        const lineText = lines[lineIndex];
+        const lineMatches = collectMatchesForLine(lineText, pattern, searchFlags);
+        for (const lineMatch of lineMatches) {
+          totalMatches += 1;
+          if (matches.length >= maxResults) {
+            continue;
+          }
+          matches.push({
+            match_id: `m${matches.length + 1}`,
+            skill_name: record.name,
+            file_path: file.path,
+            line_number: lineIndex + 1,
+            column_start: lineMatch.start + 1,
+            column_end: Math.max(lineMatch.start + 1, lineMatch.end),
+            match_text: lineMatch.text,
+            line_text: lineText,
+            before: buildSearchContextSlice(lines, lineIndex - contextBefore, lineIndex),
+            after: buildSearchContextSlice(lines, lineIndex + 1, lineIndex + 1 + contextAfter)
+          });
+        }
+      }
+    }
+  }
+
+  return {
+    requested_skill_name: rawOptions?.requestedSkillName || null,
+    pattern,
+    regex: searchFlags.regex,
+    case_mode: searchFlags.case_mode,
+    case_sensitive: searchFlags.case_sensitive,
+    path_glob: pathGlob,
+    context_before: contextBefore,
+    context_after: contextAfter,
+    max_results: maxResults,
+    total_matches: totalMatches,
+    returned_match_count: matches.length,
+    truncated: totalMatches > matches.length,
+    matches
   };
 }
 
@@ -1121,7 +1432,7 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
     name: MICRO_SKILL_REGISTRY_TOOL_NAME,
     description: [
       '管理浏览器里的微型 skill。',
-      '支持列出 skill、读取详情和文件、创建和更新 skill、写入单个文件、对文件应用补丁，以及在需要时刷新当前网页。'
+      '支持列出 skill 与文件、搜索文件内容、读取详情和文件、创建和更新 skill、写入单个文件、对文件应用补丁，以及在需要时刷新当前网页。'
     ].join(' '),
     strict: false,
     parameters: {
@@ -1130,7 +1441,7 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
       properties: {
         action: {
           type: 'string',
-          description: '必填。支持 list、read_detail、read_package、read_file、write_file、apply_patch、create、update、delete_file、delete、enable、disable、refresh_current_document。'
+          description: '必填。支持 list、list_files、search_files、read_detail、read_package、read_file、write_file、apply_patch、create、update、delete_file、delete、enable、disable、refresh_current_document。'
         },
         skill_name: {
           type: ['string', 'null'],
@@ -1170,6 +1481,34 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
           type: ['string', 'null'],
           description: '补丁文本。使用 `*** Begin Patch`、`*** Update File:`、`*** Add File:`、`*** Delete File:`、`*** End Patch` 这套格式。'
         },
+        pattern: {
+          type: ['string', 'null'],
+          description: 'search_files 时必填。固定字符串或正则模式文本。'
+        },
+        regex: {
+          type: ['boolean', 'null'],
+          description: 'search_files 时可用。为 true 时把 pattern 当作正则；省略时默认做固定字符串搜索。'
+        },
+        case_mode: {
+          type: ['string', 'null'],
+          description: 'search_files 时可用。支持 smart、sensitive、insensitive。默认 smart。'
+        },
+        path_glob: {
+          type: ['string', 'null'],
+          description: 'search_files 时可用。按 skill 内路径过滤，例如 `src/**/*.js`。'
+        },
+        context_before: {
+          type: ['integer', 'null'],
+          description: 'search_files 时可用。返回命中行之前的上下文行数。'
+        },
+        context_after: {
+          type: ['integer', 'null'],
+          description: 'search_files 时可用。返回命中行之后的上下文行数。'
+        },
+        max_results: {
+          type: ['integer', 'null'],
+          description: `search_files 时可用。返回的最大命中数。默认 ${MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS}，最大 ${MICRO_SKILL_SEARCH_MAX_RESULTS}。`
+        },
         skip_chars: {
           type: ['integer', 'null'],
           description: 'read_detail、read_package、read_file 时可用。从指定字符偏移开始读取正文。'
@@ -1185,6 +1524,10 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
         end_line: {
           type: ['integer', 'null'],
           description: 'read_detail、read_file 时可用。读取到指定结束行。必须与 start_line 一起提供，且不能和 skip_chars/max_chars 同时使用。'
+        },
+        include_line_numbers: {
+          type: ['boolean', 'null'],
+          description: 'read_detail、read_file 时可用。为 true 时额外返回带行号的 numbered_content，便于定位和补丁编辑。'
         },
         skill: buildMicroSkillRecordInputSchemaDescription()
       },
@@ -1215,6 +1558,8 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
 
   const supportedActions = new Set([
     'list',
+    'list_files',
+    'search_files',
     'read_detail',
     'read_package',
     'read_file',
@@ -1240,7 +1585,67 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       file_path: null,
       file: null,
       patch: null,
+      pattern: null,
+      regex: false,
+      case_mode: 'smart',
+      path_glob: null,
+      context_before: 0,
+      context_after: 0,
+      max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
       read_options: null,
+      include_line_numbers: false,
+      set_as_instruction: false,
+      set_as_runtime_entry: false,
+      next_instruction_path: null,
+      next_runtime_entry_path: null
+    };
+  }
+
+  if (action === 'list_files') {
+    return {
+      action,
+      skill_name: skillName,
+      skill: null,
+      file_path: null,
+      file: null,
+      patch: null,
+      pattern: null,
+      regex: false,
+      case_mode: 'smart',
+      path_glob: null,
+      context_before: 0,
+      context_after: 0,
+      max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
+      read_options: null,
+      include_line_numbers: false,
+      set_as_instruction: false,
+      set_as_runtime_entry: false,
+      next_instruction_path: null,
+      next_runtime_entry_path: null
+    };
+  }
+
+  if (action === 'search_files') {
+    const pattern = normalizeString(args.pattern);
+    if (!pattern) {
+      throw new Error('micro_skill_registry 参数错误：search_files 时 pattern 不能为空。');
+    }
+    return {
+      action,
+      skill_name: skillName,
+      skill: null,
+      file_path: null,
+      file: null,
+      patch: null,
+      pattern,
+      regex: normalizeBoolean(args.regex, false),
+      case_mode: normalizeMicroSkillSearchCaseMode(args.case_mode),
+      path_glob: normalizeMicroSkillSearchPathGlob(args.path_glob),
+      context_before: normalizeMicroSkillContextLineCount(args.context_before),
+      context_after: normalizeMicroSkillContextLineCount(args.context_after),
+      max_results: normalizeMicroSkillSearchMaxResults(args.max_results),
+      read_options: null,
+      include_line_numbers: false,
       set_as_instruction: false,
       set_as_runtime_entry: false,
       next_instruction_path: null,
@@ -1259,7 +1664,15 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       file_path: null,
       file: null,
       patch: null,
+      pattern: null,
+      regex: false,
+      case_mode: 'smart',
+      path_glob: null,
+      context_before: 0,
+      context_after: 0,
+      max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
       read_options: null,
+      include_line_numbers: false,
       set_as_instruction: false,
       set_as_runtime_entry: false,
       next_instruction_path: null,
@@ -1275,7 +1688,15 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       file_path: null,
       file: null,
       patch: null,
+      pattern: null,
+      regex: false,
+      case_mode: 'smart',
+      path_glob: null,
+      context_before: 0,
+      context_after: 0,
+      max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
       read_options: null,
+      include_line_numbers: false,
       set_as_instruction: false,
       set_as_runtime_entry: false,
       next_instruction_path: null,
@@ -1298,11 +1719,21 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       file_path: normalizeMicroSkillFilePath(filePath),
       file: null,
       patch: null,
+      pattern: null,
+      regex: false,
+      case_mode: 'smart',
+      path_glob: null,
+      context_before: 0,
+      context_after: 0,
+      max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
       read_options: action === 'read_file'
         ? normalizeMicroSkillReadRangeArgs(args, {
           allowLineRange: true
         })
         : null,
+      include_line_numbers: action === 'read_file'
+        ? normalizeBoolean(args.include_line_numbers, false)
+        : false,
       set_as_instruction: false,
       set_as_runtime_entry: false,
       next_instruction_path: normalizeOptionalString(args.next_instruction_path)
@@ -1325,7 +1756,15 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       file_path: null,
       file: buildNormalizedWriteFileInput(args.file),
       patch: null,
+      pattern: null,
+      regex: false,
+      case_mode: 'smart',
+      path_glob: null,
+      context_before: 0,
+      context_after: 0,
+      max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
       read_options: null,
+      include_line_numbers: false,
       set_as_instruction: normalizeBoolean(args.set_as_instruction, false),
       set_as_runtime_entry: normalizeBoolean(args.set_as_runtime_entry || args.set_as_entry, false),
       next_instruction_path: null,
@@ -1345,7 +1784,15 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       file_path: null,
       file: null,
       patch,
+      pattern: null,
+      regex: false,
+      case_mode: 'smart',
+      path_glob: null,
+      context_before: 0,
+      context_after: 0,
+      max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
       read_options: null,
+      include_line_numbers: false,
       set_as_instruction: false,
       set_as_runtime_entry: false,
       next_instruction_path: null,
@@ -1361,9 +1808,19 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       file_path: null,
       file: null,
       patch: null,
+      pattern: null,
+      regex: false,
+      case_mode: 'smart',
+      path_glob: null,
+      context_before: 0,
+      context_after: 0,
+      max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
       read_options: normalizeMicroSkillReadRangeArgs(args, {
         allowLineRange: action === 'read_detail'
       }),
+      include_line_numbers: action === 'read_detail'
+        ? normalizeBoolean(args.include_line_numbers, false)
+        : false,
       set_as_instruction: false,
       set_as_runtime_entry: false,
       next_instruction_path: null,
@@ -1378,7 +1835,15 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
     file_path: null,
     file: null,
     patch: null,
+    pattern: null,
+    regex: false,
+    case_mode: 'smart',
+    path_glob: null,
+    context_before: 0,
+    context_after: 0,
+    max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
     read_options: null,
+    include_line_numbers: false,
     set_as_instruction: false,
     set_as_runtime_entry: false,
     next_instruction_path: null,

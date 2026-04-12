@@ -1,6 +1,7 @@
 import {
   buildMicroSkillContextSummary,
   buildMicroSkillDetail,
+  buildMicroSkillFileIndexPayload,
   buildMicroSkillFileManifest,
   buildMicroSkillFilePayload,
   buildMicroSkillPackagePayload,
@@ -17,6 +18,7 @@ import {
   normalizeMicroSkillFilePath,
   normalizeMicroSkillRegistryToolArguments,
   parseMicroSkillVirtualManifestContent,
+  searchMicroSkillFiles,
   normalizeStoredMicroSkillRecord,
   saveStoredMicroSkillPackage
 } from '../agent_tools/micro_skill_registry_tool.js';
@@ -110,6 +112,17 @@ export function createMicroSkillManager(options = {}) {
     return [
       ...listBuiltinMicroSkillRecords(),
       ...(await listStoredRecords())
+    ];
+  }
+
+  async function listFullSkillRecords() {
+    const storedManifests = await listStoredRecords();
+    const storedPackages = (await Promise.all(
+      storedManifests.map((record) => getStoredMicroSkillPackage(record.name, store))
+    )).filter(Boolean);
+    return [
+      ...listBuiltinMicroSkillRecords(),
+      ...storedPackages
     ];
   }
 
@@ -539,6 +552,43 @@ export function createMicroSkillManager(options = {}) {
           skills
         };
       }
+      case 'list_files': {
+        const records = normalizedArgs.skill_name
+          ? [await getSkillRecord(normalizedArgs.skill_name)].filter(Boolean)
+          : await listFullSkillRecords();
+        if (records.length <= 0 && normalizedArgs.skill_name) {
+          throw new Error(`微型 skill ${normalizedArgs.skill_name} 不存在。`);
+        }
+        return {
+          ok: true,
+          action: 'list_files',
+          ...buildMicroSkillFileIndexPayload(records, {
+            requestedSkillName: normalizedArgs.skill_name
+          })
+        };
+      }
+      case 'search_files': {
+        const records = normalizedArgs.skill_name
+          ? [await getSkillRecord(normalizedArgs.skill_name)].filter(Boolean)
+          : await listFullSkillRecords();
+        if (records.length <= 0 && normalizedArgs.skill_name) {
+          throw new Error(`微型 skill ${normalizedArgs.skill_name} 不存在。`);
+        }
+        return {
+          ok: true,
+          action: 'search_files',
+          ...searchMicroSkillFiles(records, {
+            requestedSkillName: normalizedArgs.skill_name,
+            pattern: normalizedArgs.pattern,
+            regex: normalizedArgs.regex,
+            case_mode: normalizedArgs.case_mode,
+            path_glob: normalizedArgs.path_glob,
+            context_before: normalizedArgs.context_before,
+            context_after: normalizedArgs.context_after,
+            max_results: normalizedArgs.max_results
+          })
+        };
+      }
       case 'read_detail': {
         const record = await getSkillRecord(normalizedArgs.skill_name);
         if (!record) {
@@ -548,7 +598,8 @@ export function createMicroSkillManager(options = {}) {
           ok: true,
           action: 'read_detail',
           skill: buildMicroSkillDetail(record, {
-            contentReadArgs: normalizedArgs.read_options
+            contentReadArgs: normalizedArgs.read_options,
+            includeLineNumbers: normalizedArgs.include_line_numbers
           })
         };
       }
@@ -574,7 +625,8 @@ export function createMicroSkillManager(options = {}) {
           ok: true,
           action: 'read_file',
           skill: buildMicroSkillFilePayload(record, normalizedArgs.file_path, {
-            contentReadArgs: normalizedArgs.read_options
+            contentReadArgs: normalizedArgs.read_options,
+            includeLineNumbers: normalizedArgs.include_line_numbers
           })
         };
       }

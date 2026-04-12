@@ -160,11 +160,13 @@ test('normalizeMicroSkillMatchPatterns 与 URL 匹配遵循第一阶段 Chrome/T
 test('buildStoredMicroSkillRecord / saveStoredMicroSkillPackage / getStoredMicroSkillPackage 保持 package 结构与渐进式披露边界', async () => {
   const {
     buildMicroSkillDetail,
+    buildMicroSkillFileIndexPayload,
     buildMicroSkillFilePayload,
     buildMicroSkillPackagePayload,
     buildMicroSkillSummary,
     buildStoredMicroSkillRecord,
     getStoredMicroSkillPackage,
+    searchMicroSkillFiles,
     saveStoredMicroSkillPackage
   } = await loadMicroSkillRegistryToolModule();
 
@@ -208,6 +210,26 @@ test('buildStoredMicroSkillRecord / saveStoredMicroSkillPackage / getStoredMicro
   assert.doesNotMatch(manifestFile.file.content, /"kind":/);
   assert.match(manifestFile.file.content, /"description": "读取页面标题和链接"/);
 
+  const fileIndex = buildMicroSkillFileIndexPayload(loaded, {
+    requestedSkillName: 'dom-probe'
+  });
+  assert.equal(fileIndex.total_files, 4);
+  assert.equal(fileIndex.files[0].skill_name, 'dom-probe');
+  assert.equal(fileIndex.files[0].path, 'manifest.json');
+  assert.equal(fileIndex.files[0].is_manifest, true);
+
+  const searchResult = searchMicroSkillFiles(loaded, {
+    requestedSkillName: 'dom-probe',
+    pattern: 'readTitle'
+  });
+  assert.equal(searchResult.total_matches, 2);
+  assert.equal(searchResult.matches[0].skill_name, 'dom-probe');
+  assert.equal(searchResult.matches[0].file_path, 'src/main.js');
+  assert.equal(searchResult.matches[0].line_number, 1);
+  assert.equal(searchResult.matches[0].column_start > 0, true);
+  assert.equal(searchResult.matches[0].column_end >= searchResult.matches[0].column_start, true);
+  assert.match(searchResult.matches[0].line_text, /readTitle/);
+
   assert.equal(store.dump().length, 1);
 });
 
@@ -230,10 +252,48 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
   assert.equal(normalizedCreate.skill.instruction.path, 'SKILL.md');
   assert.equal(normalizedCreate.skill.files.length, 3);
 
+  const normalizedListFiles = normalizeMicroSkillRegistryToolArguments({
+    action: 'list_files',
+    skill_name: 'dom-probe'
+  });
+  assert.equal(normalizedListFiles.action, 'list_files');
+  assert.equal(normalizedListFiles.skill_name, 'dom-probe');
+
+  const normalizedSearchFiles = normalizeMicroSkillRegistryToolArguments({
+    action: 'search_files',
+    pattern: 'document.title',
+    context_before: 1,
+    context_after: 2,
+    path_glob: 'src/**/*.js',
+    max_results: 5
+  });
+  assert.deepEqual(normalizedSearchFiles, {
+    action: 'search_files',
+    skill_name: null,
+    skill: null,
+    file_path: null,
+    file: null,
+    patch: null,
+    pattern: 'document.title',
+    regex: false,
+    case_mode: 'smart',
+    path_glob: 'src/**/*.js',
+    context_before: 1,
+    context_after: 2,
+    max_results: 5,
+    read_options: null,
+    include_line_numbers: false,
+    set_as_instruction: false,
+    set_as_runtime_entry: false,
+    next_instruction_path: null,
+    next_runtime_entry_path: null
+  });
+
   const normalizedReadFile = normalizeMicroSkillRegistryToolArguments({
     action: 'read_file',
     skill_name: 'dom-probe',
-    file_path: './src/helpers/dom.js'
+    file_path: './src/helpers/dom.js',
+    include_line_numbers: true
   });
   assert.deepEqual(normalizedReadFile, {
     action: 'read_file',
@@ -242,6 +302,13 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     file_path: 'src/helpers/dom.js',
     file: null,
     patch: null,
+    pattern: null,
+    regex: false,
+    case_mode: 'smart',
+    path_glob: null,
+    context_before: 0,
+    context_after: 0,
+    max_results: 50,
     read_options: {
       mode: 'preview',
       skip_chars: 0,
@@ -249,6 +316,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
       start_line: null,
       end_line: null
     },
+    include_line_numbers: true,
     set_as_instruction: false,
     set_as_runtime_entry: false,
     next_instruction_path: null,
@@ -280,6 +348,13 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     file_path: 'src/helpers/dom.js',
     file: null,
     patch: null,
+    pattern: null,
+    regex: false,
+    case_mode: 'smart',
+    path_glob: null,
+    context_before: 0,
+    context_after: 0,
+    max_results: 50,
     read_options: {
       mode: 'preview',
       skip_chars: 0,
@@ -287,6 +362,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
       start_line: null,
       end_line: null
     },
+    include_line_numbers: false,
     set_as_instruction: false,
     set_as_runtime_entry: false,
     next_instruction_path: null,
@@ -305,7 +381,15 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     file_path: null,
     file: null,
     patch: '*** Begin Patch\n*** Update File: src/main.js\n@@\n-old\n+new\n*** End Patch',
+    pattern: null,
+    regex: false,
+    case_mode: 'smart',
+    path_glob: null,
+    context_before: 0,
+    context_after: 0,
+    max_results: 50,
     read_options: null,
+    include_line_numbers: false,
     set_as_instruction: false,
     set_as_runtime_entry: false,
     next_instruction_path: null,
@@ -371,6 +455,18 @@ test('micro skill 读取参数支持字符偏移与按行续读', async () => {
   assert.equal(fileByChars.file.content.length, 200);
   assert.equal(fileByChars.file.content_read.has_more_after_range, true);
 
+  const numberedDetail = buildMicroSkillDetail(record, {
+    contentReadArgs: normalizedReadDetail.read_options,
+    includeLineNumbers: true
+  });
+  assert.match(numberedDetail.instruction.numbered_content, /^3 \| Line 1:/m);
+
+  const numberedFile = buildMicroSkillFilePayload(record, 'src/main.js', {
+    contentReadArgs: normalizedReadFile.read_options,
+    includeLineNumbers: true
+  });
+  assert.match(numberedFile.file.numbered_content, /^\d+ \| /m);
+
   assert.throws(
     () => normalizeMicroSkillRegistryToolArguments({
       action: 'read_file',
@@ -382,6 +478,68 @@ test('micro skill 读取参数支持字符偏移与按行续读', async () => {
     }),
     /不能同时使用字符区间和行区间/
   );
+
+  const globalSearch = (await loadMicroSkillRegistryToolModule()).searchMicroSkillFiles([
+    record,
+    buildStoredMicroSkillRecord(buildSkillInput('dom-probe-2'))
+  ], {
+    pattern: 'readTitle',
+    path_glob: 'src/**/*.js',
+    max_results: 10
+  });
+  assert.equal(globalSearch.total_matches >= 3, true);
+  assert.equal(globalSearch.matches.every((item) => item.file_path.startsWith('src/')), true);
+});
+
+test('searchMicroSkillFiles 支持 regex、smart case、路径过滤与上下文行', async () => {
+  const {
+    buildStoredMicroSkillRecord,
+    searchMicroSkillFiles
+  } = await loadMicroSkillRegistryToolModule();
+
+  const record = buildStoredMicroSkillRecord({
+    ...buildSkillInput('search-probe'),
+    files: [
+      {
+        path: 'SKILL.md',
+        content: '# Search Probe\n\nuse searchFiles here'
+      },
+      {
+        path: 'src/main.js',
+        content: [
+          'const before = 1;',
+          'const SearchFiles = document.title;',
+          'const after = document.title;',
+          'return { read() { return after; } };'
+        ].join('\n')
+      },
+      {
+        path: 'references/notes.md',
+        content: 'document.title appears here too'
+      }
+    ]
+  });
+
+  const smartCaseSearch = searchMicroSkillFiles(record, {
+    pattern: 'SearchFiles',
+    path_glob: 'src/**/*.js',
+    context_before: 1,
+    context_after: 1
+  });
+  assert.equal(smartCaseSearch.total_matches, 1);
+  assert.equal(smartCaseSearch.case_sensitive, true);
+  assert.equal(smartCaseSearch.matches[0].before.length, 1);
+  assert.equal(smartCaseSearch.matches[0].after.length, 1);
+  assert.equal(smartCaseSearch.matches[0].before[0].line_number, 1);
+  assert.equal(smartCaseSearch.matches[0].after[0].line_number, 3);
+
+  const regexSearch = searchMicroSkillFiles(record, {
+    pattern: 'document\\.title',
+    regex: true,
+    path_glob: 'src/**/*.js'
+  });
+  assert.equal(regexSearch.total_matches, 2);
+  assert.equal(regexSearch.matches.every((item) => item.file_path === 'src/main.js'), true);
 });
 
 test('旧 js_runtime_script_registry 兼容层会映射到新的 micro_skill_registry 能力', async () => {
