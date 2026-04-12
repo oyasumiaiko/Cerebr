@@ -8,13 +8,17 @@ async function readWorkspaceFile(relativePath) {
   return fs.readFile(filePath, 'utf8');
 }
 
-test('compact 成功态使用响应 output_tokens 和紧凑前后对比文案', async () => {
+test('compact 成功态使用响应 usage 里的精确前后 token，非成功态保留尝试次数', async () => {
   const messageSenderSource = await readWorkspaceFile('src/core/message_sender.js');
   const messageProcessorSource = await readWorkspaceFile('src/core/message_processor.js');
 
   assert.match(
     messageSenderSource,
     /const compactUsage = normalizeApiUsageMeta\(compactPayload\?\.usage \|\| compactPayload\?\.response\?\.usage\);/
+  );
+  assert.match(
+    messageSenderSource,
+    /promptTokensBefore:\s*compactUsage\?\.promptTokens \?\? normalizedPayload\.promptTokensBefore \?\? null/
   );
   assert.match(
     messageSenderSource,
@@ -33,8 +37,8 @@ test('compact 成功态使用响应 output_tokens 和紧凑前后对比文案', 
     messageProcessorSource,
     /if \(state === 'error' && status\?\.responseStatus\) metaParts\.push\(`HTTP \$\{status\.responseStatus\}`\);/
   );
-  assert.doesNotMatch(
+  assert.match(
     messageProcessorSource,
-    /metaParts\.push\(`第 \$\{status\.attempt\}\/\$\{status\.totalAttempts\} 次`\);/
+    /const attemptLabel = status\?\.totalAttempts\s*\? `第 \$\{status\.attempt\}\/\$\{status\.totalAttempts\} 次`\s*: `第 \$\{status\.attempt\} 次`;/ 
   );
 });

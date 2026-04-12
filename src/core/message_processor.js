@@ -3667,6 +3667,12 @@ export function createMessageProcessor(appContext) {
 
       if (status?.outputCount) metaParts.push(`${status.outputCount}个output items`);
     } else {
+      if (status?.attempt) {
+        const attemptLabel = status?.totalAttempts
+          ? `第 ${status.attempt}/${status.totalAttempts} 次`
+          : `第 ${status.attempt} 次`;
+        metaParts.push(attemptLabel);
+      }
       if (status?.requestBytes) metaParts.push(`载荷 ${formatCompactStatusBytes(status.requestBytes)}`);
       if (status?.inputCount) metaParts.push(`${status.inputCount}条输入`);
       if (status?.responseBytes) metaParts.push(`响应 ${formatCompactStatusBytes(status.responseBytes)}`);

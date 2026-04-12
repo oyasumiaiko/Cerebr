@@ -5339,7 +5339,7 @@ export function createMessageSender(appContext) {
     const historyPatch = buildResponsesLocalCompactionHistoryPatch({
       compactOutput,
       sourceAssistantMessageId: normalizedPayload.sourceAssistantMessageId || null,
-      promptTokensBefore: normalizedPayload.promptTokensBefore,
+      promptTokensBefore: compactUsage?.promptTokens ?? normalizedPayload.promptTokensBefore ?? null,
       compactedAt: Date.now(),
       attempt: normalizedPayload.attempt,
       totalAttempts: normalizedPayload.totalAttempts,
