@@ -25,13 +25,11 @@ function normalizeMicroSkillContextSkills(skills) {
       const shortDescription = typeof skill.short_description === 'string' ? skill.short_description.trim() : '';
       const defaultPrompt = typeof skill.default_prompt === 'string' ? skill.default_prompt.trim() : '';
       const mountSurface = typeof skill.mount_surface === 'string' ? skill.mount_surface.trim() : '';
-      const kind = typeof skill.kind === 'string' ? skill.kind.trim() : '';
       const priority = Number.isFinite(Number(skill.priority)) ? Number(skill.priority) : 1000;
       if (!name || !shortDescription || !mountSurface) return null;
       return {
         _index: index,
         priority,
-        kind: kind || 'page_runtime',
         name,
         display_name: displayName || name,
         short_description: shortDescription,
@@ -74,16 +72,13 @@ export function buildMicroSkillContextSignature(payload) {
 export function buildMicroSkillContextInputItems(payload) {
   if (!payload || typeof payload !== 'object') return [];
   const skills = normalizeMicroSkillContextSkills(payload.skills);
-  const lines = [
-    `<micro_skill_context mode="${escapeXmlText(payload.mode || 'isolated_sandbox')}">`
-  ];
+  const lines = ['<micro_skill_context>'];
   if (payload.url) {
     lines.push(`  <url>${escapeXmlText(payload.url)}</url>`);
   }
   lines.push('  <skills>');
   skills.forEach((skill) => {
     lines.push(`    <skill name="${escapeXmlText(skill.name)}">`);
-    lines.push(`      <kind>${escapeXmlText(skill.kind || 'page_runtime')}</kind>`);
     lines.push(`      <display_name>${escapeXmlText(skill.display_name)}</display_name>`);
     lines.push(`      <short_description>${escapeXmlText(skill.short_description)}</short_description>`);
     if (skill.default_prompt) {

@@ -756,13 +756,12 @@ export function buildMicroSkillContextSummary(record) {
   if (!skill) return null;
   return {
     priority: skill.kind === MICRO_SKILL_KIND_BUILTIN_GUIDANCE ? 0 : 1000,
-    kind: skill.kind,
     name: skill.name,
     display_name: skill.interface.display_name || skill.name,
     short_description: skill.interface.short_description || skill.description,
     default_prompt: skill.interface.default_prompt,
     mount_surface: skill.kind === MICRO_SKILL_KIND_BUILTIN_GUIDANCE
-      ? 'Instruction-only built-in skill. Read detail via micro_skill_registry(action="read_detail", skill_name="skill-creator").'
+      ? '先读取这条 skill 的详情，再按需读文件或修改目标 skill。'
       : `${CEREBR_MICRO_SKILL_MOUNT_SURFACE}.skills["${skill.name}"] / ${CEREBR_MICRO_SKILL_MOUNT_SURFACE}.invoke("${skill.name}.method", ...args)`
   };
 }
@@ -856,7 +855,6 @@ function buildMicroSkillRecordInputSchemaDescription() {
     description: 'create/update 时使用的完整微型 skill package 对象。',
     additionalProperties: false,
     properties: {
-      kind: { type: ['string', 'null'] },
       name: { type: 'string' },
       description: { type: 'string' },
       interface: {
@@ -910,10 +908,8 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
     type: 'function',
     name: MICRO_SKILL_REGISTRY_TOOL_NAME,
     description: [
-      '管理 Cerebr 扩展侧持久化保存的浏览器微型 skill package。',
-      '每个 skill 由 manifest + 虚拟文件树组成，底层默认使用 IndexedDB 持久化。',
-      '摘要/详情/整包源码遵循渐进式披露：默认只注入 summary，详细说明和具体文件需要按需读取。',
-      '支持整包 create/update，也支持按文件 read/write/delete/apply_patch，并在需要时刷新当前网页的挂载。'
+      '管理浏览器里的微型 skill。',
+      '支持列出 skill、读取详情和文件、创建和更新 skill、写入单个文件、对文件应用补丁，以及在需要时刷新当前网页。'
     ].join(' '),
     strict: false,
     parameters: {
@@ -922,7 +918,7 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
       properties: {
         action: {
           type: 'string',
-          description: '必填。支持 list、read_detail、read_package、read_file、write_file、apply_patch、create、update、delete_file、delete、enable、disable、refresh_current_document。旧别名 read_source/read_source_file/upsert_source_file/delete_source_file 也可用。'
+          description: '必填。支持 list、read_detail、read_package、read_file、write_file、apply_patch、create、update、delete_file、delete、enable、disable、refresh_current_document。'
         },
         skill_name: {
           type: ['string', 'null'],
@@ -960,7 +956,7 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
         },
         patch: {
           type: ['string', 'null'],
-          description: 'apply_patch 时使用的补丁文本。语法与 Codex apply_patch 一致；文件用途由 manifest 指针路径与常见目录约定自动推断。'
+          description: '补丁文本。使用 `*** Begin Patch`、`*** Update File:`、`*** Add File:`、`*** Delete File:`、`*** End Patch` 这套格式。'
         },
         skill: buildMicroSkillRecordInputSchemaDescription()
       },

@@ -20,7 +20,7 @@ function buildSkillCreatorInstruction() {
     '- 你不确定 `description`、`SKILL.md`、runtime 入口文件、reference 文件应该分别承载什么信息。',
     '- 你需要把一个大脚本拆成多个文件并保持后续易改。',
     '',
-    '## 从 Codex skill-creator 适配到 Cerebr 的核心思想',
+    '## 核心原则',
     '1. 简洁优先：上下文窗口是公共资源。不要把模型本来就知道的常识、长篇外部文档、页面内容复述塞进 skill。',
     '2. 渐进式披露：默认上下文只看 summary；需要工作流时再 `read_detail`；只有要改具体逻辑时才 `read_file` 或 `read_package`。',
     '3. 元数据负责触发，`SKILL.md` 负责方法，runtime 源码负责确定性执行：把这三层分清楚，skill 才会稳定。',
@@ -187,11 +187,10 @@ export function getBuiltinMicroSkillRecordByName(skillName) {
 export function buildBuiltinSkillCreatorContextSummary() {
   return {
     priority: 0,
-    kind: 'builtin_guidance',
     name: BUILTIN_MICRO_SKILL_CREATOR_NAME,
     display_name: 'Skill Creator',
     short_description: '创建或更新微型 skill 时，先读这条内置指导 skill，再决定 metadata、SKILL.md 和 runtime 文件树怎么改。',
     default_prompt: 'Before creating or updating a Cerebr micro skill, read the built-in skill-creator detail and then edit only the necessary files.',
-    mount_surface: 'Instruction-only skill. Read detail with micro_skill_registry(action="read_detail", skill_name="skill-creator"), then use create/update/write_file/delete_file to build the real skill.'
+    mount_surface: 'Read detail first, then read files or edit the target skill as needed.'
   };
 }
