@@ -165,6 +165,10 @@ export function createSidebarJsSandboxRuntime(options = {}) {
 
   async function execute(request = {}) {
     const code = (typeof request?.code === 'string') ? request.code : '';
+    const timeoutMs = (() => {
+      const raw = Number(request?.timeoutMs);
+      return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 0;
+    })();
     if (!code.trim()) {
       throw new Error('执行隔离 JS Sandbox 失败：代码内容为空。');
     }
@@ -179,7 +183,24 @@ export function createSidebarJsSandboxRuntime(options = {}) {
     const requestId = `sandbox_${Date.now()}_${requestSeq}`;
 
     return await new Promise((resolve, reject) => {
+      let timeoutId = null;
       pendingRequests.set(requestId, { resolve, reject });
+      if (timeoutMs > 0) {
+        timeoutId = ownerWindow.setTimeout(() => {
+          pendingRequests.delete(requestId);
+          reject(new Error(`执行隔离 JS Sandbox 超时（${timeoutMs}ms）。`));
+        }, timeoutMs);
+        pendingRequests.set(requestId, {
+          resolve: (payload) => {
+            if (timeoutId) ownerWindow.clearTimeout(timeoutId);
+            resolve(payload);
+          },
+          reject: (error) => {
+            if (timeoutId) ownerWindow.clearTimeout(timeoutId);
+            reject(error);
+          }
+        });
+      }
       try {
         targetWindow.postMessage({
           [SANDBOX_MESSAGE_FLAG]: true,
@@ -188,6 +209,7 @@ export function createSidebarJsSandboxRuntime(options = {}) {
           code
         }, '*');
       } catch (error) {
+        if (timeoutId) ownerWindow.clearTimeout(timeoutId);
         pendingRequests.delete(requestId);
         reject(error);
       }

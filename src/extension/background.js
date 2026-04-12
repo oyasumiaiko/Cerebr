@@ -396,6 +396,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const result = await jsRuntimeManager.execute({
           tabId: targetTabId,
           code: message?.code || '',
+          timeoutMs: message?.timeoutMs,
           frameIds: Array.isArray(message?.frameIds) ? message.frameIds : null,
           allFrames: message?.allFrames === true,
           injectImmediately: message?.injectImmediately === true

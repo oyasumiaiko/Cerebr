@@ -153,12 +153,16 @@ function shouldExposeNavigationFrameSnapshot(frame) {
  * @param {string} userCode
  * @returns {string}
  */
-function buildUserScriptSource(userCode) {
+function buildUserScriptSource(userCode, timeoutMs = 0) {
   const body = (typeof userCode === 'string') ? userCode : '';
+  const normalizedTimeoutMs = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0
+    ? Math.trunc(Number(timeoutMs))
+    : 0;
   return `
   (async () => {
     const __cerebrMaxLogs = 50;
     const __cerebrMaxLogChars = 4000;
+    const __cerebrTimeoutMs = ${normalizedTimeoutMs};
     const __cerebrBuildReplacer = () => {
       const seen = new WeakSet();
       return (_key, value) => {
@@ -236,9 +240,17 @@ function buildUserScriptSource(userCode) {
     const console = __cerebrConsole;
     try {
       globalThis.console = __cerebrConsole;
-      const __cerebrValue = await (async () => {
+      const __cerebrRunUserCode = async () => {
 ${body}
-      })();
+      };
+      const __cerebrValue = await (__cerebrTimeoutMs > 0
+        ? Promise.race([
+            __cerebrRunUserCode(),
+            new Promise((_, reject) => {
+              setTimeout(() => reject(new Error(\`JS Runtime 执行超时（\${__cerebrTimeoutMs}ms）。\`)), __cerebrTimeoutMs);
+            })
+          ])
+        : __cerebrRunUserCode());
       if (__cerebrOmittedLogs > 0) {
         __cerebrLogs.push({
           level: 'info',
@@ -334,11 +346,15 @@ export function createJsRuntimeManager() {
    * @param {number[]|null} [request.frameIds]
    * @param {boolean} [request.allFrames]
    * @param {boolean} [request.injectImmediately]
+   * @param {number|null} [request.timeoutMs]
    * @returns {Promise<{ok:boolean, items:Array<Object>, value:any, logs:Array<Object>}>}
    */
   async function execute(request = {}) {
     const tabId = Number(request?.tabId);
     const code = (typeof request?.code === 'string') ? request.code : '';
+    const timeoutMs = Number.isFinite(Number(request?.timeoutMs)) && Number(request.timeoutMs) > 0
+      ? Math.trunc(Number(request.timeoutMs))
+      : 30000;
     if (!Number.isFinite(tabId)) {
       throw new Error('执行 JS Runtime 失败：缺少有效 tabId。');
     }
@@ -368,7 +384,7 @@ export function createJsRuntimeManager() {
       worldId: CEREBR_MICRO_SKILL_WORLD_ID,
       js: [
         {
-          code: buildUserScriptSource(code)
+          code: buildUserScriptSource(code, timeoutMs)
         }
       ]
     });

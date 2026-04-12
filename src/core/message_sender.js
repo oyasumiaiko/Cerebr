@@ -7533,6 +7533,10 @@ export function createMessageSender(appContext) {
             type: 'string',
             description: '要执行的 JavaScript 代码片段。它会作为 async 函数体执行，可直接使用 await、return 和 console.log/info/warn/error/debug。若需要回传大量长字符串或多行文本，优先使用 console.log 输出；return 更适合简洁结果值。'
           },
+          timeout_ms: {
+            type: ['integer', 'null'],
+            description: 'The timeout for the execution in milliseconds.'
+          },
           frame_ids: {
             type: ['array', 'null'],
             description: frameDescription,
@@ -7541,7 +7545,7 @@ export function createMessageSender(appContext) {
             }
           }
         },
-        required: ['code', 'frame_ids']
+        required: ['code', 'timeout_ms', 'frame_ids']
       }
     };
   }
@@ -8062,7 +8066,7 @@ export function createMessageSender(appContext) {
    * 规范化 js_runtime_execute 的参数。
    *
    * @param {any} rawArgs
-   * @returns {{code:string, frameIds:number[]|null}}
+   * @returns {{code:string, timeoutMs:number|null, frameIds:number[]|null}}
    */
   function normalizeResponsesJsRuntimeToolArguments(rawArgs) {
     const args = (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs))
@@ -8072,6 +8076,17 @@ export function createMessageSender(appContext) {
     if (!code.trim()) {
       throw new Error('js_runtime_execute 参数错误：code 不能为空。');
     }
+    const timeoutMs = (() => {
+      if (args.timeout_ms === null || typeof args.timeout_ms === 'undefined') return null;
+      const parsed = Number(args.timeout_ms);
+      if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
+        throw new Error('js_runtime_execute 参数错误：timeout_ms 必须是整数。');
+      }
+      if (parsed <= 0) {
+        throw new Error('js_runtime_execute 参数错误：timeout_ms 必须大于 0。');
+      }
+      return Math.trunc(parsed);
+    })();
 
     const frameIds = Array.isArray(args.frame_ids)
       ? args.frame_ids
@@ -8082,6 +8097,7 @@ export function createMessageSender(appContext) {
 
     return {
       code,
+      timeoutMs,
       frameIds: (Array.isArray(frameIds) && frameIds.length > 0) ? frameIds : null
     };
   }
@@ -8112,6 +8128,7 @@ export function createMessageSender(appContext) {
         ? options.runtimeEnvironment
         : resolveResponsesPageToolEnvironment(options?.attemptState).jsRuntimeEnvironment;
       const result = await utils.executeJsRuntime(normalizedArgs.code, {
+        timeoutMs: normalizedArgs.timeoutMs,
         frameIds: normalizedArgs.frameIds,
         runtimeEnvironment
       });

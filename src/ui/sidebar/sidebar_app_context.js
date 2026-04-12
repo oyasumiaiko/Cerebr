@@ -1341,13 +1341,20 @@ export function registerSidebarUtilities(appContext) {
    * @returns {Promise<Object>}
    */
   appContext.utils.executeJsRuntime = async (code, options = {}) => {
+    const timeoutMs = (() => {
+      const raw = options?.timeoutMs;
+      if (raw === null || typeof raw === 'undefined') return JS_RUNTIME_EXECUTION_TIMEOUT_MS;
+      const parsed = Number(raw);
+      return Number.isFinite(parsed) ? Math.max(1, Math.trunc(parsed)) : JS_RUNTIME_EXECUTION_TIMEOUT_MS;
+    })();
     const runtimeEnvironment = (typeof options?.runtimeEnvironment === 'string' && options.runtimeEnvironment)
       ? options.runtimeEnvironment
       : resolveCurrentPageToolEnvironment().jsRuntimeEnvironment;
     if (runtimeEnvironment !== JS_RUNTIME_ENV_BOUND_HOST_PAGE) {
       try {
         const result = await jsSandboxRuntime.execute({
-          code: (typeof code === 'string') ? code : ''
+          code: (typeof code === 'string') ? code : '',
+          timeoutMs
         });
         return {
           success: true,
@@ -1380,10 +1387,11 @@ export function registerSidebarUtilities(appContext) {
           type: 'EXECUTE_JS_RUNTIME',
           tabId: targetTabId,
           code: (typeof code === 'string') ? code : '',
+          timeoutMs,
           frameIds: Array.isArray(options?.frameIds) ? options.frameIds : null,
           injectImmediately: options?.injectImmediately === true
         }),
-        JS_RUNTIME_EXECUTION_TIMEOUT_MS,
+        timeoutMs,
         '执行 JS Runtime 超时'
       );
     } catch (error) {

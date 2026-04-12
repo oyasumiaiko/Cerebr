@@ -51,6 +51,7 @@ test('createJsRuntimeManager.execute 会在共享 micro skill worldId 下运行 
   const result = await manager.execute({
     tabId: 9,
     code: 'return "ok";',
+    timeoutMs: 45000,
     injectImmediately: true
   });
 
@@ -58,6 +59,7 @@ test('createJsRuntimeManager.execute 会在共享 micro skill worldId 下运行 
   assert.equal(capturedExecuteOptions.world, 'USER_SCRIPT');
   assert.equal(capturedExecuteOptions.worldId, CEREBR_MICRO_SKILL_WORLD_ID);
   assert.equal(capturedExecuteOptions.target.tabId, 9);
+  assert.match(capturedExecuteOptions.js[0].code, /const __cerebrTimeoutMs = 45000;/);
 
   delete global.chrome;
 });
