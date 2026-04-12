@@ -4441,25 +4441,54 @@ export function createMessageSender(appContext) {
     if (!attemptState) return [];
     const runtimeConversationKey = getAttemptRuntimeConversationKey(attemptState);
     const pendingSteers = getConversationPendingSteersForAttempt(attemptState);
-    if (pendingSteers.length <= 0) return [];
+    const stagedPendingSteers = Array.isArray(attemptState.pendingSteersStagedForFollowUp)
+      ? attemptState.pendingSteersStagedForFollowUp.map((steer) => normalizePendingConversationSteer(steer)).filter(Boolean)
+      : [];
+    const stagedWindowId = (typeof attemptState.pendingSteerStagedWindowId === 'string' && attemptState.pendingSteerStagedWindowId.trim())
+      ? attemptState.pendingSteerStagedWindowId.trim()
+      : '';
+    const pendingWindowId = (typeof attemptState.pendingSteerWindowId === 'string' && attemptState.pendingSteerWindowId.trim())
+      ? attemptState.pendingSteerWindowId.trim()
+      : '';
+    const steersToRestore = stagedPendingSteers.concat(pendingSteers);
+    if (steersToRestore.length <= 0) return [];
 
     removeConversationPendingSteersByIds(
       runtimeConversationKey,
       pendingSteers.map((steer) => steer.id),
       attemptState
     );
+    clearAttemptStagedPendingSteers(attemptState);
 
     const restoreDisposition = resolvePendingSteerRestoreDisposition(
       attemptState.completedSuccessfully
         ? 'completed'
         : (attemptState.manualAbort ? 'interrupted' : 'error')
     );
-    updatePendingSteerActivityTimelineStatus(
-      attemptState,
-      pendingSteers,
-      restoreDisposition.status === 'queued' ? 'queued' : 'paused'
-    );
-    const restoredJobs = buildRestoredQueueJobsFromPendingSteers(pendingSteers, {
+    const restoreStatus = restoreDisposition.status === 'queued' ? 'queued' : 'paused';
+    if (stagedPendingSteers.length > 0) {
+      updatePendingSteerActivityTimelineStatus(
+        attemptState,
+        stagedPendingSteers,
+        restoreStatus,
+        {
+          windowId: stagedWindowId || null,
+          closeOpenWindow: false
+        }
+      );
+    }
+    if (pendingSteers.length > 0) {
+      updatePendingSteerActivityTimelineStatus(
+        attemptState,
+        pendingSteers,
+        restoreStatus,
+        {
+          windowId: pendingWindowId || null,
+          closeOpenWindow: false
+        }
+      );
+    }
+    const restoredJobs = buildRestoredQueueJobsFromPendingSteers(steersToRestore, {
       createJobId: createQueuedConversationTaskId,
       conversationId: normalizeConversationId(attemptState.boundConversationId) || normalizeConversationId(runtimeConversationKey),
       conversationRevisionAtEnqueue: attemptState.historyConversationRevision,
@@ -9064,6 +9093,7 @@ export function createMessageSender(appContext) {
   function previewResponsesActivityTimelineOnLoadingMessage(attemptState, timeline) {
     const previewTarget = resolveLiveLoadingStatusElement(attemptState?.loadingMessage || null, attemptState);
     if (!previewTarget || typeof messageProcessor?.syncAssistantMessageMetadata !== 'function') return false;
+    syncAttemptResponsesRuntimeState(attemptState, { timeline });
     clearAttemptPreResponseStatus(attemptState, previewTarget);
     try {
       messageProcessor.syncAssistantMessageMetadata(
@@ -9110,6 +9140,70 @@ export function createMessageSender(appContext) {
     attemptState.pendingSteerWindowId = null;
   }
 
+  function clearAttemptStagedPendingSteers(attemptState) {
+    if (!attemptState) return;
+    attemptState.pendingSteersStagedForFollowUp = [];
+    attemptState.pendingSteerInputItemsStagedForFollowUp = [];
+    attemptState.pendingSteerStagedWindowId = null;
+  }
+
+  function stagePendingSteersForFollowUp(attemptState, pendingSteers, pendingSteerInputItems = []) {
+    if (!attemptState) return [];
+    const steerList = Array.isArray(pendingSteers)
+      ? pendingSteers.map((steer) => normalizePendingConversationSteer(steer)).filter(Boolean)
+      : [];
+    if (steerList.length <= 0) {
+      clearAttemptStagedPendingSteers(attemptState);
+      return [];
+    }
+    const stagedWindowId = ensureAttemptOpenSteerWindowId(attemptState);
+
+    const runtimeConversationKey = getAttemptRuntimeConversationKey(attemptState);
+    removeConversationPendingSteersByIds(
+      runtimeConversationKey,
+      steerList.map((steer) => steer.id),
+      attemptState
+    );
+    attemptState.pendingSteersStagedForFollowUp = steerList.map((steer) => cloneDataSafely(steer)).filter(Boolean);
+    attemptState.pendingSteerInputItemsStagedForFollowUp = Array.isArray(pendingSteerInputItems)
+      ? pendingSteerInputItems.map((item) => cloneDataSafely(item)).filter(Boolean)
+      : [];
+    attemptState.pendingSteerStagedWindowId = stagedWindowId;
+    updatePendingSteerActivityTimelineStatus(attemptState, steerList, 'accepted', {
+      windowId: stagedWindowId
+    });
+    return steerList;
+  }
+
+  async function commitStagedPendingSteersForFollowUp(attemptState) {
+    if (!attemptState) return false;
+    const stagedSteers = Array.isArray(attemptState.pendingSteersStagedForFollowUp)
+      ? attemptState.pendingSteersStagedForFollowUp.map((steer) => normalizePendingConversationSteer(steer)).filter(Boolean)
+      : [];
+    const stagedWindowId = (typeof attemptState.pendingSteerStagedWindowId === 'string' && attemptState.pendingSteerStagedWindowId.trim())
+      ? attemptState.pendingSteerStagedWindowId.trim()
+      : '';
+    if (stagedSteers.length > 0) {
+      updatePendingSteerActivityTimelineStatus(attemptState, stagedSteers, 'completed', {
+        windowId: stagedWindowId || null,
+        closeOpenWindow: false
+      });
+    }
+    const stagedInputItems = Array.isArray(attemptState.pendingSteerInputItemsStagedForFollowUp)
+      ? attemptState.pendingSteerInputItemsStagedForFollowUp.map((item) => cloneDataSafely(item)).filter(Boolean)
+      : [];
+    if (stagedInputItems.length > 0) {
+      const mergedAcceptedInputItems = mergeResponsesReplayOutputItems(
+        attemptState.responsesToolLoopAccumulatedInputItems,
+        stagedInputItems
+      );
+      applyResponsesInputItemsToAttempt(attemptState, mergedAcceptedInputItems);
+      await persistAttemptConversationSnapshot(attemptState, { force: true });
+    }
+    clearAttemptStagedPendingSteers(attemptState);
+    return true;
+  }
+
   function appendPendingSteerActivityTimelineToAttempt(attemptState, pendingSteer) {
     if (!attemptState) return false;
     const currentPendingSteers = getConversationPendingSteersForAttempt(attemptState);
@@ -9127,13 +9221,15 @@ export function createMessageSender(appContext) {
     return previewResponsesActivityTimelineOnLoadingMessage(attemptState, nextTimeline);
   }
 
-  function updatePendingSteerActivityTimelineStatus(attemptState, pendingSteers, status = 'completed') {
+  function updatePendingSteerActivityTimelineStatus(attemptState, pendingSteers, status = 'completed', options = {}) {
     if (!attemptState) return false;
     const steerList = Array.isArray(pendingSteers)
       ? pendingSteers.map((steer) => normalizePendingConversationSteer(steer)).filter(Boolean)
       : [];
     if (steerList.length <= 0) return false;
-    const steerWindowId = ensureAttemptOpenSteerWindowId(attemptState);
+    const steerWindowId = (typeof options?.windowId === 'string' && options.windowId.trim())
+      ? options.windowId.trim()
+      : ensureAttemptOpenSteerWindowId(attemptState);
 
     let nextTimeline = Array.isArray(attemptState.responsesToolLoopAccumulatedTimeline)
       ? cloneResponsesActivityTimeline(attemptState.responsesToolLoopAccumulatedTimeline)
@@ -9145,7 +9241,7 @@ export function createMessageSender(appContext) {
     if (!Array.isArray(nextTimeline) || nextTimeline.length <= 0) return false;
 
     const appliedToAssistantNode = applyResponsesActivityTimelineToAttempt(attemptState, nextTimeline);
-    if (status !== 'pending') {
+    if (status !== 'pending' && options?.closeOpenWindow !== false) {
       closeAttemptOpenSteerWindow(attemptState);
     }
     if (appliedToAssistantNode) return true;
@@ -9324,8 +9420,6 @@ export function createMessageSender(appContext) {
   }) {
     let currentRequestBody = initialRequestBody;
     let lastHandleResult = null;
-    let pendingSteerIdsAwaitingRequestAcceptance = [];
-    let pendingSteerInputItemsAwaitingRequestAcceptance = [];
 
     while (true) {
       const response = await sendApiRequestForAttempt({
@@ -9336,25 +9430,8 @@ export function createMessageSender(appContext) {
         attemptState
       });
 
-      if (pendingSteerIdsAwaitingRequestAcceptance.length > 0) {
-        const acceptedPendingSteers = getConversationPendingSteersForAttempt(attemptState)
-          .filter((steer) => pendingSteerIdsAwaitingRequestAcceptance.includes(String(steer?.id || '').trim()));
-        updatePendingSteerActivityTimelineStatus(attemptState, acceptedPendingSteers, 'completed');
-        removeConversationPendingSteersByIds(
-          getAttemptRuntimeConversationKey(attemptState),
-          pendingSteerIdsAwaitingRequestAcceptance,
-          attemptState
-        );
-        if (attemptState && pendingSteerInputItemsAwaitingRequestAcceptance.length > 0) {
-          const mergedAcceptedInputItems = mergeResponsesReplayOutputItems(
-            attemptState.responsesToolLoopAccumulatedInputItems,
-            pendingSteerInputItemsAwaitingRequestAcceptance
-          );
-          applyResponsesInputItemsToAttempt(attemptState, mergedAcceptedInputItems);
-          await persistAttemptConversationSnapshot(attemptState, { force: true });
-        }
-        pendingSteerIdsAwaitingRequestAcceptance = [];
-        pendingSteerInputItemsAwaitingRequestAcceptance = [];
+      if (Array.isArray(attemptState?.pendingSteersStagedForFollowUp) && attemptState.pendingSteersStagedForFollowUp.length > 0) {
+        await commitStagedPendingSteersForFollowUp(attemptState);
       }
 
       const requestedResponseHandlingMode = resolveResponseHandlingMode({
@@ -9454,12 +9531,11 @@ export function createMessageSender(appContext) {
         functionCallOutputs,
         pendingSteerInputItemsForFollowUp
       );
-      pendingSteerIdsAwaitingRequestAcceptance = pendingSteersForFollowUp
-        .map((steer) => String(steer?.id || '').trim())
-        .filter(Boolean);
-      pendingSteerInputItemsAwaitingRequestAcceptance = pendingSteerInputItemsForFollowUp
-        .map((item) => cloneDataSafely(item))
-        .filter(Boolean);
+      stagePendingSteersForFollowUp(
+        attemptState,
+        pendingSteersForFollowUp,
+        pendingSteerInputItemsForFollowUp
+      );
     }
   }
 
@@ -9762,6 +9838,9 @@ export function createMessageSender(appContext) {
           : normalizedConversationRevisionAtStart,
         retryPolicy: normalizedConversationRetryPolicy,
         pendingSteers: [],
+        pendingSteersStagedForFollowUp: [],
+        pendingSteerInputItemsStagedForFollowUp: [],
+        pendingSteerStagedWindowId: null,
         pendingSteerWindowId: null,
         pendingSteerWindowSerial: 0
       };

@@ -282,6 +282,7 @@ async function runMockResponsesServer() {
           const messageItem = createMessageItem('msg_3', finalText);
           writeSseEvent(res, { type: 'response.created', response: { id: 'resp_3' } });
           writeSseEvent(res, { type: 'response.in_progress', response: { id: 'resp_3' } });
+          await sleep(1200);
           writeSseEvent(res, { type: 'response.output_item.added', item: messageItem });
           writeSseEvent(res, {
             type: 'response.output_text.delta',
@@ -526,6 +527,29 @@ async function main() {
         .map((el) => (el.innerText || '').trim())
         .filter(Boolean)
     ));
+    await waitFor(async () => mockServer.requestLog.length >= 3 ? true : null, {
+      timeoutMs: 15000,
+      intervalMs: 100,
+      label: 'third follow-up request observed'
+    });
+    result.steps.push('third_request_observed');
+    result.pendingSteerPreviewAfterAcceptance = await sidebarFrame.evaluate(() => {
+      const panel = document.querySelector('.conversation-send-queue-preview');
+      if (!panel) {
+        return {
+          exists: false,
+          steerWindowCount: 0,
+          steerItemCount: 0,
+          text: ''
+        };
+      }
+      return {
+        exists: true,
+        steerWindowCount: panel.querySelectorAll('.conversation-send-queue-preview__pending-steer-window').length,
+        steerItemCount: panel.querySelectorAll('.conversation-send-queue-preview__pending-steer-item').length,
+        text: (panel.innerText || '').trim()
+      };
+    });
 
     const settled = await waitFor(async () => {
       return await sidebarFrame.evaluate(() => {
@@ -549,6 +573,7 @@ async function main() {
         messageId: target.getAttribute('data-message-id') || '',
         toolCount: toolEntries.length,
         expandedToolCount: toolEntries.filter((el) => el.classList.contains('is-expanded')).length,
+        steerEntryCount: target.querySelectorAll('.response-activity-entry--steer').length,
         timelineClassName: timeline?.className || '',
         timelineDataset: timeline ? { ...timeline.dataset } : null,
         toolClassNames: toolEntries.map((el) => el.className || ''),
@@ -590,6 +615,9 @@ async function main() {
     if ((result.pendingSteerPreview?.steerWindowCount || 0) !== 1 || (result.pendingSteerPreview?.steerItemCount || 0) !== 2) {
       throw new Error(`queue preview did not aggregate pending steers into one window: ${JSON.stringify(result.pendingSteerPreview)}`);
     }
+    if ((result.pendingSteerPreviewAfterAcceptance?.steerWindowCount || 0) !== 0) {
+      throw new Error(`pending steer preview did not disappear after follow-up request accepted the steer window: ${JSON.stringify(result.pendingSteerPreviewAfterAcceptance)}`);
+    }
     if (!result.wrapperReplaceResult?.replaced) {
       throw new Error(`failed to replace assistant wrapper for regression probe: ${JSON.stringify(result.wrapperReplaceResult)}`);
     }
@@ -598,6 +626,9 @@ async function main() {
     }
     if ((result.finalToolTimelineState?.expandedToolCount || 0) > 0) {
       throw new Error(`tool entries stayed expanded after wrapper replacement and auto-collapse window: ${JSON.stringify(result.finalToolTimelineState)}`);
+    }
+    if ((result.finalToolTimelineState?.steerEntryCount || 0) !== 1) {
+      throw new Error(`expected exactly one steer window in final response_activity timeline: ${JSON.stringify(result.finalToolTimelineState)}`);
     }
   } finally {
     result.finishedAt = new Date().toISOString();
