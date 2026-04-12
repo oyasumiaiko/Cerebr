@@ -1553,12 +1553,15 @@ export function createMessageProcessor(appContext) {
     }
   }
 
-  function buildResponseActivityJsRuntimeSummaryParts(record) {
+  function buildResponseActivityJsRuntimeSummaryParts(record, options = {}) {
     const meta = getResponseActivityJsRuntimeMeta(record);
+    const isInProgress = options?.isInProgress === true || isResponseActivityEntryInProgress(record);
     const codePreview = formatResponseActivityJsCodePreview(meta.code) || 'JavaScript';
     const action = meta.isTopLevel
-      ? '已运行'
-      : `已在${meta.frameIds.length}个iframe运行`;
+      ? (isInProgress ? '运行中' : '已运行')
+      : (isInProgress
+          ? `正在${meta.frameIds.length}个iframe中运行`
+          : `已在${meta.frameIds.length}个iframe运行`);
     return {
       action,
       value: codePreview,
@@ -1688,7 +1691,7 @@ export function createMessageProcessor(appContext) {
     return normalized;
   }
 
-  function buildResponseToolCallPrimaryText(record) {
+  function buildResponseToolCallPrimaryText(record, options = {}) {
     if (!record || typeof record !== 'object') return '工具调用';
     const type = String(record.type || '').toLowerCase();
     if (type === 'web_search_call') {
@@ -1709,7 +1712,7 @@ export function createMessageProcessor(appContext) {
       return subject ? `${actionLabel} ${subject}` : actionLabel;
     }
     if (isResponseActivityJsRuntimeEntry(record)) {
-      const parts = buildResponseActivityJsRuntimeSummaryParts(record);
+      const parts = buildResponseActivityJsRuntimeSummaryParts(record, options);
       return `${parts.action} ${parts.value}`.trim();
     }
     if (type === 'function_call') {
@@ -1726,7 +1729,7 @@ export function createMessageProcessor(appContext) {
    * 将工具调用主文案拆成“淡色动作词 + 正常色变量值”的结构，
    * 这样可以用颜色层级替代多余的冒号、括号等符号噪音。
    */
-  function buildResponseToolCallPrimaryParts(record) {
+  function buildResponseToolCallPrimaryParts(record, options = {}) {
     if (!record || typeof record !== 'object') {
       return { action: '', value: '工具调用', valueUrl: '', locationAction: '', locationValue: '', locationUrl: '' };
     }
@@ -1762,7 +1765,7 @@ export function createMessageProcessor(appContext) {
       };
     }
     if (isResponseActivityJsRuntimeEntry(record)) {
-      return buildResponseActivityJsRuntimeSummaryParts(record);
+      return buildResponseActivityJsRuntimeSummaryParts(record, options);
     }
     if (type === 'function_call') {
       const name = (typeof record.name === 'string' && record.name.trim()) ? record.name.trim() : '匿名函数';
@@ -2409,7 +2412,9 @@ export function createMessageProcessor(appContext) {
     const isInProgress = isThinkingRuntimeActive && isResponseActivityEntryInProgress(entry);
     const hasOutput = hasResponsesToolOutputBody(entry?.output);
     const shouldAutoRemainExpanded = isInProgress || (!hasOutput && isThinkingRuntimeActive);
-    const primaryParts = renderSearchQueriesInline ? null : buildResponseToolCallPrimaryParts(entry);
+    const primaryParts = renderSearchQueriesInline
+      ? null
+      : buildResponseToolCallPrimaryParts(entry, { isInProgress });
     const secondaryLines = getResponseActivityToolSecondaryLines(entry);
     const argumentsText = (typeof entry.arguments === 'string' && entry.arguments.trim())
       ? formatResponseToolCallArguments(entry.arguments)
