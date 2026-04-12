@@ -38,6 +38,10 @@ import {
 } from '../utils/conversation_steer_identity.js';
 import { attemptBelongsToConversationQueue } from '../utils/conversation_attempt_membership.js';
 import { selectLatestRunningAttemptForCurrentConversation } from '../utils/conversation_active_attempt_selector.js';
+import {
+  isDraftConversationQueueKey,
+  resolveAttemptRuntimeConversationKey
+} from '../utils/conversation_runtime_key.js';
 import { serializeSelectionTextWithMath } from '../utils/math_selection_text.js';
 import { normalizeApiUsageMeta, normalizeApiTimingMeta } from '../utils/api_footer_template.js';
 import {
@@ -389,7 +393,7 @@ export function createMessageSender(appContext) {
       const hasDelayedRetry = jobs.some((job) => normalizeConversationQueuedTask(job).status === 'delayed_retry');
       if (!hasDelayedRetry) continue;
       const boundId = normalizeConversationId(queueKey);
-      if (!boundId || boundId.startsWith('__draft_queue_')) continue;
+      if (!boundId || isDraftConversationQueueKey(boundId)) continue;
       ids.add(boundId);
     }
     return Array.from(ids).sort();
@@ -452,22 +456,21 @@ export function createMessageSender(appContext) {
   }
 
   function getAttemptRuntimeConversationKey(attemptState, fallbackConversationId = '') {
-    const explicitRuntimeKey = (typeof attemptState?.runtimeConversationKey === 'string' && attemptState.runtimeConversationKey.trim())
-      ? attemptState.runtimeConversationKey.trim()
-      : '';
-    if (explicitRuntimeKey) return explicitRuntimeKey;
-
-    const boundConversationId = normalizeConversationId(attemptState?.boundConversationId);
-    if (boundConversationId) return getRuntimeConversationKey(boundConversationId);
-
-    const normalizedFallbackConversationId = normalizeConversationId(fallbackConversationId);
-    if (normalizedFallbackConversationId) return getRuntimeConversationKey(normalizedFallbackConversationId);
-
-    const activeConversationId = normalizeConversationId(currentConversationId)
-      || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
-    if (activeConversationId) return getRuntimeConversationKey(activeConversationId);
-
-    return getActiveDraftConversationQueueKey();
+    return resolveAttemptRuntimeConversationKey({
+      explicitRuntimeConversationKey: (
+        typeof attemptState?.runtimeConversationKey === 'string'
+        && attemptState.runtimeConversationKey.trim()
+      )
+        ? attemptState.runtimeConversationKey.trim()
+        : '',
+      boundConversationId: getRuntimeConversationKey(normalizeConversationId(attemptState?.boundConversationId)),
+      fallbackConversationId: getRuntimeConversationKey(normalizeConversationId(fallbackConversationId)),
+      activeConversationId: getRuntimeConversationKey(
+        normalizeConversationId(currentConversationId)
+        || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.())
+      ),
+      activeDraftConversationQueueKey: getActiveDraftConversationQueueKey()
+    });
   }
 
   function getAttemptRuntimeSnapshot(attemptState, fallbackConversationId = '') {
