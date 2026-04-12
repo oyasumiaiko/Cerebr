@@ -4769,6 +4769,7 @@ export function createMessageSender(appContext) {
         toolCount: normalizedOptions.toolCount,
         responseStatus: normalizedOptions.responseStatus,
         responseBytes: normalizedOptions.responseBytes,
+        compactedOutputTokens: normalizedOptions.compactedOutputTokens,
         outputCount: Array.isArray(normalizedOptions.compactOutput)
           ? normalizedOptions.compactOutput.length
           : normalizedOptions.outputCount
@@ -4812,6 +4813,7 @@ export function createMessageSender(appContext) {
       toolCount: normalizeNullableInt(normalizedOptions.toolCount),
       responseStatus: normalizeNullableInt(normalizedOptions.responseStatus),
       responseBytes: normalizeNullableInt(normalizedOptions.responseBytes),
+      compactedOutputTokens: normalizeNullableInt(normalizedOptions.compactedOutputTokens),
       outputCount: normalizeNullableInt(normalizedOptions.outputCount),
       errorMessage,
       updatedAt: normalizeNullableInt(normalizedOptions.updatedAt) || Date.now()
@@ -5100,6 +5102,7 @@ export function createMessageSender(appContext) {
     if (compactPayload?.error) {
       throw new Error(compactPayload.error?.message || 'Compact 接口返回错误');
     }
+    const compactUsage = normalizeApiUsageMeta(compactPayload?.usage || compactPayload?.response?.usage);
 
     const compactOutput = cloneResponsesInputItems(
       Array.isArray(compactPayload?.output) ? compactPayload.output : []
@@ -5120,6 +5123,7 @@ export function createMessageSender(appContext) {
       toolCount: compactRequestSummary?.toolCount,
       responseStatus: compactResponse.status,
       responseBytes: (new TextEncoder()).encode(compactResponseText).length,
+      compactedOutputTokens: compactUsage?.completionTokens ?? null,
       outputCount: compactOutput.length
     });
     const markerResult = updateResponsesLocalCompactionMessage({

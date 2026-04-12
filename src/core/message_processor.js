@@ -3382,6 +3382,7 @@ export function createMessageProcessor(appContext) {
       toolCount: normalizeInt(status.toolCount),
       responseStatus: normalizeInt(status.responseStatus),
       responseBytes: normalizeInt(status.responseBytes),
+      compactedOutputTokens: normalizeInt(status.compactedOutputTokens),
       outputCount: normalizeInt(status.outputCount),
       errorMessage: (typeof status.errorMessage === 'string' && status.errorMessage.trim())
         ? status.errorMessage.trim()
@@ -3394,12 +3395,31 @@ export function createMessageProcessor(appContext) {
     const parsed = Number(bytes);
     if (!Number.isFinite(parsed) || parsed <= 0) return '';
     if (parsed >= 1024 * 1024) {
-      return `${(parsed / (1024 * 1024)).toFixed(parsed >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+      return `${(parsed / (1024 * 1024)).toFixed(parsed >= 10 * 1024 * 1024 ? 0 : 1)}MB`;
     }
     if (parsed >= 1024) {
-      return `${(parsed / 1024).toFixed(parsed >= 10 * 1024 ? 0 : 1)} KB`;
+      return `${(parsed / 1024).toFixed(parsed >= 10 * 1024 ? 0 : 1)}KB`;
     }
-    return `${Math.trunc(parsed)} B`;
+    return `${Math.trunc(parsed)}B`;
+  }
+
+  function formatCompactStatusTokens(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) return '';
+    if (parsed < 1000) return `${Math.trunc(parsed)}`;
+    const units = [
+      { base: 1e9, suffix: 'b' },
+      { base: 1e6, suffix: 'm' },
+      { base: 1e3, suffix: 'k' }
+    ];
+    const unit = units.find(item => parsed >= item.base) || units[units.length - 1];
+    const scaled = parsed / unit.base;
+    const digits = scaled >= 100 ? 0 : (scaled >= 10 ? 1 : 2);
+    const text = scaled
+      .toFixed(digits)
+      .replace(/(\.\d*?)0+$/g, '$1')
+      .replace(/\.$/g, '');
+    return `${text}${unit.suffix}`;
   }
 
   function truncateCompactStatusText(text, maxLength = 120) {
@@ -3411,6 +3431,10 @@ export function createMessageProcessor(appContext) {
 
   function buildResponsesLocalCompactionPresentation(node) {
     const status = normalizeResponsesLocalCompactionStatus(node?.responsesLocalCompactionStatus);
+    const promptTokensBefore = (() => {
+      const raw = Number(node?.contextCompactionMarker?.promptTokensBefore);
+      return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : null;
+    })();
     const hasSuccessfulMarker = !!(node?.contextCompactionMarker
       && Array.isArray(node?.response_input_items)
       && node.response_input_items.length > 0);
@@ -3418,14 +3442,37 @@ export function createMessageProcessor(appContext) {
     if (!state) return null;
 
     const metaParts = [];
-    if (status?.attempt && status?.totalAttempts) {
-      metaParts.push(`第 ${status.attempt}/${status.totalAttempts} 次`);
+    const flowArrow = '→';
+    if (state === 'success') {
+      const compactedOutputTokens = status?.compactedOutputTokens || null;
+      const tokenBeforeLabel = formatCompactStatusTokens(promptTokensBefore);
+      const tokenAfterLabel = formatCompactStatusTokens(compactedOutputTokens);
+      if (tokenBeforeLabel && tokenAfterLabel) {
+        metaParts.push(`上下文 ${tokenBeforeLabel} ${flowArrow} ${tokenAfterLabel} tokens`);
+      } else if (tokenBeforeLabel) {
+        metaParts.push(`上下文 ${tokenBeforeLabel} tokens`);
+      } else if (tokenAfterLabel) {
+        metaParts.push(`压缩响应 ${tokenAfterLabel} tokens`);
+      }
+
+      const requestBytesLabel = formatCompactStatusBytes(status?.requestBytes);
+      const responseBytesLabel = formatCompactStatusBytes(status?.responseBytes);
+      if (requestBytesLabel && responseBytesLabel) {
+        metaParts.push(`载荷 ${requestBytesLabel} ${flowArrow} ${responseBytesLabel}`);
+      } else if (requestBytesLabel) {
+        metaParts.push(`载荷 ${requestBytesLabel}`);
+      } else if (responseBytesLabel) {
+        metaParts.push(`载荷 ${responseBytesLabel}`);
+      }
+
+      if (status?.outputCount) metaParts.push(`${status.outputCount}个output items`);
+    } else {
+      if (status?.requestBytes) metaParts.push(`载荷 ${formatCompactStatusBytes(status.requestBytes)}`);
+      if (status?.inputCount) metaParts.push(`${status.inputCount}条输入`);
+      if (status?.responseBytes) metaParts.push(`响应 ${formatCompactStatusBytes(status.responseBytes)}`);
+      if (status?.outputCount) metaParts.push(`${status.outputCount}个output items`);
+      if (state === 'error' && status?.responseStatus) metaParts.push(`HTTP ${status.responseStatus}`);
     }
-    if (status?.requestBytes) metaParts.push(`载荷 ${formatCompactStatusBytes(status.requestBytes)}`);
-    if (status?.inputCount) metaParts.push(`${status.inputCount} 条输入`);
-    if (status?.responseBytes) metaParts.push(`响应 ${formatCompactStatusBytes(status.responseBytes)}`);
-    if (status?.outputCount) metaParts.push(`${status.outputCount} 个 output items`);
-    if (status?.responseStatus) metaParts.push(`HTTP ${status.responseStatus}`);
 
     let title = '上下文已压缩';
     let iconClass = 'fa-box-archive';
@@ -3486,6 +3533,7 @@ export function createMessageProcessor(appContext) {
     messageWrapperDiv.dataset.compactionState = presentation.state;
     messageWrapperDiv.classList.remove('updating');
     messageWrapperDiv.classList.remove('assistant-pre-response');
+    messageWrapperDiv.classList.toggle('error-message', presentation.state === 'error');
 
     let banner = existingBanner;
     if (!banner) {
