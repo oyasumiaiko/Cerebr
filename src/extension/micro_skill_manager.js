@@ -17,7 +17,6 @@ import {
   microSkillMatchesUrl,
   normalizeMicroSkillFilePath,
   normalizeMicroSkillRegistryToolArguments,
-  parseMicroSkillVirtualManifestContent,
   searchMicroSkillFiles,
   normalizeStoredMicroSkillRecord,
   saveStoredMicroSkillPackage
@@ -379,72 +378,6 @@ export function createMicroSkillManager(options = {}) {
     };
   }
 
-  async function writeSkillFile(skillName, fileInput, options = {}) {
-    const existing = await getMutableStoredSkillRecord(skillName, 'write_file');
-    const normalizedExisting = normalizeStoredMicroSkillRecord(existing);
-    if (!normalizedExisting) {
-      throw new Error(`微型 skill ${skillName} 不存在，无法写入文件。`);
-    }
-
-    if (fileInput.path === MICRO_SKILL_VIRTUAL_MANIFEST_PATH) {
-      if (options?.setAsInstruction === true || options?.setAsRuntimeEntry === true) {
-        throw new Error('写入 manifest.json 时不支持同时使用 set_as_instruction / set_as_runtime_entry，请直接修改 manifest 内容。');
-      }
-      const manifestInput = parseMicroSkillVirtualManifestContent(fileInput.content, normalizedExisting);
-      const nextRecord = buildStoredMicroSkillRecord({
-        ...normalizedExisting,
-        ...manifestInput,
-        files: cloneFiles(normalizedExisting.files)
-      }, normalizedExisting);
-      const persistedRecord = await persistMutatedSkillRecord(normalizedExisting, nextRecord);
-
-      return {
-        ok: true,
-        action: 'write_file',
-        skill: buildMicroSkillSummary(persistedRecord),
-        files: buildMicroSkillFileManifest(persistedRecord, { includeContent: false }),
-        file: buildMicroSkillFilePayload(persistedRecord, MICRO_SKILL_VIRTUAL_MANIFEST_PATH)?.file || null,
-        ...(await maybeRefreshCurrentDocument(options?.tabId))
-      };
-    }
-
-    const nextFiles = cloneFiles(normalizedExisting.files);
-    const existingIndex = nextFiles.findIndex((file) => file.path === fileInput.path);
-    const existingFile = existingIndex >= 0 ? nextFiles[existingIndex] : null;
-    const nextFile = {
-      path: fileInput.path,
-      kind: fileInput.kind || existingFile?.kind || null,
-      content: fileInput.content
-    };
-
-    if (existingIndex >= 0) {
-      nextFiles[existingIndex] = nextFile;
-    } else {
-      nextFiles.push(nextFile);
-    }
-
-    const nextRecord = buildStoredMicroSkillRecord({
-      ...normalizedExisting,
-      instruction: {
-        path: options?.setAsInstruction === true ? nextFile.path : normalizedExisting.instruction.path
-      },
-      runtime: {
-        entry_path: options?.setAsRuntimeEntry === true ? nextFile.path : normalizedExisting.runtime.entry_path
-      },
-      files: nextFiles
-    }, normalizedExisting);
-    const persistedRecord = await persistMutatedSkillRecord(normalizedExisting, nextRecord);
-
-    return {
-      ok: true,
-      action: 'write_file',
-      skill: buildMicroSkillSummary(persistedRecord),
-      files: buildMicroSkillFileManifest(persistedRecord, { includeContent: false }),
-      file: buildMicroSkillFilePayload(persistedRecord, nextFile.path)?.file || null,
-      ...(await maybeRefreshCurrentDocument(options?.tabId))
-    };
-  }
-
   async function deleteSkillFile(skillName, filePath, options = {}) {
     const existing = await getMutableStoredSkillRecord(skillName, 'delete_file');
     const normalizedExisting = normalizeStoredMicroSkillRecord(existing);
@@ -634,12 +567,6 @@ export function createMicroSkillManager(options = {}) {
         return await createSkill(normalizedArgs.skill, { tabId: options?.tabId });
       case 'update':
         return await updateSkill(normalizedArgs.skill, { tabId: options?.tabId });
-      case 'write_file':
-        return await writeSkillFile(normalizedArgs.skill_name, normalizedArgs.file, {
-          tabId: options?.tabId,
-          setAsInstruction: normalizedArgs.set_as_instruction === true,
-          setAsRuntimeEntry: normalizedArgs.set_as_runtime_entry === true
-        });
       case 'apply_patch':
         return await applySkillPatch(normalizedArgs.skill_name, normalizedArgs.patch, {
           tabId: options?.tabId

@@ -283,8 +283,6 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     max_results: 5,
     read_options: null,
     include_line_numbers: false,
-    set_as_instruction: false,
-    set_as_runtime_entry: false,
     next_instruction_path: null,
     next_runtime_entry_path: null
   });
@@ -317,24 +315,21 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
       end_line: null
     },
     include_line_numbers: true,
-    set_as_instruction: false,
-    set_as_runtime_entry: false,
     next_instruction_path: null,
     next_runtime_entry_path: null
   });
 
-  const normalizedWriteFile = normalizeMicroSkillRegistryToolArguments({
-    action: 'write_file',
-    skill_name: 'dom-probe',
-    set_as_runtime_entry: true,
-    file: {
-      path: 'src/runtime/new-main.js',
-      content: 'module.exports = { read() { return document.title; } };'
-    }
-  });
-  assert.equal(normalizedWriteFile.action, 'write_file');
-  assert.equal(normalizedWriteFile.file.path, 'src/runtime/new-main.js');
-  assert.equal(normalizedWriteFile.set_as_runtime_entry, true);
+  assert.throws(
+    () => normalizeMicroSkillRegistryToolArguments({
+      action: 'write_file',
+      skill_name: 'dom-probe',
+      file: {
+        path: 'src/runtime/new-main.js',
+        content: 'module.exports = { read() { return document.title; } };'
+      }
+    }),
+    /不支持的 action `write_file`/
+  );
 
   const normalizedLegacy = normalizeMicroSkillRegistryToolArguments({
     action: 'read_source_file',
@@ -363,8 +358,6 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
       end_line: null
     },
     include_line_numbers: false,
-    set_as_instruction: false,
-    set_as_runtime_entry: false,
     next_instruction_path: null,
     next_runtime_entry_path: null
   });
@@ -390,8 +383,6 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     max_results: 50,
     read_options: null,
     include_line_numbers: false,
-    set_as_instruction: false,
-    set_as_runtime_entry: false,
     next_instruction_path: null,
     next_runtime_entry_path: null
   });

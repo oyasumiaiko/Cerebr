@@ -1143,11 +1143,6 @@ function buildMicroSkillMutationSummaryText(result) {
     case 'apply_patch':
       summary = buildMicroSkillApplyPatchSummaryText(normalized);
       break;
-    case 'write_file':
-      summary = filePath
-        ? `Updated file ${filePath}${skillName ? ` in skill ${skillName}` : ''}${revision ? ` (revision ${revision})` : ''}.`
-        : `Updated skill ${skillName || '(unknown)'}${revision ? ` to revision ${revision}` : ''}.`;
-      break;
     case 'delete_file':
       summary = filePath
         ? `Deleted file ${filePath}${skillName ? ` from skill ${skillName}` : ''}${revision ? ` (revision ${revision})` : ''}.`

@@ -203,41 +203,40 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   assert.doesNotMatch(readManifest.skill.file.content, /"name":/);
   assert.doesNotMatch(readManifest.skill.file.content, /"kind":/);
 
-  const writtenFile = await manager.executeRegistryAction({
-    action: 'write_file',
+  const addedFile = await manager.executeRegistryAction({
+    action: 'apply_patch',
     skill_name: 'dom-probe',
-    file: {
-      path: 'src/helpers/url.js',
-      content: 'module.exports = { readUrl() { return location.href; } };'
-    }
+    patch: [
+      '*** Begin Patch',
+      '*** Add File: src/helpers/url.js',
+      '+module.exports = { readUrl() { return location.href; } };',
+      '*** End Patch'
+    ].join('\n')
   }, { tabId: 11 });
-  assert.equal(writtenFile.ok, true);
-  assert.equal(writtenFile.files.total_count, 5);
+  assert.equal(addedFile.ok, true);
+  assert.equal(addedFile.files.total_count, 5);
+  assert.deepEqual(addedFile.affected_files, {
+    added: ['src/helpers/url.js'],
+    modified: [],
+    deleted: []
+  });
   assert.equal(calls.update.length, 2);
   assert.equal(calls.execute.length, 3);
 
-  const writtenManifest = await manager.executeRegistryAction({
-    action: 'write_file',
+  const patchedManifestDescription = await manager.executeRegistryAction({
+    action: 'apply_patch',
     skill_name: 'dom-probe',
-    file: {
-      path: 'manifest.json',
-      content: JSON.stringify({
-        description: '读取页面标题、链接与路径信息',
-        interface: {
-          display_name: 'DOM Probe',
-          short_description: '读取标题、URL 和路径',
-          default_prompt: 'Read the current page title, URL, and pathname.'
-        },
-        match: ['https://*.example.com/*'],
-        enabled: true,
-        instruction: { path: 'SKILL.md' },
-        runtime: { entry_path: 'src/main.js' }
-      }, null, 2)
-    }
+    patch: [
+      '*** Begin Patch',
+      '*** Update File: manifest.json',
+      '@@',
+      '-  "description": "读取页面标题和链接",',
+      '+  "description": "读取页面标题、链接与路径信息",',
+      '*** End Patch'
+    ].join('\n')
   }, { tabId: 11 });
-  assert.equal(writtenManifest.ok, true);
-  assert.equal(writtenManifest.file.is_manifest, true);
-  assert.equal(writtenManifest.skill.description, '读取页面标题、链接与路径信息');
+  assert.equal(patchedManifestDescription.ok, true);
+  assert.equal(patchedManifestDescription.skill.description, '读取页面标题、链接与路径信息');
   assert.equal(calls.update.length, 3);
   assert.equal(calls.execute.length, 4);
 
@@ -285,23 +284,16 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   assert.equal(calls.execute.length, 6);
 
   const reenabledViaManifest = await manager.executeRegistryAction({
-    action: 'write_file',
+    action: 'apply_patch',
     skill_name: 'dom-probe',
-    file: {
-      path: 'manifest.json',
-      content: JSON.stringify({
-        description: '读取页面标题、链接与路径信息',
-        interface: {
-          display_name: 'DOM Probe',
-          short_description: '读取标题、URL 和路径',
-          default_prompt: 'Read the current page title, URL, and pathname.'
-        },
-        match: ['https://*.example.com/*'],
-        enabled: true,
-        instruction: { path: 'SKILL.md' },
-        runtime: { entry_path: 'src/main.js' }
-      }, null, 2)
-    }
+    patch: [
+      '*** Begin Patch',
+      '*** Update File: manifest.json',
+      '@@',
+      '-  "enabled": false,',
+      '+  "enabled": true,',
+      '*** End Patch'
+    ].join('\n')
   }, { tabId: 11 });
   assert.equal(reenabledViaManifest.ok, true);
   assert.equal(calls.register.length, 2);

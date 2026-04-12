@@ -1361,17 +1361,6 @@ export async function listMatchingStoredMicroSkillPackagesForUrl(url, store = nu
   return packages.filter(Boolean);
 }
 
-function buildNormalizedWriteFileInput(rawFile) {
-  const file = ensurePlainObject(rawFile);
-  return {
-    path: normalizeMicroSkillFilePath(file.path),
-    kind: normalizeOptionalString(file.kind) ? normalizeMicroSkillFileKind(file.kind) : null,
-    content: (typeof file.content === 'string')
-      ? file.content
-      : ((typeof file.code === 'string') ? file.code : '')
-  };
-}
-
 function buildMicroSkillRecordInputSchemaDescription() {
   return {
     type: ['object', 'null'],
@@ -1432,7 +1421,8 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
     name: MICRO_SKILL_REGISTRY_TOOL_NAME,
     description: [
       '管理浏览器里的微型 skill。',
-      '支持列出 skill 与文件、搜索文件内容、读取详情和文件、创建和更新 skill、写入单个文件、对文件应用补丁，以及在需要时刷新当前网页。'
+      '支持列出 skill 与文件、搜索文件内容、读取详情和文件、创建和更新 skill、对文件应用补丁，以及在需要时刷新当前网页。',
+      '只要需要编辑 skill 内文件或 manifest.json，就统一使用 apply_patch，并优先做增量修改而不是整文件重写。'
     ].join(' '),
     strict: false,
     parameters: {
@@ -1441,7 +1431,7 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
       properties: {
         action: {
           type: 'string',
-          description: '必填。支持 list、list_files、search_files、read_detail、read_package、read_file、write_file、apply_patch、create、update、delete_file、delete、enable、disable、refresh_current_document。'
+          description: '必填。支持 list、list_files、search_files、read_detail、read_package、read_file、apply_patch、create、update、delete_file、delete、enable、disable、refresh_current_document。'
         },
         skill_name: {
           type: ['string', 'null'],
@@ -1451,14 +1441,6 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
           type: ['string', 'null'],
           description: '按单个文件读取或删除时使用的 skill 内部路径。'
         },
-        set_as_instruction: {
-          type: ['boolean', 'null'],
-          description: 'write_file 时是否把该文件设为新的 instruction 文件。'
-        },
-        set_as_runtime_entry: {
-          type: ['boolean', 'null'],
-          description: 'write_file 时是否把该文件设为新的 runtime 入口文件。'
-        },
         next_instruction_path: {
           type: ['string', 'null'],
           description: '删除 instruction 文件时，指定新的 instruction 文件路径。'
@@ -1467,19 +1449,9 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
           type: ['string', 'null'],
           description: '删除 runtime entry 文件时，指定新的 runtime 入口文件路径。'
         },
-        file: {
-          type: ['object', 'null'],
-          description: '单个文件对象。用于 write_file。',
-          additionalProperties: false,
-          properties: {
-            path: { type: 'string' },
-            content: { type: 'string' }
-          },
-          required: ['path', 'content']
-        },
         patch: {
           type: ['string', 'null'],
-          description: '补丁文本。使用 `*** Begin Patch`、`*** Update File:`、`*** Add File:`、`*** Delete File:`、`*** End Patch` 这套格式。'
+          description: '补丁文本。使用 `*** Begin Patch`、`*** Update File:`、`*** Add File:`、`*** Delete File:`、`*** End Patch` 这套格式。需要编辑文件时统一走这个 action，并尽量只改必要片段。'
         },
         pattern: {
           type: ['string', 'null'],
@@ -1545,7 +1517,6 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
     refresh: 'refresh_current_document',
     read_source: 'read_package',
     read_source_file: 'read_file',
-    upsert_source_file: 'write_file',
     delete_source_file: 'delete_file'
   };
   const action = legacyActionMap[rawAction] || rawAction;
@@ -1563,7 +1534,6 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
     'read_detail',
     'read_package',
     'read_file',
-    'write_file',
     'apply_patch',
     'create',
     'update',
@@ -1594,8 +1564,6 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
       read_options: null,
       include_line_numbers: false,
-      set_as_instruction: false,
-      set_as_runtime_entry: false,
       next_instruction_path: null,
       next_runtime_entry_path: null
     };
@@ -1618,8 +1586,6 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
       read_options: null,
       include_line_numbers: false,
-      set_as_instruction: false,
-      set_as_runtime_entry: false,
       next_instruction_path: null,
       next_runtime_entry_path: null
     };
@@ -1646,8 +1612,6 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       max_results: normalizeMicroSkillSearchMaxResults(args.max_results),
       read_options: null,
       include_line_numbers: false,
-      set_as_instruction: false,
-      set_as_runtime_entry: false,
       next_instruction_path: null,
       next_runtime_entry_path: null
     };
@@ -1673,8 +1637,6 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
       read_options: null,
       include_line_numbers: false,
-      set_as_instruction: false,
-      set_as_runtime_entry: false,
       next_instruction_path: null,
       next_runtime_entry_path: null
     };
@@ -1697,8 +1659,6 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
       read_options: null,
       include_line_numbers: false,
-      set_as_instruction: false,
-      set_as_runtime_entry: false,
       next_instruction_path: null,
       next_runtime_entry_path: null
     };
@@ -1734,41 +1694,12 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       include_line_numbers: action === 'read_file'
         ? normalizeBoolean(args.include_line_numbers, false)
         : false,
-      set_as_instruction: false,
-      set_as_runtime_entry: false,
       next_instruction_path: normalizeOptionalString(args.next_instruction_path)
         ? normalizeMicroSkillFilePath(args.next_instruction_path)
         : null,
       next_runtime_entry_path: normalizeOptionalString(args.next_runtime_entry_path || args.next_entry_path)
         ? normalizeMicroSkillFilePath(args.next_runtime_entry_path || args.next_entry_path)
         : null
-    };
-  }
-
-  if (action === 'write_file') {
-    if (!args.file || typeof args.file !== 'object') {
-      throw new Error('micro_skill_registry 参数错误：write_file 时 file 不能为空。');
-    }
-    return {
-      action,
-      skill_name: skillName,
-      skill: null,
-      file_path: null,
-      file: buildNormalizedWriteFileInput(args.file),
-      patch: null,
-      pattern: null,
-      regex: false,
-      case_mode: 'smart',
-      path_glob: null,
-      context_before: 0,
-      context_after: 0,
-      max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
-      read_options: null,
-      include_line_numbers: false,
-      set_as_instruction: normalizeBoolean(args.set_as_instruction, false),
-      set_as_runtime_entry: normalizeBoolean(args.set_as_runtime_entry || args.set_as_entry, false),
-      next_instruction_path: null,
-      next_runtime_entry_path: null
     };
   }
 
@@ -1793,8 +1724,6 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
       read_options: null,
       include_line_numbers: false,
-      set_as_instruction: false,
-      set_as_runtime_entry: false,
       next_instruction_path: null,
       next_runtime_entry_path: null
     };
@@ -1821,8 +1750,6 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       include_line_numbers: action === 'read_detail'
         ? normalizeBoolean(args.include_line_numbers, false)
         : false,
-      set_as_instruction: false,
-      set_as_runtime_entry: false,
       next_instruction_path: null,
       next_runtime_entry_path: null
     };
@@ -1844,8 +1771,6 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
     max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
     read_options: null,
     include_line_numbers: false,
-    set_as_instruction: false,
-    set_as_runtime_entry: false,
     next_instruction_path: null,
     next_runtime_entry_path: null
   };
