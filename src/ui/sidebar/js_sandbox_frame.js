@@ -5,6 +5,7 @@ import {
 
 const SANDBOX_MESSAGE_FLAG = '__cerebrJsSandbox';
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+const activeExecutionAborters = new Map();
 
 function postSandboxMessage(type, payload = {}) {
   try {
@@ -104,14 +105,38 @@ async function executeUserCodeWithCapturedConsole(code) {
   }
 }
 
+function createSandboxAbortError() {
+  const error = new Error('执行隔离 JS Sandbox 已取消。');
+  error.name = 'AbortError';
+  return error;
+}
+
 window.addEventListener('message', async (event) => {
   const data = event.data || {};
   if (data?.[SANDBOX_MESSAGE_FLAG] !== true) return;
-  if (data.type !== 'execute') return;
 
   const requestId = (typeof data.requestId === 'string') ? data.requestId : '';
+  if (data.type === 'abort') {
+    const abortExecution = activeExecutionAborters.get(requestId);
+    if (typeof abortExecution === 'function') {
+      abortExecution();
+    }
+    return;
+  }
+  if (data.type !== 'execute') return;
+
   try {
-    const execution = await executeUserCodeWithCapturedConsole(data.code);
+    let abort = null;
+    const abortPromise = new Promise((_, reject) => {
+      abort = () => reject(createSandboxAbortError());
+    });
+    if (typeof abort === 'function') {
+      activeExecutionAborters.set(requestId, abort);
+    }
+    const execution = await Promise.race([
+      executeUserCodeWithCapturedConsole(data.code),
+      abortPromise
+    ]);
     if (execution.ok !== true) {
       postSandboxMessage('execute_result', {
         requestId,
@@ -128,6 +153,8 @@ window.addEventListener('message', async (event) => {
       requestId,
       payload: buildJsSandboxErrorEnvelope(error)
     });
+  } finally {
+    activeExecutionAborters.delete(requestId);
   }
 });
 

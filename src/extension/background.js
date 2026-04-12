@@ -396,6 +396,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const result = await jsRuntimeManager.execute({
           tabId: targetTabId,
           code: message?.code || '',
+          executionId: message?.executionId || '',
           timeoutMs: message?.timeoutMs,
           frameIds: Array.isArray(message?.frameIds) ? message.frameIds : null,
           allFrames: message?.allFrames === true,
@@ -408,6 +409,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
       } catch (error) {
         sendResponse({ success: false, error: error?.message || '执行 JS Runtime 失败' });
+      }
+    })();
+    return true;
+  }
+
+  if (message?.type === 'ABORT_JS_RUNTIME') {
+    (async () => {
+      try {
+        const targetTabId = resolveSidebarRequestTargetTabId({
+          explicitTabId: message?.tabId,
+          senderTabId: sender?.tab?.id
+        });
+        if (!Number.isFinite(targetTabId)) {
+          sendResponse({ success: false, error: '未找到与当前侧栏实例绑定的目标标签页。' });
+          return;
+        }
+
+        const result = await jsRuntimeManager.abort({
+          tabId: targetTabId,
+          executionId: message?.executionId || '',
+          frameIds: Array.isArray(message?.frameIds) ? message.frameIds : null,
+          allFrames: message?.allFrames === true
+        });
+        sendResponse({
+          success: true,
+          tabId: targetTabId,
+          ...result
+        });
+      } catch (error) {
+        sendResponse({ success: false, error: error?.message || '中止 JS Runtime 失败' });
       }
     })();
     return true;

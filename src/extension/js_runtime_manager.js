@@ -153,16 +153,22 @@ function shouldExposeNavigationFrameSnapshot(frame) {
  * @param {string} userCode
  * @returns {string}
  */
-function buildUserScriptSource(userCode, timeoutMs = 0) {
+function buildUserScriptSource(userCode, timeoutMs = 0, executionId = '') {
   const body = (typeof userCode === 'string') ? userCode : '';
   const normalizedTimeoutMs = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0
     ? Math.trunc(Number(timeoutMs))
     : 0;
+  const normalizedExecutionId = (typeof executionId === 'string' && executionId.trim())
+    ? executionId.trim()
+    : '';
   return `
   (async () => {
     const __cerebrMaxLogs = 50;
     const __cerebrMaxLogChars = 4000;
     const __cerebrTimeoutMs = ${normalizedTimeoutMs};
+    const __cerebrExecutionId = ${JSON.stringify(normalizedExecutionId)};
+    const __cerebrAbortEventName = '__cerebrJsRuntimeAbort';
+    const __cerebrAbortRegistry = globalThis.__cerebrJsRuntimeAbortRegistry ??= new Set();
     const __cerebrBuildReplacer = () => {
       const seen = new WeakSet();
       return (_key, value) => {
@@ -221,6 +227,39 @@ function buildUserScriptSource(userCode, timeoutMs = 0) {
     };
     const __cerebrLogs = [];
     let __cerebrOmittedLogs = 0;
+    const __cerebrBuildAbortError = () => {
+      const error = new Error('JS Runtime 执行已被中止。');
+      error.name = 'AbortError';
+      return error;
+    };
+    const __cerebrIsAborted = () => (
+      !!__cerebrExecutionId
+      && __cerebrAbortRegistry instanceof Set
+      && __cerebrAbortRegistry.has(__cerebrExecutionId)
+    );
+    let __cerebrAbortListener = null;
+    const __cerebrAbortPromise = !__cerebrExecutionId
+      ? null
+      : new Promise((_, reject) => {
+          const __cerebrRejectIfAborted = () => {
+            if (!__cerebrIsAborted()) return;
+            reject(__cerebrBuildAbortError());
+          };
+          __cerebrAbortListener = (event) => {
+            const detailExecutionId = (typeof event?.detail?.executionId === 'string')
+              ? event.detail.executionId
+              : '';
+            if (detailExecutionId && detailExecutionId !== __cerebrExecutionId) return;
+            __cerebrRejectIfAborted();
+          };
+          globalThis.addEventListener(__cerebrAbortEventName, __cerebrAbortListener);
+          __cerebrRejectIfAborted();
+        });
+    const __cerebrWrapAbortable = (promise) => (
+      __cerebrAbortPromise
+        ? Promise.race([promise, __cerebrAbortPromise])
+        : promise
+    );
     const __cerebrPushLog = (level, args) => {
       if (__cerebrLogs.length >= __cerebrMaxLogs) {
         __cerebrOmittedLogs += 1;
@@ -243,7 +282,7 @@ function buildUserScriptSource(userCode, timeoutMs = 0) {
       const __cerebrRunUserCode = async () => {
 ${body}
       };
-      const __cerebrValue = await (__cerebrTimeoutMs > 0
+      const __cerebrValue = await __cerebrWrapAbortable(__cerebrTimeoutMs > 0
         ? Promise.race([
             __cerebrRunUserCode(),
             new Promise((_, reject) => {
@@ -279,8 +318,42 @@ ${body}
         error: __cerebrNormalizeError(error)
       };
     } finally {
+      if (__cerebrAbortListener) {
+        try { globalThis.removeEventListener(__cerebrAbortEventName, __cerebrAbortListener); } catch (_) {}
+      }
+      if (__cerebrExecutionId && __cerebrAbortRegistry instanceof Set) {
+        __cerebrAbortRegistry.delete(__cerebrExecutionId);
+      }
       globalThis.console = __cerebrOriginalConsole;
     }
+  })();
+`.trim();
+}
+
+function buildAbortUserScriptSource(executionId) {
+  const normalizedExecutionId = (typeof executionId === 'string' && executionId.trim())
+    ? executionId.trim()
+    : '';
+  if (!normalizedExecutionId) {
+    throw new Error('中止 JS Runtime 失败：缺少 executionId。');
+  }
+  return `
+  (() => {
+    const __cerebrExecutionId = ${JSON.stringify(normalizedExecutionId)};
+    const __cerebrAbortRegistry = globalThis.__cerebrJsRuntimeAbortRegistry ??= new Set();
+    __cerebrAbortRegistry.add(__cerebrExecutionId);
+    try {
+      globalThis.dispatchEvent(new CustomEvent('__cerebrJsRuntimeAbort', {
+        detail: { executionId: __cerebrExecutionId }
+      }));
+    } catch (_) {}
+    return {
+      __cerebrJsRuntimeEnvelope: true,
+      ok: true,
+      value: null,
+      logs: [],
+      error: null
+    };
   })();
 `.trim();
 }
@@ -355,6 +428,9 @@ export function createJsRuntimeManager() {
     const timeoutMs = Number.isFinite(Number(request?.timeoutMs)) && Number(request.timeoutMs) > 0
       ? Math.trunc(Number(request.timeoutMs))
       : 30000;
+    const executionId = (typeof request?.executionId === 'string' && request.executionId.trim())
+      ? request.executionId.trim()
+      : '';
     if (!Number.isFinite(tabId)) {
       throw new Error('执行 JS Runtime 失败：缺少有效 tabId。');
     }
@@ -384,7 +460,7 @@ export function createJsRuntimeManager() {
       worldId: CEREBR_MICRO_SKILL_WORLD_ID,
       js: [
         {
-          code: buildUserScriptSource(code, timeoutMs)
+          code: buildUserScriptSource(code, timeoutMs, executionId)
         }
       ]
     });
@@ -406,6 +482,62 @@ export function createJsRuntimeManager() {
         ? successfulItems[0].result
         : successfulItems.map(item => item.result)
     };
+  }
+
+  /**
+   * 向正在运行的 JS Runtime 执行注入中止信号。
+   *
+   * 说明：
+   * - 这里不能真正抢占同步死循环；
+   * - 但可以让正在等待中的 async 执行尽快以 AbortError 结束。
+   *
+   * @param {Object} request
+   * @param {number} request.tabId
+   * @param {string} request.executionId
+   * @param {number[]|null} [request.frameIds]
+   * @param {boolean} [request.allFrames]
+   * @returns {Promise<{ok:boolean}>}
+   */
+  async function abort(request = {}) {
+    const tabId = Number(request?.tabId);
+    const executionId = (typeof request?.executionId === 'string' && request.executionId.trim())
+      ? request.executionId.trim()
+      : '';
+    if (!Number.isFinite(tabId)) {
+      throw new Error('中止 JS Runtime 失败：缺少有效 tabId。');
+    }
+    if (!executionId) {
+      throw new Error('中止 JS Runtime 失败：缺少 executionId。');
+    }
+
+    const availability = await getAvailability();
+    if (!availability.available) {
+      throw new Error(availability.reason || 'JS Runtime 当前不可用');
+    }
+
+    /** @type {chrome.userScripts.UserScriptInjectionTarget} */
+    const target = { tabId };
+    if (Array.isArray(request?.frameIds) && request.frameIds.length > 0) {
+      target.frameIds = request.frameIds
+        .map(value => Number(value))
+        .filter(value => Number.isFinite(value));
+    } else if (request?.allFrames === true) {
+      target.allFrames = true;
+    }
+
+    await chrome.userScripts.execute({
+      target,
+      injectImmediately: true,
+      world: 'USER_SCRIPT',
+      worldId: CEREBR_MICRO_SKILL_WORLD_ID,
+      js: [
+        {
+          code: buildAbortUserScriptSource(executionId)
+        }
+      ]
+    });
+
+    return { ok: true };
   }
 
   /**
@@ -467,6 +599,7 @@ export function createJsRuntimeManager() {
   return {
     getAvailability,
     listFrames,
-    execute
+    execute,
+    abort
   };
 }

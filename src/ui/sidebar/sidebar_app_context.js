@@ -1341,12 +1341,20 @@ export function registerSidebarUtilities(appContext) {
    * @returns {Promise<Object>}
    */
   appContext.utils.executeJsRuntime = async (code, options = {}) => {
+    const createAbortError = () => {
+      const error = new Error('执行 JS Runtime 已取消。');
+      error.name = 'AbortError';
+      return error;
+    };
     const timeoutMs = (() => {
       const raw = options?.timeoutMs;
       if (raw === null || typeof raw === 'undefined') return JS_RUNTIME_EXECUTION_TIMEOUT_MS;
       const parsed = Number(raw);
       return Number.isFinite(parsed) ? Math.max(1, Math.trunc(parsed)) : JS_RUNTIME_EXECUTION_TIMEOUT_MS;
     })();
+    const signal = (options?.signal && typeof options.signal === 'object')
+      ? options.signal
+      : null;
     const runtimeEnvironment = (typeof options?.runtimeEnvironment === 'string' && options.runtimeEnvironment)
       ? options.runtimeEnvironment
       : resolveCurrentPageToolEnvironment().jsRuntimeEnvironment;
@@ -1354,7 +1362,8 @@ export function registerSidebarUtilities(appContext) {
       try {
         const result = await jsSandboxRuntime.execute({
           code: (typeof code === 'string') ? code : '',
-          timeoutMs
+          timeoutMs,
+          signal
         });
         return {
           success: true,
@@ -1362,6 +1371,9 @@ export function registerSidebarUtilities(appContext) {
           ...result
         };
       } catch (error) {
+        if (error?.name === 'AbortError') {
+          throw error;
+        }
         return {
           success: false,
           error: error?.message || '执行隔离 JS Sandbox 失败'
@@ -1382,19 +1394,67 @@ export function registerSidebarUtilities(appContext) {
           error: '当前侧栏尚未解析出稳定的宿主标签页，暂时无法执行 JS Runtime。'
         };
       }
-      return await raceWithTimeout(
-        chrome.runtime.sendMessage({
+      if (signal?.aborted) {
+        throw createAbortError();
+      }
+      const executionId = `jsrt_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      const executeRequest = {
           type: 'EXECUTE_JS_RUNTIME',
           tabId: targetTabId,
           code: (typeof code === 'string') ? code : '',
+          executionId,
           timeoutMs,
           frameIds: Array.isArray(options?.frameIds) ? options.frameIds : null,
           injectImmediately: options?.injectImmediately === true
-        }),
+        };
+      const executePromise = chrome.runtime.sendMessage(executeRequest);
+      if (!signal) {
+        return await raceWithTimeout(
+          executePromise,
+          timeoutMs,
+          '执行 JS Runtime 超时'
+        );
+      }
+
+      let cleanedUp = false;
+      let abortListener = null;
+      const cleanupAbortListener = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        if (abortListener) {
+          try { signal.removeEventListener?.('abort', abortListener); } catch (_) {}
+        }
+      };
+      const handleAbort = () => {
+        cleanupAbortListener();
+        chrome.runtime.sendMessage({
+          type: 'ABORT_JS_RUNTIME',
+          tabId: targetTabId,
+          executionId,
+          frameIds: Array.isArray(options?.frameIds) ? options.frameIds : null
+        }).catch(() => null);
+      };
+      const abortPromise = new Promise((_, reject) => {
+        abortListener = () => {
+          handleAbort();
+          reject(createAbortError());
+        };
+        if (signal.aborted) {
+          abortListener();
+          return;
+        }
+        try { signal.addEventListener?.('abort', abortListener, { once: true }); } catch (_) {}
+      });
+
+      return await raceWithTimeout(
+        Promise.race([executePromise, abortPromise]).finally(cleanupAbortListener),
         timeoutMs,
         '执行 JS Runtime 超时'
       );
     } catch (error) {
+      if (error?.name === 'AbortError') {
+        throw error;
+      }
       return {
         success: false,
         error: error?.message || '执行 JS Runtime 失败'

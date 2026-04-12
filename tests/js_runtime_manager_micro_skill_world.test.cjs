@@ -63,3 +63,45 @@ test('createJsRuntimeManager.execute 会在共享 micro skill worldId 下运行 
 
   delete global.chrome;
 });
+
+test('createJsRuntimeManager.abort 会在同一 worldId 下发送 executionId 中止脚本', async () => {
+  const { createJsRuntimeManager } = await loadJsRuntimeManagerModule();
+  const { CEREBR_MICRO_SKILL_WORLD_ID } = await loadMicroSkillRuntimeModule();
+
+  let capturedAbortOptions = null;
+  global.chrome = {
+    userScripts: {
+      async getScripts() { return []; },
+      async execute(options) {
+        capturedAbortOptions = options;
+        return [];
+      }
+    },
+    tabs: {
+      async get() {
+        return { title: 'Example', url: 'https://example.com/' };
+      }
+    },
+    webNavigation: {
+      async getAllFrames() {
+        return [{ frameId: 0, url: 'https://example.com/' }];
+      }
+    }
+  };
+
+  const manager = createJsRuntimeManager();
+  const result = await manager.abort({
+    tabId: 9,
+    executionId: 'jsrt_abort_demo',
+    frameIds: [3]
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(capturedAbortOptions.world, 'USER_SCRIPT');
+  assert.equal(capturedAbortOptions.worldId, CEREBR_MICRO_SKILL_WORLD_ID);
+  assert.deepEqual(capturedAbortOptions.target.frameIds, [3]);
+  assert.match(capturedAbortOptions.js[0].code, /jsrt_abort_demo/);
+  assert.match(capturedAbortOptions.js[0].code, /__cerebrJsRuntimeAbortRegistry/);
+
+  delete global.chrome;
+});

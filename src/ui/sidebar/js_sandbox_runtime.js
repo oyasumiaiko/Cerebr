@@ -38,6 +38,12 @@ export function createSidebarJsSandboxRuntime(options = {}) {
   let requestSeq = 0;
   const pendingRequests = new Map();
 
+  function createSandboxAbortError() {
+    const error = new Error('执行隔离 JS Sandbox 已取消。');
+    error.name = 'AbortError';
+    return error;
+  }
+
   function settleSandboxReadyAsError(error) {
     if (typeof rejectSandboxReady === 'function') {
       rejectSandboxReady(error);
@@ -182,24 +188,54 @@ export function createSidebarJsSandboxRuntime(options = {}) {
     requestSeq += 1;
     const requestId = `sandbox_${Date.now()}_${requestSeq}`;
 
+    const abortExecution = () => {
+      try {
+        targetWindow.postMessage({
+          [SANDBOX_MESSAGE_FLAG]: true,
+          type: 'abort',
+          requestId
+        }, '*');
+      } catch (_) {}
+    };
+
     return await new Promise((resolve, reject) => {
       let timeoutId = null;
-      pendingRequests.set(requestId, { resolve, reject });
+      let abortListener = null;
+      const cleanup = () => {
+        if (timeoutId) ownerWindow.clearTimeout(timeoutId);
+        if (abortListener) {
+          try { request?.signal?.removeEventListener?.('abort', abortListener); } catch (_) {}
+        }
+        pendingRequests.delete(requestId);
+      };
+      pendingRequests.set(requestId, {
+        resolve: (payload) => {
+          cleanup();
+          resolve(payload);
+        },
+        reject: (error) => {
+          cleanup();
+          reject(error);
+        }
+      });
       if (timeoutMs > 0) {
         timeoutId = ownerWindow.setTimeout(() => {
-          pendingRequests.delete(requestId);
+          cleanup();
+          abortExecution();
           reject(new Error(`执行隔离 JS Sandbox 超时（${timeoutMs}ms）。`));
         }, timeoutMs);
-        pendingRequests.set(requestId, {
-          resolve: (payload) => {
-            if (timeoutId) ownerWindow.clearTimeout(timeoutId);
-            resolve(payload);
-          },
-          reject: (error) => {
-            if (timeoutId) ownerWindow.clearTimeout(timeoutId);
-            reject(error);
-          }
-        });
+      }
+      if (request?.signal) {
+        abortListener = () => {
+          cleanup();
+          abortExecution();
+          reject(createSandboxAbortError());
+        };
+        if (request.signal.aborted) {
+          abortListener();
+          return;
+        }
+        try { request.signal.addEventListener?.('abort', abortListener, { once: true }); } catch (_) {}
       }
       try {
         targetWindow.postMessage({
@@ -209,8 +245,7 @@ export function createSidebarJsSandboxRuntime(options = {}) {
           code
         }, '*');
       } catch (error) {
-        if (timeoutId) ownerWindow.clearTimeout(timeoutId);
-        pendingRequests.delete(requestId);
+        cleanup();
         reject(error);
       }
     });

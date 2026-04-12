@@ -8221,7 +8221,8 @@ export function createMessageSender(appContext) {
       const result = await utils.executeJsRuntime(normalizedArgs.code, {
         timeoutMs: normalizedArgs.timeoutMs,
         frameIds: normalizedArgs.frameIds,
-        runtimeEnvironment
+        runtimeEnvironment,
+        signal: options?.attemptState?.controller?.signal || null
       });
 
       if (!result || result.success !== true) {
@@ -8250,6 +8251,9 @@ export function createMessageSender(appContext) {
         error: null
       });
     } catch (error) {
+      if (error?.name === 'AbortError') {
+        throw error;
+      }
       return compactResponsesJsRuntimeResult({
         ok: false,
         value: null,
