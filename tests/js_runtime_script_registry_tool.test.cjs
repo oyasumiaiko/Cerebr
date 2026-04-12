@@ -137,6 +137,7 @@ test('normalizeMicroSkillMatchPatterns 与 URL 匹配遵循第一阶段 Chrome/T
 test('buildStoredMicroSkillRecord / saveStoredMicroSkillPackage / getStoredMicroSkillPackage 保持 package 结构与渐进式披露边界', async () => {
   const {
     buildMicroSkillDetail,
+    buildMicroSkillFilePayload,
     buildMicroSkillPackagePayload,
     buildMicroSkillSummary,
     buildStoredMicroSkillRecord,
@@ -159,17 +160,28 @@ test('buildStoredMicroSkillRecord / saveStoredMicroSkillPackage / getStoredMicro
 
   const summary = buildMicroSkillSummary(loaded);
   assert.equal(summary.interface.short_description, '读取当前页面标题和 URL');
-  assert.equal(summary.files.total_count, 3);
+  assert.equal(summary.files.total_count, 4);
 
   const detail = buildMicroSkillDetail(loaded);
   assert.equal(detail.instruction.path, 'SKILL.md');
   assert.match(detail.instruction.content, /DOM Probe/);
+  assert.equal(detail.files.virtual_manifest_path, 'manifest.json');
+  assert.equal(detail.files.files[0].path, 'manifest.json');
   assert.equal(detail.files.files[0].content, undefined);
 
   const source = buildMicroSkillPackagePayload(loaded);
+  assert.equal(source.manifest_path, 'manifest.json');
   assert.equal(source.runtime.entry_path, 'src/main.js');
-  assert.equal(source.files.files.length, 3);
-  assert.match(source.files.files[2].content, /document\.title/);
+  assert.equal(source.files.files.length, 4);
+  assert.match(source.files.files[0].content, /"instruction"/);
+  assert.match(source.files.files[3].content, /document\.title/);
+
+  const manifestFile = buildMicroSkillFilePayload(loaded, 'manifest.json');
+  assert.equal(manifestFile.file.path, 'manifest.json');
+  assert.equal(manifestFile.file.is_manifest, true);
+  assert.doesNotMatch(manifestFile.file.content, /"name":/);
+  assert.doesNotMatch(manifestFile.file.content, /"kind":/);
+  assert.match(manifestFile.file.content, /"description": "读取页面标题和链接"/);
 
   assert.equal(store.dump().length, 1);
 });

@@ -167,6 +167,36 @@ test('applyMicroSkillPackagePatch 可以删除、修改、移动文件并保持�
   });
 });
 
+test('applyMicroSkillPackagePatch 支持直接 patch manifest.json', async () => {
+  const { buildStoredMicroSkillRecord, buildMicroSkillFilePayload } = await loadMicroSkillRegistryToolModule();
+  const { applyMicroSkillPackagePatch } = await loadMicroSkillApplyPatchModule();
+
+  const record = buildStoredMicroSkillRecord(buildSkillInput());
+  const result = applyMicroSkillPackagePatch(record, wrapPatch(
+    [
+      '*** Update File: manifest.json',
+      '@@',
+      '-  "description": "读取页面标题和链接",',
+      '+  "description": "读取页面标题、链接与路径信息",',
+      '@@',
+      '-  "enabled": true,',
+      '+  "enabled": false,'
+    ].join('\n')
+  ));
+
+  assert.equal(result.record.enabled, false);
+  assert.equal(result.record.description, '读取页面标题、链接与路径信息');
+  assert.equal(
+    buildMicroSkillFilePayload(result.record, 'manifest.json').file.is_manifest,
+    true
+  );
+  assert.deepEqual(result.affected_files, {
+    added: [],
+    modified: ['manifest.json'],
+    deleted: []
+  });
+});
+
 test('applyMicroSkillPackagePatch 会复现 Codex 的多 chunk、交错修改与 EOF 追加行为', async () => {
   const { buildStoredMicroSkillRecord, buildMicroSkillFilePayload } = await loadMicroSkillRegistryToolModule();
   const { applyMicroSkillPackagePatch } = await loadMicroSkillApplyPatchModule();
@@ -294,6 +324,38 @@ test('applyMicroSkillPackagePatch 会对虚拟文件特有的错误场景给出�
   assert.equal(
     buildMicroSkillFilePayload(addedReference.record, 'references/notes.md').file.kind,
     'reference'
+  );
+
+  assert.throws(
+    () => applyMicroSkillPackagePatch(record, wrapPatch(
+      [
+        '*** Add File: manifest.json',
+        '+{}'
+      ].join('\n')
+    )),
+    /manifest\.json 是保留虚拟文件，不支持 Add File/
+  );
+
+  assert.throws(
+    () => applyMicroSkillPackagePatch(record, wrapPatch(
+      [
+        '*** Delete File: manifest.json'
+      ].join('\n')
+    )),
+    /manifest\.json 是保留虚拟文件，不支持 Delete File/
+  );
+
+  assert.throws(
+    () => applyMicroSkillPackagePatch(record, wrapPatch(
+      [
+        '*** Update File: manifest.json',
+        '*** Move to: other.json',
+        '@@',
+        '-  "enabled": true,',
+        '+  "enabled": false,'
+      ].join('\n')
+    )),
+    /manifest\.json 是保留虚拟文件，不支持 Move to/
   );
 
   assert.throws(

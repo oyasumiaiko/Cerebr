@@ -172,6 +172,16 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   assert.equal(readFile.skill.file.path, 'src/helpers/dom.js');
   assert.match(readFile.skill.file.content, /document\.title/);
 
+  const readManifest = await manager.executeRegistryAction({
+    action: 'read_file',
+    skill_name: 'dom-probe',
+    file_path: 'manifest.json'
+  }, { tabId: 11 });
+  assert.equal(readManifest.ok, true);
+  assert.equal(readManifest.skill.file.is_manifest, true);
+  assert.doesNotMatch(readManifest.skill.file.content, /"name":/);
+  assert.doesNotMatch(readManifest.skill.file.content, /"kind":/);
+
   const writtenFile = await manager.executeRegistryAction({
     action: 'write_file',
     skill_name: 'dom-probe',
@@ -181,9 +191,34 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     }
   }, { tabId: 11 });
   assert.equal(writtenFile.ok, true);
-  assert.equal(writtenFile.files.total_count, 4);
+  assert.equal(writtenFile.files.total_count, 5);
   assert.equal(calls.update.length, 2);
   assert.equal(calls.execute.length, 3);
+
+  const writtenManifest = await manager.executeRegistryAction({
+    action: 'write_file',
+    skill_name: 'dom-probe',
+    file: {
+      path: 'manifest.json',
+      content: JSON.stringify({
+        description: '读取页面标题、链接与路径信息',
+        interface: {
+          display_name: 'DOM Probe',
+          short_description: '读取标题、URL 和路径',
+          default_prompt: 'Read the current page title, URL, and pathname.'
+        },
+        match: ['https://*.example.com/*'],
+        enabled: true,
+        instruction: { path: 'SKILL.md' },
+        runtime: { entry_path: 'src/main.js' }
+      }, null, 2)
+    }
+  }, { tabId: 11 });
+  assert.equal(writtenManifest.ok, true);
+  assert.equal(writtenManifest.file.is_manifest, true);
+  assert.equal(writtenManifest.skill.description, '读取页面标题、链接与路径信息');
+  assert.equal(calls.update.length, 3);
+  assert.equal(calls.execute.length, 4);
 
   const patchedFile = await manager.executeRegistryAction({
     action: 'apply_patch',
@@ -203,8 +238,53 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     modified: ['src/helpers/url.js'],
     deleted: []
   });
-  assert.equal(calls.update.length, 3);
-  assert.equal(calls.execute.length, 4);
+  assert.equal(calls.update.length, 4);
+  assert.equal(calls.execute.length, 5);
+
+  const patchedManifest = await manager.executeRegistryAction({
+    action: 'apply_patch',
+    skill_name: 'dom-probe',
+    patch: [
+      '*** Begin Patch',
+      '*** Update File: manifest.json',
+      '@@',
+      '-  "enabled": true,',
+      '+  "enabled": false,',
+      '*** End Patch'
+    ].join('\n')
+  }, { tabId: 11 });
+  assert.equal(patchedManifest.ok, true);
+  assert.deepEqual(patchedManifest.affected_files, {
+    added: [],
+    modified: ['manifest.json'],
+    deleted: []
+  });
+  assert.equal(patchedManifest.skill.enabled, false);
+  assert.equal(calls.unregister.length, 1);
+  assert.equal(calls.execute.length, 6);
+
+  const reenabledViaManifest = await manager.executeRegistryAction({
+    action: 'write_file',
+    skill_name: 'dom-probe',
+    file: {
+      path: 'manifest.json',
+      content: JSON.stringify({
+        description: '读取页面标题、链接与路径信息',
+        interface: {
+          display_name: 'DOM Probe',
+          short_description: '读取标题、URL 和路径',
+          default_prompt: 'Read the current page title, URL, and pathname.'
+        },
+        match: ['https://*.example.com/*'],
+        enabled: true,
+        instruction: { path: 'SKILL.md' },
+        runtime: { entry_path: 'src/main.js' }
+      }, null, 2)
+    }
+  }, { tabId: 11 });
+  assert.equal(reenabledViaManifest.ok, true);
+  assert.equal(calls.register.length, 2);
+  assert.equal(calls.execute.length, 7);
 
   const deletedFile = await manager.executeRegistryAction({
     action: 'delete_file',
@@ -212,33 +292,33 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     file_path: 'src/helpers/url.js'
   }, { tabId: 11 });
   assert.equal(deletedFile.ok, true);
-  assert.equal(deletedFile.files.total_count, 3);
-  assert.equal(calls.update.length, 4);
-  assert.equal(calls.execute.length, 5);
+  assert.equal(deletedFile.files.total_count, 4);
+  assert.equal(calls.update.length, 5);
+  assert.equal(calls.execute.length, 8);
 
   const disabled = await manager.executeRegistryAction({
     action: 'disable',
     skill_name: 'dom-probe'
   }, { tabId: 11 });
   assert.equal(disabled.ok, true);
-  assert.equal(calls.unregister.length, 1);
-  assert.equal(calls.execute.length, 6);
+  assert.equal(calls.unregister.length, 2);
+  assert.equal(calls.execute.length, 9);
 
   const enabled = await manager.executeRegistryAction({
     action: 'enable',
     skill_name: 'dom-probe'
   }, { tabId: 11 });
   assert.equal(enabled.ok, true);
-  assert.equal(calls.register.length, 2);
-  assert.equal(calls.execute.length, 7);
+  assert.equal(calls.register.length, 3);
+  assert.equal(calls.execute.length, 10);
 
   const removed = await manager.executeRegistryAction({
     action: 'delete',
     skill_name: 'dom-probe'
   }, { tabId: 11 });
   assert.equal(removed.ok, true);
-  assert.equal(calls.unregister.length, 2);
-  assert.equal(calls.execute.length, 8);
+  assert.equal(calls.unregister.length, 3);
+  assert.equal(calls.execute.length, 11);
 });
 
 test('内置 skill-creator 会自动出现在列表中且保持只读', async () => {

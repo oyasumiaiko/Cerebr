@@ -12,9 +12,11 @@ import {
   listBuiltinMicroSkillRecords,
   listMatchingStoredMicroSkillPackagesForUrl,
   listStoredMicroSkillManifests,
+  MICRO_SKILL_VIRTUAL_MANIFEST_PATH,
   microSkillMatchesUrl,
   normalizeMicroSkillFilePath,
   normalizeMicroSkillRegistryToolArguments,
+  parseMicroSkillVirtualManifestContent,
   normalizeStoredMicroSkillRecord,
   saveStoredMicroSkillPackage
 } from '../agent_tools/micro_skill_registry_tool.js';
@@ -371,6 +373,28 @@ export function createMicroSkillManager(options = {}) {
       throw new Error(`微型 skill ${skillName} 不存在，无法写入文件。`);
     }
 
+    if (fileInput.path === MICRO_SKILL_VIRTUAL_MANIFEST_PATH) {
+      if (options?.setAsInstruction === true || options?.setAsRuntimeEntry === true) {
+        throw new Error('写入 manifest.json 时不支持同时使用 set_as_instruction / set_as_runtime_entry，请直接修改 manifest 内容。');
+      }
+      const manifestInput = parseMicroSkillVirtualManifestContent(fileInput.content, normalizedExisting);
+      const nextRecord = buildStoredMicroSkillRecord({
+        ...normalizedExisting,
+        ...manifestInput,
+        files: cloneFiles(normalizedExisting.files)
+      }, normalizedExisting);
+      const persistedRecord = await persistMutatedSkillRecord(normalizedExisting, nextRecord);
+
+      return {
+        ok: true,
+        action: 'write_file',
+        skill: buildMicroSkillSummary(persistedRecord),
+        files: buildMicroSkillFileManifest(persistedRecord, { includeContent: false }),
+        file: buildMicroSkillFilePayload(persistedRecord, MICRO_SKILL_VIRTUAL_MANIFEST_PATH)?.file || null,
+        ...(await maybeRefreshCurrentDocument(options?.tabId))
+      };
+    }
+
     const nextFiles = cloneFiles(normalizedExisting.files);
     const existingIndex = nextFiles.findIndex((file) => file.path === fileInput.path);
     const existingFile = existingIndex >= 0 ? nextFiles[existingIndex] : null;
@@ -416,6 +440,9 @@ export function createMicroSkillManager(options = {}) {
     }
 
     const normalizedPath = normalizeMicroSkillFilePath(filePath);
+    if (normalizedPath === MICRO_SKILL_VIRTUAL_MANIFEST_PATH) {
+      throw new Error('manifest.json 是保留虚拟文件，不能删除。');
+    }
     const existingFile = normalizedExisting.files.find((file) => file.path === normalizedPath) || null;
     if (!existingFile) {
       throw new Error(`微型 skill ${skillName} 中不存在文件 ${normalizedPath}。`);

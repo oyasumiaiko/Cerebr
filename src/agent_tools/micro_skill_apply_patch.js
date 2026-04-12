@@ -17,10 +17,13 @@
 
 import {
   buildStoredMicroSkillRecord,
+  MICRO_SKILL_VIRTUAL_MANIFEST_PATH,
   normalizeMicroSkillFilePath,
+  parseMicroSkillVirtualManifestContent,
   normalizeStoredMicroSkillRecord,
   pickDefaultMicroSkillInstructionPath,
-  pickDefaultMicroSkillRuntimeEntryPath
+  pickDefaultMicroSkillRuntimeEntryPath,
+  serializeMicroSkillVirtualManifest
 } from './micro_skill_registry_tool.js';
 
 const BEGIN_PATCH_MARKER = '*** Begin Patch';
@@ -490,6 +493,8 @@ export function applyMicroSkillPackagePatch(record, patch) {
   const nextFiles = cloneFiles(skill.files);
   let instructionPath = skill.instruction.path;
   let runtimeEntryPath = skill.runtime.entry_path;
+  let manifestInput = null;
+  let manifestContent = serializeMicroSkillVirtualManifest(skill);
   const affectedFiles = {
     added: [],
     modified: [],
@@ -497,8 +502,18 @@ export function applyMicroSkillPackagePatch(record, patch) {
   };
 
   for (const hunk of hunks) {
+    const normalizedHunkPath = normalizeMicroSkillFilePath(hunk.path);
+    const isManifestHunk = normalizedHunkPath === MICRO_SKILL_VIRTUAL_MANIFEST_PATH;
+
+    if (isManifestHunk && hunk.type === 'add_file') {
+      throw new Error('manifest.json 是保留虚拟文件，不支持 Add File。');
+    }
+    if (isManifestHunk && hunk.type === 'delete_file') {
+      throw new Error('manifest.json 是保留虚拟文件，不支持 Delete File。');
+    }
+
     if (hunk.type === 'add_file') {
-      const normalizedPath = normalizeMicroSkillFilePath(hunk.path);
+      const normalizedPath = normalizedHunkPath;
       const existingIndex = findFileIndex(nextFiles, normalizedPath);
       const existingFile = existingIndex >= 0 ? nextFiles[existingIndex] : null;
       upsertFilePreservingOrder(nextFiles, {
@@ -515,7 +530,7 @@ export function applyMicroSkillPackagePatch(record, patch) {
     }
 
     if (hunk.type === 'delete_file') {
-      const normalizedPath = normalizeMicroSkillFilePath(hunk.path);
+      const normalizedPath = normalizedHunkPath;
       const existingIndex = findFileIndex(nextFiles, normalizedPath);
       if (existingIndex < 0) {
         throw new Error(`Failed to delete file ${normalizedPath}`);
@@ -528,7 +543,22 @@ export function applyMicroSkillPackagePatch(record, patch) {
     }
 
     if (hunk.type === 'update_file') {
-      const sourcePath = normalizeMicroSkillFilePath(hunk.path);
+      const sourcePath = normalizedHunkPath;
+      if (sourcePath === MICRO_SKILL_VIRTUAL_MANIFEST_PATH) {
+        if (hunk.move_path) {
+          throw new Error('manifest.json 是保留虚拟文件，不支持 Move to。');
+        }
+        manifestContent = derivePatchedFileContent(manifestContent, sourcePath, hunk.chunks);
+        manifestInput = parseMicroSkillVirtualManifestContent(manifestContent, skill);
+        if (manifestInput?.instruction?.path) {
+          instructionPath = manifestInput.instruction.path;
+        }
+        if (Object.prototype.hasOwnProperty.call(manifestInput?.runtime || {}, 'entry_path')) {
+          runtimeEntryPath = manifestInput.runtime.entry_path;
+        }
+        affectedFiles.modified.push(sourcePath);
+        continue;
+      }
       const sourceIndex = findFileIndex(nextFiles, sourcePath);
       if (sourceIndex < 0) {
         throw new Error(`Failed to read file to update ${sourcePath}`);
@@ -577,11 +607,14 @@ export function applyMicroSkillPackagePatch(record, patch) {
 
   const nextRecord = buildStoredMicroSkillRecord({
     ...skill,
+    ...(manifestInput || {}),
     instruction: {
-      path: instructionPath
+      path: manifestInput?.instruction?.path ?? instructionPath
     },
     runtime: {
-      entry_path: runtimeEntryPath
+      entry_path: Object.prototype.hasOwnProperty.call(manifestInput?.runtime || {}, 'entry_path')
+        ? manifestInput.runtime.entry_path
+        : runtimeEntryPath
     },
     files: nextFiles
   }, skill);

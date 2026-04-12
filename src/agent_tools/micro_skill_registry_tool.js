@@ -21,6 +21,7 @@ export const MICRO_SKILL_REGISTRY_DB_NAME = MICRO_SKILL_DB_NAME;
 export const MICRO_SKILL_REGISTRY_VERSION = 2;
 export const MICRO_SKILL_MATCH_ALL_URLS = '<all_urls>';
 export const CEREBR_MICRO_SKILL_MOUNT_SURFACE = 'globalThis.__cerebrMicroSkills';
+export const MICRO_SKILL_VIRTUAL_MANIFEST_PATH = 'manifest.json';
 
 const MICRO_SKILL_KIND_PAGE_RUNTIME = 'page_runtime';
 const MICRO_SKILL_KIND_BUILTIN_GUIDANCE = 'builtin_guidance';
@@ -47,6 +48,10 @@ function normalizeBoolean(value, fallback = false) {
 
 function ensurePlainObject(value) {
   return (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
+}
+
+function isMicroSkillVirtualManifestPath(value) {
+  return normalizeMicroSkillFilePath(value) === MICRO_SKILL_VIRTUAL_MANIFEST_PATH;
 }
 
 function escapeRegExp(value) {
@@ -197,6 +202,85 @@ export function normalizeMicroSkillFilePath(value) {
     throw new Error(`micro_skill_registry 参数错误：文件路径 \`${normalizedPath}\` 不能包含空段、"." 或 ".."。`);
   }
   return normalizedPath;
+}
+
+function buildEditableMicroSkillManifestObject(skill) {
+  return {
+    description: skill.description,
+    interface: {
+      display_name: skill.interface.display_name || null,
+      short_description: skill.interface.short_description || null,
+      default_prompt: skill.interface.default_prompt || null
+    },
+    match: [...skill.match],
+    enabled: skill.enabled === true,
+    instruction: {
+      path: skill.instruction.path
+    },
+    runtime: {
+      entry_path: skill.runtime.entry_path
+    }
+  };
+}
+
+export function serializeMicroSkillVirtualManifest(record) {
+  const skill = normalizeStoredMicroSkillRecord(record);
+  if (!skill) {
+    throw new Error('无法为无效的微型 skill 生成 manifest 虚拟文件。');
+  }
+  return `${JSON.stringify(buildEditableMicroSkillManifestObject(skill), null, 2)}\n`;
+}
+
+export function parseMicroSkillVirtualManifestContent(content, existingRecord = null) {
+  const existing = existingRecord ? normalizeStoredMicroSkillRecord(existingRecord) : null;
+  let parsed = null;
+  try {
+    parsed = JSON.parse(String(content || ''));
+  } catch (error) {
+    throw new Error(`micro_skill_registry 参数错误：manifest.json 不是合法 JSON：${error?.message || error}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('micro_skill_registry 参数错误：manifest.json 顶层必须是 JSON object。');
+  }
+
+  return {
+    kind: existing?.kind || MICRO_SKILL_KIND_PAGE_RUNTIME,
+    name: existing?.name || null,
+    description: normalizeString(parsed.description || existing?.description),
+    interface: {
+      display_name: normalizeOptionalString(parsed?.interface?.display_name ?? existing?.interface?.display_name),
+      short_description: normalizeOptionalString(parsed?.interface?.short_description ?? existing?.interface?.short_description),
+      default_prompt: normalizeOptionalString(parsed?.interface?.default_prompt ?? existing?.interface?.default_prompt)
+    },
+    match: Array.isArray(parsed.match) ? parsed.match : (existing?.match || []),
+    enabled: (typeof parsed.enabled === 'boolean') ? parsed.enabled : (existing?.enabled ?? true),
+    instruction: {
+      path: normalizeOptionalString(parsed?.instruction?.path ?? existing?.instruction?.path)
+        ? normalizeMicroSkillFilePath(parsed?.instruction?.path ?? existing?.instruction?.path)
+        : null
+    },
+    runtime: {
+      entry_path: normalizeOptionalString(parsed?.runtime?.entry_path ?? existing?.runtime?.entry_path)
+        ? normalizeMicroSkillFilePath(parsed?.runtime?.entry_path ?? existing?.runtime?.entry_path)
+        : null
+    }
+  };
+}
+
+function buildMicroSkillVirtualManifestFile(record, options = {}) {
+  const skill = normalizeStoredMicroSkillRecord(record);
+  if (!skill) return null;
+  return {
+    path: MICRO_SKILL_VIRTUAL_MANIFEST_PATH,
+    kind: null,
+    is_virtual: true,
+    is_manifest: true,
+    is_instruction: false,
+    is_runtime_entry: false,
+    ...(options?.includeContent === true
+      ? { content: serializeMicroSkillVirtualManifest(skill) }
+      : {})
+  };
 }
 
 function normalizeMicroSkillFile(rawFile, options = {}) {
@@ -531,11 +615,16 @@ export function buildMicroSkillFileManifest(record, options = {}) {
       is_runtime_entry: !!skill.runtime.entry_path && file.path === skill.runtime.entry_path,
       ...(includeContent ? { content: file.content } : {})
     }));
+  const manifestFile = buildMicroSkillVirtualManifestFile(skill, { includeContent });
+  if (manifestFile && !onlyKinds && (!onlyPaths || onlyPaths.has(manifestFile.path))) {
+    selectedFiles.unshift(manifestFile);
+  }
 
   return {
-    total_count: skill.files.length,
+    total_count: skill.files.length + 1,
     returned_file_count: selectedFiles.length,
     by_kind: summarizeFileKinds(skill.files),
+    virtual_manifest_path: MICRO_SKILL_VIRTUAL_MANIFEST_PATH,
     instruction_path: skill.instruction.path,
     runtime_entry_path: skill.runtime.entry_path,
     files: selectedFiles
@@ -573,8 +662,9 @@ export function buildMicroSkillSummary(record) {
       runtime_file_count: skill.files.filter((file) => file.kind === MICRO_SKILL_FILE_KIND_RUNTIME_SOURCE).length
     },
     files: {
-      total_count: skill.files.length,
-      by_kind: summarizeFileKinds(skill.files)
+      total_count: skill.files.length + 1,
+      by_kind: summarizeFileKinds(skill.files),
+      virtual_manifest_path: MICRO_SKILL_VIRTUAL_MANIFEST_PATH
     }
   };
 }
@@ -607,6 +697,7 @@ export function buildMicroSkillPackagePayload(record) {
     runtime: {
       entry_path: skill.runtime.entry_path
     },
+    manifest_path: MICRO_SKILL_VIRTUAL_MANIFEST_PATH,
     files: buildMicroSkillFileManifest(skill, { includeContent: true })
   };
 }
@@ -615,6 +706,24 @@ export function buildMicroSkillFilePayload(record, filePath) {
   const skill = normalizeStoredMicroSkillRecord(record);
   if (!skill) return null;
   const normalizedPath = normalizeMicroSkillFilePath(filePath);
+  if (isMicroSkillVirtualManifestPath(normalizedPath)) {
+    const manifestFile = buildMicroSkillVirtualManifestFile(skill, { includeContent: true });
+    return {
+      kind: skill.kind,
+      builtin: skill.builtin === true,
+      read_only: skill.read_only === true,
+      name: skill.name,
+      revision: skill.revision,
+      requested_file_path: normalizedPath,
+      instruction: {
+        path: skill.instruction.path
+      },
+      runtime: {
+        entry_path: skill.runtime.entry_path
+      },
+      file: manifestFile
+    };
+  }
   const file = skill.files.find((item) => item.path === normalizedPath) || null;
   if (!file) {
     throw new Error(`微型 skill ${skill.name} 中不存在文件 ${normalizedPath}。`);
