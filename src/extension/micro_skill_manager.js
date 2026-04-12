@@ -82,6 +82,8 @@ export function createMicroSkillManager(options = {}) {
   const userScriptsApi = options?.userScriptsApi || globalThis?.chrome?.userScripts || null;
   const tabsApi = options?.tabsApi || globalThis?.chrome?.tabs || null;
   const jsRuntimeManager = options?.jsRuntimeManager || null;
+  let reconcilePromise = null;
+  let reconcileRerunRequested = false;
 
   function ensureUserScriptsApi() {
     if (
@@ -101,6 +103,15 @@ export function createMicroSkillManager(options = {}) {
       throw new Error('当前扩展环境没有可用的 chrome.tabs 能力。');
     }
     return tabsApi;
+  }
+
+  function isDuplicateScriptIdError(error, scriptId = '') {
+    const message = (typeof error?.message === 'string' && error.message.trim())
+      ? error.message.trim()
+      : '';
+    if (!message) return false;
+    if (!message.includes('Duplicate script ID')) return false;
+    return !scriptId || message.includes(scriptId);
   }
 
   async function listStoredRecords() {
@@ -174,7 +185,14 @@ export function createMicroSkillManager(options = {}) {
     if (!skill || skill.enabled !== true || skill.kind !== 'page_runtime') return null;
     const api = ensureUserScriptsApi();
     const definition = buildRegisteredMicroSkillUserScript(skill);
-    await api.register([definition]);
+    try {
+      await api.register([definition]);
+    } catch (error) {
+      if (!isDuplicateScriptIdError(error, definition.id)) {
+        throw error;
+      }
+      await api.update([definition]);
+    }
     return definition;
   }
 
@@ -194,7 +212,7 @@ export function createMicroSkillManager(options = {}) {
     });
   }
 
-  async function reconcileRegisteredSkills() {
+  async function runReconcileRegisteredSkillsPass() {
     const api = ensureUserScriptsApi();
     const desiredManifests = (await listStoredRecords())
       .filter((record) => record.enabled === true && record.kind === 'page_runtime');
@@ -223,19 +241,51 @@ export function createMicroSkillManager(options = {}) {
     if (idsToUnregister.length > 0) {
       await api.unregister({ ids: idsToUnregister });
     }
-    if (definitionsToRegister.length > 0) {
-      await api.register(definitionsToRegister);
+    let registeredCount = 0;
+    let updatedCount = 0;
+    for (const definition of definitionsToRegister) {
+      try {
+        await api.register([definition]);
+        registeredCount += 1;
+      } catch (error) {
+        if (!isDuplicateScriptIdError(error, definition.id)) {
+          throw error;
+        }
+        await api.update([definition]);
+        updatedCount += 1;
+      }
     }
     if (definitionsToUpdate.length > 0) {
       await api.update(definitionsToUpdate);
+      updatedCount += definitionsToUpdate.length;
     }
 
     return {
       ok: true,
-      registered_count: definitionsToRegister.length,
-      updated_count: definitionsToUpdate.length,
+      registered_count: registeredCount,
+      updated_count: updatedCount,
       unregistered_count: idsToUnregister.length
     };
+  }
+
+  async function reconcileRegisteredSkills() {
+    if (reconcilePromise) {
+      reconcileRerunRequested = true;
+      return reconcilePromise;
+    }
+
+    reconcilePromise = (async () => {
+      let lastResult = null;
+      do {
+        reconcileRerunRequested = false;
+        lastResult = await runReconcileRegisteredSkillsPass();
+      } while (reconcileRerunRequested);
+      return lastResult;
+    })().finally(() => {
+      reconcilePromise = null;
+    });
+
+    return reconcilePromise;
   }
 
   async function getTabUrl(tabId) {

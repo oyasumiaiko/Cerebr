@@ -860,12 +860,23 @@ async function captureVisibleTabForPrompt(windowId = null, rawArgs = null) {
 const jsRuntimeManager = createJsRuntimeManager();
 const microSkillManager = createMicroSkillManager({ jsRuntimeManager });
 let microSkillManagerReadyPromise = null;
+let microSkillManagerReadyPending = false;
 
 function ensureMicroSkillManagerReady(options = {}) {
+  if (microSkillManagerReadyPromise && microSkillManagerReadyPending) {
+    return microSkillManagerReadyPromise;
+  }
   if (!microSkillManagerReadyPromise || options?.force === true) {
+    microSkillManagerReadyPending = true;
     microSkillManagerReadyPromise = microSkillManager
       .initialize()
+      .then((result) => {
+        microSkillManagerReadyPending = false;
+        return result;
+      })
       .catch((error) => {
+        microSkillManagerReadyPending = false;
+        microSkillManagerReadyPromise = null;
         console.error('初始化微型 skill manager 失败:', error);
         throw error;
       });

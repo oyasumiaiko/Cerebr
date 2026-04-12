@@ -591,6 +591,53 @@ test('reconcileRegisteredSkills 会对现有动态脚本做 register/update/unre
   });
 });
 
+test('reconcileRegisteredSkills 遇到 Duplicate script ID 时会回退到 update 而不是整体失败', async () => {
+  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+
+  const calls = {
+    register: [],
+    update: []
+  };
+
+  const manager = createMicroSkillManager({
+    store: createMockStore([
+      {
+        ...buildSkillInput('worldquant-brain-sim-state'),
+        match: ['https://platform.worldquantbrain.com/*'],
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-02T00:00:00.000Z',
+        revision: 1
+      }
+    ]),
+    userScriptsApi: {
+      async getScripts() { return []; },
+      async register(definitions) {
+        calls.register.push(clone(definitions));
+        throw new Error("Duplicate script ID 'cerebr-micro-skill--worldquant-brain-sim-state'");
+      },
+      async update(definitions) { calls.update.push(clone(definitions)); },
+      async unregister() {}
+    },
+    tabsApi: {
+      async get() {
+        return { url: 'https://platform.worldquantbrain.com/', title: 'BRAIN' };
+      }
+    },
+    jsRuntimeManager: {
+      async execute() {
+        return { ok: true, tabId: 1, value: null, logs: [], items: [] };
+      }
+    }
+  });
+
+  const result = await manager.reconcileRegisteredSkills();
+  assert.equal(result.ok, true);
+  assert.equal(result.registered_count, 0);
+  assert.equal(result.updated_count, 1);
+  assert.equal(calls.register.length, 1);
+  assert.equal(calls.update.length, 1);
+});
+
 test('listMatchingSkillSummariesForTab 只返回当前 URL 命中的轻量摘要', async () => {
   const { createMicroSkillManager } = await loadMicroSkillManagerModule();
 
