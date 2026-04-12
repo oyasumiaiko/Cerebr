@@ -145,7 +145,6 @@ const RESPONSES_REQUEST_USER_INPUT_TOOL_NAME = REQUEST_USER_INPUT_TOOL_NAME;
 const RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME = LIST_ASKABLE_MODELS_TOOL_NAME;
 const RESPONSES_ASK_OTHER_AI_TOOL_NAME = ASK_OTHER_AI_TOOL_NAME;
 const RESPONSES_MICRO_SKILL_REGISTRY_TOOL_NAME = MICRO_SKILL_REGISTRY_TOOL_NAME;
-const RESPONSES_LEGACY_JS_RUNTIME_SCRIPT_REGISTRY_TOOL_NAME = 'js_runtime_script_registry';
 const RESPONSES_LOCAL_COMPACTION_MARKER_TEXT = '已压缩上下文（基于上一轮上下文大小）';
 const RESPONSES_LOCAL_COMPACTION_PENDING_TEXT = '上下文压缩中';
 const RESPONSES_LOCAL_COMPACTION_ERROR_TEXT = '上下文压缩失败';
@@ -8806,10 +8805,7 @@ export function createMessageSender(appContext) {
     let outputPayload = null;
     if (functionName === RESPONSES_JS_RUNTIME_TOOL_NAME) {
       outputPayload = await executeResponsesJsRuntimeFunction(parsedArgs, options);
-    } else if (
-      functionName === RESPONSES_MICRO_SKILL_REGISTRY_TOOL_NAME
-      || functionName === RESPONSES_LEGACY_JS_RUNTIME_SCRIPT_REGISTRY_TOOL_NAME
-    ) {
+    } else if (functionName === RESPONSES_MICRO_SKILL_REGISTRY_TOOL_NAME) {
       outputPayload = await executeResponsesMicroSkillRegistryFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME) {
       outputPayload = await executeResponsesRequestUserInputFunction(parsedArgs, options);
@@ -8846,10 +8842,7 @@ export function createMessageSender(appContext) {
       output:
         functionName === RESPONSES_JS_RUNTIME_TOOL_NAME
             ? serializeResponsesJsRuntimeFunctionToolOutput(outputPayload)
-          : (
-              functionName === RESPONSES_MICRO_SKILL_REGISTRY_TOOL_NAME
-              || functionName === RESPONSES_LEGACY_JS_RUNTIME_SCRIPT_REGISTRY_TOOL_NAME
-            )
+          : functionName === RESPONSES_MICRO_SKILL_REGISTRY_TOOL_NAME
             ? serializeResponsesMicroSkillRegistryFunctionToolOutput(outputPayload)
           : functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME
             ? serializeResponsesRequestUserInputFunctionToolOutput(outputPayload)

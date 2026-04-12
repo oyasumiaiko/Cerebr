@@ -1510,16 +1510,7 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
 
 export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
   const args = ensurePlainObject(rawArgs);
-  const rawAction = normalizeString(args.action).toLowerCase();
-  const legacyActionMap = {
-    save: 'update',
-    get: 'read_detail',
-    refresh: 'refresh_current_document',
-    read_source: 'read_package',
-    read_source_file: 'read_file',
-    delete_source_file: 'delete_file'
-  };
-  const action = legacyActionMap[rawAction] || rawAction;
+  const action = normalizeString(args.action).toLowerCase();
   const skillName = normalizeOptionalString(args.skill_name || args.script_id);
   const filePath = normalizeOptionalString(args.file_path);
 

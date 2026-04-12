@@ -8,11 +8,6 @@ async function loadMicroSkillRegistryToolModule() {
   return import(`${pathToFileURL(filePath).href}?test=${Date.now()}`);
 }
 
-async function loadLegacyCompatModule() {
-  const filePath = path.resolve(__dirname, '../src/agent_tools/js_runtime_script_registry_tool.js');
-  return import(pathToFileURL(filePath).href);
-}
-
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
@@ -331,36 +326,14 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     /不支持的 action `write_file`/
   );
 
-  const normalizedLegacy = normalizeMicroSkillRegistryToolArguments({
-    action: 'read_source_file',
-    skill_name: 'dom-probe',
-    file_path: 'src/helpers/dom.js'
-  });
-  assert.deepEqual(normalizedLegacy, {
-    action: 'read_file',
-    skill_name: 'dom-probe',
-    skill: null,
-    file_path: 'src/helpers/dom.js',
-    file: null,
-    patch: null,
-    pattern: null,
-    regex: false,
-    case_mode: 'smart',
-    path_glob: null,
-    context_before: 0,
-    context_after: 0,
-    max_results: 50,
-    read_options: {
-      mode: 'preview',
-      skip_chars: 0,
-      max_chars: 10000,
-      start_line: null,
-      end_line: null
-    },
-    include_line_numbers: false,
-    next_instruction_path: null,
-    next_runtime_entry_path: null
-  });
+  assert.throws(
+    () => normalizeMicroSkillRegistryToolArguments({
+      action: 'read_source_file',
+      skill_name: 'dom-probe',
+      file_path: 'src/helpers/dom.js'
+    }),
+    /不支持的 action `read_source_file`/
+  );
 
   const normalizedApplyPatch = normalizeMicroSkillRegistryToolArguments({
     action: 'apply_patch',
@@ -531,15 +504,4 @@ test('searchMicroSkillFiles 支持 regex、smart case、路径过滤与上下文
   });
   assert.equal(regexSearch.total_matches, 2);
   assert.equal(regexSearch.matches.every((item) => item.file_path === 'src/main.js'), true);
-});
-
-test('旧 js_runtime_script_registry 兼容层会映射到新的 micro_skill_registry 能力', async () => {
-  const legacy = await loadLegacyCompatModule();
-  const modern = await loadMicroSkillRegistryToolModule();
-
-  assert.equal(legacy.JS_RUNTIME_SCRIPT_REGISTRY_TOOL_NAME, modern.MICRO_SKILL_REGISTRY_TOOL_NAME);
-  assert.equal(
-    legacy.buildJsRuntimeScriptRegistryFunctionToolDefinition().name,
-    modern.MICRO_SKILL_REGISTRY_TOOL_NAME
-  );
 });
