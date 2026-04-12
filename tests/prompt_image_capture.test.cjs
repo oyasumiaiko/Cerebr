@@ -10,6 +10,10 @@ async function loadPromptImageCaptureModule() {
   await fs.writeFile(path.join(tempDir, 'package.json'), JSON.stringify({ type: 'module' }), 'utf8');
   await fs.mkdir(path.join(tempDir, 'src', 'extension'), { recursive: true });
   await fs.mkdir(path.join(tempDir, 'src', 'agent_tools'), { recursive: true });
+  await fs.copyFile(
+    path.resolve(__dirname, '../src/agent_tools/prompt_image_tool_shared.js'),
+    path.join(tempDir, 'src', 'agent_tools', 'prompt_image_tool_shared.js')
+  );
   // 这里复制最小依赖集到临时 ESM 沙箱，避免直接受仓库 CommonJS 测试环境影响。
   await fs.copyFile(
     path.resolve(__dirname, '../src/agent_tools/webpage_screenshot_tool.js'),
@@ -34,6 +38,7 @@ function installPromptImageRuntime(options = {}) {
   const sourceMimeType = options.sourceMimeType || 'image/png';
   const bitmapWidth = options.bitmapWidth || 1600;
   const bitmapHeight = options.bitmapHeight || 900;
+  const sourceBytes = Buffer.from(options.sourceBytes || 'source-image', 'utf8');
   const outputMimeType = Object.prototype.hasOwnProperty.call(options, 'outputMimeType')
     ? options.outputMimeType
     : 'image/jpeg';
@@ -51,7 +56,15 @@ function installPromptImageRuntime(options = {}) {
     return {
       ok: true,
       async blob() {
-        return { type: sourceMimeType };
+        return {
+          type: sourceMimeType,
+          async arrayBuffer() {
+            return sourceBytes.buffer.slice(
+              sourceBytes.byteOffset,
+              sourceBytes.byteOffset + sourceBytes.byteLength
+            );
+          }
+        };
       }
     };
   };

@@ -77,6 +77,10 @@ import {
   buildWebpageScreenshotFunctionToolDefinition
 } from '../agent_tools/webpage_screenshot_tool.js';
 import {
+  VIEW_IMAGE_TOOL_NAME,
+  buildViewImageFunctionToolDefinition
+} from '../agent_tools/view_image_tool.js';
+import {
   buildConversationReferenceSnapshot,
   executeHistoryReadTool,
   executeHistorySearchTool
@@ -144,6 +148,7 @@ const RESPONSES_JS_RUNTIME_TOOL_NAME = 'js_runtime_execute';
 const RESPONSES_PAGE_CONTENT_TOOL_NAME = 'page_content_read';
 const RESPONSES_PDF_CONTENT_TOOL_NAME = PDF_CONTENT_READ_TOOL_NAME;
 const RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME = WEBPAGE_SCREENSHOT_TOOL_NAME;
+const RESPONSES_VIEW_IMAGE_TOOL_NAME = VIEW_IMAGE_TOOL_NAME;
 const RESPONSES_HISTORY_SEARCH_TOOL_NAME = 'history_search';
 const RESPONSES_HISTORY_READ_TOOL_NAME = 'history_read';
 const RESPONSES_REQUEST_USER_INPUT_TOOL_NAME = REQUEST_USER_INPUT_TOOL_NAME;
@@ -7176,6 +7181,19 @@ export function createMessageSender(appContext) {
     }
   }
 
+  async function getViewImageResult(rawArgs) {
+    try {
+      console.log('发送 view_image 结果请求');
+      return await chrome.runtime.sendMessage({
+        type: 'GET_VIEW_IMAGE_RESULT_FROM_SIDEBAR',
+        args: rawArgs && typeof rawArgs === 'object' ? rawArgs : null
+      });
+    } catch (error) {
+      console.error('获取 view_image 结果失败:', error);
+      return null;
+    }
+  }
+
   /**
    * 在重新生成开始前重置既有 AI 消息的基础时序/usage 元信息。
    *
@@ -7890,6 +7908,7 @@ export function createMessageSender(appContext) {
     const tools = [
       buildMicroSkillRegistryFunctionToolDefinition(),
       buildRequestUserInputFunctionToolDefinition(),
+      buildViewImageFunctionToolDefinition(),
       buildListAskableModelsFunctionToolDefinition(),
       buildAskOtherAiFunctionToolDefinition(),
       buildResponsesHistorySearchFunctionToolDefinition(),
@@ -8093,7 +8112,7 @@ export function createMessageSender(appContext) {
     }
   }
 
-  function serializeResponsesWebpageScreenshotFunctionToolOutput(value) {
+  function serializeResponsesPromptImageFunctionToolOutput(value, options = {}) {
     const normalized = (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
     const imageUrl = (typeof normalized.image_url === 'string') ? normalized.image_url.trim() : '';
     const detail = (normalized.detail === 'original') ? 'original' : null;
@@ -8109,12 +8128,28 @@ export function createMessageSender(appContext) {
       return [item];
     }
 
-    return buildResponsesGenericXmlToolOutputContentItems('webpage_screenshot_result', {
+    return buildResponsesGenericXmlToolOutputContentItems(options.rootTag || 'image_result', {
       ok: false,
       error: normalized.error || {
-        message: '网页截图工具未返回可用图片。',
-        name: 'WebpageScreenshotUnavailableError'
+        message: options.defaultErrorMessage || '图片工具未返回可用图片。',
+        name: options.defaultErrorName || 'PromptImageUnavailableError'
       }
+    });
+  }
+
+  function serializeResponsesWebpageScreenshotFunctionToolOutput(value) {
+    return serializeResponsesPromptImageFunctionToolOutput(value, {
+      rootTag: 'webpage_screenshot_result',
+      defaultErrorMessage: '网页截图工具未返回可用图片。',
+      defaultErrorName: 'WebpageScreenshotUnavailableError'
+    });
+  }
+
+  function serializeResponsesViewImageFunctionToolOutput(value) {
+    return serializeResponsesPromptImageFunctionToolOutput(value, {
+      rootTag: 'view_image_result',
+      defaultErrorMessage: '读取图片工具未返回可用图片。',
+      defaultErrorName: 'ViewImageUnavailableError'
     });
   }
 
@@ -8379,6 +8414,35 @@ export function createMessageSender(appContext) {
         error: {
           message: '未能从当前网页获取 webpage_screenshot 结果。',
           name: 'WebpageScreenshotUnavailableError'
+        }
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      };
+    }
+  }
+
+  /**
+   * 读取一张显式指定的图片，并返回给模型可直接消费的 JPEG prompt 图片。
+   *
+   * 说明：
+   * - `path` 可以是本地路径、file URL、http(s) URL、data URL 或 `Images/...` 相对路径；
+   * - 默认返回压缩后的 prompt 图片，`detail: original` 时保留原始分辨率；
+   * - 远程 URL 的读取在扩展后台完成，不依赖宿主页 `<img>`/canvas，因此不会受页面 CORS 或 stained canvas 影响。
+   *
+   * @param {any} rawArgs
+   * @returns {Promise<Object>}
+   */
+  async function executeResponsesViewImageFunction(rawArgs) {
+    try {
+      const result = await getViewImageResult(rawArgs);
+      return result || {
+        ok: false,
+        error: {
+          message: '未能读取指定图片。',
+          name: 'ViewImageUnavailableError'
         }
       };
     } catch (error) {
@@ -8969,6 +9033,8 @@ export function createMessageSender(appContext) {
       outputPayload = await executeResponsesPdfContentFunction(parsedArgs);
     } else if (functionName === RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME) {
       outputPayload = await executeResponsesWebpageScreenshotFunction(parsedArgs);
+    } else if (functionName === RESPONSES_VIEW_IMAGE_TOOL_NAME) {
+      outputPayload = await executeResponsesViewImageFunction(parsedArgs);
     } else if (functionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME) {
       outputPayload = await executeResponsesHistorySearchFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_HISTORY_READ_TOOL_NAME) {
@@ -9006,6 +9072,8 @@ export function createMessageSender(appContext) {
               ? serializeResponsesPdfContentFunctionToolOutput(outputPayload)
               : functionName === RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME
                 ? serializeResponsesWebpageScreenshotFunctionToolOutput(outputPayload)
+              : functionName === RESPONSES_VIEW_IMAGE_TOOL_NAME
+                ? serializeResponsesViewImageFunctionToolOutput(outputPayload)
             : functionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME
               ? serializeResponsesHistorySearchFunctionToolOutput(outputPayload)
               : functionName === RESPONSES_HISTORY_READ_TOOL_NAME

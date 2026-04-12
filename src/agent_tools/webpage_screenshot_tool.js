@@ -1,3 +1,11 @@
+import {
+  PROMPT_IMAGE_JPEG_QUALITY,
+  PROMPT_IMAGE_MAX_HEIGHT,
+  PROMPT_IMAGE_MAX_WIDTH,
+  buildPromptImageDetailSchemaDescription,
+  normalizePromptImageDetail
+} from './prompt_image_tool_shared.js';
+
 /**
  * 网页截图工具定义。
  *
@@ -9,13 +17,9 @@
  */
 
 export const WEBPAGE_SCREENSHOT_TOOL_NAME = 'webpage_screenshot';
-export const WEBPAGE_SCREENSHOT_PROMPT_MAX_WIDTH = 2048;
-export const WEBPAGE_SCREENSHOT_PROMPT_MAX_HEIGHT = 768;
-export const WEBPAGE_SCREENSHOT_PROMPT_JPEG_QUALITY = 0.85;
-
-function normalizeString(value) {
-  return (typeof value === 'string') ? value.trim() : '';
-}
+export const WEBPAGE_SCREENSHOT_PROMPT_MAX_WIDTH = PROMPT_IMAGE_MAX_WIDTH;
+export const WEBPAGE_SCREENSHOT_PROMPT_MAX_HEIGHT = PROMPT_IMAGE_MAX_HEIGHT;
+export const WEBPAGE_SCREENSHOT_PROMPT_JPEG_QUALITY = PROMPT_IMAGE_JPEG_QUALITY;
 
 /**
  * 规范化截图工具参数。
@@ -32,18 +36,9 @@ export function normalizeWebpageScreenshotArguments(rawArgs) {
   const args = (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs))
     ? rawArgs
     : {};
-  const detail = normalizeString(args.detail);
-
-  if (!detail) {
-    return { detail: null };
-  }
-  if (detail === 'original') {
-    return { detail: 'original' };
-  }
-
-  throw new Error(
-    `webpage_screenshot.detail 只支持 \`original\`；默认压缩模式请省略该字段，当前收到：\`${detail}\``
-  );
+  return {
+    detail: normalizePromptImageDetail(args.detail, WEBPAGE_SCREENSHOT_TOOL_NAME)
+  };
 }
 
 export function buildWebpageScreenshotFunctionToolDefinition() {
@@ -62,7 +57,7 @@ export function buildWebpageScreenshotFunctionToolDefinition() {
       properties: {
         detail: {
           type: ['string', 'null'],
-          description: 'Optional detail override. The only supported value is `original`; omit this field for default compressed behavior.'
+          description: buildPromptImageDetailSchemaDescription()
         }
       }
     }

@@ -1,8 +1,8 @@
 import {
-  WEBPAGE_SCREENSHOT_PROMPT_JPEG_QUALITY,
-  WEBPAGE_SCREENSHOT_PROMPT_MAX_HEIGHT,
-  WEBPAGE_SCREENSHOT_PROMPT_MAX_WIDTH
-} from '../agent_tools/webpage_screenshot_tool.js';
+  PROMPT_IMAGE_JPEG_QUALITY,
+  PROMPT_IMAGE_MAX_HEIGHT,
+  PROMPT_IMAGE_MAX_WIDTH
+} from '../agent_tools/prompt_image_tool_shared.js';
 
 const SOURCE_FALLBACK_MIME_TYPE = 'image/png';
 const OUTPUT_JPEG_MIME_TYPE = 'image/jpeg';
@@ -16,7 +16,7 @@ function extractMimeTypeFromDataUrl(dataUrl) {
 
 function clampJpegQuality(quality) {
   const numeric = Number(quality);
-  if (!Number.isFinite(numeric)) return WEBPAGE_SCREENSHOT_PROMPT_JPEG_QUALITY;
+  if (!Number.isFinite(numeric)) return PROMPT_IMAGE_JPEG_QUALITY;
   return Math.max(0.1, Math.min(1, numeric));
 }
 
@@ -25,13 +25,13 @@ function computeResizeToFitSize(width, height) {
   const safeHeight = Number(height);
   if (!Number.isFinite(safeWidth) || !Number.isFinite(safeHeight) || safeWidth <= 0 || safeHeight <= 0) {
     return {
-      width: WEBPAGE_SCREENSHOT_PROMPT_MAX_WIDTH,
-      height: WEBPAGE_SCREENSHOT_PROMPT_MAX_HEIGHT,
+      width: PROMPT_IMAGE_MAX_WIDTH,
+      height: PROMPT_IMAGE_MAX_HEIGHT,
       resized: true
     };
   }
 
-  if (safeWidth <= WEBPAGE_SCREENSHOT_PROMPT_MAX_WIDTH && safeHeight <= WEBPAGE_SCREENSHOT_PROMPT_MAX_HEIGHT) {
+  if (safeWidth <= PROMPT_IMAGE_MAX_WIDTH && safeHeight <= PROMPT_IMAGE_MAX_HEIGHT) {
     return {
       width: Math.round(safeWidth),
       height: Math.round(safeHeight),
@@ -40,8 +40,8 @@ function computeResizeToFitSize(width, height) {
   }
 
   const scale = Math.min(
-    WEBPAGE_SCREENSHOT_PROMPT_MAX_WIDTH / safeWidth,
-    WEBPAGE_SCREENSHOT_PROMPT_MAX_HEIGHT / safeHeight
+    PROMPT_IMAGE_MAX_WIDTH / safeWidth,
+    PROMPT_IMAGE_MAX_HEIGHT / safeHeight
   );
   return {
     width: Math.max(1, Math.round(safeWidth * scale)),
@@ -151,9 +151,56 @@ export async function buildPromptImageResultFromScreenshotDataUrl(options = {}) 
     throw new Error('截图数据为空，无法构造 prompt 图片。');
   }
 
-  const detail = options?.detail === 'original' ? 'original' : null;
-  const originalMimeType = extractMimeTypeFromDataUrl(dataUrl);
   const sourceBlob = await dataUrlToBlob(dataUrl);
+  return buildPromptImageResultFromImageBlob({
+    sourceBlob,
+    detail: options?.detail === 'original' ? 'original' : null,
+    jpegQuality: options?.jpegQuality,
+    originalMimeType: extractMimeTypeFromDataUrl(dataUrl)
+  });
+}
+
+/**
+ * 将任意已读取到内存中的图片 Blob 规范化成 prompt 友好的 JPEG。
+ *
+ * 说明：
+ * - 这里不关心图片来自截图、URL 还是本地文件；
+ * - 只负责尺寸控制、JPEG 转码和最终 `input_image` 需要的 data URL 结构；
+ * - 因此网页截图工具与 `view_image` 都复用这一层。
+ *
+ * @param {{
+ *   sourceBlob:Blob|{type?:string,arrayBuffer:()=>Promise<ArrayBuffer>},
+ *   detail:'original'|null,
+ *   jpegQuality?:number,
+ *   originalMimeType?:string
+ * }} options
+ * @returns {Promise<{
+ *   image_url:string,
+ *   detail:'original'|null,
+ *   mime_type:string,
+ *   original_mime_type:string,
+ *   width:number|null,
+ *   height:number|null,
+ *   original_width:number|null,
+ *   original_height:number|null,
+ *   resized:boolean,
+ *   approximate_bytes:number
+ * }>}
+ */
+export async function buildPromptImageResultFromImageBlob(options = {}) {
+  const sourceBlob = options?.sourceBlob;
+  if (!sourceBlob || typeof sourceBlob !== 'object' || typeof sourceBlob.arrayBuffer !== 'function') {
+    throw new Error('图片数据为空，无法构造 prompt 图片。');
+  }
+
+  const detail = options?.detail === 'original' ? 'original' : null;
+  const explicitOriginalMimeType = (typeof options?.originalMimeType === 'string' && options.originalMimeType.trim())
+    ? options.originalMimeType.trim().toLowerCase()
+    : '';
+  const originalMimeType = explicitOriginalMimeType
+    || ((typeof sourceBlob.type === 'string' && sourceBlob.type.trim())
+      ? sourceBlob.type.trim().toLowerCase()
+      : SOURCE_FALLBACK_MIME_TYPE);
   const bitmap = await createImageBitmap(sourceBlob);
 
   try {

@@ -1,10 +1,15 @@
 import { createJsRuntimeManager } from './js_runtime_manager.js';
 import { createMicroSkillManager } from './micro_skill_manager.js';
-import { buildPromptImageResultFromScreenshotDataUrl } from './prompt_image_capture.js';
+import {
+  buildPromptImageResultFromImageBlob,
+  buildPromptImageResultFromScreenshotDataUrl
+} from './prompt_image_capture.js';
+import { fetchPromptImageSourceBlob } from './prompt_image_source.js';
 import { resolveSidebarRequestTargetTabId } from '../utils/sidebar_target_tab.js';
 import {
   normalizeWebpageScreenshotArguments
 } from '../agent_tools/webpage_screenshot_tool.js';
+import { normalizeViewImageArguments } from '../agent_tools/view_image_tool.js';
 
 // 确保 Service Worker 立即激活
 self.addEventListener('install', (event) => {
@@ -598,6 +603,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'GET_VIEW_IMAGE_RESULT_FROM_SIDEBAR') {
+    (async () => {
+      const result = await buildViewImageResultForPrompt(message?.args);
+      sendResponse(result);
+    })();
+    return true;
+  }
+
   if (message.type === 'GET_WEBPAGE_SCREENSHOT_RESULT_FROM_SIDEBAR') {
     (async () => {
       const result = await relaySidebarContentRequestToTab({
@@ -878,6 +891,46 @@ async function captureVisibleTabForPrompt(windowId = null, rawArgs = null) {
                 name: (typeof error?.name === 'string' && error.name.trim())
                     ? error.name.trim()
                     : 'WebpageScreenshotToolError'
+            }
+        };
+    }
+}
+
+/**
+ * 读取一张显式指定的图片，并转成供模型直接消费的 prompt 图片。
+ *
+ * 设计说明：
+ * - 这里始终在扩展后台读取 URL / 本地文件，不依赖网页里的 `<img>` 加载状态；
+ * - 因此不会落入宿主页 CORS 或 stained canvas 的限制；
+ * - 成功拿到 Blob 后直接复用截图工具已经验证过的 JPEG 转码链路。
+ *
+ * @param {any} rawArgs
+ * @returns {Promise<Object>}
+ */
+async function buildViewImageResultForPrompt(rawArgs = null) {
+    try {
+        const { path, detail } = normalizeViewImageArguments(rawArgs);
+        const { sourceBlob, originalMimeType, sourceUrl } = await fetchPromptImageSourceBlob(path);
+        const promptImage = await buildPromptImageResultFromImageBlob({
+            sourceBlob,
+            detail,
+            originalMimeType
+        });
+        return {
+            ok: true,
+            source_url: sourceUrl,
+            ...promptImage
+        };
+    } catch (error) {
+        return {
+            ok: false,
+            error: {
+                message: (typeof error?.message === 'string' && error.message.trim())
+                    ? error.message.trim()
+                    : '读取图片工具处理失败。',
+                name: (typeof error?.name === 'string' && error.name.trim())
+                    ? error.name.trim()
+                    : 'ViewImageToolError'
             }
         };
     }
