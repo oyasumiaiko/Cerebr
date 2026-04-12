@@ -92,6 +92,7 @@ import {
   normalizeRequestUserInputArguments
 } from '../agent_tools/request_user_input_tool.js';
 import {
+  MICRO_SKILL_READ_MAX_CHARS,
   MICRO_SKILL_REGISTRY_TOOL_NAME,
   buildMicroSkillRegistryFunctionToolDefinition
 } from '../agent_tools/micro_skill_registry_tool.js';
@@ -7766,6 +7767,27 @@ export function createMessageSender(appContext) {
     }
   }
 
+  function serializeResponsesMicroSkillRegistryFunctionToolOutput(value) {
+    try {
+      return buildResponsesGenericXmlToolOutputContentItems('micro_skill_registry_result', value, {
+        blockTruncation: {
+          maxChars: MICRO_SKILL_READ_MAX_CHARS,
+          mode: 'tail'
+        }
+      });
+    } catch (error) {
+      return buildResponsesGenericXmlToolOutputContentItems('micro_skill_registry_result', {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      }, {
+        blockTruncation: {
+          maxChars: MICRO_SKILL_READ_MAX_CHARS,
+          mode: 'tail'
+        }
+      });
+    }
+  }
+
   function serializeResponsesJsRuntimeFunctionToolOutput(value) {
     try {
       return buildResponsesJsRuntimeToolOutputContentItems(value);
@@ -8683,12 +8705,12 @@ export function createMessageSender(appContext) {
       call_id: callId,
       output:
         functionName === RESPONSES_JS_RUNTIME_TOOL_NAME
-          ? serializeResponsesJsRuntimeFunctionToolOutput(outputPayload)
+            ? serializeResponsesJsRuntimeFunctionToolOutput(outputPayload)
           : (
               functionName === RESPONSES_MICRO_SKILL_REGISTRY_TOOL_NAME
               || functionName === RESPONSES_LEGACY_JS_RUNTIME_SCRIPT_REGISTRY_TOOL_NAME
             )
-            ? serializeResponsesFunctionToolOutput(outputPayload)
+            ? serializeResponsesMicroSkillRegistryFunctionToolOutput(outputPayload)
           : functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME
             ? serializeResponsesRequestUserInputFunctionToolOutput(outputPayload)
           : functionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME

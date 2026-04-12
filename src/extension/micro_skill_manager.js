@@ -547,7 +547,9 @@ export function createMicroSkillManager(options = {}) {
         return {
           ok: true,
           action: 'read_detail',
-          skill: buildMicroSkillDetail(record)
+          skill: buildMicroSkillDetail(record, {
+            contentReadArgs: normalizedArgs.read_options
+          })
         };
       }
       case 'read_package': {
@@ -558,7 +560,9 @@ export function createMicroSkillManager(options = {}) {
         return {
           ok: true,
           action: 'read_package',
-          skill: buildMicroSkillPackagePayload(record)
+          skill: buildMicroSkillPackagePayload(record, {
+            contentReadArgs: normalizedArgs.read_options
+          })
         };
       }
       case 'read_file': {
@@ -569,7 +573,9 @@ export function createMicroSkillManager(options = {}) {
         return {
           ok: true,
           action: 'read_file',
-          skill: buildMicroSkillFilePayload(record, normalizedArgs.file_path)
+          skill: buildMicroSkillFilePayload(record, normalizedArgs.file_path, {
+            contentReadArgs: normalizedArgs.read_options
+          })
         };
       }
       case 'create':

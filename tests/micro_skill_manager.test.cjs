@@ -88,6 +88,27 @@ function buildSkillInput(name = 'dom-probe') {
   };
 }
 
+function buildLongSkillInput(name = 'long-dom-probe') {
+  const instructionLines = Array.from({ length: 40 }, (_, index) => `Line ${index + 1}: ${'B'.repeat(360)}`);
+  return {
+    ...buildSkillInput(name),
+    files: [
+      {
+        path: 'SKILL.md',
+        content: `# Long DOM Probe\n\n${instructionLines.join('\n')}\n`
+      },
+      {
+        path: 'src/main.js',
+        content: `${'const title = document.title;\n'.repeat(900)}return { read() { return title; } };`
+      },
+      {
+        path: 'src/helpers/dom.js',
+        content: 'module.exports = { readTitle() { return document.title; } };'
+      }
+    ]
+  };
+}
+
 test('create/update/delete/enable/disable 会驱动 register/update/unregister 与当前文档 refresh', async () => {
   const { createMicroSkillManager } = await loadMicroSkillManagerModule();
 
@@ -367,6 +388,74 @@ test('内置 skill-creator 会自动出现在列表中且保持只读', async ()
     }),
     /内置只读指导 skill/
   );
+});
+
+test('read_detail/read_file 支持截断预览、字符偏移与按行续读', async () => {
+  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+
+  const manager = createMicroSkillManager({
+    store: createMockStore([
+      {
+        ...buildLongSkillInput(),
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-02T00:00:00.000Z',
+        revision: 1
+      }
+    ]),
+    userScriptsApi: {
+      async getScripts() { return []; },
+      async register() {},
+      async update() {},
+      async unregister() {}
+    },
+    tabsApi: {
+      async get() {
+        return { url: 'https://app.example.com/path', title: 'Example' };
+      }
+    },
+    jsRuntimeManager: {
+      async execute() {
+        return { ok: true, tabId: 1, value: null, logs: [], items: [] };
+      }
+    }
+  });
+
+  const detailPreview = await manager.executeRegistryAction({
+    action: 'read_detail',
+    skill_name: 'long-dom-probe'
+  });
+  assert.equal(detailPreview.ok, true);
+  assert.equal(detailPreview.skill.instruction.content_read.mode, 'preview');
+  assert.equal(detailPreview.skill.instruction.content_read.max_chars, 10000);
+  assert.equal(detailPreview.skill.instruction.content_read.truncated, true);
+  assert.equal(detailPreview.skill.instruction.content.length, 10000);
+
+  const detailByLine = await manager.executeRegistryAction({
+    action: 'read_detail',
+    skill_name: 'long-dom-probe',
+    start_line: 3,
+    end_line: 4
+  });
+  assert.equal(detailByLine.ok, true);
+  assert.equal(detailByLine.skill.instruction.content_read.mode, 'line_range');
+  assert.equal(detailByLine.skill.instruction.content_read.start_line, 3);
+  assert.equal(detailByLine.skill.instruction.content_read.end_line, 4);
+  assert.match(detailByLine.skill.instruction.content, /^Line 1:/m);
+  assert.doesNotMatch(detailByLine.skill.instruction.content, /^Line 3:/m);
+
+  const fileByChars = await manager.executeRegistryAction({
+    action: 'read_file',
+    skill_name: 'long-dom-probe',
+    file_path: 'src/main.js',
+    skip_chars: 200,
+    max_chars: 150
+  });
+  assert.equal(fileByChars.ok, true);
+  assert.equal(fileByChars.skill.file.content_read.mode, 'char_range');
+  assert.equal(fileByChars.skill.file.content_read.skip_chars, 200);
+  assert.equal(fileByChars.skill.file.content_read.max_chars, 150);
+  assert.equal(fileByChars.skill.file.content.length, 150);
+  assert.equal(fileByChars.skill.file.content_read.has_more_after_range, true);
 });
 
 test('reconcileRegisteredSkills 会对现有动态脚本做 register/update/unregister 分流', async () => {

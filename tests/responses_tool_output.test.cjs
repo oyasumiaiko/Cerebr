@@ -243,6 +243,29 @@ test('buildResponsesGenericXmlToolOutputContentItems 在没有 value 字段时�
   assert.match(text, /"name": "skill-creator"/);
 });
 
+test('buildResponsesGenericXmlToolOutputContentItems 支持按调用方放宽正文截断上限', async () => {
+  const { buildResponsesGenericXmlToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesGenericXmlToolOutputContentItems('micro_skill_registry_result', {
+    ok: true,
+    action: 'read_file',
+    skill: {
+      file: {
+        path: 'src/main.js',
+        content: 'X'.repeat(12000)
+      }
+    }
+  }, {
+    blockTruncation: {
+      maxChars: 10000,
+      mode: 'tail'
+    }
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<micro_skill_registry_result>/);
+  assert.match(text, /truncated \d+ chars out of \d+ total chars/);
+  assert.match(text, /returned range \[0, \d+\)/);
+});
+
 test('buildResponsesPdfContentToolOutputContentItems 使用 overview / selection / content XML 分块', async () => {
   const { buildResponsesPdfContentToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesPdfContentToolOutputContentItems({

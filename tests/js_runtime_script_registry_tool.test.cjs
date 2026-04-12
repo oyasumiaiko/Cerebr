@@ -96,6 +96,29 @@ function buildSkillInput(name = 'dom-probe') {
   };
 }
 
+function buildLongSkillInput(name = 'long-dom-probe') {
+  const instructionLines = Array.from({ length: 40 }, (_, index) => `Line ${index + 1}: ${'A'.repeat(400)}`);
+  const instructionContent = `# Long DOM Probe\n\n${instructionLines.join('\n')}\n`;
+  const runtimeContent = `${'const value = "x";\n'.repeat(800)}return { read() { return value; } };`;
+  return {
+    ...buildSkillInput(name),
+    files: [
+      {
+        path: 'SKILL.md',
+        content: instructionContent
+      },
+      {
+        path: 'src/main.js',
+        content: runtimeContent
+      },
+      {
+        path: 'src/helpers/dom.js',
+        content: 'module.exports = { readTitle() { return document.title; } };'
+      }
+    ]
+  };
+}
+
 test('normalizeMicroSkillMatchPatterns 与 URL 匹配遵循第一阶段 Chrome/TM 风格约束', async () => {
   const {
     normalizeMicroSkillMatchPatterns,
@@ -165,6 +188,7 @@ test('buildStoredMicroSkillRecord / saveStoredMicroSkillPackage / getStoredMicro
   const detail = buildMicroSkillDetail(loaded);
   assert.equal(detail.instruction.path, 'SKILL.md');
   assert.match(detail.instruction.content, /DOM Probe/);
+  assert.equal(detail.instruction.content_read.mode, 'preview');
   assert.equal(detail.files.virtual_manifest_path, 'manifest.json');
   assert.equal(detail.files.files[0].path, 'manifest.json');
   assert.equal(detail.files.files[0].content, undefined);
@@ -179,6 +203,7 @@ test('buildStoredMicroSkillRecord / saveStoredMicroSkillPackage / getStoredMicro
   const manifestFile = buildMicroSkillFilePayload(loaded, 'manifest.json');
   assert.equal(manifestFile.file.path, 'manifest.json');
   assert.equal(manifestFile.file.is_manifest, true);
+  assert.equal(manifestFile.file.content_read.mode, 'preview');
   assert.doesNotMatch(manifestFile.file.content, /"name":/);
   assert.doesNotMatch(manifestFile.file.content, /"kind":/);
   assert.match(manifestFile.file.content, /"description": "读取页面标题和链接"/);
@@ -217,6 +242,13 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     file_path: 'src/helpers/dom.js',
     file: null,
     patch: null,
+    read_options: {
+      mode: 'preview',
+      skip_chars: 0,
+      max_chars: 10000,
+      start_line: null,
+      end_line: null
+    },
     set_as_instruction: false,
     set_as_runtime_entry: false,
     next_instruction_path: null,
@@ -248,6 +280,13 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     file_path: 'src/helpers/dom.js',
     file: null,
     patch: null,
+    read_options: {
+      mode: 'preview',
+      skip_chars: 0,
+      max_chars: 10000,
+      start_line: null,
+      end_line: null
+    },
     set_as_instruction: false,
     set_as_runtime_entry: false,
     next_instruction_path: null,
@@ -266,11 +305,83 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     file_path: null,
     file: null,
     patch: '*** Begin Patch\n*** Update File: src/main.js\n@@\n-old\n+new\n*** End Patch',
+    read_options: null,
     set_as_instruction: false,
     set_as_runtime_entry: false,
     next_instruction_path: null,
     next_runtime_entry_path: null
   });
+});
+
+test('micro skill 读取参数支持字符偏移与按行续读', async () => {
+  const {
+    buildMicroSkillDetail,
+    buildMicroSkillFilePayload,
+    buildStoredMicroSkillRecord,
+    normalizeMicroSkillRegistryToolArguments
+  } = await loadMicroSkillRegistryToolModule();
+
+  const record = buildStoredMicroSkillRecord(buildLongSkillInput());
+
+  const normalizedReadDetail = normalizeMicroSkillRegistryToolArguments({
+    action: 'read_detail',
+    skill_name: 'long-dom-probe',
+    start_line: 3,
+    end_line: 5
+  });
+  assert.deepEqual(normalizedReadDetail.read_options, {
+    mode: 'line_range',
+    skip_chars: null,
+    max_chars: null,
+    start_line: 3,
+    end_line: 5
+  });
+
+  const normalizedReadFile = normalizeMicroSkillRegistryToolArguments({
+    action: 'read_file',
+    skill_name: 'long-dom-probe',
+    file_path: 'src/main.js',
+    skip_chars: 120,
+    max_chars: 200
+  });
+  assert.deepEqual(normalizedReadFile.read_options, {
+    mode: 'char_range',
+    skip_chars: 120,
+    max_chars: 200,
+    start_line: null,
+    end_line: null
+  });
+
+  const detailByLine = buildMicroSkillDetail(record, {
+    contentReadArgs: normalizedReadDetail.read_options
+  });
+  assert.equal(detailByLine.instruction.content_read.mode, 'line_range');
+  assert.equal(detailByLine.instruction.content_read.start_line, 3);
+  assert.equal(detailByLine.instruction.content_read.end_line, 5);
+  assert.match(detailByLine.instruction.content, /^Line 1:/m);
+  assert.doesNotMatch(detailByLine.instruction.content, /^Line 4:/m);
+  assert.equal(detailByLine.instruction.content_read.has_more_after_range, true);
+
+  const fileByChars = buildMicroSkillFilePayload(record, 'src/main.js', {
+    contentReadArgs: normalizedReadFile.read_options
+  });
+  assert.equal(fileByChars.file.content_read.mode, 'char_range');
+  assert.equal(fileByChars.file.content_read.skip_chars, 120);
+  assert.equal(fileByChars.file.content_read.max_chars, 200);
+  assert.equal(fileByChars.file.content.length, 200);
+  assert.equal(fileByChars.file.content_read.has_more_after_range, true);
+
+  assert.throws(
+    () => normalizeMicroSkillRegistryToolArguments({
+      action: 'read_file',
+      skill_name: 'long-dom-probe',
+      file_path: 'src/main.js',
+      skip_chars: 10,
+      start_line: 1,
+      end_line: 2
+    }),
+    /不能同时使用字符区间和行区间/
+  );
 });
 
 test('旧 js_runtime_script_registry 兼容层会映射到新的 micro_skill_registry 能力', async () => {
