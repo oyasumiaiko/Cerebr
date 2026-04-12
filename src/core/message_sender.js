@@ -3337,7 +3337,7 @@ export function createMessageSender(appContext) {
           label: 'Steer',
           className: 'conversation-send-queue-preview__action--steer',
           title: '改为当前生成的 steer',
-          iconClass: 'fa-solid fa-turn-down-left',
+          iconClass: 'fa-solid fa-forward-step',
           onClick: () => { void handleQueuePreviewSteer(activeQueueKey, preview.id); }
         }));
         actions.appendChild(createQueuePreviewActionButton({
