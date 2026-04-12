@@ -18,16 +18,17 @@ const {
   waitForWorktreeExtensionWorker
 } = require('./lib/worktree_unpacked_extension_harness.cjs');
 
-const [rawRepoRoot, outputDir, rawArg3 = '', rawArg4 = ''] = process.argv.slice(2);
+const [rawRepoRoot, outputDir, rawArg3 = '', rawArg4 = '', rawArg5 = ''] = process.argv.slice(2);
 const repoRoot = rawRepoRoot ? path.resolve(rawRepoRoot) : '';
 const launchMode = (rawArg3 === 'stable' || rawArg3 === 'worktree_unpacked')
   ? rawArg3
   : ((rawArg4 === 'stable' || rawArg4 === 'worktree_unpacked') ? rawArg4 : 'stable');
 const chromePath = (launchMode === rawArg3) ? '' : rawArg3;
+const requestedDetail = [rawArg3, rawArg4, rawArg5].includes('original') ? 'original' : null;
 
 if (!repoRoot || !outputDir || (launchMode === 'stable' && !chromePath)) {
   throw new Error(
-    'Usage: node tests/cdp_webpage_screenshot_tool_regression.cjs <repoRoot> <outputDir> [chromePath] [mode=stable|worktree_unpacked]'
+    'Usage: node tests/cdp_webpage_screenshot_tool_regression.cjs <repoRoot> <outputDir> [chromePath] [mode=stable|worktree_unpacked] [detail=original]'
   );
 }
 
@@ -299,12 +300,15 @@ function createMessageItem(id, text) {
 }
 
 function createFunctionCallItem() {
+  const toolArguments = requestedDetail === 'original'
+    ? { detail: 'original' }
+    : {};
   return {
     id: `fc_${SCREENSHOT_CALL_ID}`,
     type: 'function_call',
     call_id: SCREENSHOT_CALL_ID,
     name: 'webpage_screenshot',
-    arguments: '{}',
+    arguments: JSON.stringify(toolArguments),
     status: 'completed'
   };
 }
@@ -405,11 +409,16 @@ async function runMockResponsesServer() {
           }
 
           screenshotOutputSummary = buildImageOutputSummary(screenshotOutput);
+          const expectOriginalDetail = requestedDetail === 'original';
           const isValidImageOutput = (
             screenshotOutputSummary.outputLength === 1
             && screenshotOutputSummary.firstType === 'input_image'
             && screenshotOutputSummary.prefix === 'data:image/jpeg;base64'
-            && screenshotOutputSummary.hasDetailField === false
+            && (
+              expectOriginalDetail
+                ? (screenshotOutputSummary.hasDetailField === true && screenshotOutputSummary.detail === 'original')
+                : screenshotOutputSummary.hasDetailField === false
+            )
             && screenshotOutputSummary.approxBytes > 0
           );
           const finalText = isValidImageOutput
@@ -493,6 +502,7 @@ async function main() {
     startedAt: new Date().toISOString(),
     outputDir,
     launchMode,
+    requestedDetail: requestedDetail || 'default',
     headless: runHeadless,
     steps: []
   };

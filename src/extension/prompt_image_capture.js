@@ -4,26 +4,20 @@ import {
   WEBPAGE_SCREENSHOT_PROMPT_MAX_WIDTH
 } from '../agent_tools/webpage_screenshot_tool.js';
 
+const SOURCE_FALLBACK_MIME_TYPE = 'image/png';
+const OUTPUT_JPEG_MIME_TYPE = 'image/jpeg';
 const DATA_URL_PATTERN = /^data:([^;,]+)(;base64)?,/i;
 
 function extractMimeTypeFromDataUrl(dataUrl) {
-  if (typeof dataUrl !== 'string') return 'image/png';
+  if (typeof dataUrl !== 'string') return SOURCE_FALLBACK_MIME_TYPE;
   const match = dataUrl.match(DATA_URL_PATTERN);
-  return (match?.[1] || 'image/png').toLowerCase();
+  return (match?.[1] || SOURCE_FALLBACK_MIME_TYPE).toLowerCase();
 }
 
 function clampJpegQuality(quality) {
   const numeric = Number(quality);
   if (!Number.isFinite(numeric)) return WEBPAGE_SCREENSHOT_PROMPT_JPEG_QUALITY;
   return Math.max(0.1, Math.min(1, numeric));
-}
-
-function estimateDataUrlBytes(dataUrl) {
-  if (typeof dataUrl !== 'string') return 0;
-  const commaIndex = dataUrl.indexOf(',');
-  const base64 = commaIndex >= 0 ? dataUrl.slice(commaIndex + 1) : dataUrl;
-  if (!base64) return 0;
-  return Math.round((base64.length * 3) / 4);
 }
 
 function computeResizeToFitSize(width, height) {
@@ -81,6 +75,46 @@ async function blobToDataUrl(blob, fallbackMimeType) {
   return `data:${mimeType};base64,${bytesToBase64(bytes)}`;
 }
 
+function buildTargetSizeForBitmap(bitmap, detail) {
+  const width = Math.round(Number(bitmap?.width));
+  const height = Math.round(Number(bitmap?.height));
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    throw new Error('截图尺寸无效，无法生成 prompt 图片。');
+  }
+
+  if (detail === 'original') {
+    return {
+      width,
+      height,
+      resized: false
+    };
+  }
+  return computeResizeToFitSize(width, height);
+}
+
+async function renderBitmapToJpegBlob(bitmap, targetSize, jpegQuality) {
+  const canvas = new OffscreenCanvas(targetSize.width, targetSize.height);
+  const context = canvas.getContext('2d', { alpha: false });
+  if (!context) {
+    throw new Error('无法创建截图压缩所需的 2D canvas 上下文。');
+  }
+
+  context.clearRect(0, 0, targetSize.width, targetSize.height);
+  context.drawImage(bitmap, 0, 0, targetSize.width, targetSize.height);
+
+  const outputBlob = await canvas.convertToBlob({
+    type: OUTPUT_JPEG_MIME_TYPE,
+    quality: clampJpegQuality(jpegQuality)
+  });
+  const outputMimeType = (typeof outputBlob.type === 'string' && outputBlob.type)
+    ? outputBlob.type
+    : OUTPUT_JPEG_MIME_TYPE;
+  return {
+    outputBlob,
+    outputMimeType
+  };
+}
+
 /**
  * 将截图 data URL 压成更适合 prompt 的图片。
  *
@@ -90,8 +124,8 @@ async function blobToDataUrl(blob, fallbackMimeType) {
  *
  * 针对网页截图的差异：
  * - 截图源天然来自浏览器生成的 PNG；
- * - 默认优先转成 JPEG(quality=0.85)，显著降低 data URL 体积；
- * - 只有显式请求 `original` 时，才保留原始截图字节。
+ * - 不论默认还是 `detail: original`，最终都统一转成 JPEG，避免上层再分 MIME；
+ * - `detail: original` 只保留原始分辨率，不再保留原始截图字节。
  *
  * @param {{
  *   dataUrl:string,
@@ -119,47 +153,20 @@ export async function buildPromptImageResultFromScreenshotDataUrl(options = {}) 
 
   const detail = options?.detail === 'original' ? 'original' : null;
   const originalMimeType = extractMimeTypeFromDataUrl(dataUrl);
-
-  if (detail === 'original') {
-    return {
-      image_url: dataUrl,
-      detail: 'original',
-      mime_type: originalMimeType,
-      original_mime_type: originalMimeType,
-      width: null,
-      height: null,
-      original_width: null,
-      original_height: null,
-      resized: false,
-      approximate_bytes: estimateDataUrlBytes(dataUrl)
-    };
-  }
-
   const sourceBlob = await dataUrlToBlob(dataUrl);
   const bitmap = await createImageBitmap(sourceBlob);
 
   try {
-    const targetSize = computeResizeToFitSize(bitmap.width, bitmap.height);
-    const canvas = new OffscreenCanvas(targetSize.width, targetSize.height);
-    const context = canvas.getContext('2d', { alpha: false });
-    if (!context) {
-      throw new Error('无法创建截图压缩所需的 2D canvas 上下文。');
-    }
-
-    context.clearRect(0, 0, targetSize.width, targetSize.height);
-    context.drawImage(bitmap, 0, 0, targetSize.width, targetSize.height);
-
-    const outputBlob = await canvas.convertToBlob({
-      type: 'image/jpeg',
-      quality: clampJpegQuality(options?.jpegQuality)
-    });
-    const outputMimeType = (typeof outputBlob.type === 'string' && outputBlob.type)
-      ? outputBlob.type
-      : 'image/jpeg';
+    const targetSize = buildTargetSizeForBitmap(bitmap, detail);
+    const { outputBlob, outputMimeType } = await renderBitmapToJpegBlob(
+      bitmap,
+      targetSize,
+      options?.jpegQuality
+    );
 
     return {
       image_url: await blobToDataUrl(outputBlob, outputMimeType),
-      detail: null,
+      detail,
       mime_type: outputMimeType,
       original_mime_type: originalMimeType,
       width: targetSize.width,

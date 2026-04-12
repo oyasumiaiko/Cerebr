@@ -8049,7 +8049,8 @@ export function createMessageSender(appContext) {
    * 说明：
    * - 截图来源固定为当前侧栏绑定网页的可见区域；
    * - content script 负责隐藏侧边栏，避免把对话 UI 自己拍进去；
-   * - 默认返回压缩后的 prompt 图片，`detail: original` 时保留原始分辨率截图。
+   * - 默认返回压缩后的 prompt 图片，`detail: original` 时保留原始分辨率；
+   * - 两条路径都会统一输出 JPEG，避免上层再按 MIME 分叉。
    *
    * @param {any} rawArgs
    * @returns {Promise<Object>}
