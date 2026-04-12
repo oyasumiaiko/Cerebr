@@ -734,6 +734,48 @@ body.standalone-mode #empty-state-repomix {
     border: 1px solid color-mix(in srgb, var(--cerebr-highlight) 20%, transparent);
 }
 
+.conversation-send-queue-preview__pending-steer-window {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.conversation-send-queue-preview__pending-steer-title {
+    font-weight: 600;
+}
+
+.conversation-send-queue-preview__pending-steer-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.conversation-send-queue-preview__pending-steer-item {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+    min-width: 0;
+}
+
+.conversation-send-queue-preview__pending-steer-order {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+    color: color-mix(in srgb, var(--cerebr-text-color) 58%, transparent);
+}
+
+.conversation-send-queue-preview__pending-steer-text {
+    min-width: 0;
+    flex: 1 1 auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.conversation-send-queue-preview__pending-steer-meta {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    color: color-mix(in srgb, var(--cerebr-text-color) 58%, transparent);
+}
+
 .conversation-send-queue-preview__text {
     min-width: 0;
     flex: 1 1 180px;

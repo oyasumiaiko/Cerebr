@@ -2619,11 +2619,17 @@ export function createMessageProcessor(appContext) {
         entryKind: 'narrative',
         narrativeKind: entry.kind,
         narrativeStatus: String(entry?.status || '').trim().toLowerCase(),
+        narrativeCount: Number.isFinite(Number(entry?.count))
+          ? Math.max(0, Math.floor(Number(entry.count)))
+          : 0,
         markdown: buildMarkdownSurfaceSnapshot(normalizedText, renderedHtml),
         signature: JSON.stringify({
           renderedHtml,
           narrativeKind: entry.kind,
-          narrativeStatus: String(entry?.status || '').trim().toLowerCase()
+          narrativeStatus: String(entry?.status || '').trim().toLowerCase(),
+          narrativeCount: Number.isFinite(Number(entry?.count))
+            ? Math.max(0, Math.floor(Number(entry.count)))
+            : 0
         })
       };
     }
@@ -2988,7 +2994,9 @@ export function createMessageProcessor(appContext) {
       icon.setAttribute('aria-hidden', 'true');
       label.appendChild(icon);
       const labelText = document.createElement('span');
-      labelText.textContent = '转向';
+      labelText.textContent = snapshot.narrativeCount > 1
+        ? `转向 ×${snapshot.narrativeCount}`
+        : '转向';
       label.appendChild(labelText);
       title.textContent = getResponseActivitySteerStatusLabel(snapshot);
     } else if (summary) {
