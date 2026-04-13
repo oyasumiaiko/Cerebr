@@ -2955,10 +2955,13 @@ export function createMessageSender(appContext) {
     let container = getConversationQueuedSendPreviewContainer();
     if (!container) {
       container = document.createElement('section');
-      container.className = 'conversation-send-queue-preview';
+      // queue / steer 预览也挂到与 slash / request_user_input 相同的 drawer 壳层里，
+      // 这样既复用同一套视觉语义，也能显式恢复 pointer-events，避免被 accessory region 吃掉点击。
+      container.className = 'conversation-send-queue-preview composer-accessory-drawer composer-queue-preview-panel';
       container.setAttribute('aria-live', 'polite');
       container.setAttribute('aria-label', '当前会话待发送消息队列');
     }
+    container.className = 'conversation-send-queue-preview composer-accessory-drawer composer-queue-preview-panel';
 
     // 兼容旧实现：若容器曾被插到聊天滚动区顶部或输入区外部，这里统一迁回输入框附近。
     document.querySelectorAll('.conversation-send-queue-preview').forEach((node) => {
@@ -2979,6 +2982,27 @@ export function createMessageSender(appContext) {
     }
 
     return container;
+  }
+
+  function ensureConversationQueuedSendPreviewSurface(container) {
+    if (!container) return null;
+
+    let surface = Array.from(container.children || []).find((child) => (
+      child?.classList?.contains('conversation-send-queue-preview__surface')
+    )) || null;
+
+    if (!surface) {
+      surface = document.createElement('div');
+    }
+
+    surface.className = 'conversation-send-queue-preview__surface composer-accessory-drawer-surface composer-queue-preview-surface';
+    if (surface.parentElement !== container) {
+      container.replaceChildren(surface);
+    } else if (container.firstElementChild !== surface || container.childElementCount !== 1) {
+      container.replaceChildren(surface);
+    }
+
+    return surface;
   }
 
   function clearConversationQueuePreviewDragClasses(scope = null) {
@@ -3323,8 +3347,10 @@ export function createMessageSender(appContext) {
 
     const container = ensureConversationQueuedSendPreviewContainer();
     if (!container) return;
+    const surface = ensureConversationQueuedSendPreviewSurface(container);
+    if (!surface) return;
 
-    container.textContent = '';
+    surface.textContent = '';
 
     const list = document.createElement('div');
     list.className = 'conversation-send-queue-preview__list';
@@ -3532,7 +3558,7 @@ export function createMessageSender(appContext) {
       list.appendChild(item);
     });
 
-    container.appendChild(list);
+    surface.appendChild(list);
   }
 
   function cloneDataSafely(value) {

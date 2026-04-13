@@ -550,6 +550,16 @@ body.standalone-mode #empty-state-repomix {
    - 放在输入框正上方，紧贴输入区，强化“已进入发送队列”的感知；
    - 每条队列消息都尽量横向压缩，避免把标签/按钮拆成多行占垂直空间。 */
 .conversation-send-queue-preview {
+    display: block;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    color: var(--cerebr-text-color);
+    pointer-events: auto;
+}
+
+.conversation-send-queue-preview__surface {
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -566,9 +576,28 @@ body.standalone-mode #empty-state-repomix {
     box-shadow:
       0 10px 24px rgba(15, 23, 42, 0.12),
       inset 0 0 0 1px color-mix(in srgb, #ffffff 10%, transparent);
-    position: relative;
     overflow: hidden;
-    z-index: 1;
+}
+
+.composer-queue-preview-panel {
+    --composer-request-content-font-size: calc(var(--cerebr-font-size) * 0.7);
+    font-size: var(--composer-request-content-font-size);
+}
+
+.composer-queue-preview-surface {
+    gap: 8px;
+    padding-top: 10px;
+    padding-bottom: 10px;
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--cerebr-panel-surface-bg, var(--cerebr-input-bg)) 90%, transparent),
+        color-mix(in srgb, var(--cerebr-input-bg) 82%, var(--cerebr-bg-color) 18%)
+      );
+    border-color: color-mix(in srgb, var(--cerebr-border-color) 48%, transparent);
+    box-shadow:
+      0 10px 24px rgba(15, 23, 42, 0.12),
+      inset 0 0 0 1px color-mix(in srgb, #ffffff 10%, transparent);
 }
 
 .conversation-send-queue-preview[hidden] {
