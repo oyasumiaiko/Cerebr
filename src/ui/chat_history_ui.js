@@ -9560,11 +9560,11 @@ export function createChatHistoryUI(appContext) {
     titleWrap.className = 'micro-skill-viewer-title-wrap';
     const title = document.createElement('div');
     title.className = 'micro-skill-viewer-title';
-    title.textContent = '微型技能';
+    title.textContent = 'Skill 管理';
     titleWrap.appendChild(title);
     const subtitle = document.createElement('div');
     subtitle.className = 'micro-skill-viewer-subtitle';
-    subtitle.textContent = '查看当前扩展里已注册的浏览器微型 skill，点列表查看详情；源码按需加载。';
+    subtitle.textContent = '查看当前扩展里已注册的浏览器 Skill，点列表查看详情；源码按需加载。';
     titleWrap.appendChild(subtitle);
     toolbar.appendChild(titleWrap);
 
@@ -9658,7 +9658,7 @@ export function createChatHistoryUI(appContext) {
   }
 
   /**
-   * 确保 Esc 聊天历史面板中存在“微型技能”标签与内容容器。
+   * 确保 Esc 聊天历史面板中存在“Skill 管理”标签与内容容器。
    * 这样即便当前面板是在旧代码路径下创建的，也能在后续打开时补齐新 tab。
    */
   function ensureMicroSkillsTabDom(panel) {
@@ -9666,20 +9666,37 @@ export function createChatHistoryUI(appContext) {
     const tabContents = panel?.querySelector('.history-tab-contents');
     if (!tabBar || !tabContents) return;
 
+    const moveNodeAfter = (parent, node, anchor) => {
+      if (!parent || !node) return;
+      if (!anchor || anchor.parentElement !== parent) {
+        if (node.parentElement !== parent || parent.lastElementChild !== node) {
+          parent.appendChild(node);
+        }
+        return;
+      }
+      const nextSibling = anchor.nextElementSibling;
+      if (nextSibling === node) return;
+      if (!nextSibling) {
+        parent.appendChild(node);
+        return;
+      }
+      parent.insertBefore(node, nextSibling);
+    };
+
     let microSkillsTab = tabBar.querySelector('.history-tab[data-tab="micro-skills"]');
     if (!microSkillsTab) {
       microSkillsTab = document.createElement('div');
       microSkillsTab.className = 'history-tab';
-      microSkillsTab.textContent = '微型技能';
+      microSkillsTab.textContent = 'Skill 管理';
       microSkillsTab.dataset.tab = 'micro-skills';
-
-      const backupTab = tabBar.querySelector('.history-tab[data-tab="backup-settings"]');
-      if (backupTab) {
-        tabBar.insertBefore(microSkillsTab, backupTab);
-      } else {
-        tabBar.appendChild(microSkillsTab);
-      }
     }
+    microSkillsTab.textContent = 'Skill 管理';
+    moveNodeAfter(
+      tabBar,
+      microSkillsTab,
+      tabBar.querySelector('.history-tab[data-tab="prompt-settings"]')
+        || tabBar.querySelector('.history-tab[data-tab="history"]')
+    );
 
     let microSkillContent = tabContents.querySelector('.history-tab-content[data-tab="micro-skills"]');
     if (!microSkillContent) {
@@ -9687,14 +9704,13 @@ export function createChatHistoryUI(appContext) {
       microSkillContent.className = 'history-tab-content';
       microSkillContent.dataset.tab = 'micro-skills';
       microSkillContent.dataset.lazyReady = '0';
-
-      const backupContent = tabContents.querySelector('.history-tab-content[data-tab="backup-settings"]');
-      if (backupContent) {
-        tabContents.insertBefore(microSkillContent, backupContent);
-      } else {
-        tabContents.appendChild(microSkillContent);
-      }
     }
+    moveNodeAfter(
+      tabContents,
+      microSkillContent,
+      tabContents.querySelector('.history-tab-content[data-tab="prompt-settings"]')
+        || tabContents.querySelector('.history-tab-content[data-tab="history"]')
+    );
   }
 
   /**
@@ -10333,6 +10349,11 @@ export function createChatHistoryUI(appContext) {
       promptTab.textContent = '提示词设置';
       promptTab.dataset.tab = 'prompt-settings';
 
+      const microSkillsTab = document.createElement('div');
+      microSkillsTab.className = 'history-tab';
+      microSkillsTab.textContent = 'Skill 管理';
+      microSkillsTab.dataset.tab = 'micro-skills';
+
       const apiTab = document.createElement('div');
       apiTab.className = 'history-tab';
       apiTab.textContent = 'API 设置';
@@ -10360,6 +10381,7 @@ export function createChatHistoryUI(appContext) {
       
       tabBar.appendChild(historyTab);
       tabBar.appendChild(promptTab);
+      tabBar.appendChild(microSkillsTab);
       tabBar.appendChild(apiTab);
       tabBar.appendChild(settingsTab);
       tabBar.appendChild(galleryTab);
@@ -10525,6 +10547,11 @@ export function createChatHistoryUI(appContext) {
         promptSettingsContent.classList.remove('visible');
       }
 
+      const microSkillContent = document.createElement('div');
+      microSkillContent.className = 'history-tab-content';
+      microSkillContent.dataset.tab = 'micro-skills';
+      microSkillContent.dataset.lazyReady = '0';
+
       // API 设置标签内容（复用 sidebar.html 中的 DOM）
       const apiSettingsContent = dom.apiSettingsPanel;
       if (apiSettingsContent) {
@@ -10553,6 +10580,7 @@ export function createChatHistoryUI(appContext) {
       // 添加标签内容到容器
       tabContents.appendChild(historyContent);
       if (promptSettingsContent) tabContents.appendChild(promptSettingsContent);
+      tabContents.appendChild(microSkillContent);
       if (apiSettingsContent) tabContents.appendChild(apiSettingsContent);
       tabContents.appendChild(settingsContent);
       tabContents.appendChild(galleryContent);
