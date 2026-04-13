@@ -1132,6 +1132,43 @@ function buildMicroSkillApplyPatchSummaryText(result) {
   return `Success. Updated the following files:\n${lines.join('\n')}`;
 }
 
+function buildMicroSkillCreateTemplateSummaryText(result) {
+  const skillName = typeof result?.normalized_name === 'string' && result.normalized_name.trim()
+    ? result.normalized_name.trim()
+    : (typeof result?.skill?.name === 'string' ? result.skill.name.trim() : '(unknown)');
+  const revision = Number.isFinite(Number(result?.skill?.revision)) ? Number(result.skill.revision) : null;
+  const createdFiles = Array.isArray(result?.created_files)
+    ? result.created_files.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean)
+    : [];
+  const selectedResources = Array.isArray(result?.selected_resources)
+    ? result.selected_resources.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean)
+    : [];
+  const nextSteps = Array.isArray(result?.next_steps)
+    ? result.next_steps.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean)
+    : [];
+
+  const lines = [
+    `Created skill scaffold ${skillName}${revision ? ` (revision ${revision})` : ''}.`
+  ];
+  if (createdFiles.length > 0) {
+    lines.push('', 'Created files:');
+    for (const filePath of createdFiles) {
+      lines.push(`- ${filePath}`);
+    }
+  }
+  if (selectedResources.length > 0) {
+    lines.push('', `Selected resources: ${selectedResources.join(', ')}`);
+  }
+  lines.push('', `Examples created: ${result?.examples_created === true ? 'yes' : 'no'}`);
+  if (nextSteps.length > 0) {
+    lines.push('', 'Next steps:');
+    nextSteps.forEach((step, index) => {
+      lines.push(`${index + 1}. ${step}`);
+    });
+  }
+  return lines.join('\n');
+}
+
 function buildMicroSkillMutationSummaryText(result) {
   const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
   const action = typeof normalized.action === 'string' ? normalized.action.trim() : '';
@@ -1157,7 +1194,9 @@ function buildMicroSkillMutationSummaryText(result) {
       break;
     case 'create':
     case 'create_skill':
-      summary = `Created skill ${skillName || '(unknown)'}${revision ? ` (revision ${revision})` : ''}${totalFiles ? ` with ${totalFiles} files` : ''}.`;
+      summary = normalized.create_mode === 'template'
+        ? buildMicroSkillCreateTemplateSummaryText(normalized)
+        : `Created skill ${skillName || '(unknown)'}${revision ? ` (revision ${revision})` : ''}${totalFiles ? ` with ${totalFiles} files` : ''}.`;
       break;
     case 'update':
       summary = `Updated skill ${skillName || '(unknown)'}${revision ? ` to revision ${revision}` : ''}.`;

@@ -104,6 +104,35 @@ test('skill_registry search_files 摘要会优先显示 action、pattern 和技�
   });
 });
 
+test('skill_registry create_skill 摘要会显示创建模板动作与技能名', async () => {
+  const { buildMicroSkillRegistrySummaryParts, buildMicroSkillRegistryPrimaryText } = await loadModule();
+
+  const record = {
+    type: 'function_call',
+    name: 'skill_registry',
+    arguments: JSON.stringify({
+      action: 'create_skill',
+      skill: {
+        name: 'DOM Probe Template',
+        description: '读取页面标题和链接',
+        match: ['https://*.example.com/*']
+      }
+    })
+  };
+
+  const parts = buildMicroSkillRegistrySummaryParts(record);
+  assert.deepEqual(parts, {
+    action: '创建技能模板',
+    value: 'DOM Probe Template',
+    valueUrl: '',
+    meta: '',
+    locationAction: '',
+    locationValue: '',
+    locationUrl: ''
+  });
+  assert.equal(buildMicroSkillRegistryPrimaryText(record), '创建技能模板 DOM Probe Template');
+});
+
 test('skill_registry mount_on_current_page 摘要会显示当前页挂载动作与技能名', async () => {
   const { buildMicroSkillRegistrySummaryParts, buildMicroSkillRegistryPrimaryText } = await loadModule();
 

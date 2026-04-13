@@ -30,6 +30,7 @@ import {
   buildMicroSkillUnmountFromCurrentPageSource
 } from './micro_skill_runtime.js';
 import { createIndexedDbMicroSkillStore } from '../storage/micro_skill_store.js';
+import { buildSkillScaffoldInput, buildSkillScaffoldNextSteps } from '../agent_tools/skill_scaffold.js';
 
 function normalizeTabId(value) {
   const numeric = Number(value);
@@ -513,7 +514,24 @@ export function createMicroSkillManager(options = {}) {
   }
 
   async function createSkill(skillInput, options = {}) {
-    const nextRecord = buildStoredMicroSkillRecord(skillInput, null);
+    const createMode = options?.createMode === 'template' ? 'template' : 'package_compat';
+    const requestedName = createMode === 'template'
+      ? String(skillInput?.requested_name || '').trim()
+      : '';
+    const scaffoldedInput = createMode === 'template'
+      ? buildSkillScaffoldInput({
+          skillName: skillInput?.name,
+          description: skillInput?.description,
+          displayName: skillInput?.interface?.display_name,
+          shortDescription: skillInput?.interface?.short_description,
+          defaultPrompt: skillInput?.interface?.default_prompt,
+          match: skillInput?.match,
+          enabled: skillInput?.enabled === true,
+          resources: skillInput?.resources,
+          examples: skillInput?.examples === true
+        })
+      : skillInput;
+    const nextRecord = buildStoredMicroSkillRecord(scaffoldedInput, null);
     if (getBuiltinMicroSkillRecord(nextRecord.name)) {
       throw new Error(`技能 ${nextRecord.name} 是内置保留名称，不能 create。`);
     }
@@ -524,6 +542,29 @@ export function createMicroSkillManager(options = {}) {
     await saveStoredMicroSkillPackage(nextRecord, store);
     if (nextRecord.enabled && nextRecord.kind === 'page_runtime') {
       await registerSkillRecord(nextRecord);
+    }
+    if (createMode === 'template') {
+      const createdFiles = Array.isArray(nextRecord.files)
+        ? nextRecord.files.map((file) => file.path)
+        : [];
+      return {
+        ok: true,
+        action: 'create_skill',
+        create_mode: 'template',
+        requested_name: requestedName || nextRecord.name,
+        normalized_name: nextRecord.name,
+        created_files: createdFiles,
+        selected_resources: Array.isArray(skillInput?.resources) ? [...skillInput.resources] : [],
+        examples_created: skillInput?.examples === true,
+        next_steps: buildSkillScaffoldNextSteps({
+          enabled: nextRecord.enabled === true,
+          resources: skillInput?.resources,
+          examples: skillInput?.examples === true
+        }),
+        skill: buildMicroSkillSummary(nextRecord),
+        refreshed_current_document: false,
+        refresh_result: null
+      };
     }
     return {
       ok: true,
@@ -753,7 +794,10 @@ export function createMicroSkillManager(options = {}) {
         };
       }
       case 'create_skill':
-        return await createSkill(normalizedArgs.skill, { tabId: options?.tabId });
+        return await createSkill(normalizedArgs.skill, {
+          tabId: options?.tabId,
+          createMode: normalizedArgs.create_mode
+        });
       case 'update':
         return await updateSkill(normalizedArgs.skill, { tabId: options?.tabId });
       case 'apply_patch':

@@ -88,6 +88,20 @@ function buildSkillInput(name = 'dom-probe') {
   };
 }
 
+function buildCreateTemplateInput(name = 'DOM Probe') {
+  return {
+    name,
+    description: '读取页面标题和链接',
+    interface: {
+      short_description: '读取当前页面标题和 URL',
+      default_prompt: 'Read the current page title and URL.'
+    },
+    match: ['https://*.example.com/*'],
+    resources: ['references'],
+    examples: true
+  };
+}
+
 function buildLongSkillInput(name = 'long-dom-probe') {
   const instructionLines = Array.from({ length: 40 }, (_, index) => `Line ${index + 1}: ${'B'.repeat(360)}`);
   return {
@@ -332,6 +346,85 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   assert.equal(removed.ok, true);
   assert.equal(calls.unregister.length, 3);
   assert.equal(calls.execute.length, 11);
+});
+
+test('模板式 create_skill 默认禁用且不会自动 refresh 当前文档', async () => {
+  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+
+  const calls = {
+    register: [],
+    execute: []
+  };
+  const manager = createMicroSkillManager({
+    store: createMockStore(),
+    userScriptsApi: {
+      async getScripts() { return []; },
+      async register(definitions) { calls.register.push(clone(definitions)); },
+      async update() {},
+      async unregister() {}
+    },
+    tabsApi: {
+      async get(tabId) {
+        return {
+          id: tabId,
+          url: 'https://app.example.com/path',
+          title: 'Example'
+        };
+      }
+    },
+    jsRuntimeManager: {
+      async execute(request) {
+        calls.execute.push(clone(request));
+        return {
+          ok: true,
+          tabId: request.tabId,
+          value: { mounted: true },
+          logs: [],
+          items: []
+        };
+      }
+    }
+  });
+
+  const created = await manager.executeRegistryAction({
+    action: 'create_skill',
+    skill: buildCreateTemplateInput('DOM Probe Template')
+  }, { tabId: 11 });
+  assert.equal(created.ok, true);
+  assert.equal(created.create_mode, 'template');
+  assert.equal(created.requested_name, 'DOM Probe Template');
+  assert.equal(created.normalized_name, 'dom-probe-template');
+  assert.equal(created.skill.enabled, false);
+  assert.equal(created.refreshed_current_document, false);
+  assert.equal(created.refresh_result, null);
+  assert.deepEqual(created.selected_resources, ['references']);
+  assert.equal(created.examples_created, true);
+  assert.equal(Array.isArray(created.created_files), true);
+  assert.equal(created.created_files.includes('SKILL.md'), true);
+  assert.equal(created.created_files.includes('src/main.js'), true);
+  assert.equal(created.created_files.includes('src/helpers/dom.js'), true);
+  assert.equal(created.created_files.includes('references/api_reference.md'), true);
+  assert.equal(Array.isArray(created.next_steps), true);
+  assert.equal(created.next_steps.some((line) => /enable_skill/.test(line)), true);
+  assert.equal(calls.register.length, 0);
+  assert.equal(calls.execute.length, 0);
+
+  const instruction = await manager.executeRegistryAction({
+    action: 'read_file',
+    skill_name: 'dom-probe-template',
+    file_path: 'SKILL.md'
+  }, { tabId: 11 });
+  assert.equal(instruction.ok, true);
+  assert.match(instruction.skill.file.content, /## Inputs/);
+  assert.match(instruction.skill.file.content, /\$invoke\("dom-probe-template", "readSummary"\)/);
+
+  const manifest = await manager.executeRegistryAction({
+    action: 'read_file',
+    skill_name: 'dom-probe-template',
+    file_path: 'manifest.json'
+  }, { tabId: 11 });
+  assert.equal(manifest.ok, true);
+  assert.match(manifest.skill.file.content, /"enabled": false/);
 });
 
 test('mount_on_current_page 只挂载指定技能并返回当前页 active skills', async () => {

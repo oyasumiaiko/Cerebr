@@ -91,6 +91,20 @@ function buildSkillInput(name = 'dom-probe') {
   };
 }
 
+function buildCreateTemplateInput(name = 'DOM Probe') {
+  return {
+    name,
+    description: '读取页面标题和链接',
+    interface: {
+      short_description: '读取当前页面标题和 URL',
+      default_prompt: 'Read the current page title and URL.'
+    },
+    match: ['https://*.example.com/*'],
+    resources: ['references'],
+    examples: true
+  };
+}
+
 function buildLongSkillInput(name = 'long-dom-probe') {
   const instructionLines = Array.from({ length: 40 }, (_, index) => `Line ${index + 1}: ${'A'.repeat(400)}`);
   const instructionContent = `# Long DOM Probe\n\n${instructionLines.join('\n')}\n`;
@@ -241,17 +255,33 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
   assert.match(definition.parameters.properties.action.description, /mount_on_current_page/);
   assert.doesNotMatch(definition.parameters.properties.action.description, /read_file/);
   assert.doesNotMatch(definition.parameters.properties.action.description, /apply_patch/);
+  assert.equal(definition.parameters.properties.skill.required.includes('name'), true);
+  assert.equal(definition.parameters.properties.skill.required.includes('match'), true);
+  assert.equal(definition.parameters.properties.skill.properties.resources.items.enum.includes('references'), true);
 
   const normalizedCreate = normalizeMicroSkillRegistryToolArguments({
     action: 'create',
-    skill: buildSkillInput()
+    skill: buildCreateTemplateInput()
   });
   assert.equal(normalizedCreate.original_action, 'create');
   assert.equal(normalizedCreate.action, 'create_skill');
+  assert.equal(normalizedCreate.create_mode, 'template');
   assert.equal(normalizedCreate.deprecated_compat_action, false);
+  assert.equal(normalizedCreate.skill.requested_name, 'DOM Probe');
   assert.equal(normalizedCreate.skill.name, 'dom-probe');
-  assert.equal(normalizedCreate.skill.instruction.path, 'SKILL.md');
-  assert.equal(normalizedCreate.skill.files.length, 3);
+  assert.equal(normalizedCreate.skill.interface.display_name, 'Dom Probe');
+  assert.equal(normalizedCreate.skill.enabled, false);
+  assert.deepEqual(normalizedCreate.skill.resources, ['references']);
+  assert.equal(normalizedCreate.skill.examples, true);
+
+  const normalizedCompatCreate = normalizeMicroSkillRegistryToolArguments({
+    action: 'create_skill',
+    skill: buildSkillInput()
+  });
+  assert.equal(normalizedCompatCreate.create_mode, 'package_compat');
+  assert.equal(normalizedCompatCreate.deprecated_compat_action, true);
+  assert.equal(normalizedCompatCreate.skill.instruction.path, 'SKILL.md');
+  assert.equal(normalizedCompatCreate.skill.files.length, 3);
 
   const normalizedListFiles = normalizeMicroSkillRegistryToolArguments({
     action: 'list_files',
@@ -345,6 +375,18 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
       file_path: 'src/helpers/dom.js'
     }),
     /不支持的 action `read_source_file`/
+  );
+
+  assert.throws(
+    () => normalizeMicroSkillRegistryToolArguments({
+      action: 'create_skill',
+      skill: {
+        ...buildCreateTemplateInput('Need Examples'),
+        resources: [],
+        examples: true
+      }
+    }),
+    /examples=true 时必须同时提供/
   );
 
   const normalizedApplyPatch = normalizeMicroSkillRegistryToolArguments({

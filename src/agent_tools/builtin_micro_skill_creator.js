@@ -1,3 +1,5 @@
+import { buildSkillScaffoldFiles } from './skill_scaffold.js';
+
 export const BUILTIN_MICRO_SKILL_CREATOR_NAME = 'skill-creator';
 
 function buildSkillCreatorInstruction() {
@@ -49,11 +51,21 @@ function buildSkillCreatorInstruction() {
     '',
     '## 推荐工作流',
     '1. 先 `skill_registry(action="list")` 看是否已有类似 skill；如果是更新，先 `list_files(target={kind:"skill",name})` / `search_files(target={kind:"skill",name})` 找目标，再 `read_file(target={kind:"skill",name}, file_path="SKILL.md")` 和必要的源码文件了解现状。',
-    '2. 创建新 skill 时，先定 metadata：`name`、`description`、`interface.*`、`match`、`instruction.path`、`runtime.entry_path`。',
-    '3. 先建一个最小可工作的文件包，再继续拆 helper；不要一开始就过度设计。',
+    '2. 创建新 skill 时，不要手工拼整包 files。先调用 `skill_registry(action="create_skill", skill={...})` 生成标准模板骨架。',
+    '3. scaffold 创建完成后，再用顶层 `read_file` / `apply_patch` 精确修改 `SKILL.md`、`src/main.js`、`src/helpers/dom.js` 和 `manifest.json`。',
     '4. 如果只是改一两个 helper，优先 `search_files` + `read_file` + `apply_patch`，不要整体覆写全部文件。',
     '5. 需要新增文件时，也统一使用 `apply_patch` 的 `*** Add File:`；需要修改 metadata 时，直接 patch `manifest.json`。',
-    '6. 改完后，如果当前会话绑定了宿主页且这个 skill 应该立即生效，再 `skill_registry(action="mount_on_current_page", skill_name="<skill-name>")`。',
+    '6. 改完后，仅在需要时再 `enable_skill` / `mount_on_current_page`，不要把占位模板直接挂到当前页。',
+    '',
+    '## create_skill 模板入口参数',
+    '- `name`：必填，输入名可以带空格或大写；系统会自动归一化成 hyphen-case 稳定 key。',
+    '- `description`：必填，写“什么时候该触发这个 skill”，不是实现细节。',
+    '- `match[]`：必填，page runtime skill 的 URL 范围。',
+    '- `interface.display_name` / `short_description` / `default_prompt`：可选；不填时会自动补默认值。',
+    '- `enabled`：可选，默认 `false`。推荐先保持禁用，补完模板后再启用。',
+    '- `resources`：可选，只支持 `scripts` / `references` / `assets`。',
+    '- `examples`：可选；为 `true` 时会给已选 resources 生成示例文件，且必须先提供 `resources`。',
+    '- 返回值会带 `created_files` 与 `next_steps`；创建后按这些 next steps 继续 patch，而不是重新 handcraft 整包。 ',
     '',
     '## 什么时候该拆文件',
     '- 同一个文件同时承担“选 DOM + 解析文本 + 点击动作 + 导出接口”时，应该拆。',
@@ -96,10 +108,11 @@ function buildSkillCreatorInstruction() {
     '## 当你需要真正创建或更新 skill 时的推荐顺序',
     '1. 先 `read_file(target={kind:"skill",name:"skill-creator"}, file_path="SKILL.md")`，确认工作流和字段职责。',
     '2. 如果是修改已有 skill，再读目标 skill 的 `SKILL.md`，必要时读相关 `read_file`。',
-    '3. 若只是修改局部逻辑，优先 `search_files(target={kind:"skill",name}, ...)` -> `read_file(target={kind:"skill",name}, include_line_numbers=true)` -> `apply_patch(target={kind:"skill",name}, ...)`。',
-    '4. 需要新增文件、修改已有文件，或调整 `manifest.json` 时，统一继续使用顶层 `apply_patch`；skill lifecycle 动作用 `skill_registry`，不要把文件编辑塞回 registry。',
-    '5. 创建全新 skill 时，用 `skill_registry(action="create_skill", skill=...)` 做 bootstrap；删除、启停也分别用 `delete_skill` / `enable_skill` / `disable_skill`。',
-    '6. 改完仅在需要时 `mount_on_current_page`，不要无意义挂载。',
+    '3. 若是新建 skill，先调用 `skill_registry(action="create_skill", skill={ name, description, match, interface?, resources?, examples? })` 生成模板。',
+    '4. 模板生成后，按返回的 `next_steps` 继续：优先 `read_file(target={kind:"skill",name}, file_path="SKILL.md")`，再 patch runtime / helper / manifest。',
+    '5. 若只是修改局部逻辑，优先 `search_files(target={kind:"skill",name}, ...)` -> `read_file(target={kind:"skill",name}, include_line_numbers=true)` -> `apply_patch(target={kind:"skill",name}, ...)`。',
+    '6. 需要新增文件、修改已有文件，或调整 `manifest.json` 时，统一继续使用顶层 `apply_patch`；skill lifecycle 动作用 `skill_registry`，不要把文件编辑塞回 registry。',
+    '7. 删除、启停分别用 `delete_skill` / `enable_skill` / `disable_skill`；改完仅在需要时 `mount_on_current_page`。',
     '',
     '## 判断一个 skill 是否“做对了”',
     '- summary 足够短，但能让模型知道何时该触发它。',
@@ -111,41 +124,20 @@ function buildSkillCreatorInstruction() {
 }
 
 function buildSkillCreatorTemplateFiles() {
-  return [
-    {
-      path: 'template/src/main.js',
-      kind: 'template',
-      content: [
-        '// 入口文件应当尽量薄：负责组织 helper、导出最终 methods。',
-        '// 约定：helper 文件使用异步 require，而不是把所有逻辑堆进一个文件。',
-        '',
-        'const dom = await require("./helpers/dom.js");',
-        '',
-        'return {',
-        '  readSummary() {',
-        '    return {',
-        '      title: dom.readTitle(),',
-        '      href: location.href',
-        '    };',
-        '  }',
-        '};'
-      ].join('\n')
-    },
-    {
-      path: 'template/src/helpers/dom.js',
-      kind: 'template',
-      content: [
-        '// helper 文件负责脆弱的 DOM 选择器和可复用读取逻辑。',
-        '// 这样页面结构变化时，只需要局部读取/修改这个文件。',
-        '',
-        'module.exports = {',
-        '  readTitle() {',
-        '    return document.title;',
-        '  }',
-        '};'
-      ].join('\n')
-    }
-  ];
+  return buildSkillScaffoldFiles({
+    pathPrefix: 'template',
+    skillName: 'example-page-skill',
+    displayName: 'Example Page Skill',
+    description: 'Read or control a specific web page workflow without guessing brittle DOM details.',
+    shortDescription: '示例页面 skill 模板',
+    defaultPrompt: 'Read the current page state for the example page skill.',
+    match: ['https://example.com/*'],
+    resources: ['scripts', 'references', 'assets'],
+    examples: true
+  }).map((file) => ({
+    ...file,
+    kind: 'template'
+  }));
 }
 
 export function buildBuiltinSkillCreatorRecord() {

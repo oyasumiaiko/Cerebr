@@ -107,36 +107,8 @@ function buildSkillInput(urlString) {
       default_prompt: 'Read the current example.com page title.'
     },
     match: [`${url.origin}/*`],
-    enabled: true,
-    instruction: {
-      path: 'SKILL.md'
-    },
-    runtime: {
-      entry_path: 'src/main.js'
-    },
-    files: [
-      {
-        path: 'SKILL.md',
-        content: [
-          '# Example DOM Skill',
-          '',
-          '用于 smoke：读取 example.com 页面的 title 与 href。'
-        ].join('\n')
-      },
-      {
-        path: 'src/main.js',
-        content: [
-          'return {',
-          '  readSummary() {',
-          '    return {',
-          '      title: document.title,',
-          '      href: location.href',
-          '    };',
-          '  }',
-          '};'
-        ].join('\n')
-      }
-    ]
+    resources: ['references'],
+    examples: true
   };
 }
 
@@ -264,7 +236,21 @@ async function main() {
     if (!created?.success || created?.ok !== true) {
       throw new Error(`create_skill failed: ${JSON.stringify(created)}`);
     }
+    if (created?.create_mode !== 'template') {
+      throw new Error(`expected template create_mode, got: ${JSON.stringify(created)}`);
+    }
+    if (created?.skill?.enabled !== false) {
+      throw new Error(`expected created template to stay disabled by default: ${JSON.stringify(created)}`);
+    }
+    if (created?.refreshed_current_document !== false) {
+      throw new Error(`template create should not refresh current document: ${JSON.stringify(created)}`);
+    }
     result.createdSkill = created?.skill?.name || skillName;
+    result.createResult = {
+      createMode: created?.create_mode || '',
+      createdFiles: Array.isArray(created?.created_files) ? created.created_files : [],
+      nextSteps: Array.isArray(created?.next_steps) ? created.next_steps : []
+    };
     result.steps.push('skill_created');
 
     await waitFor(async () => {
@@ -304,6 +290,22 @@ async function main() {
     result.steps.push('skill_source_loaded');
 
     await sidebarFrame.locator('body').screenshot({ path: path.join(outputDir, 'skill-viewer.png') });
+
+    const enabledState = await sidebarFrame.evaluate(async (skillNameValue) => {
+      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      return await chrome.runtime.sendMessage({
+        type: 'MICRO_SKILL_REGISTRY_ACTION',
+        tabId: typeof tab?.id === 'number' ? tab.id : null,
+        payload: {
+          action: 'enable_skill',
+          skill_name: skillNameValue
+        }
+      });
+    }, skillName);
+    if (!enabledState?.success || enabledState?.ok !== true || enabledState?.skill?.enabled !== true) {
+      throw new Error(`enable_skill failed: ${JSON.stringify(enabledState)}`);
+    }
+    result.steps.push('skill_enabled');
 
     const remountButton = sidebarFrame.getByRole('button', { name: '在当前页重挂载' });
     await remountButton.click();

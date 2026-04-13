@@ -298,6 +298,43 @@ test('buildResponsesMicroSkillRegistryToolOutputContentItems 会把 apply_patch 
   assert.doesNotMatch(text, /"match": \[/);
 });
 
+test('buildResponsesMicroSkillRegistryToolOutputContentItems 会把模板式 create_skill 渲染成脚手架摘要与 next steps', async () => {
+  const { buildResponsesMicroSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesMicroSkillRegistryToolOutputContentItems({
+    ok: true,
+    action: 'create_skill',
+    create_mode: 'template',
+    normalized_name: 'worldquant-dom-helper',
+    created_files: [
+      'SKILL.md',
+      'src/main.js',
+      'src/helpers/dom.js',
+      'references/api_reference.md'
+    ],
+    selected_resources: ['references'],
+    examples_created: true,
+    next_steps: [
+      'Edit SKILL.md to replace the TODO sections with real trigger rules, inputs, examples, and workflow.',
+      'When the scaffold is ready, call enable_skill and then mount_on_current_page only if immediate verification is needed.'
+    ],
+    skill: {
+      name: 'worldquant-dom-helper',
+      revision: 1
+    },
+    refreshed_current_document: false,
+    refresh_result: null
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /Created skill scaffold worldquant-dom-helper/);
+  assert.match(text, /Created files:/);
+  assert.match(text, /- SKILL\.md/);
+  assert.match(text, /Selected resources: references/);
+  assert.match(text, /Examples created: yes/);
+  assert.match(text, /Next steps:/);
+  assert.match(text, /1\. Edit SKILL\.md/);
+  assert.doesNotMatch(text, /Mounted on current document:/);
+});
+
 test('buildResponsesMicroSkillRegistryToolOutputContentItems 只把真实 active skills 渲染为 mounted', async () => {
   const { buildResponsesMicroSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesMicroSkillRegistryToolOutputContentItems({

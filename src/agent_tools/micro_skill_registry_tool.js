@@ -18,6 +18,12 @@ import {
   PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS,
   PAGE_CONTENT_READ_MAX_CHARS
 } from './page_content_read_tool.js';
+import {
+  buildDefaultMicroSkillMountContract as buildSharedDefaultMicroSkillMountContract,
+  normalizeSkillScaffoldName,
+  SKILL_SCAFFOLD_ALLOWED_RESOURCES,
+  titleCaseSkillName
+} from './skill_scaffold.js';
 
 export const SKILL_REGISTRY_TOOL_NAME = 'skill_registry';
 export const LEGACY_MICRO_SKILL_REGISTRY_TOOL_NAME = 'micro_skill_registry';
@@ -50,6 +56,10 @@ function normalizeString(value) {
 function normalizeOptionalString(value) {
   const text = normalizeString(value);
   return text || null;
+}
+
+function normalizeSingleLineText(value) {
+  return (typeof value === 'string') ? value.replace(/\s+/g, ' ').trim() : '';
 }
 
 function normalizeBoolean(value, fallback = false) {
@@ -196,10 +206,13 @@ export function inferMicroSkillFileKindForPath(filePath, options = {}) {
   if (pathStartsWithAnyPrefix(normalizedPath, ['ui/', 'meta/', 'metadata/'])) {
     return MICRO_SKILL_FILE_KIND_UI_METADATA;
   }
+  if (explicitKind) {
+    return explicitKind;
+  }
   if (isMicroSkillRuntimeSourcePath(normalizedPath)) {
     return MICRO_SKILL_FILE_KIND_RUNTIME_SOURCE;
   }
-  return explicitKind || MICRO_SKILL_FILE_KIND_REFERENCE;
+  return MICRO_SKILL_FILE_KIND_REFERENCE;
 }
 
 function normalizeMicroSkillInterface(rawInterface, fallbackDescription = '') {
@@ -208,6 +221,68 @@ function normalizeMicroSkillInterface(rawInterface, fallbackDescription = '') {
     display_name: normalizeOptionalString(input.display_name),
     short_description: normalizeOptionalString(input.short_description) || normalizeOptionalString(fallbackDescription),
     default_prompt: normalizeOptionalString(input.default_prompt)
+  };
+}
+
+function buildMicroSkillCreateTemplateInterface(rawInterface, description, normalizedName) {
+  const input = ensurePlainObject(rawInterface);
+  const displayName = normalizeSingleLineText(input.display_name) || titleCaseSkillName(normalizedName);
+  const shortDescription = normalizeSingleLineText(input.short_description) || description;
+  const defaultPrompt = normalizeSingleLineText(input.default_prompt) || null;
+  return {
+    display_name: displayName,
+    short_description: shortDescription,
+    default_prompt: defaultPrompt
+  };
+}
+
+function normalizeMicroSkillCreateTemplateResources(rawResources) {
+  const values = Array.isArray(rawResources) ? rawResources : [];
+  const normalized = [];
+  const seen = new Set();
+  for (const value of values) {
+    const resource = normalizeString(value).toLowerCase();
+    if (!resource) continue;
+    if (!SKILL_SCAFFOLD_ALLOWED_RESOURCES.includes(resource)) {
+      throw new Error(`skill_registry 参数错误：create_skill.resources 不支持 \`${value}\`，只允许 ${SKILL_SCAFFOLD_ALLOWED_RESOURCES.join(', ')}。`);
+    }
+    if (seen.has(resource)) continue;
+    seen.add(resource);
+    normalized.push(resource);
+  }
+  return normalized;
+}
+
+function normalizeMicroSkillCreateTemplateInput(rawSkill) {
+  const skill = ensurePlainObject(rawSkill);
+  const requestedName = normalizeString(skill.name);
+  if (!requestedName) {
+    throw new Error('skill_registry 参数错误：create_skill.skill.name 不能为空。');
+  }
+  const normalizedName = normalizeSkillScaffoldName(requestedName);
+  if (!normalizedName) {
+    throw new Error('skill_registry 参数错误：create_skill.skill.name 归一化后不能为空。');
+  }
+  const safeName = normalizeMicroSkillName(normalizedName);
+  const description = normalizeSingleLineText(skill.description);
+  if (!description) {
+    throw new Error('skill_registry 参数错误：create_skill.skill.description 不能为空。');
+  }
+  const resources = normalizeMicroSkillCreateTemplateResources(skill.resources);
+  const examples = normalizeBoolean(skill.examples, false);
+  if (examples && resources.length <= 0) {
+    throw new Error('skill_registry 参数错误：create_skill.skill.examples=true 时必须同时提供 create_skill.skill.resources。');
+  }
+  return {
+    kind: MICRO_SKILL_KIND_PAGE_RUNTIME,
+    requested_name: requestedName,
+    name: safeName,
+    description,
+    interface: buildMicroSkillCreateTemplateInterface(skill.interface, description, safeName),
+    match: normalizeMicroSkillMatchPatterns(skill.match, { allowEmpty: false }),
+    enabled: normalizeBoolean(skill.enabled, false),
+    resources,
+    examples
   };
 }
 
@@ -761,17 +836,7 @@ function normalizeMicroSkillRuntime(rawRuntime, files, kind) {
  * 这不是单独字段存储，而是用于生成默认 SKILL.md/内置指导文案时的公共片段。
  */
 export function buildDefaultMicroSkillMountContract() {
-  return [
-    'Recommended helpers: `globalThis.$skill(name)`, `globalThis.$invoke(skillName, methodName, ...args)`, `globalThis.$methods(name)`.',
-    '`$skill(name)` returns mounted exports or `null`.',
-    '`$methods(name)` returns the callable top-level method names exposed by the mounted exports.',
-    '`$invoke(skillName, methodName, ...args)` calls a mounted top-level method with clearer parameter boundaries.',
-    'Compatibility runtime registry: `globalThis.__cerebrMicroSkills`.',
-    'Runtime source files run as async CommonJS-like bodies with `ctx`, `module`, `exports`, `require` available.',
-    '`require()` is async in this runtime, so helper imports should use `await require("./helper.js")`.',
-    'Entry file can `return { methods... }`, or assign `module.exports = { ... }`; advanced style: call `ctx.mount(exports)` manually.',
-    'If a mounted exports object exposes `dispose()`, Cerebr may call it before unmount / remount.'
-  ].join('\n');
+  return buildSharedDefaultMicroSkillMountContract();
 }
 
 /**
@@ -1365,10 +1430,10 @@ export async function listMatchingStoredMicroSkillPackagesForUrl(url, store = nu
   return packages.filter(Boolean);
 }
 
-function buildMicroSkillRecordInputSchemaDescription() {
+function buildMicroSkillFullPackageInputSchemaDescription() {
   return {
     type: ['object', 'null'],
-    description: 'create_skill 时使用的完整 skill package 对象。',
+    description: '旧兼容层使用的完整 skill package 对象；新模型默认不应再手工拼整包 files。',
     additionalProperties: false,
     properties: {
       name: { type: 'string' },
@@ -1416,6 +1481,58 @@ function buildMicroSkillRecordInputSchemaDescription() {
       }
     },
     required: ['name', 'description', 'instruction', 'files']
+  };
+}
+
+function buildMicroSkillCreateTemplateInputSchemaDescription() {
+  return {
+    type: ['object', 'null'],
+    description: [
+      'create_skill 时使用的模板脚手架参数。',
+      '它会生成标准 SKILL.md / src/main.js / src/helpers/dom.js，后续再用 read_file / apply_patch 继续修改。'
+    ].join(' '),
+    additionalProperties: false,
+    properties: {
+      name: {
+        type: 'string',
+        description: '必填。skill 的显示输入名；系统会自动归一化成 hyphen-case 稳定 key。'
+      },
+      description: {
+        type: 'string',
+        description: '必填。写清什么时候该触发这个 skill。'
+      },
+      interface: {
+        type: ['object', 'null'],
+        additionalProperties: false,
+        properties: {
+          display_name: { type: ['string', 'null'] },
+          short_description: { type: ['string', 'null'] },
+          default_prompt: { type: ['string', 'null'] }
+        }
+      },
+      match: {
+        type: 'array',
+        description: '必填。page runtime skill 的 URL 匹配范围。',
+        items: { type: 'string' }
+      },
+      enabled: {
+        type: ['boolean', 'null'],
+        description: '可选。默认 false；建议先创建模板、补完文件后再启用。'
+      },
+      resources: {
+        type: 'array',
+        description: '可选。预留资源类型，只支持 scripts / references / assets。',
+        items: {
+          type: 'string',
+          enum: [...SKILL_SCAFFOLD_ALLOWED_RESOURCES]
+        }
+      },
+      examples: {
+        type: ['boolean', 'null'],
+        description: '可选。为选中的 resources 生成示例文件；若为 true，resources 不能为空。'
+      }
+    },
+    required: ['name', 'description', 'match']
   };
 }
 
@@ -1475,7 +1592,7 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
           type: ['string', 'null'],
           description: '目标 skill 的稳定 key。对 create_skill 不需要；delete_skill、enable_skill、disable_skill、mount_on_current_page 以及兼容层旧 action 作用于单个 skill 时使用。'
         },
-        skill: buildMicroSkillRecordInputSchemaDescription()
+        skill: buildMicroSkillCreateTemplateInputSchemaDescription()
       },
       required: ['action']
     }
@@ -1587,15 +1704,23 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
     };
   }
 
-  if (action === 'create_skill' || action === 'update') {
+  if (action === 'create_skill') {
+    const rawSkill = ensurePlainObject(args.skill);
+    const isFullPackageCompat = Array.isArray(rawSkill.files)
+      || Array.isArray(rawSkill.files_meta)
+      || !!rawSkill.instruction
+      || !!rawSkill.runtime;
     return {
       original_action: originalAction || action,
       action,
       skill_name: null,
-      skill: normalizeMicroSkillInput(args.skill, {
-        requireFiles: true,
-        requireContent: true
-      }),
+      skill: isFullPackageCompat
+        ? normalizeMicroSkillInput(rawSkill, {
+            requireFiles: true,
+            requireContent: true
+          })
+        : normalizeMicroSkillCreateTemplateInput(rawSkill),
+      create_mode: isFullPackageCompat ? 'package_compat' : 'template',
       file_path: null,
       file: null,
       patch: null,
@@ -1608,7 +1733,35 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
       read_options: null,
       include_line_numbers: false,
-      deprecated_compat_action: action === 'update',
+      deprecated_compat_action: isFullPackageCompat,
+      next_instruction_path: null,
+      next_runtime_entry_path: null
+    };
+  }
+
+  if (action === 'update') {
+    return {
+      original_action: originalAction || action,
+      action,
+      skill_name: null,
+      skill: normalizeMicroSkillInput(args.skill, {
+        requireFiles: true,
+        requireContent: true
+      }),
+      create_mode: null,
+      file_path: null,
+      file: null,
+      patch: null,
+      pattern: null,
+      regex: false,
+      case_mode: 'smart',
+      path_glob: null,
+      context_before: 0,
+      context_after: 0,
+      max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
+      read_options: null,
+      include_line_numbers: false,
+      deprecated_compat_action: true,
       next_instruction_path: null,
       next_runtime_entry_path: null
     };

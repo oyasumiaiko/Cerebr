@@ -64,6 +64,8 @@ function resolveMicroSkillActionLabel(action, options = {}) {
   const normalizedAction = normalizeSummaryText(action).toLowerCase();
   const isInProgress = options?.isInProgress === true;
   switch (normalizedAction) {
+    case 'create':
+      return isInProgress ? '正在创建技能模板' : '创建技能模板';
     case 'list':
       return isInProgress ? '正在查看技能列表' : '查看技能列表';
     case 'list_files':
@@ -77,7 +79,7 @@ function resolveMicroSkillActionLabel(action, options = {}) {
     case 'read_file':
       return isInProgress ? '正在读取文件' : '读取文件';
     case 'create_skill':
-      return isInProgress ? '正在创建技能' : '创建技能';
+      return isInProgress ? '正在创建技能模板' : '创建技能模板';
     case 'update':
       return isInProgress ? '正在更新技能' : '更新技能';
     case 'delete_file':
@@ -122,6 +124,7 @@ function buildMicroSkillRegistryTargetParts(args, options = {}) {
     case 'read_detail':
     case 'read_package':
     case 'create_skill':
+    case 'create':
     case 'update':
     case 'delete_skill':
     case 'enable_skill':
