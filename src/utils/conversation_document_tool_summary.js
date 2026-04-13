@@ -58,7 +58,7 @@ export function getVirtualFileToolTypeLabel(record) {
   if (!isVirtualFileToolCall(record)) return '';
   const args = parseArgumentsObject(record?.arguments);
   const target = resolveVirtualFileTarget(args);
-  return target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文档';
+  return target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能' : '文档';
 }
 
 export function buildVirtualFileSummaryParts(record, options = {}) {

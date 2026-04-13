@@ -2200,7 +2200,7 @@ export function createMessageProcessor(appContext) {
   function getResponseToolCallTypeLabel(record) {
     const type = String(record?.type || '').toLowerCase();
     if (type === 'web_search_call') return '搜索';
-    if (type === 'code_interpreter_call') return '代码解释器';
+    if (type === 'code_interpreter_call') return '代码';
     if (isResponseActivityJsRuntimeEntry(record)) return 'JS';
     if (isResponseActivityConversationDocumentEntry(record)) return getVirtualFileToolTypeLabel(record);
     if (isResponseActivityMicroSkillRegistryEntry(record)) return getMicroSkillRegistryToolTypeLabel(record);

@@ -8,7 +8,7 @@ async function loadModule() {
   return import(pathToFileURL(modulePath).href);
 }
 
-test('顶层 read_file 在 skill target 下会显示技能文件摘要', async () => {
+test('顶层 read_file 在 skill target 下会显示简短技能类别摘要', async () => {
   const {
     buildVirtualFileSummaryParts,
     buildVirtualFilePrimaryText,
@@ -38,7 +38,7 @@ test('顶层 read_file 在 skill target 下会显示技能文件摘要', async (
     locationUrl: ''
   });
   assert.equal(buildVirtualFilePrimaryText(record), '读取文件 src/helpers/dom.js dom-probe');
-  assert.equal(getVirtualFileToolTypeLabel(record), '技能文件');
+  assert.equal(getVirtualFileToolTypeLabel(record), '技能');
 });
 
 test('顶层 apply_patch 在 skill target 下会显示首个文件与 diff 汇总', async () => {
