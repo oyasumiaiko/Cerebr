@@ -6133,7 +6133,7 @@ export function createMessageSender(appContext) {
 
     const body = trimmed.slice(1).trim();
     if (!body) {
-      return { type: 'command', name: 'help', args: [], raw: trimmed, argsText: '' };
+      return { type: 'command', name: '', args: [], raw: trimmed, argsText: '' };
     }
 
     const parts = body.split(/\s+/);
@@ -6141,7 +6141,7 @@ export function createMessageSender(appContext) {
     const args = parts;
     return {
       type: 'command',
-      name: name || 'help',
+      name: name || '',
       args,
       raw: trimmed,
       argsText: args.join(' ')
@@ -6151,26 +6151,14 @@ export function createMessageSender(appContext) {
   // 斜杠命令定义（基础版）
   const slashCommandRegistry = [
     {
-      name: 'help',
-      aliases: ['?','commands'],
-      usage: '/help',
-      description: '显示可用斜杠命令',
-      handler: async () => {
-        if (typeof showNotification === 'function') {
-          showNotification({ message: '输入 / 即可在输入框上方查看斜杠命令', type: 'info' });
-        }
-      },
-      requiresArgs: false
-    },
-    {
-      name: 'clear',
-      aliases: ['cls'],
-      usage: '/clear',
-      description: '清空当前对话',
+      name: 'new',
+      aliases: ['clear', 'cls'],
+      usage: '/new',
+      description: '开始新对话',
       handler: async () => {
         await chatHistoryUI?.clearChatHistory?.();
         if (typeof showNotification === 'function') {
-          showNotification('已清空当前对话');
+          showNotification('已开始新对话');
         }
       },
       requiresArgs: false
@@ -6435,12 +6423,27 @@ export function createMessageSender(appContext) {
   ];
 
   /**
+   * 斜杠菜单默认按命令名排序。
+   * 说明：这里只看真实命令名，不按 alias 排，避免 `/model` 因 alias `api` 被挪到前面。
+   *
+   * @param {Array<Object>} commands
+   * @returns {Array<Object>}
+   */
+  function sortSlashCommandsForMenu(commands) {
+    return (Array.isArray(commands) ? commands.slice() : []).sort((left, right) => {
+      const leftName = String(left?.name || '');
+      const rightName = String(right?.name || '');
+      return leftName.localeCompare(rightName, 'en', { sensitivity: 'base' });
+    });
+  }
+
+  /**
    * 对外暴露的“命令元信息列表”，用于 UI 提示展示。
    * 注意：这里不暴露 handler，避免 UI 误调用业务逻辑。
    * @returns {Array<{name: string, usage: string, description: string, aliases: string[]}>}
    */
   function getSlashCommandList() {
-    return slashCommandRegistry.map((item) => ({
+    return sortSlashCommandsForMenu(slashCommandRegistry).map((item) => ({
       name: item.name,
       usage: item.usage,
       description: item.description,
@@ -6470,7 +6473,7 @@ export function createMessageSender(appContext) {
     const argsTokens = tokens.slice(1);
     const commandKeyword = commandToken.toLowerCase();
 
-    const registry = slashCommandRegistry.slice();
+    const registry = sortSlashCommandsForMenu(slashCommandRegistry);
     const allCommands = getSlashCommandList();
 
     if (!commandKeyword) {
@@ -6589,6 +6592,13 @@ export function createMessageSender(appContext) {
     }
 
     const normalized = parsed.name || '';
+    if (!normalized) {
+      if (typeof showNotification === 'function') {
+        showNotification({ message: '请输入或选择一个斜杠命令', type: 'info' });
+      }
+      return { handled: true, keepInput: true };
+    }
+
     const command = slashCommandRegistry.find((item) => {
       if (!item || !item.name) return false;
       if (item.name === normalized) return true;
@@ -6597,7 +6607,7 @@ export function createMessageSender(appContext) {
 
     if (!command) {
       if (typeof showNotification === 'function') {
-        showNotification({ message: `未知命令：/${normalized}，输入 /help 查看`, type: 'warning' });
+        showNotification({ message: `未知命令：/${normalized}，输入 / 打开命令菜单`, type: 'warning' });
       }
       return { handled: true, keepInput: true };
     }
