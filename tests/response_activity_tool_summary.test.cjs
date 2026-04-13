@@ -8,7 +8,7 @@ async function loadModule() {
   return import(pathToFileURL(modulePath).href);
 }
 
-test('micro_skill_registry read_file 摘要会显示技能 action、文件路径和技能名', async () => {
+test('skill_registry read_file 摘要会显示技能 action、文件路径和技能名', async () => {
   const {
     buildMicroSkillRegistrySummaryParts,
     buildMicroSkillRegistryPrimaryText,
@@ -17,7 +17,7 @@ test('micro_skill_registry read_file 摘要会显示技能 action、文件路径
 
   const record = {
     type: 'function_call',
-    name: 'micro_skill_registry',
+    name: 'skill_registry',
     arguments: JSON.stringify({
       action: 'read_file',
       skill_name: 'dom-probe',
@@ -39,7 +39,7 @@ test('micro_skill_registry read_file 摘要会显示技能 action、文件路径
   assert.equal(getMicroSkillRegistryToolTypeLabel(record), '技能');
 });
 
-test('micro_skill_registry apply_patch 摘要会显示首个文件和汇总增删行数', async () => {
+test('skill_registry apply_patch 摘要会显示首个文件和汇总增删行数', async () => {
   const {
     buildMicroSkillRegistrySummaryParts,
     buildMicroSkillRegistryPrimaryText
@@ -47,7 +47,7 @@ test('micro_skill_registry apply_patch 摘要会显示首个文件和汇总增�
 
   const record = {
     type: 'function_call',
-    name: 'micro_skill_registry',
+    name: 'skill_registry',
     arguments: JSON.stringify({
       action: 'apply_patch',
       skill_name: 'dom-probe',
@@ -78,12 +78,12 @@ test('micro_skill_registry apply_patch 摘要会显示首个文件和汇总增�
   assert.equal(buildMicroSkillRegistryPrimaryText(record), '修改了 src/main.js +2 · -1 · 另 1 个文件');
 });
 
-test('micro_skill_registry search_files 摘要会优先显示 action、pattern 和技能名', async () => {
+test('skill_registry search_files 摘要会优先显示 action、pattern 和技能名', async () => {
   const { buildMicroSkillRegistrySummaryParts } = await loadModule();
 
   const record = {
     type: 'function_call',
-    name: 'micro_skill_registry',
+    name: 'skill_registry',
     arguments: JSON.stringify({
       action: 'search_files',
       skill_name: 'dom-probe',

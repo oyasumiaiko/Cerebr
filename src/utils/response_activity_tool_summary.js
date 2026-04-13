@@ -1,6 +1,7 @@
 import { buildMicroSkillApplyPatchPreview } from './micro_skill_patch_preview.js';
 
-export const RESPONSE_ACTIVITY_MICRO_SKILL_REGISTRY_TOOL_NAME = 'micro_skill_registry';
+export const RESPONSE_ACTIVITY_SKILL_REGISTRY_TOOL_NAME = 'skill_registry';
+export const RESPONSE_ACTIVITY_LEGACY_MICRO_SKILL_REGISTRY_TOOL_NAME = 'micro_skill_registry';
 
 function normalizeSummaryText(value) {
   return (typeof value === 'string') ? value.trim() : '';
@@ -75,17 +76,17 @@ function resolveMicroSkillActionLabel(action, options = {}) {
       return isInProgress ? '正在读取技能包' : '读取技能包';
     case 'read_file':
       return isInProgress ? '正在读取文件' : '读取文件';
-    case 'create':
+    case 'create_skill':
       return isInProgress ? '正在创建技能' : '创建技能';
     case 'update':
       return isInProgress ? '正在更新技能' : '更新技能';
     case 'delete_file':
       return isInProgress ? '正在删除文件' : '删除文件';
-    case 'delete':
+    case 'delete_skill':
       return isInProgress ? '正在删除技能' : '删除技能';
-    case 'enable':
+    case 'enable_skill':
       return isInProgress ? '正在启用技能' : '启用技能';
-    case 'disable':
+    case 'disable_skill':
       return isInProgress ? '正在停用技能' : '停用技能';
     case 'refresh_current_document':
       return isInProgress ? '正在刷新当前文档挂载' : '刷新当前文档挂载';
@@ -118,11 +119,11 @@ function buildMicroSkillRegistryTargetParts(args, options = {}) {
       };
     case 'read_detail':
     case 'read_package':
-    case 'create':
+    case 'create_skill':
     case 'update':
-    case 'delete':
-    case 'enable':
-    case 'disable':
+    case 'delete_skill':
+    case 'enable_skill':
+    case 'disable_skill':
       return {
         action,
         value: skillName || '技能',
@@ -144,7 +145,7 @@ function buildMicroSkillRegistryTargetParts(args, options = {}) {
     default:
       return {
         action,
-        value: skillName || filePath || RESPONSE_ACTIVITY_MICRO_SKILL_REGISTRY_TOOL_NAME,
+        value: skillName || filePath || RESPONSE_ACTIVITY_SKILL_REGISTRY_TOOL_NAME,
         meta: ''
       };
   }
@@ -152,7 +153,10 @@ function buildMicroSkillRegistryTargetParts(args, options = {}) {
 
 export function isMicroSkillRegistryToolCall(record) {
   return String(record?.type || '').toLowerCase() === 'function_call'
-    && normalizeSummaryText(record?.name).toLowerCase() === RESPONSE_ACTIVITY_MICRO_SKILL_REGISTRY_TOOL_NAME;
+    && new Set([
+      RESPONSE_ACTIVITY_SKILL_REGISTRY_TOOL_NAME,
+      RESPONSE_ACTIVITY_LEGACY_MICRO_SKILL_REGISTRY_TOOL_NAME
+    ]).has(normalizeSummaryText(record?.name).toLowerCase());
 }
 
 export function getMicroSkillRegistryToolTypeLabel(record) {
@@ -166,7 +170,7 @@ export function buildMicroSkillRegistrySummaryParts(record, options = {}) {
     const action = options?.isInProgress === true ? '正在执行技能操作' : '执行技能操作';
     return {
       action,
-      value: RESPONSE_ACTIVITY_MICRO_SKILL_REGISTRY_TOOL_NAME,
+      value: RESPONSE_ACTIVITY_SKILL_REGISTRY_TOOL_NAME,
       valueUrl: '',
       meta: '',
       locationAction: '',

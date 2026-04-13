@@ -245,7 +245,7 @@ test('buildResponsesGenericXmlToolOutputContentItems 在没有 value 字段时�
 
 test('buildResponsesGenericXmlToolOutputContentItems 支持按调用方放宽正文截断上限', async () => {
   const { buildResponsesGenericXmlToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
-  const items = buildResponsesGenericXmlToolOutputContentItems('micro_skill_registry_result', {
+  const items = buildResponsesGenericXmlToolOutputContentItems('skill_registry_result', {
     ok: true,
     action: 'read_file',
     skill: {
@@ -261,7 +261,7 @@ test('buildResponsesGenericXmlToolOutputContentItems 支持按调用方放宽正
     }
   });
   const text = formatResponsesToolOutputForDisplay(items);
-  assert.match(text, /<micro_skill_registry_result>/);
+  assert.match(text, /<skill_registry_result>/);
   assert.match(text, /truncated \d+ chars out of \d+ total chars/);
   assert.match(text, /returned range \[0, \d+\)/);
 });
@@ -289,7 +289,7 @@ test('buildResponsesMicroSkillRegistryToolOutputContentItems 会把 apply_patch 
     }
   });
   const text = formatResponsesToolOutputForDisplay(items);
-  assert.match(text, /<micro_skill_registry_result>/);
+  assert.match(text, /<skill_registry_result>/);
   assert.match(text, /Success\. Updated the following files:/);
   assert.match(text, /A references\/experiment-loop\.md/);
   assert.match(text, /M SKILL\.md/);
@@ -302,7 +302,7 @@ test('buildResponsesMicroSkillRegistryToolOutputContentItems 只把真实 active
   const { buildResponsesMicroSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesMicroSkillRegistryToolOutputContentItems({
     ok: true,
-    action: 'create',
+    action: 'create_skill',
     skill: {
       name: 'worldquant-brain-knowledge-cache',
       revision: 1
@@ -330,7 +330,7 @@ test('buildResponsesMicroSkillRegistryToolOutputContentItems 会显式提示 ref
   const { buildResponsesMicroSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesMicroSkillRegistryToolOutputContentItems({
     ok: true,
-    action: 'create',
+    action: 'create_skill',
     skill: {
       name: 'worldquant-brain-knowledge-cache',
       revision: 1

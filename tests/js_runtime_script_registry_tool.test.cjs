@@ -237,12 +237,17 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
 
   const definition = buildMicroSkillRegistryFunctionToolDefinition();
   assert.equal(definition.name, MICRO_SKILL_REGISTRY_TOOL_NAME);
+  assert.match(definition.parameters.properties.action.description, /create_skill/);
+  assert.doesNotMatch(definition.parameters.properties.action.description, /read_file/);
+  assert.doesNotMatch(definition.parameters.properties.action.description, /apply_patch/);
 
   const normalizedCreate = normalizeMicroSkillRegistryToolArguments({
     action: 'create',
     skill: buildSkillInput()
   });
-  assert.equal(normalizedCreate.action, 'create');
+  assert.equal(normalizedCreate.original_action, 'create');
+  assert.equal(normalizedCreate.action, 'create_skill');
+  assert.equal(normalizedCreate.deprecated_compat_action, false);
   assert.equal(normalizedCreate.skill.name, 'dom-probe');
   assert.equal(normalizedCreate.skill.instruction.path, 'SKILL.md');
   assert.equal(normalizedCreate.skill.files.length, 3);
@@ -251,8 +256,10 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     action: 'list_files',
     skill_name: 'dom-probe'
   });
+  assert.equal(normalizedListFiles.original_action, 'list_files');
   assert.equal(normalizedListFiles.action, 'list_files');
   assert.equal(normalizedListFiles.skill_name, 'dom-probe');
+  assert.equal(normalizedListFiles.deprecated_compat_action, true);
 
   const normalizedSearchFiles = normalizeMicroSkillRegistryToolArguments({
     action: 'search_files',
@@ -263,6 +270,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     max_results: 5
   });
   assert.deepEqual(normalizedSearchFiles, {
+    original_action: 'search_files',
     action: 'search_files',
     skill_name: null,
     skill: null,
@@ -278,6 +286,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     max_results: 5,
     read_options: null,
     include_line_numbers: false,
+    deprecated_compat_action: true,
     next_instruction_path: null,
     next_runtime_entry_path: null
   });
@@ -289,6 +298,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     include_line_numbers: true
   });
   assert.deepEqual(normalizedReadFile, {
+    original_action: 'read_file',
     action: 'read_file',
     skill_name: 'dom-probe',
     skill: null,
@@ -310,6 +320,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
       end_line: null
     },
     include_line_numbers: true,
+    deprecated_compat_action: true,
     next_instruction_path: null,
     next_runtime_entry_path: null
   });
@@ -341,6 +352,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     patch: '*** Begin Patch\n*** Update File: src/main.js\n@@\n-old\n+new\n*** End Patch'
   });
   assert.deepEqual(normalizedApplyPatch, {
+    original_action: 'apply_patch',
     action: 'apply_patch',
     skill_name: 'dom-probe',
     skill: null,
@@ -356,6 +368,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     max_results: 50,
     read_options: null,
     include_line_numbers: false,
+    deprecated_compat_action: true,
     next_instruction_path: null,
     next_runtime_entry_path: null
   });

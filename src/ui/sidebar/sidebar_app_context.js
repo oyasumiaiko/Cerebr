@@ -14,6 +14,14 @@ import {
   buildRequestUserInputSkipPayload,
   shouldAutoCompleteRequestUserInput
 } from '../../utils/request_user_input_interaction.js';
+import {
+  VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
+  buildConversationDocumentActionPayloadFromVirtualFileAction,
+  buildSkillRegistryFileActionPayloadFromVirtualFileAction,
+  executeConversationDocumentAction,
+  normalizeVirtualFileResultFromSkillRegistryAction,
+  normalizeVirtualFileToolArguments
+} from '../../agent_tools/conversation_document_tools.js';
 
 const JS_RUNTIME_STATUS_TIMEOUT_MS = 5000;
 const JS_RUNTIME_FRAME_SNAPSHOT_TIMEOUT_MS = 5000;
@@ -1263,7 +1271,7 @@ export function registerSidebarUtilities(appContext) {
   };
 
   /**
-   * 获取当前会话可见的微型 skill 摘要。
+   * 获取当前会话可见的技能摘要。
    *
    * 设计目标：
    * - 给隐藏 `micro_skill_context` 提供轻量摘要来源；
@@ -1289,18 +1297,18 @@ export function registerSidebarUtilities(appContext) {
           tabId: targetTabId
         }),
         MICRO_SKILL_REGISTRY_TIMEOUT_MS,
-        '读取当前页面匹配的微型 skill 摘要超时'
+        '读取当前页面匹配的技能摘要超时'
       );
     } catch (error) {
       return {
         success: false,
-        error: error?.message || '读取当前页面匹配的微型 skill 摘要失败'
+        error: error?.message || '读取当前页面匹配的技能摘要失败'
       };
     }
   };
 
   /**
-   * 统一执行扩展侧微型 skill 注册表动作。
+   * 统一执行扩展侧 skill_registry 动作。
    *
    * 说明：
    * - 所有真正会改 registry / 动态 userScripts 的动作都交给 background；
@@ -1322,12 +1330,68 @@ export function registerSidebarUtilities(appContext) {
           payload: (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {}
         }),
         MICRO_SKILL_REGISTRY_TIMEOUT_MS,
-        '执行微型 skill 注册表操作超时'
+        '执行 skill_registry 操作超时'
       );
     } catch (error) {
       return {
         success: false,
-        error: error?.message || '执行微型 skill 注册表操作失败'
+        error: error?.message || '执行 skill_registry 操作失败'
+      };
+    }
+  };
+
+  appContext.utils.executeVirtualFileAction = async (action, payload = {}) => {
+    try {
+      const normalizedArgs = normalizeVirtualFileToolArguments(action, payload, {
+        defaultTargetKind: VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT
+      });
+
+      if (normalizedArgs.target.kind === VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT) {
+        const conversationId = appContext.services.chatHistoryUI?.getCurrentConversationId?.();
+        if (!conversationId) {
+          return {
+            ok: false,
+            error: {
+              message: '当前对话尚未持久化，暂时无法访问对话文档。',
+              name: 'ConversationDocumentUnavailableError',
+              stack: ''
+            }
+          };
+        }
+        return await executeConversationDocumentAction(
+          action,
+          buildConversationDocumentActionPayloadFromVirtualFileAction(action, normalizedArgs),
+          { conversationId }
+        );
+      }
+
+      const skillResult = await appContext.utils.executeMicroSkillRegistryAction(
+        buildSkillRegistryFileActionPayloadFromVirtualFileAction(action, normalizedArgs)
+      );
+      if (skillResult?.success === true) {
+        const output = { ...skillResult };
+        delete output.success;
+        return normalizeVirtualFileResultFromSkillRegistryAction(action, output, normalizedArgs);
+      }
+      return {
+        ok: false,
+        target: normalizedArgs.target,
+        error: {
+          message: (typeof skillResult?.error === 'string' && skillResult.error.trim())
+            ? skillResult.error.trim()
+            : '执行虚拟文件操作失败。',
+          name: 'VirtualFileActionError',
+          stack: ''
+        }
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: {
+          message: error?.message || '执行虚拟文件操作失败。',
+          name: error?.name || 'VirtualFileActionError',
+          stack: typeof error?.stack === 'string' ? error.stack : ''
+        }
       };
     }
   };

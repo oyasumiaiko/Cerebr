@@ -103,24 +103,28 @@ import {
 } from '../agent_tools/request_user_input_tool.js';
 import {
   MICRO_SKILL_READ_MAX_CHARS,
+  LEGACY_MICRO_SKILL_REGISTRY_TOOL_NAME,
   MICRO_SKILL_REGISTRY_TOOL_NAME,
   buildMicroSkillRegistryFunctionToolDefinition
 } from '../agent_tools/micro_skill_registry_tool.js';
 import {
   CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
   CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME,
-  CONVERSATION_DOCUMENT_INTERNAL_READ_FILE_FULL_ACTION,
-  CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION,
   CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
   CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
-  buildConversationDocumentApplyPatchFunctionToolDefinition,
-  buildConversationDocumentListFilesFunctionToolDefinition,
-  buildConversationDocumentReadFileFunctionToolDefinition,
-  buildConversationDocumentSearchFilesFunctionToolDefinition,
+  VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
+  VIRTUAL_FILE_TARGET_KIND_SKILL,
+  buildConversationDocumentActionPayloadFromVirtualFileAction,
+  buildSkillRegistryFileActionPayloadFromVirtualFileAction,
+  buildVirtualFileApplyPatchFunctionToolDefinition,
+  buildVirtualFileListFilesFunctionToolDefinition,
+  buildVirtualFileReadFileFunctionToolDefinition,
+  buildVirtualFileSearchFilesFunctionToolDefinition,
   executeConversationDocumentAction,
-  isConversationDocumentToolAction,
-  isConversationDocumentMutationAction
+  isVirtualFileToolAction,
+  normalizeVirtualFileResultFromSkillRegistryAction,
+  normalizeVirtualFileToolArguments
 } from '../agent_tools/conversation_document_tools.js';
 import {
   JS_RUNTIME_ENV_BOUND_HOST_PAGE,
@@ -171,11 +175,12 @@ const RESPONSES_HISTORY_READ_TOOL_NAME = 'history_read';
 const RESPONSES_REQUEST_USER_INPUT_TOOL_NAME = REQUEST_USER_INPUT_TOOL_NAME;
 const RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME = LIST_ASKABLE_MODELS_TOOL_NAME;
 const RESPONSES_ASK_OTHER_AI_TOOL_NAME = ASK_OTHER_AI_TOOL_NAME;
-const RESPONSES_MICRO_SKILL_REGISTRY_TOOL_NAME = MICRO_SKILL_REGISTRY_TOOL_NAME;
-const RESPONSES_CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME = CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME;
-const RESPONSES_CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME = CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME;
-const RESPONSES_CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME = CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME;
-const RESPONSES_CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME = CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME;
+const RESPONSES_SKILL_REGISTRY_TOOL_NAME = MICRO_SKILL_REGISTRY_TOOL_NAME;
+const RESPONSES_LEGACY_MICRO_SKILL_REGISTRY_TOOL_NAME = LEGACY_MICRO_SKILL_REGISTRY_TOOL_NAME;
+const RESPONSES_VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME = CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME;
+const RESPONSES_VIRTUAL_FILE_LIST_FILES_TOOL_NAME = CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME;
+const RESPONSES_VIRTUAL_FILE_READ_FILE_TOOL_NAME = CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME;
+const RESPONSES_VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME = CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME;
 const RESPONSES_LOCAL_COMPACTION_MARKER_TEXT = '已压缩上下文（基于上一轮上下文大小）';
 const RESPONSES_LOCAL_COMPACTION_PENDING_TEXT = '上下文压缩中';
 const RESPONSES_LOCAL_COMPACTION_ERROR_TEXT = '上下文压缩失败';
@@ -8008,10 +8013,10 @@ export function createMessageSender(appContext) {
   function getResponsesCustomFunctionTools(usedApiConfig, pageToolEnvironment = resolveResponsesPageToolEnvironment()) {
     if (!isOpenAIResponsesApiConfig(usedApiConfig)) return [];
     const tools = [
-      buildConversationDocumentApplyPatchFunctionToolDefinition(),
-      buildConversationDocumentListFilesFunctionToolDefinition(),
-      buildConversationDocumentReadFileFunctionToolDefinition(),
-      buildConversationDocumentSearchFilesFunctionToolDefinition(),
+      buildVirtualFileApplyPatchFunctionToolDefinition(),
+      buildVirtualFileListFilesFunctionToolDefinition(),
+      buildVirtualFileReadFileFunctionToolDefinition(),
+      buildVirtualFileSearchFilesFunctionToolDefinition(),
       buildMicroSkillRegistryFunctionToolDefinition(),
       buildRequestUserInputFunctionToolDefinition(),
       buildViewImageFunctionToolDefinition(),
@@ -9092,16 +9097,56 @@ export function createMessageSender(appContext) {
     throw new Error('当前对话尚未持久化，无法访问对话文档。');
   }
 
-  async function executeResponsesConversationDocumentFunction(toolName, rawArgs, options = {}) {
+  async function executeResponsesSkillRegistryInternalAction(rawArgs, options = {}) {
     try {
-      const conversationId = await resolveConversationIdForConversationDocumentTool(options);
-      const result = await executeConversationDocumentAction(toolName, rawArgs, {
-        conversationId
-      });
-      if (result?.ok === true && result?.change_event) {
-        dispatchConversationDocumentChange(result.change_event);
+      if (typeof utils?.executeMicroSkillRegistryAction !== 'function') {
+        throw new Error('当前客户端没有可用的 skill_registry 执行入口。');
       }
-      return result;
+      const result = await utils.executeMicroSkillRegistryAction(rawArgs);
+      if (result?.success === true) {
+        const payload = { ...result };
+        delete payload.success;
+        return payload;
+      }
+      throw new Error((typeof result?.error === 'string' && result.error.trim())
+        ? result.error.trim()
+        : 'skill_registry 执行失败。');
+    } catch (error) {
+      return {
+        ok: false,
+        value: null,
+        items: [],
+        error: normalizeResponsesCustomToolError(error)
+      };
+    }
+  }
+
+  async function executeResponsesVirtualFileFunction(toolName, rawArgs, options = {}) {
+    try {
+      const normalizedArgs = normalizeVirtualFileToolArguments(toolName, rawArgs, {
+        defaultTargetKind: VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT
+      });
+      if (normalizedArgs.target.kind === VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT) {
+        const conversationId = await resolveConversationIdForConversationDocumentTool(options);
+        const result = await executeConversationDocumentAction(
+          toolName,
+          buildConversationDocumentActionPayloadFromVirtualFileAction(toolName, normalizedArgs),
+          { conversationId }
+        );
+        if (result?.ok === true && result?.change_event) {
+          dispatchConversationDocumentChange(result.change_event);
+        }
+        return {
+          ...result,
+          target: normalizedArgs.target
+        };
+      }
+
+      const skillResult = await executeResponsesSkillRegistryInternalAction(
+        buildSkillRegistryFileActionPayloadFromVirtualFileAction(toolName, normalizedArgs),
+        options
+      );
+      return normalizeVirtualFileResultFromSkillRegistryAction(toolName, skillResult, normalizedArgs);
     } catch (error) {
       return {
         ok: false,
@@ -9114,7 +9159,7 @@ export function createMessageSender(appContext) {
    * 执行扩展侧 JS 脚本注册表工具。
    *
    * 设计说明：
-   * - 存储管理完全走扩展侧微型 skill package 层，当前默认落到 IndexedDB；
+   * - 存储管理完全走扩展侧 skill package 层，当前默认落到 IndexedDB；
    * - refresh 仅在显式请求时发生，并复用现有 `utils.executeJsRuntime`；
    * - 默认 runtime 环境跟随当前页面工具模式，除非调用参数显式覆盖。
    *
@@ -9122,28 +9167,8 @@ export function createMessageSender(appContext) {
    * @param {{attemptState?:any}} [options]
    * @returns {Promise<Object>}
    */
-  async function executeResponsesMicroSkillRegistryFunction(rawArgs, options = {}) {
-    try {
-      if (typeof utils?.executeMicroSkillRegistryAction !== 'function') {
-        throw new Error('当前客户端没有可用的 micro_skill_registry 执行入口。');
-      }
-      const result = await utils.executeMicroSkillRegistryAction(rawArgs);
-      if (result?.success === true) {
-        const payload = { ...result };
-        delete payload.success;
-        return payload;
-      }
-      throw new Error((typeof result?.error === 'string' && result.error.trim())
-        ? result.error.trim()
-        : 'micro_skill_registry 执行失败。');
-    } catch (error) {
-      return {
-        ok: false,
-        value: null,
-        items: [],
-        error: normalizeResponsesCustomToolError(error)
-      };
-    }
+  async function executeResponsesSkillRegistryFunction(rawArgs, options = {}) {
+    return await executeResponsesSkillRegistryInternalAction(rawArgs, options);
   }
 
   /**
@@ -9189,10 +9214,13 @@ export function createMessageSender(appContext) {
     let outputPayload = null;
     if (functionName === RESPONSES_JS_RUNTIME_TOOL_NAME) {
       outputPayload = await executeResponsesJsRuntimeFunction(parsedArgs, options);
-    } else if (isConversationDocumentToolAction(functionName)) {
-      outputPayload = await executeResponsesConversationDocumentFunction(functionName, parsedArgs, options);
-    } else if (functionName === RESPONSES_MICRO_SKILL_REGISTRY_TOOL_NAME) {
-      outputPayload = await executeResponsesMicroSkillRegistryFunction(parsedArgs, options);
+    } else if (isVirtualFileToolAction(functionName)) {
+      outputPayload = await executeResponsesVirtualFileFunction(functionName, parsedArgs, options);
+    } else if (
+      functionName === RESPONSES_SKILL_REGISTRY_TOOL_NAME
+      || functionName === RESPONSES_LEGACY_MICRO_SKILL_REGISTRY_TOOL_NAME
+    ) {
+      outputPayload = await executeResponsesSkillRegistryFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME) {
       outputPayload = await executeResponsesRequestUserInputFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME) {
@@ -9230,9 +9258,12 @@ export function createMessageSender(appContext) {
       output:
         functionName === RESPONSES_JS_RUNTIME_TOOL_NAME
             ? serializeResponsesJsRuntimeFunctionToolOutput(outputPayload)
-          : isConversationDocumentToolAction(functionName)
+          : isVirtualFileToolAction(functionName)
             ? serializeResponsesConversationDocumentFunctionToolOutput(functionName, outputPayload)
-          : functionName === RESPONSES_MICRO_SKILL_REGISTRY_TOOL_NAME
+          : (
+            functionName === RESPONSES_SKILL_REGISTRY_TOOL_NAME
+            || functionName === RESPONSES_LEGACY_MICRO_SKILL_REGISTRY_TOOL_NAME
+          )
             ? serializeResponsesMicroSkillRegistryFunctionToolOutput(outputPayload)
           : functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME
             ? serializeResponsesRequestUserInputFunctionToolOutput(outputPayload)

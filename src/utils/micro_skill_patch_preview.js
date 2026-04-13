@@ -265,3 +265,29 @@ export function buildConversationDocumentApplyPatchPreview(rawArguments, options
     requireAction: false
   });
 }
+
+export function buildVirtualFileApplyPatchPreview(rawArguments, options = {}) {
+  let args = rawArguments;
+  if (typeof rawArguments === 'string') {
+    try {
+      args = JSON.parse(rawArguments);
+    } catch (_) {
+      args = null;
+    }
+  }
+  const parsedArgs = (args && typeof args === 'object' && !Array.isArray(args)) ? args : {};
+  const target = (parsedArgs.target && typeof parsedArgs.target === 'object' && !Array.isArray(parsedArgs.target))
+    ? parsedArgs.target
+    : null;
+  if (String(target?.kind || '').trim().toLowerCase() === 'skill') {
+    return buildApplyPatchPreview({
+      action: 'apply_patch',
+      skill_name: target?.name || '',
+      patch: parsedArgs.patch || ''
+    }, {
+      ...options,
+      requireAction: false
+    });
+  }
+  return buildConversationDocumentApplyPatchPreview(rawArguments, options);
+}

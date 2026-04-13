@@ -57,6 +57,42 @@ test('normalizeConversationDocumentPath 支持空格与 Unicode，并拒绝越�
   );
 });
 
+test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验并默认 conversation_document', async () => {
+  const {
+    VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
+    VIRTUAL_FILE_LIST_FILES_TOOL_NAME,
+    normalizeVirtualFileToolArguments
+  } = await loadConversationDocumentToolsModule();
+
+  const defaultDocumentTarget = normalizeVirtualFileToolArguments(VIRTUAL_FILE_LIST_FILES_TOOL_NAME, {});
+  assert.deepEqual(defaultDocumentTarget, {
+    action: 'list_files',
+    target: {
+      kind: 'conversation_document',
+      name: null
+    },
+    path_glob: null
+  });
+
+  const skillPatchTarget = normalizeVirtualFileToolArguments(VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME, {
+    target: {
+      kind: 'skill',
+      name: 'dom-probe'
+    },
+    patch: '*** Begin Patch\n*** Add File: notes.md\n+hello\n*** End Patch'
+  });
+  assert.equal(skillPatchTarget.target.kind, 'skill');
+  assert.equal(skillPatchTarget.target.name, 'dom-probe');
+
+  assert.throws(
+    () => normalizeVirtualFileToolArguments(VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME, {
+      target: { kind: 'skill' },
+      patch: '*** Begin Patch\n*** Add File: notes.md\n+hello\n*** End Patch'
+    }),
+    /target.kind=skill 时 target.name 不能为空/
+  );
+});
+
 test('apply_patch 遇到同名 Add File 时会按 Windows 语义追加 (2)', async () => {
   const {
     executeConversationDocumentAction,

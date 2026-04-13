@@ -22,7 +22,7 @@ import { resolveResponseActivityPanelModeState } from '../utils/response_activit
 import { resolveResponseActivityToolExpansionState } from '../utils/response_activity_tool_auto_collapse.js';
 import { normalizeAssistantPreResponseStatus } from '../utils/assistant_pre_response_status.js';
 import {
-  buildConversationDocumentApplyPatchPreview,
+  buildVirtualFileApplyPatchPreview,
   buildMicroSkillApplyPatchPreview
 } from '../utils/micro_skill_patch_preview.js';
 import {
@@ -32,10 +32,10 @@ import {
   isMicroSkillRegistryToolCall
 } from '../utils/response_activity_tool_summary.js';
 import {
-  buildConversationDocumentPrimaryText,
-  buildConversationDocumentSummaryParts,
-  getConversationDocumentToolTypeLabel,
-  isConversationDocumentToolCall
+  buildVirtualFilePrimaryText,
+  buildVirtualFileSummaryParts,
+  getVirtualFileToolTypeLabel,
+  isVirtualFileToolCall
 } from '../utils/conversation_document_tool_summary.js';
 import {
   extractResponsesToolOutputInputImages,
@@ -1852,7 +1852,7 @@ export function createMessageProcessor(appContext) {
   }
 
   function isResponseActivityConversationDocumentEntry(record) {
-    return isConversationDocumentToolCall(record);
+    return isVirtualFileToolCall(record);
   }
 
   function getResponseActivityJsRuntimeMeta(record) {
@@ -2010,7 +2010,7 @@ export function createMessageProcessor(appContext) {
     const preview = isResponseActivityMicroSkillRegistryEntry(entry)
       ? buildMicroSkillApplyPatchPreview(entry.arguments)
       : (isResponseActivityConversationDocumentEntry(entry)
-          ? buildConversationDocumentApplyPatchPreview(entry.arguments)
+          ? buildVirtualFileApplyPatchPreview(entry.arguments)
           : null);
     if (!preview || !Array.isArray(preview.files) || preview.files.length <= 0) return false;
 
@@ -2202,7 +2202,7 @@ export function createMessageProcessor(appContext) {
     if (type === 'web_search_call') return '搜索';
     if (type === 'code_interpreter_call') return '代码解释器';
     if (isResponseActivityJsRuntimeEntry(record)) return 'JS';
-    if (isResponseActivityConversationDocumentEntry(record)) return getConversationDocumentToolTypeLabel(record);
+    if (isResponseActivityConversationDocumentEntry(record)) return getVirtualFileToolTypeLabel(record);
     if (isResponseActivityMicroSkillRegistryEntry(record)) return getMicroSkillRegistryToolTypeLabel(record);
     if (type === 'function_call') return '函数';
     return type || 'tool';
@@ -2249,7 +2249,7 @@ export function createMessageProcessor(appContext) {
       return `${parts.action} ${parts.value}`.trim();
     }
     if (isResponseActivityConversationDocumentEntry(record)) {
-      return buildConversationDocumentPrimaryText(record, options);
+      return buildVirtualFilePrimaryText(record, options);
     }
     if (isResponseActivityMicroSkillRegistryEntry(record)) {
       return buildMicroSkillRegistryPrimaryText(record, options);
@@ -2307,9 +2307,9 @@ export function createMessageProcessor(appContext) {
       return buildResponseActivityJsRuntimeSummaryParts(record, options);
     }
     if (isResponseActivityConversationDocumentEntry(record)) {
-      return buildConversationDocumentSummaryParts(record, options) || {
+      return buildVirtualFileSummaryParts(record, options) || {
         action: '',
-        value: '文档',
+        value: '文件',
         valueUrl: '',
         meta: '',
         locationAction: '',

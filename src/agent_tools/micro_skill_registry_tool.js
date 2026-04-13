@@ -1,5 +1,5 @@
 /**
- * Cerebr 浏览器微型 Skill 注册表。
+ * 浏览器 skill 注册表。
  *
  * 新模型收敛为“skill package + 虚拟文件树”：
  * - manifest 负责触发、匹配、启停、更新时间、runtime 入口等结构化索引；
@@ -19,7 +19,9 @@ import {
   PAGE_CONTENT_READ_MAX_CHARS
 } from './page_content_read_tool.js';
 
-export const MICRO_SKILL_REGISTRY_TOOL_NAME = 'micro_skill_registry';
+export const SKILL_REGISTRY_TOOL_NAME = 'skill_registry';
+export const LEGACY_MICRO_SKILL_REGISTRY_TOOL_NAME = 'micro_skill_registry';
+export const MICRO_SKILL_REGISTRY_TOOL_NAME = SKILL_REGISTRY_TOOL_NAME;
 export const MICRO_SKILL_REGISTRY_STORAGE_KEY = 'micro_skill_registry_v1';
 export const MICRO_SKILL_REGISTRY_DB_NAME = MICRO_SKILL_DB_NAME;
 export const MICRO_SKILL_REGISTRY_VERSION = 2;
@@ -255,7 +257,7 @@ function buildEditableMicroSkillManifestObject(skill) {
 export function serializeMicroSkillVirtualManifest(record) {
   const skill = normalizeStoredMicroSkillRecord(record);
   if (!skill) {
-    throw new Error('无法为无效的微型 skill 生成 manifest 虚拟文件。');
+    throw new Error('无法为无效的技能生成 manifest 虚拟文件。');
   }
   return `${JSON.stringify(buildEditableMicroSkillManifestObject(skill), null, 2)}\n`;
 }
@@ -1142,7 +1144,7 @@ export function buildMicroSkillFilePayload(record, filePath, options = {}) {
   }
   const file = skill.files.find((item) => item.path === normalizedPath) || null;
   if (!file) {
-    throw new Error(`微型 skill ${skill.name} 中不存在文件 ${normalizedPath}。`);
+    throw new Error(`技能 ${skill.name} 中不存在文件 ${normalizedPath}。`);
   }
   const contentRead = buildMicroSkillTextReadResult(file.content, options?.contentReadArgs || null, {
     allowLineRange: true
@@ -1308,7 +1310,7 @@ function ensureMicroSkillStore(store = null) {
   const requiredMethods = ['listManifests', 'getManifest', 'getPackage', 'savePackage', 'deletePackage'];
   const missing = requiredMethods.filter((name) => typeof resolved?.[name] !== 'function');
   if (missing.length > 0) {
-    throw new Error(`当前环境没有可用的 micro skill store，缺少方法：${missing.join(', ')}`);
+    throw new Error(`当前环境没有可用的 skill store，缺少方法：${missing.join(', ')}`);
   }
   return resolved;
 }
@@ -1337,7 +1339,7 @@ export async function saveStoredMicroSkillPackage(record, store = null) {
   const resolvedStore = ensureMicroSkillStore(store);
   const normalized = normalizeStoredMicroSkillRecord(record);
   if (!normalized) {
-    throw new Error('无法保存无效的微型 skill package。');
+    throw new Error('无法保存无效的 skill package。');
   }
   await resolvedStore.savePackage(normalized);
   return normalized;
@@ -1364,7 +1366,7 @@ export async function listMatchingStoredMicroSkillPackagesForUrl(url, store = nu
 function buildMicroSkillRecordInputSchemaDescription() {
   return {
     type: ['object', 'null'],
-    description: 'create/update 时使用的完整微型 skill package 对象。',
+    description: 'create_skill 时使用的完整 skill package 对象。',
     additionalProperties: false,
     properties: {
       name: { type: 'string' },
@@ -1415,14 +1417,42 @@ function buildMicroSkillRecordInputSchemaDescription() {
   };
 }
 
+function normalizeSkillRegistryActionName(value) {
+  const normalized = normalizeString(value).toLowerCase();
+  switch (normalized) {
+    case 'create':
+      return 'create_skill';
+    case 'delete':
+      return 'delete_skill';
+    case 'enable':
+      return 'enable_skill';
+    case 'disable':
+      return 'disable_skill';
+    default:
+      return normalized;
+  }
+}
+
+function isLegacySkillRegistryFileAction(action) {
+  return new Set([
+    'list_files',
+    'search_files',
+    'read_detail',
+    'read_package',
+    'read_file',
+    'apply_patch',
+    'update',
+    'delete_file'
+  ]).has(normalizeString(action).toLowerCase());
+}
+
 export function buildMicroSkillRegistryFunctionToolDefinition() {
   return {
     type: 'function',
-    name: MICRO_SKILL_REGISTRY_TOOL_NAME,
+    name: SKILL_REGISTRY_TOOL_NAME,
     description: [
-      '管理浏览器里的微型 skill。',
-      '支持列出 skill 与文件、搜索文件内容、读取详情和文件、创建和更新 skill、对文件应用补丁，以及在需要时刷新当前网页。',
-      '只要需要编辑 skill 内文件或 manifest.json，就统一使用 apply_patch，并优先做增量修改而不是整文件重写。'
+      '管理浏览器里的 skill 生命周期与当前页挂载。',
+      '只负责列出、创建、删除、启用、停用 skill，以及在需要时刷新当前网页。'
     ].join(' '),
     strict: false,
     parameters: {
@@ -1431,75 +1461,11 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
       properties: {
         action: {
           type: 'string',
-          description: '必填。支持 list、list_files、search_files、read_detail、read_package、read_file、apply_patch、create、update、delete_file、delete、enable、disable、refresh_current_document。'
+          description: '必填。支持 list、create_skill、delete_skill、enable_skill、disable_skill、refresh_current_document。'
         },
         skill_name: {
           type: ['string', 'null'],
-          description: '读写单个 skill 时使用的稳定 key。'
-        },
-        file_path: {
-          type: ['string', 'null'],
-          description: '按单个文件读取或删除时使用的 skill 内部路径。'
-        },
-        next_instruction_path: {
-          type: ['string', 'null'],
-          description: '删除 instruction 文件时，指定新的 instruction 文件路径。'
-        },
-        next_runtime_entry_path: {
-          type: ['string', 'null'],
-          description: '删除 runtime entry 文件时，指定新的 runtime 入口文件路径。'
-        },
-        patch: {
-          type: ['string', 'null'],
-          description: '补丁文本。使用 `*** Begin Patch`、`*** Update File:`、`*** Add File:`、`*** Delete File:`、`*** End Patch` 这套格式。需要编辑文件时统一走这个 action，并尽量只改必要片段。'
-        },
-        pattern: {
-          type: ['string', 'null'],
-          description: 'search_files 时必填。固定字符串或正则模式文本。'
-        },
-        regex: {
-          type: ['boolean', 'null'],
-          description: 'search_files 时可用。为 true 时把 pattern 当作正则；省略时默认做固定字符串搜索。'
-        },
-        case_mode: {
-          type: ['string', 'null'],
-          description: 'search_files 时可用。支持 smart、sensitive、insensitive。默认 smart。'
-        },
-        path_glob: {
-          type: ['string', 'null'],
-          description: 'search_files 时可用。按 skill 内路径过滤，例如 `src/**/*.js`。'
-        },
-        context_before: {
-          type: ['integer', 'null'],
-          description: 'search_files 时可用。返回命中行之前的上下文行数。'
-        },
-        context_after: {
-          type: ['integer', 'null'],
-          description: 'search_files 时可用。返回命中行之后的上下文行数。'
-        },
-        max_results: {
-          type: ['integer', 'null'],
-          description: `search_files 时可用。返回的最大命中数。默认 ${MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS}，最大 ${MICRO_SKILL_SEARCH_MAX_RESULTS}。`
-        },
-        skip_chars: {
-          type: ['integer', 'null'],
-          description: 'read_detail、read_package、read_file 时可用。从指定字符偏移开始读取正文。'
-        },
-        max_chars: {
-          type: ['integer', 'null'],
-          description: `read_detail、read_package、read_file 时可用。本次最多返回的正文字符数。默认 ${MICRO_SKILL_READ_DEFAULT_RANGE_CHARS}，最大 ${MICRO_SKILL_READ_MAX_CHARS}。`
-        },
-        start_line: {
-          type: ['integer', 'null'],
-          description: 'read_detail、read_file 时可用。从指定行号开始读取正文。必须与 end_line 一起提供，且不能和 skip_chars/max_chars 同时使用。'
-        },
-        end_line: {
-          type: ['integer', 'null'],
-          description: 'read_detail、read_file 时可用。读取到指定结束行。必须与 start_line 一起提供，且不能和 skip_chars/max_chars 同时使用。'
-        },
-        include_line_numbers: {
-          type: ['boolean', 'null'],
-          description: 'read_detail、read_file 时可用。为 true 时额外返回带行号的 numbered_content，便于定位和补丁编辑。'
+          description: '目标 skill 的稳定 key。对 create_skill 不需要；其余 action 作用于单个 skill 时使用。'
         },
         skill: buildMicroSkillRecordInputSchemaDescription()
       },
@@ -1508,38 +1474,37 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
   };
 }
 
+export function buildSkillRegistryFunctionToolDefinition() {
+  return buildMicroSkillRegistryFunctionToolDefinition();
+}
+
 export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
   const args = ensurePlainObject(rawArgs);
-  const action = normalizeString(args.action).toLowerCase();
+  const originalAction = normalizeString(args.action).toLowerCase();
+  const action = normalizeSkillRegistryActionName(originalAction);
   const skillName = normalizeOptionalString(args.skill_name || args.script_id);
   const filePath = normalizeOptionalString(args.file_path);
 
   if (!action) {
-    throw new Error('micro_skill_registry 参数错误：action 不能为空。');
+    throw new Error('skill_registry 参数错误：action 不能为空。');
   }
 
   const supportedActions = new Set([
     'list',
-    'list_files',
-    'search_files',
-    'read_detail',
-    'read_package',
-    'read_file',
-    'apply_patch',
-    'create',
-    'update',
-    'delete_file',
-    'delete',
-    'enable',
-    'disable',
+    'create_skill',
+    'delete_skill',
+    'enable_skill',
+    'disable_skill',
     'refresh_current_document'
   ]);
-  if (!supportedActions.has(action)) {
-    throw new Error(`micro_skill_registry 参数错误：不支持的 action \`${action}\`。`);
+  const allowLegacyFileActions = isLegacySkillRegistryFileAction(action);
+  if (!supportedActions.has(action) && !allowLegacyFileActions) {
+    throw new Error(`skill_registry 参数错误：不支持的 action \`${originalAction || action}\`。`);
   }
 
   if (action === 'list') {
     return {
+      original_action: originalAction || action,
       action,
       skill_name: null,
       skill: null,
@@ -1555,6 +1520,7 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
       read_options: null,
       include_line_numbers: false,
+      deprecated_compat_action: false,
       next_instruction_path: null,
       next_runtime_entry_path: null
     };
@@ -1562,6 +1528,7 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
 
   if (action === 'list_files') {
     return {
+      original_action: originalAction || action,
       action,
       skill_name: skillName,
       skill: null,
@@ -1577,6 +1544,7 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
       read_options: null,
       include_line_numbers: false,
+      deprecated_compat_action: true,
       next_instruction_path: null,
       next_runtime_entry_path: null
     };
@@ -1585,9 +1553,10 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
   if (action === 'search_files') {
     const pattern = normalizeString(args.pattern);
     if (!pattern) {
-      throw new Error('micro_skill_registry 参数错误：search_files 时 pattern 不能为空。');
+      throw new Error('skill_registry 参数错误：search_files 时 pattern 不能为空。');
     }
     return {
+      original_action: originalAction || action,
       action,
       skill_name: skillName,
       skill: null,
@@ -1603,13 +1572,15 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       max_results: normalizeMicroSkillSearchMaxResults(args.max_results),
       read_options: null,
       include_line_numbers: false,
+      deprecated_compat_action: true,
       next_instruction_path: null,
       next_runtime_entry_path: null
     };
   }
 
-  if (action === 'create' || action === 'update') {
+  if (action === 'create_skill' || action === 'update') {
     return {
+      original_action: originalAction || action,
       action,
       skill_name: null,
       skill: normalizeMicroSkillInput(args.skill, {
@@ -1628,6 +1599,7 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
       read_options: null,
       include_line_numbers: false,
+      deprecated_compat_action: action === 'update',
       next_instruction_path: null,
       next_runtime_entry_path: null
     };
@@ -1635,6 +1607,7 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
 
   if (action === 'refresh_current_document') {
     return {
+      original_action: originalAction || action,
       action,
       skill_name: skillName,
       skill: null,
@@ -1650,20 +1623,22 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
       read_options: null,
       include_line_numbers: false,
+      deprecated_compat_action: false,
       next_instruction_path: null,
       next_runtime_entry_path: null
     };
   }
 
   if (!skillName) {
-    throw new Error(`micro_skill_registry 参数错误：action=${action} 时 skill_name 不能为空。`);
+    throw new Error(`skill_registry 参数错误：action=${originalAction || action} 时 skill_name 不能为空。`);
   }
 
   if (action === 'read_file' || action === 'delete_file') {
     if (!filePath) {
-      throw new Error(`micro_skill_registry 参数错误：action=${action} 时 file_path 不能为空。`);
+      throw new Error(`skill_registry 参数错误：action=${originalAction || action} 时 file_path 不能为空。`);
     }
     return {
+      original_action: originalAction || action,
       action,
       skill_name: skillName,
       skill: null,
@@ -1685,6 +1660,7 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       include_line_numbers: action === 'read_file'
         ? normalizeBoolean(args.include_line_numbers, false)
         : false,
+      deprecated_compat_action: true,
       next_instruction_path: normalizeOptionalString(args.next_instruction_path)
         ? normalizeMicroSkillFilePath(args.next_instruction_path)
         : null,
@@ -1697,9 +1673,10 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
   if (action === 'apply_patch') {
     const patch = (typeof args.patch === 'string') ? args.patch : '';
     if (!patch.trim()) {
-      throw new Error('micro_skill_registry 参数错误：apply_patch 时 patch 不能为空。');
+      throw new Error('skill_registry 参数错误：apply_patch 时 patch 不能为空。');
     }
     return {
+      original_action: originalAction || action,
       action,
       skill_name: skillName,
       skill: null,
@@ -1715,6 +1692,7 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
       read_options: null,
       include_line_numbers: false,
+      deprecated_compat_action: true,
       next_instruction_path: null,
       next_runtime_entry_path: null
     };
@@ -1722,6 +1700,7 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
 
   if (action === 'read_detail' || action === 'read_package') {
     return {
+      original_action: originalAction || action,
       action,
       skill_name: skillName,
       skill: null,
@@ -1741,12 +1720,38 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       include_line_numbers: action === 'read_detail'
         ? normalizeBoolean(args.include_line_numbers, false)
         : false,
+      deprecated_compat_action: true,
+      next_instruction_path: null,
+      next_runtime_entry_path: null
+    };
+  }
+
+  if (action === 'delete_skill' || action === 'enable_skill' || action === 'disable_skill') {
+    return {
+      original_action: originalAction || action,
+      action,
+      skill_name: skillName,
+      skill: null,
+      file_path: null,
+      file: null,
+      patch: null,
+      pattern: null,
+      regex: false,
+      case_mode: 'smart',
+      path_glob: null,
+      context_before: 0,
+      context_after: 0,
+      max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
+      read_options: null,
+      include_line_numbers: false,
+      deprecated_compat_action: false,
       next_instruction_path: null,
       next_runtime_entry_path: null
     };
   }
 
   return {
+    original_action: originalAction || action,
     action,
     skill_name: skillName,
     skill: null,
@@ -1762,6 +1767,7 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
     max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
     read_options: null,
     include_line_numbers: false,
+    deprecated_compat_action: false,
     next_instruction_path: null,
     next_runtime_entry_path: null
   };

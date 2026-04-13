@@ -9088,7 +9088,7 @@ export function createChatHistoryUI(appContext) {
 
   async function executeMicroSkillViewerAction(payload) {
     if (typeof utils?.executeMicroSkillRegistryAction !== 'function') {
-      throw new Error('当前界面没有可用的微型 skill 注册表入口。');
+      throw new Error('当前界面没有可用的 skill 注册表入口。');
     }
     const result = await utils.executeMicroSkillRegistryAction(payload);
     if (result?.success === true) {
@@ -9098,7 +9098,43 @@ export function createChatHistoryUI(appContext) {
     }
     throw new Error((typeof result?.error === 'string' && result.error.trim())
       ? result.error.trim()
-      : '微型 skill 操作失败。');
+      : 'skill 操作失败。');
+  }
+
+  async function executeMicroSkillViewerFileAction(action, payload) {
+    if (typeof utils?.executeVirtualFileAction !== 'function') {
+      throw new Error('当前界面没有可用的虚拟文件入口。');
+    }
+    const result = await utils.executeVirtualFileAction(action, payload);
+    if (result?.ok === true) {
+      return result;
+    }
+    throw new Error((typeof result?.error?.message === 'string' && result.error.message.trim())
+      ? result.error.message.trim()
+      : 'skill 文件操作失败。');
+  }
+
+  function buildMicroSkillDetailFromViewerParts(summary, instructionFile, fileIndex) {
+    if (!summary) return null;
+    const instructionPath = String(summary?.instruction?.path || 'SKILL.md').trim() || 'SKILL.md';
+    const files = Array.isArray(fileIndex?.files) ? fileIndex.files : [];
+    const instruction = instructionFile?.file || {};
+    return {
+      ...summary,
+      instruction: {
+        path: instructionPath,
+        content: typeof instruction.content === 'string' ? instruction.content : '',
+        content_read: instruction.content_read || null,
+        ...(typeof instruction.numbered_content === 'string'
+          ? { numbered_content: instruction.numbered_content }
+          : {})
+      },
+      files: {
+        total_count: Number.isFinite(Number(fileIndex?.total_files)) ? Number(fileIndex.total_files) : files.length,
+        returned_file_count: Number.isFinite(Number(fileIndex?.returned_file_count)) ? Number(fileIndex.returned_file_count) : files.length,
+        files
+      }
+    };
   }
 
   function getFilteredMicroSkillSummaries() {
@@ -9132,8 +9168,8 @@ export function createChatHistoryUI(appContext) {
       const empty = document.createElement('div');
       empty.className = 'micro-skill-list-empty';
       empty.textContent = microSkillViewerState.summaries.length > 0
-        ? '当前筛选条件下没有匹配的微型 skill'
-        : '当前还没有已注册的微型 skill';
+        ? '当前筛选条件下没有匹配的技能'
+        : '当前还没有已注册的技能';
       listContainer.appendChild(empty);
       return;
     }
@@ -9246,11 +9282,27 @@ export function createChatHistoryUI(appContext) {
     try {
       let sourcePayload = microSkillViewerState.sourceByName.get(skillName) || null;
       if (!sourcePayload) {
-        const result = await executeMicroSkillViewerAction({
-          action: 'read_package',
-          skill_name: skillName
+        const fileIndex = await executeMicroSkillViewerFileAction('list_files', {
+          target: { kind: 'skill', name: skillName }
         });
-        sourcePayload = result?.skill || null;
+        const indexFiles = Array.isArray(fileIndex?.files) ? fileIndex.files : [];
+        const files = [];
+        for (const file of indexFiles) {
+          const fileResult = await executeMicroSkillViewerFileAction('read_file', {
+            target: { kind: 'skill', name: skillName },
+            file_path: file.path
+          });
+          files.push({
+            ...file,
+            ...(fileResult?.file || {})
+          });
+        }
+        sourcePayload = {
+          target: { kind: 'skill', name: skillName },
+          total_files: fileIndex?.total_files || files.length,
+          returned_file_count: fileIndex?.returned_file_count || files.length,
+          files
+        };
         if (sourcePayload) {
           microSkillViewerState.sourceByName.set(skillName, sourcePayload);
         }
@@ -9269,12 +9321,11 @@ export function createChatHistoryUI(appContext) {
       heading.textContent = '文件包';
       sourceSection.appendChild(heading);
 
-      const sourceManifest = sourcePayload?.files;
-      const sourceFiles = Array.isArray(sourceManifest?.files) ? sourceManifest.files : [];
+      const sourceFiles = Array.isArray(sourcePayload?.files) ? sourcePayload.files : [];
       if (sourceFiles.length <= 0) {
         const empty = document.createElement('div');
         empty.className = 'micro-skill-detail-empty-desc';
-        empty.textContent = '这个微型 skill 当前没有可显示的文件。';
+        empty.textContent = '这个技能当前没有可显示的文件。';
         sourceSection.appendChild(empty);
       } else {
         sourceFiles.forEach((file) => {
@@ -9328,9 +9379,9 @@ export function createChatHistoryUI(appContext) {
 
       detailContainer.appendChild(sourceSection);
     } catch (error) {
-      console.error('读取微型 skill 源码失败:', error);
+      console.error('读取技能源码失败:', error);
       showNotification?.({
-        message: '读取微型 skill 源码失败',
+        message: '读取技能源码失败',
         description: String(error?.message || error),
         type: 'error',
         duration: 3200
@@ -9343,7 +9394,7 @@ export function createChatHistoryUI(appContext) {
     if (!detailContainer) return;
 
     if (!skillDetail) {
-      renderMicroSkillViewerEmptyState(detailContainer, '没有可显示的详情', '请选择左侧列表中的一个微型 skill。');
+      renderMicroSkillViewerEmptyState(detailContainer, '没有可显示的详情', '请选择左侧列表中的一个技能。');
       return;
     }
 
@@ -9385,10 +9436,10 @@ export function createChatHistoryUI(appContext) {
     remountBtn.textContent = '在当前页重挂载';
     remountBtn.disabled = state.isStandalone === true || skillDetail.builtin === true;
     remountBtn.title = skillDetail.builtin === true
-      ? '内置指导 skill 不会挂载到网页 runtime，它只提供制作 skill 的方法与模板。'
+      ? '内置指导 skill 不会挂载到网页 runtime，它只提供创建和修改技能的方法与模板。'
       : (state.isStandalone === true
           ? '独立聊天页面没有绑定宿主页，无法执行当前页重挂载。'
-          : '把当前选中的微型 skill 重新挂载到绑定网页。');
+          : '把当前选中的技能重新挂载到绑定网页。');
     remountBtn.addEventListener('click', async () => {
       try {
         remountBtn.disabled = true;
@@ -9405,11 +9456,11 @@ export function createChatHistoryUI(appContext) {
         if (result?.ok !== true || refreshResult?.ok !== true) {
           throw new Error((typeof refreshResult?.error?.message === 'string' && refreshResult.error.message.trim())
             ? refreshResult.error.message.trim()
-            : '当前页微型 skill refresh 失败。');
+            : '当前页 skill refresh 失败。');
         }
         const requestedSkillMounted = activeSkills.includes(skillDetail.name);
         showNotification?.({
-          message: requestedSkillMounted ? '当前页微型 skill 已刷新' : '当前页已刷新，但该 skill 未挂载',
+          message: requestedSkillMounted ? '当前页 skill 已刷新' : '当前页已刷新，但该 skill 未挂载',
           description: activeSkills.length > 0
             ? `当前实际已挂载：${activeSkills.join(', ')}`
             : '当前页没有任何已挂载的 page runtime skill。',
@@ -9417,9 +9468,9 @@ export function createChatHistoryUI(appContext) {
           duration: requestedSkillMounted ? 2400 : 3200
         });
       } catch (error) {
-        console.error('刷新当前页微型 skill 挂载失败:', error);
+        console.error('刷新当前页 skill 挂载失败:', error);
         showNotification?.({
-          message: '刷新当前页微型 skill 挂载失败',
+          message: '刷新当前页 skill 挂载失败',
           description: String(error?.message || error),
           type: 'error',
           duration: 3200
@@ -9469,11 +9520,18 @@ export function createChatHistoryUI(appContext) {
     try {
       let detail = microSkillViewerState.detailByName.get(skillName) || null;
       if (!detail || options?.forceReload === true) {
-        const result = await executeMicroSkillViewerAction({
-          action: 'read_detail',
-          skill_name: skillName
+        const summary = microSkillViewerState.summaries.find((item) => item?.name === skillName) || null;
+        if (!summary) {
+          throw new Error(`skill ${skillName} 不存在。`);
+        }
+        const fileIndex = await executeMicroSkillViewerFileAction('list_files', {
+          target: { kind: 'skill', name: skillName }
         });
-        detail = result?.skill || null;
+        const instructionFile = await executeMicroSkillViewerFileAction('read_file', {
+          target: { kind: 'skill', name: skillName },
+          file_path: summary?.instruction?.path || 'SKILL.md'
+        });
+        detail = buildMicroSkillDetailFromViewerParts(summary, instructionFile, fileIndex);
         if (detail) {
           microSkillViewerState.detailByName.set(skillName, detail);
         }
@@ -9485,10 +9543,10 @@ export function createChatHistoryUI(appContext) {
       renderMicroSkillDetail(detail);
     } catch (error) {
       if (seq !== microSkillViewerState.requestSeq) return;
-      console.error('读取微型 skill 详情失败:', error);
+      console.error('读取技能详情失败:', error);
       renderMicroSkillViewerEmptyState(
         getMicroSkillViewerRefs().detailContainer,
-        '读取微型 skill 详情失败',
+        '读取技能详情失败',
         String(error?.message || error)
       );
     }
@@ -9527,16 +9585,16 @@ export function createChatHistoryUI(appContext) {
         } else {
           renderMicroSkillViewerEmptyState(
             detailContainer,
-            '还没有微型 skill',
-            '你已经有浏览器微型 skill 运行时了，但当前注册表里还没有任何技能。'
+            '还没有技能',
+            '当前注册表里还没有任何已创建的技能。'
           );
         }
       } catch (error) {
-        console.error('刷新微型 skill 查看器失败:', error);
+        console.error('刷新技能查看器失败:', error);
         renderMicroSkillSummaryList();
         renderMicroSkillViewerEmptyState(
           detailContainer,
-          '读取微型 skill 列表失败',
+          '读取技能列表失败',
           String(error?.message || error)
         );
       } finally {
@@ -9644,7 +9702,7 @@ export function createChatHistoryUI(appContext) {
     };
 
     renderMicroSkillSummaryList();
-    renderMicroSkillViewerEmptyState(detailPane, '选择一个技能', '左侧列表展示当前已注册的微型 skill。点击某条记录即可查看详细说明。');
+    renderMicroSkillViewerEmptyState(detailPane, '选择一个技能', '左侧列表展示当前已注册的技能。点击某条记录即可查看详细说明。');
     return container;
   }
 

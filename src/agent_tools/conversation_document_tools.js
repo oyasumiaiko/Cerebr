@@ -1,11 +1,11 @@
 /**
- * 对话级文档虚拟文件工具。
+ * 统一虚拟文件工具。
  *
  * 说明：
- * - 只操作“当前对话”名下的文本虚拟文件；
- * - 不触碰真实工作区文件，也不自动把文档内容注入模型上下文；
- * - 公开给模型的只有 `apply_patch` / `list_files` / `read_file` / `search_files` 四个顶层工具；
- * - UI 为了编辑与完整查看，会额外复用 `write_file` / `read_file_full` 两个内部 action。
+ * - 顶层公开给模型的文件工具统一为 `apply_patch` / `list_files` / `read_file` / `search_files`；
+ * - 文件工具通过结构化 `target` 选择作用域，当前支持 `conversation_document` 与 `skill`；
+ * - 对话文档仍在侧栏本地 IndexedDB 执行；skill 文件则复用现有 skill package / background 执行链路；
+ * - UI 为了编辑对话文档与完整查看，会额外复用 `write_file` / `read_file_full` 两个内部 action。
  */
 
 import {
@@ -14,16 +14,27 @@ import {
 } from './page_content_read_tool.js';
 import { derivePatchedFileContent, parseApplyPatch } from './apply_patch_core.js';
 import {
+  normalizeMicroSkillFilePath,
+  normalizeMicroSkillName
+} from './micro_skill_registry_tool.js';
+import {
   getConversationDocument,
   listConversationDocuments,
   putConversationDocument,
   replaceConversationDocuments
 } from '../storage/conversation_document_store.js';
 
-export const CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME = 'apply_patch';
-export const CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME = 'list_files';
-export const CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME = 'read_file';
-export const CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME = 'search_files';
+export const VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME = 'apply_patch';
+export const VIRTUAL_FILE_LIST_FILES_TOOL_NAME = 'list_files';
+export const VIRTUAL_FILE_READ_FILE_TOOL_NAME = 'read_file';
+export const VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME = 'search_files';
+export const VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT = 'conversation_document';
+export const VIRTUAL_FILE_TARGET_KIND_SKILL = 'skill';
+
+export const CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME = VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME;
+export const CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME = VIRTUAL_FILE_LIST_FILES_TOOL_NAME;
+export const CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME = VIRTUAL_FILE_READ_FILE_TOOL_NAME;
+export const CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME = VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME;
 export const CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION = 'write_file';
 export const CONVERSATION_DOCUMENT_INTERNAL_READ_FILE_FULL_ACTION = 'read_file_full';
 export const CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME = 'cerebr-conversation-document-change';
@@ -34,10 +45,10 @@ export const CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS = 50;
 export const CONVERSATION_DOCUMENT_SEARCH_MAX_RESULTS = 200;
 
 const PUBLIC_ACTIONS = new Set([
-  CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
-  CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
-  CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
-  CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME
+  VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
+  VIRTUAL_FILE_LIST_FILES_TOOL_NAME,
+  VIRTUAL_FILE_READ_FILE_TOOL_NAME,
+  VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME
 ]);
 
 const INTERNAL_ACTIONS = new Set([
@@ -47,6 +58,11 @@ const INTERNAL_ACTIONS = new Set([
 
 function normalizeString(value) {
   return (typeof value === 'string') ? value.trim() : '';
+}
+
+function normalizeOptionalString(value) {
+  const text = normalizeString(value);
+  return text || null;
 }
 
 function ensurePlainObject(value) {
@@ -87,6 +103,63 @@ function toIsoTimestamp(value) {
 
 function buildDocumentSizeChars(content) {
   return Array.from(typeof content === 'string' ? content : '').length;
+}
+
+function normalizeVirtualFileTargetKind(value, fallback = VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT) {
+  const normalized = normalizeString(value).toLowerCase();
+  if (!normalized) return fallback;
+  if (
+    normalized === VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT
+    || normalized === VIRTUAL_FILE_TARGET_KIND_SKILL
+  ) {
+    return normalized;
+  }
+  throw new Error(`virtual_file 参数错误：不支持的 target.kind \`${value}\`。`);
+}
+
+export function normalizeVirtualFileTarget(rawTarget, options = {}) {
+  const input = ensurePlainObject(rawTarget);
+  const kind = normalizeVirtualFileTargetKind(input.kind, options?.defaultKind || VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT);
+  const name = normalizeOptionalString(input.name);
+  if (kind === VIRTUAL_FILE_TARGET_KIND_SKILL) {
+    if (options?.requireSkillName === true && !name) {
+      throw new Error('virtual_file 参数错误：target.kind=skill 时 target.name 不能为空。');
+    }
+    return {
+      kind,
+      name: name ? normalizeMicroSkillName(name) : null
+    };
+  }
+  if (name) {
+    throw new Error('virtual_file 参数错误：target.kind=conversation_document 时不能提供 target.name。');
+  }
+  return {
+    kind,
+    name: null
+  };
+}
+
+function buildVirtualFileTargetSchemaDescription(options = {}) {
+  const requireSkillName = options?.requireSkillName === true;
+  return {
+    type: ['object', 'null'],
+    description: requireSkillName
+      ? '可选。文件目标作用域。默认 `conversation_document`；若 `kind="skill"` 则必须提供 `name`。'
+      : '可选。文件目标作用域。默认 `conversation_document`；当 `kind="skill"` 时可用 `name` 指定单个技能。',
+    additionalProperties: false,
+    properties: {
+      kind: {
+        type: ['string', 'null'],
+        description: '可选。支持 `conversation_document` 与 `skill`。省略时默认 `conversation_document`。'
+      },
+      name: {
+        type: ['string', 'null'],
+        description: requireSkillName
+          ? '当 `kind="skill"` 时必填。skill 的稳定 key。'
+          : '当 `kind="skill"` 时可选。skill 的稳定 key；省略时表示跨全部 skill。'
+      }
+    }
+  };
 }
 
 export function normalizeConversationDocumentPath(value) {
@@ -748,14 +821,170 @@ function buildReadFilePayload(documentRecord, readOptions, includeLineNumbers) {
   };
 }
 
-export function isConversationDocumentToolAction(action) {
+export function isVirtualFileToolAction(action) {
   return PUBLIC_ACTIONS.has(normalizeString(action).toLowerCase());
+}
+
+export function isConversationDocumentToolAction(action) {
+  return isVirtualFileToolAction(action);
 }
 
 export function isConversationDocumentMutationAction(action) {
   const normalized = normalizeString(action).toLowerCase();
-  return normalized === CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME
+  return normalized === VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME
     || normalized === CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION;
+}
+
+function normalizeVirtualFileReadArgs(action, args) {
+  return {
+    mode: args.mode,
+    skip_chars: args.skip_chars,
+    max_chars: args.max_chars,
+    start_line: action === VIRTUAL_FILE_READ_FILE_TOOL_NAME ? args.start_line : null,
+    end_line: action === VIRTUAL_FILE_READ_FILE_TOOL_NAME ? args.end_line : null
+  };
+}
+
+function normalizeVirtualFileSearchArgs(args) {
+  return {
+    pattern: normalizeString(args.pattern),
+    regex: args.regex === true,
+    case_mode: normalizeOptionalString(args.case_mode),
+    path_glob: normalizeOptionalString(args.path_glob),
+    context_before: args.context_before,
+    context_after: args.context_after,
+    max_results: args.max_results
+  };
+}
+
+export function normalizeVirtualFileToolArguments(action, rawArgs, options = {}) {
+  const args = ensurePlainObject(rawArgs);
+  const normalizedAction = normalizeString(action).toLowerCase();
+  if (!PUBLIC_ACTIONS.has(normalizedAction)) {
+    throw new Error(`virtual_file 参数错误：不支持的 action \`${action}\`。`);
+  }
+
+  const requireSkillName = normalizedAction === VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME
+    || normalizedAction === VIRTUAL_FILE_READ_FILE_TOOL_NAME;
+  const target = normalizeVirtualFileTarget(args.target, {
+    defaultKind: options?.defaultTargetKind || VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
+    requireSkillName
+  });
+
+  switch (normalizedAction) {
+    case VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME: {
+      const patch = typeof args.patch === 'string' ? args.patch : '';
+      if (!patch.trim()) {
+        throw new Error('virtual_file 参数错误：apply_patch 需要 patch。');
+      }
+      return {
+        action: normalizedAction,
+        target,
+        patch
+      };
+    }
+    case VIRTUAL_FILE_LIST_FILES_TOOL_NAME:
+      return {
+        action: normalizedAction,
+        target,
+        path_glob: normalizeOptionalString(args.path_glob)
+      };
+    case VIRTUAL_FILE_READ_FILE_TOOL_NAME:
+      return {
+        action: normalizedAction,
+        target,
+        file_path: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL
+          ? normalizeMicroSkillFilePath(args.file_path)
+          : normalizeConversationDocumentPath(args.file_path),
+        include_line_numbers: args.include_line_numbers === true,
+        read_options: normalizeVirtualFileReadArgs(normalizedAction, args)
+      };
+    case VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME: {
+      const searchArgs = normalizeVirtualFileSearchArgs(args);
+      if (!searchArgs.pattern) {
+        throw new Error('virtual_file 参数错误：search_files 需要 pattern。');
+      }
+      return {
+        action: normalizedAction,
+        target,
+        ...searchArgs
+      };
+    }
+    default:
+      throw new Error(`virtual_file 参数错误：未处理的 action \`${action}\`。`);
+  }
+}
+
+export function buildConversationDocumentActionPayloadFromVirtualFileAction(action, normalizedArgs) {
+  const input = ensurePlainObject(normalizedArgs);
+  switch (normalizeString(action).toLowerCase()) {
+    case VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME:
+      return { patch: input.patch || '' };
+    case VIRTUAL_FILE_LIST_FILES_TOOL_NAME:
+      return { path_glob: input.path_glob || null };
+    case VIRTUAL_FILE_READ_FILE_TOOL_NAME:
+      return {
+        file_path: input.file_path,
+        include_line_numbers: input.include_line_numbers === true,
+        ...(ensurePlainObject(input.read_options))
+      };
+    case VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME:
+      return {
+        pattern: input.pattern,
+        regex: input.regex === true,
+        case_mode: input.case_mode || null,
+        path_glob: input.path_glob || null,
+        context_before: input.context_before,
+        context_after: input.context_after,
+        max_results: input.max_results
+      };
+    default:
+      throw new Error(`virtual_file 参数错误：未处理的 conversation_document action \`${action}\`。`);
+  }
+}
+
+export function buildSkillRegistryFileActionPayloadFromVirtualFileAction(action, normalizedArgs) {
+  const input = ensurePlainObject(normalizedArgs);
+  const target = ensurePlainObject(input.target);
+  const payload = {
+    skill_name: normalizeOptionalString(target.name)
+  };
+  switch (normalizeString(action).toLowerCase()) {
+    case VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME:
+      return {
+        action: 'apply_patch',
+        ...payload,
+        patch: input.patch || ''
+      };
+    case VIRTUAL_FILE_LIST_FILES_TOOL_NAME:
+      return {
+        action: 'list_files',
+        ...payload,
+        path_glob: input.path_glob || null
+      };
+    case VIRTUAL_FILE_READ_FILE_TOOL_NAME:
+      return {
+        action: 'read_file',
+        ...payload,
+        file_path: input.file_path,
+        include_line_numbers: input.include_line_numbers === true,
+        ...(ensurePlainObject(input.read_options))
+      };
+    case VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME:
+      return {
+        action: 'search_files',
+        ...payload,
+        pattern: input.pattern,
+        regex: input.regex === true,
+        case_mode: input.case_mode || null,
+        path_glob: input.path_glob || null,
+        context_before: input.context_before,
+        context_after: input.context_after,
+        max_results: input.max_results
+      };
+    default:
+      throw new Error(`virtual_file 参数错误：未处理的 skill action \`${action}\`。`);
+  }
 }
 
 function normalizeActionArgs(action, rawArgs, options = {}) {
@@ -994,14 +1223,135 @@ export async function executeConversationDocumentAction(action, rawArgs, options
   }
 }
 
+function buildVirtualFileTargetSummary(target) {
+  const normalizedTarget = ensurePlainObject(target);
+  return {
+    kind: normalizeVirtualFileTargetKind(
+      normalizedTarget.kind,
+      VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT
+    ),
+    name: normalizeOptionalString(normalizedTarget.name)
+  };
+}
+
+function normalizeSkillRegistryFileRecord(file, fallbackSkillName = null) {
+  const input = ensurePlainObject(file);
+  return {
+    skill_name: normalizeOptionalString(input.skill_name || fallbackSkillName),
+    path: normalizeOptionalString(input.path) || '',
+    kind: normalizeOptionalString(input.kind),
+    size_chars: Number.isFinite(Number(input.size_chars)) ? Math.max(0, Math.trunc(Number(input.size_chars))) : null,
+    is_manifest: input.is_manifest === true,
+    is_instruction: input.is_instruction === true,
+    is_runtime_entry: input.is_runtime_entry === true,
+    ...(typeof input.content === 'string' ? { content: input.content } : {}),
+    ...(input.content_read && typeof input.content_read === 'object' ? { content_read: input.content_read } : {}),
+    ...(typeof input.numbered_content === 'string' ? { numbered_content: input.numbered_content } : {})
+  };
+}
+
+export function normalizeVirtualFileResultFromSkillRegistryAction(action, rawResult, normalizedArgs) {
+  const normalizedAction = normalizeString(action).toLowerCase();
+  const result = ensurePlainObject(rawResult);
+  const target = buildVirtualFileTargetSummary(normalizedArgs?.target);
+  if (result.ok !== true) {
+    return {
+      ...result,
+      action: normalizedAction,
+      target
+    };
+  }
+
+  if (normalizedAction === VIRTUAL_FILE_LIST_FILES_TOOL_NAME) {
+    return {
+      ok: true,
+      action: normalizedAction,
+      target,
+      total_files: Number.isFinite(Number(result.total_files)) ? Math.max(0, Math.trunc(Number(result.total_files))) : 0,
+      returned_file_count: Number.isFinite(Number(result.returned_file_count))
+        ? Math.max(0, Math.trunc(Number(result.returned_file_count)))
+        : 0,
+      files: Array.isArray(result.files)
+        ? result.files.map((file) => normalizeSkillRegistryFileRecord(file))
+        : []
+    };
+  }
+
+  if (normalizedAction === VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME) {
+    return {
+      ok: true,
+      action: normalizedAction,
+      target,
+      pattern: normalizeOptionalString(result.pattern) || normalizeOptionalString(normalizedArgs?.pattern) || '',
+      regex: result.regex === true,
+      case_mode: normalizeOptionalString(result.case_mode) || 'smart',
+      case_sensitive: result.case_sensitive === true,
+      path_glob: normalizeOptionalString(result.path_glob),
+      context_before: Number.isFinite(Number(result.context_before)) ? Math.max(0, Math.trunc(Number(result.context_before))) : 0,
+      context_after: Number.isFinite(Number(result.context_after)) ? Math.max(0, Math.trunc(Number(result.context_after))) : 0,
+      max_results: Number.isFinite(Number(result.max_results)) ? Math.max(1, Math.trunc(Number(result.max_results))) : CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS,
+      total_matches: Number.isFinite(Number(result.total_matches)) ? Math.max(0, Math.trunc(Number(result.total_matches))) : 0,
+      returned_match_count: Number.isFinite(Number(result.returned_match_count))
+        ? Math.max(0, Math.trunc(Number(result.returned_match_count)))
+        : 0,
+      truncated: result.truncated === true,
+      matches: Array.isArray(result.matches)
+        ? result.matches.map((match) => ({
+            match_id: normalizeOptionalString(match?.match_id),
+            skill_name: normalizeOptionalString(match?.skill_name),
+            file_path: normalizeOptionalString(match?.file_path) || '',
+            line_number: Number.isFinite(Number(match?.line_number)) ? Math.max(1, Math.trunc(Number(match.line_number))) : 1,
+            column_start: Number.isFinite(Number(match?.column_start)) ? Math.max(1, Math.trunc(Number(match.column_start))) : 1,
+            column_end: Number.isFinite(Number(match?.column_end)) ? Math.max(1, Math.trunc(Number(match.column_end))) : 1,
+            match_text: typeof match?.match_text === 'string' ? match.match_text : '',
+            line_text: typeof match?.line_text === 'string' ? match.line_text : '',
+            before: Array.isArray(match?.before) ? match.before : [],
+            after: Array.isArray(match?.after) ? match.after : []
+          }))
+        : []
+    };
+  }
+
+  if (normalizedAction === VIRTUAL_FILE_READ_FILE_TOOL_NAME) {
+    const skill = ensurePlainObject(result.skill);
+    const file = normalizeSkillRegistryFileRecord(skill.file, skill.name || target.name);
+    return {
+      ok: true,
+      action: normalizedAction,
+      target,
+      file
+    };
+  }
+
+  if (normalizedAction === VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME) {
+    return {
+      ok: true,
+      action: normalizedAction,
+      target,
+      affected_files: ensurePlainObject(result.affected_files),
+      files: ensurePlainObject(result.files),
+      skill: ensurePlainObject(result.skill),
+      refreshed_current_document: result.refreshed_current_document === true,
+      refresh_result: result.refresh_result || null
+    };
+  }
+
+  return {
+    ...result,
+    action: normalizedAction,
+    target
+  };
+}
+
 function buildCommonFileReadParametersDescription() {
   return {
     type: 'object',
     additionalProperties: false,
     properties: {
+      target: buildVirtualFileTargetSchemaDescription({ requireSkillName: true }),
       file_path: {
         type: 'string',
-        description: '当前对话中文档的虚拟路径，例如 `docs/plan.md`。'
+        description: '要读取的虚拟文件路径；对话文档示例 `docs/plan.md`，skill 文件示例 `SKILL.md` 或 `src/main.js`。'
       },
       mode: {
         type: ['string', 'null'],
@@ -1032,16 +1382,17 @@ function buildCommonFileReadParametersDescription() {
   };
 }
 
-export function buildConversationDocumentApplyPatchFunctionToolDefinition() {
+export function buildVirtualFileApplyPatchFunctionToolDefinition() {
   return {
     type: 'function',
-    name: CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
-    description: '对当前对话下的虚拟文档应用 Codex apply_patch。仅作用于当前对话文档，不会修改真实工作区文件。',
+    name: VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
+    description: '对虚拟文件应用 Codex apply_patch。支持当前对话文档和 skill 文件；不会修改真实工作区文件。',
     strict: false,
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
+        target: buildVirtualFileTargetSchemaDescription({ requireSkillName: true }),
         patch: {
           type: 'string',
           description: '补丁文本。必须使用 `*** Begin Patch` / `*** Update File:` / `*** Add File:` / `*** Delete File:` / `*** End Patch` 语法。'
@@ -1052,45 +1403,59 @@ export function buildConversationDocumentApplyPatchFunctionToolDefinition() {
   };
 }
 
-export function buildConversationDocumentListFilesFunctionToolDefinition() {
+export function buildConversationDocumentApplyPatchFunctionToolDefinition() {
+  return buildVirtualFileApplyPatchFunctionToolDefinition();
+}
+
+export function buildVirtualFileListFilesFunctionToolDefinition() {
   return {
     type: 'function',
-    name: CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
-    description: '列出当前对话下的虚拟文档路径与基本元数据。',
+    name: VIRTUAL_FILE_LIST_FILES_TOOL_NAME,
+    description: '列出虚拟文件路径与基本元数据。默认作用于当前对话文档；当 `target.kind="skill"` 时可列出单个或全部 skill 文件。',
     strict: false,
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
+        target: buildVirtualFileTargetSchemaDescription({ requireSkillName: false }),
         path_glob: {
           type: ['string', 'null'],
-          description: '可选。按文档路径过滤，例如 `docs/**/*.md`。'
+          description: '可选。按虚拟文件路径过滤，例如 `docs/**/*.md` 或 `src/**/*.js`。'
         }
       }
     }
   };
 }
 
-export function buildConversationDocumentReadFileFunctionToolDefinition() {
+export function buildConversationDocumentListFilesFunctionToolDefinition() {
+  return buildVirtualFileListFilesFunctionToolDefinition();
+}
+
+export function buildVirtualFileReadFileFunctionToolDefinition() {
   return {
     type: 'function',
-    name: CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
-    description: '读取当前对话下某个虚拟文档。默认返回安全预览，可按字符或行范围读取。',
+    name: VIRTUAL_FILE_READ_FILE_TOOL_NAME,
+    description: '读取单个虚拟文件。默认返回安全预览，可按字符或行范围读取；当 `target.kind="skill"` 时必须指定 `target.name`。',
     strict: false,
     parameters: buildCommonFileReadParametersDescription()
   };
 }
 
-export function buildConversationDocumentSearchFilesFunctionToolDefinition() {
+export function buildConversationDocumentReadFileFunctionToolDefinition() {
+  return buildVirtualFileReadFileFunctionToolDefinition();
+}
+
+export function buildVirtualFileSearchFilesFunctionToolDefinition() {
   return {
     type: 'function',
-    name: CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
-    description: '在当前对话的全部虚拟文档中搜索文本或正则模式。',
+    name: VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME,
+    description: '在虚拟文件中搜索文本或正则模式。默认作用于当前对话文档；当 `target.kind="skill"` 时可搜索单个或全部 skill 文件。',
     strict: false,
     parameters: {
       type: 'object',
       additionalProperties: false,
       properties: {
+        target: buildVirtualFileTargetSchemaDescription({ requireSkillName: false }),
         pattern: {
           type: 'string',
           description: '必填。固定字符串或正则模式。'
@@ -1105,7 +1470,7 @@ export function buildConversationDocumentSearchFilesFunctionToolDefinition() {
         },
         path_glob: {
           type: ['string', 'null'],
-          description: '可选。按文档路径过滤，例如 `docs/**/*.md`。'
+          description: '可选。按虚拟文件路径过滤，例如 `docs/**/*.md` 或 `src/**/*.js`。'
         },
         context_before: {
           type: ['integer', 'null'],
@@ -1123,4 +1488,8 @@ export function buildConversationDocumentSearchFilesFunctionToolDefinition() {
       required: ['pattern']
     }
   };
+}
+
+export function buildConversationDocumentSearchFilesFunctionToolDefinition() {
+  return buildVirtualFileSearchFilesFunctionToolDefinition();
 }

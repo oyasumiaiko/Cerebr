@@ -8,13 +8,13 @@ async function readWorkspaceFile(relativePath) {
   return fs.readFile(filePath, 'utf8');
 }
 
-test('response activity 已接入 micro_skill_registry 专用摘要与 meta 样式', async () => {
+test('response activity 已接入顶层虚拟文件摘要与 meta 样式', async () => {
   const messageProcessorSource = await readWorkspaceFile('src/core/message_processor.js');
   const sidebarCssSource = await readWorkspaceFile('src/ui/styles/sidebar.css');
 
-  assert.match(messageProcessorSource, /buildMicroSkillRegistrySummaryParts/);
-  assert.match(messageProcessorSource, /buildMicroSkillRegistryPrimaryText/);
-  assert.match(messageProcessorSource, /getMicroSkillRegistryToolTypeLabel/);
+  assert.match(messageProcessorSource, /buildVirtualFileSummaryParts/);
+  assert.match(messageProcessorSource, /buildVirtualFilePrimaryText/);
+  assert.match(messageProcessorSource, /getVirtualFileToolTypeLabel/);
   assert.match(messageProcessorSource, /response-activity-tool-meta/);
 
   assert.match(sidebarCssSource, /\.message \.response-activity-tool-meta/);

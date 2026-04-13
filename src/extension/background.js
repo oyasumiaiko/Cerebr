@@ -496,7 +496,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       } catch (error) {
         sendResponse({
           success: false,
-          error: error?.message || '微型 skill 注册表操作失败。'
+          error: error?.message || 'skill_registry 操作失败。'
         });
       }
     })();
@@ -523,7 +523,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       } catch (error) {
         sendResponse({
           success: false,
-          error: error?.message || '读取当前页面匹配的微型 skill 摘要失败。'
+          error: error?.message || '读取当前页面匹配的技能摘要失败。'
         });
       }
     })();

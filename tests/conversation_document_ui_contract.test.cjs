@@ -11,11 +11,11 @@ async function readWorkspaceFile(relativePath) {
 test('message_sender 已注册对话文档顶层工具并接入专用执行分支', async () => {
   const source = await readWorkspaceFile('src/core/message_sender.js');
 
-  assert.match(source, /buildConversationDocumentApplyPatchFunctionToolDefinition\(\)/);
-  assert.match(source, /buildConversationDocumentListFilesFunctionToolDefinition\(\)/);
-  assert.match(source, /buildConversationDocumentReadFileFunctionToolDefinition\(\)/);
-  assert.match(source, /buildConversationDocumentSearchFilesFunctionToolDefinition\(\)/);
-  assert.match(source, /executeResponsesConversationDocumentFunction\(functionName, parsedArgs, options\)/);
+  assert.match(source, /buildVirtualFileApplyPatchFunctionToolDefinition\(\)/);
+  assert.match(source, /buildVirtualFileListFilesFunctionToolDefinition\(\)/);
+  assert.match(source, /buildVirtualFileReadFileFunctionToolDefinition\(\)/);
+  assert.match(source, /buildVirtualFileSearchFilesFunctionToolDefinition\(\)/);
+  assert.match(source, /executeResponsesVirtualFileFunction\(functionName, parsedArgs, options\)/);
   assert.match(source, /serializeResponsesConversationDocumentFunctionToolOutput\(functionName, outputPayload\)/);
 });
 

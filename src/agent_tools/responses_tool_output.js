@@ -1106,7 +1106,7 @@ function extractMicroSkillRefreshErrorMessage(refreshResult) {
   const message = typeof refreshResult?.error?.message === 'string'
     ? refreshResult.error.message.trim()
     : '';
-  return message || '微型 skill 当前文档 refresh 失败。';
+  return message || '技能当前文档 refresh 失败。';
 }
 
 function buildMicroSkillApplyPatchSummaryText(result) {
@@ -1151,18 +1151,22 @@ function buildMicroSkillMutationSummaryText(result) {
         : `Deleted file from skill ${skillName || '(unknown)'}.`;
       break;
     case 'create':
+    case 'create_skill':
       summary = `Created skill ${skillName || '(unknown)'}${revision ? ` (revision ${revision})` : ''}${totalFiles ? ` with ${totalFiles} files` : ''}.`;
       break;
     case 'update':
       summary = `Updated skill ${skillName || '(unknown)'}${revision ? ` to revision ${revision}` : ''}.`;
       break;
     case 'enable':
+    case 'enable_skill':
       summary = `Enabled skill ${skillName || '(unknown)'}${revision ? ` (revision ${revision})` : ''}.`;
       break;
     case 'disable':
+    case 'disable_skill':
       summary = `Disabled skill ${skillName || '(unknown)'}${revision ? ` (revision ${revision})` : ''}.`;
       break;
     case 'delete':
+    case 'delete_skill':
       summary = `Deleted skill ${skillName || '(unknown)'}.`;
       break;
     case 'refresh_current_document':
@@ -1188,13 +1192,13 @@ export function buildResponsesMicroSkillRegistryToolOutputContentItems(result, o
   if (normalized.ok === true) {
     const summaryText = buildMicroSkillMutationSummaryText(normalized);
     if (summaryText) {
-      return buildResponsesGenericXmlToolOutputContentItems('micro_skill_registry_result', {
+      return buildResponsesGenericXmlToolOutputContentItems('skill_registry_result', {
         ok: true,
         value: summaryText
       }, options);
     }
   }
-  return buildResponsesGenericXmlToolOutputContentItems('micro_skill_registry_result', normalized, options);
+  return buildResponsesGenericXmlToolOutputContentItems('skill_registry_result', normalized, options);
 }
 
 export function buildResponsesConversationDocumentToolOutputContentItems(toolName, result, options = {}) {

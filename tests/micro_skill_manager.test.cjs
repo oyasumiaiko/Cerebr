@@ -150,7 +150,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   });
 
   const created = await manager.executeRegistryAction({
-    action: 'create',
+    action: 'create_skill',
     skill: buildSkillInput()
   }, { tabId: 11 });
   assert.equal(created.ok, true);
@@ -310,7 +310,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   assert.equal(calls.execute.length, 8);
 
   const disabled = await manager.executeRegistryAction({
-    action: 'disable',
+    action: 'disable_skill',
     skill_name: 'dom-probe'
   }, { tabId: 11 });
   assert.equal(disabled.ok, true);
@@ -318,7 +318,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   assert.equal(calls.execute.length, 9);
 
   const enabled = await manager.executeRegistryAction({
-    action: 'enable',
+    action: 'enable_skill',
     skill_name: 'dom-probe'
   }, { tabId: 11 });
   assert.equal(enabled.ok, true);
@@ -326,7 +326,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   assert.equal(calls.execute.length, 10);
 
   const removed = await manager.executeRegistryAction({
-    action: 'delete',
+    action: 'delete_skill',
     skill_name: 'dom-probe'
   }, { tabId: 11 });
   assert.equal(removed.ok, true);
