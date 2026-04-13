@@ -307,15 +307,13 @@ test('buildResponsesMicroSkillRegistryToolOutputContentItems 会把模板式 cre
     normalized_name: 'worldquant-dom-helper',
     created_files: [
       'SKILL.md',
-      'src/main.js',
-      'src/helpers/dom.js',
       'references/api_reference.md'
     ],
     selected_resources: ['references'],
     examples_created: true,
     next_steps: [
-      'Edit SKILL.md to replace the TODO sections with real trigger rules, inputs, examples, and workflow.',
-      'When the scaffold is ready, call enable_skill and then mount_on_current_page only if immediate verification is needed.'
+      'Edit SKILL.md and replace the placeholder sections with real trigger rules, workflow, and concrete examples.',
+      'If this skill later needs browser runtime code, patch manifest.json to add match and runtime.entry_path, then add the corresponding JS files with apply_patch.'
     ],
     skill: {
       name: 'worldquant-dom-helper',

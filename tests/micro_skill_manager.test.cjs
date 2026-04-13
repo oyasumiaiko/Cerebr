@@ -96,7 +96,6 @@ function buildCreateTemplateInput(name = 'DOM Probe') {
       short_description: '读取当前页面标题和 URL',
       default_prompt: 'Read the current page title and URL.'
     },
-    match: ['https://*.example.com/*'],
     resources: ['references'],
     examples: true
   };
@@ -394,6 +393,7 @@ test('模板式 create_skill 默认禁用且不会自动 refresh 当前文档', 
   assert.equal(created.create_mode, 'template');
   assert.equal(created.requested_name, 'DOM Probe Template');
   assert.equal(created.normalized_name, 'dom-probe-template');
+  assert.equal(created.skill.kind, 'guidance');
   assert.equal(created.skill.enabled, false);
   assert.equal(created.refreshed_current_document, false);
   assert.equal(created.refresh_result, null);
@@ -401,8 +401,8 @@ test('模板式 create_skill 默认禁用且不会自动 refresh 当前文档', 
   assert.equal(created.examples_created, true);
   assert.equal(Array.isArray(created.created_files), true);
   assert.equal(created.created_files.includes('SKILL.md'), true);
-  assert.equal(created.created_files.includes('src/main.js'), true);
-  assert.equal(created.created_files.includes('src/helpers/dom.js'), true);
+  assert.equal(created.created_files.includes('src/main.js'), false);
+  assert.equal(created.created_files.includes('src/helpers/dom.js'), false);
   assert.equal(created.created_files.includes('references/api_reference.md'), true);
   assert.equal(Array.isArray(created.next_steps), true);
   assert.equal(created.next_steps.some((line) => /enable_skill/.test(line)), true);
@@ -415,8 +415,10 @@ test('模板式 create_skill 默认禁用且不会自动 refresh 当前文档', 
     file_path: 'SKILL.md'
   }, { tabId: 11 });
   assert.equal(instruction.ok, true);
-  assert.match(instruction.skill.file.content, /## Inputs/);
-  assert.match(instruction.skill.file.content, /\$invoke\("dom-probe-template", "readSummary"\)/);
+  assert.match(instruction.skill.file.content, /## Overview/);
+  assert.match(instruction.skill.file.content, /## Structuring This Skill/);
+  assert.match(instruction.skill.file.content, /## Resources \(optional\)/);
+  assert.equal(Object.prototype.hasOwnProperty.call(instruction.skill, 'has_runtime'), false);
 
   const manifest = await manager.executeRegistryAction({
     action: 'read_file',
@@ -425,6 +427,219 @@ test('模板式 create_skill 默认禁用且不会自动 refresh 当前文档', 
   }, { tabId: 11 });
   assert.equal(manifest.ok, true);
   assert.match(manifest.skill.file.content, /"enabled": false/);
+  assert.match(manifest.skill.file.content, /"match": \[\]/);
+  assert.match(manifest.skill.file.content, /"entry_path": null/);
+});
+
+test('listMatchingSkillSummariesForTab 会同时注入 builtin、启用的 guidance skill 和命中的 page runtime skill 摘要', async () => {
+  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+
+  const manager = createMicroSkillManager({
+    store: createMockStore([
+      {
+        name: 'ops-guide',
+        description: '指导如何检查当前页面状态',
+        interface: {
+          display_name: 'Ops Guide',
+          short_description: '检查页面状态的通用指导',
+          default_prompt: null
+        },
+        match: [],
+        enabled: true,
+        instruction: {
+          path: 'SKILL.md'
+        },
+        runtime: {
+          entry_path: null
+        },
+        files: [
+          {
+            path: 'SKILL.md',
+            content: '# Ops Guide\n\nRead this guidance first.'
+          }
+        ],
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-02T00:00:00.000Z',
+        revision: 1
+      },
+      {
+        ...buildSkillInput('page-probe'),
+        match: ['https://app.example.com/*'],
+        enabled: true,
+        created_at: '2026-01-01T00:00:00.000Z',
+        updated_at: '2026-01-03T00:00:00.000Z',
+        revision: 1
+      }
+    ]),
+    userScriptsApi: {
+      async getScripts() { return []; },
+      async register() {},
+      async update() {},
+      async unregister() {}
+    },
+    tabsApi: {
+      async get() {
+        return { id: 11, url: 'https://app.example.com/path', title: 'Example' };
+      }
+    },
+    jsRuntimeManager: {
+      async execute() {
+        return { ok: true, tabId: 11, value: null, logs: [], items: [] };
+      }
+    }
+  });
+
+  const summaries = await manager.listMatchingSkillSummariesForTab(11);
+  assert.equal(summaries.ok, true);
+  assert.equal(Array.isArray(summaries.skills), true);
+  assert.deepEqual(
+    summaries.skills.map((skill) => skill.name),
+    ['skill-creator', 'ops-guide', 'page-probe']
+  );
+  assert.equal(summaries.skills.every((skill) => typeof skill.short_description === 'string' && skill.short_description), true);
+  assert.equal(summaries.skills.every((skill) => skill.instruction_path === 'SKILL.md'), true);
+  assert.equal(summaries.skills.every((skill) => !Object.prototype.hasOwnProperty.call(skill, 'mount_surface')), true);
+});
+
+test('skill 可以在后续 patch 后从 guidance 演进成 page runtime，再退回 guidance', async () => {
+  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+  const calls = {
+    register: [],
+    update: [],
+    unregister: [],
+    execute: []
+  };
+
+  const manager = createMicroSkillManager({
+    store: createMockStore(),
+    userScriptsApi: {
+      async getScripts() { return []; },
+      async register(definitions) { calls.register.push(clone(definitions)); },
+      async update(definitions) { calls.update.push(clone(definitions)); },
+      async unregister(payload) { calls.unregister.push(clone(payload)); }
+    },
+    tabsApi: {
+      async get() {
+        return { id: 11, url: 'https://app.example.com/path', title: 'Example' };
+      }
+    },
+    jsRuntimeManager: {
+      async execute(request) {
+        calls.execute.push(clone(request));
+        return {
+          ok: true,
+          tabId: request.tabId,
+          value: {
+            active_skills: ['runtime-probe']
+          },
+          logs: [],
+          items: []
+        };
+      }
+    }
+  });
+
+  const created = await manager.executeRegistryAction({
+    action: 'create_skill',
+    skill: {
+      name: 'Runtime Probe',
+      description: '在需要页面 runtime 时再继续演进的通用 skill。',
+      resources: [],
+      examples: false
+    }
+  }, { tabId: 11 });
+  assert.equal(created.skill.kind, 'guidance');
+
+  const genericInstruction = await manager.executeRegistryAction({
+    action: 'read_file',
+    skill_name: 'runtime-probe',
+    file_path: 'SKILL.md'
+  }, { tabId: 11 });
+  assert.equal(Object.prototype.hasOwnProperty.call(genericInstruction.skill, 'has_runtime'), false);
+
+  await manager.executeRegistryAction({
+    action: 'apply_patch',
+    skill_name: 'runtime-probe',
+    patch: [
+      '*** Begin Patch',
+      '*** Add File: src/main.js',
+      '+return {',
+      '+  readSummary() {',
+      '+    return { title: document.title, href: location.href };',
+      '+  }',
+      '+};',
+      '*** End Patch'
+    ].join('\n')
+  }, { tabId: 11 });
+
+  const runtimeManifest = await manager.executeRegistryAction({
+    action: 'apply_patch',
+    skill_name: 'runtime-probe',
+    patch: [
+      '*** Begin Patch',
+      '*** Update File: manifest.json',
+      '@@',
+      '-  "match": [],',
+      '+  "match": [',
+      '+    "https://app.example.com/*"',
+      '+  ],',
+      '@@',
+      '-    "entry_path": null',
+      '+    "entry_path": "src/main.js"',
+      '*** End Patch'
+    ].join('\n')
+  }, { tabId: 11 });
+  assert.equal(runtimeManifest.skill.kind, 'page_runtime');
+
+  const runtimeInstruction = await manager.executeRegistryAction({
+    action: 'read_file',
+    skill_name: 'runtime-probe',
+    file_path: 'SKILL.md'
+  }, { tabId: 11 });
+  assert.equal(runtimeInstruction.skill.has_runtime, true);
+  assert.equal(runtimeInstruction.skill.runtime_entry_path, 'src/main.js');
+
+  const enabled = await manager.executeRegistryAction({
+    action: 'enable_skill',
+    skill_name: 'runtime-probe'
+  }, { tabId: 11 });
+  assert.equal(enabled.skill.kind, 'page_runtime');
+  assert.equal(calls.register.length, 1);
+
+  const mounted = await manager.executeRegistryAction({
+    action: 'mount_on_current_page',
+    skill_name: 'runtime-probe'
+  }, { tabId: 11 });
+  assert.equal(mounted.ok, true);
+  assert.equal(mounted.requested_skill_status, 'mounted');
+
+  const reverted = await manager.executeRegistryAction({
+    action: 'apply_patch',
+    skill_name: 'runtime-probe',
+    patch: [
+      '*** Begin Patch',
+      '*** Update File: manifest.json',
+      '@@',
+      '-  "match": [',
+      '-    "https://app.example.com/*"',
+      '-  ],',
+      '+  "match": [],',
+      '@@',
+      '-    "entry_path": "src/main.js"',
+      '+    "entry_path": null',
+      '*** End Patch'
+    ].join('\n')
+  }, { tabId: 11 });
+  assert.equal(reverted.skill.kind, 'guidance');
+  assert.equal(calls.unregister.length, 1);
+
+  const revertedInstruction = await manager.executeRegistryAction({
+    action: 'read_file',
+    skill_name: 'runtime-probe',
+    file_path: 'SKILL.md'
+  }, { tabId: 11 });
+  assert.equal(revertedInstruction.skill.has_runtime, true);
+  assert.match(revertedInstruction.skill.runtime_hint, /JS runtime files/i);
 });
 
 test('mount_on_current_page 只挂载指定技能并返回当前页 active skills', async () => {

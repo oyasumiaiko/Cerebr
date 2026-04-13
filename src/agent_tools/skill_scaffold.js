@@ -6,16 +6,15 @@
  * 2. 内置 `skill-creator` 展示给模型查看的模板示例；
  * 3. 创建完成后返回给模型的 `next_steps`。
  *
- * 这样后续只需要维护这一份模板源，就不会出现：
- * - skill-creator 教模型看的是一套模板；
- * - create_skill 实际创建出来的是另一套模板；
- * - tool output 里提示的下一步又是第三套说法。
+ * 当前目标不是继续强化 Cerebr 专用 page runtime 模板，
+ * 而是尽量贴近官方 Codex `init_skill.py` 的通用 skill 骨架：
+ * - 默认先生成通用 `SKILL.md`；
+ * - `scripts/` / `references/` / `assets/` 只在需要时再添加；
+ * - 是否演进成有 JS runtime 的页面 skill，交给后续 patch。
  */
 
 export const SKILL_SCAFFOLD_ALLOWED_RESOURCES = Object.freeze(['scripts', 'references', 'assets']);
 export const SKILL_SCAFFOLD_INSTRUCTION_PATH = 'SKILL.md';
-export const SKILL_SCAFFOLD_RUNTIME_ENTRY_PATH = 'src/main.js';
-export const SKILL_SCAFFOLD_DOM_HELPER_PATH = 'src/helpers/dom.js';
 
 function normalizeSingleLineText(value) {
   return (typeof value === 'string') ? value.replace(/\s+/g, ' ').trim() : '';
@@ -35,22 +34,6 @@ function normalizeTemplatePathPrefix(value) {
 
 function joinScaffoldPath(prefix, relativePath) {
   return `${normalizeTemplatePathPrefix(prefix)}${String(relativePath || '').trim()}`;
-}
-
-function formatMatchPatterns(match) {
-  const patterns = Array.isArray(match) ? match : [];
-  if (patterns.length <= 0) {
-    return '- `TODO: add match patterns`';
-  }
-  return patterns.map((pattern) => `- \`${String(pattern || '').trim()}\``).join('\n');
-}
-
-function buildResourceHintLine(resources) {
-  const selected = Array.isArray(resources) ? resources : [];
-  if (selected.length <= 0) {
-    return '- Resource directories: add concrete files under `scripts/`, `references/`, or `assets/` only when needed.';
-  }
-  return `- Selected resource directories: ${selected.map((value) => `\`${value}/\``).join(', ')}.`;
 }
 
 export function normalizeSkillScaffoldName(value) {
@@ -73,14 +56,11 @@ export function titleCaseSkillName(skillName) {
 }
 
 /**
- * 统一的浏览器 runtime 调用约定说明。
+ * 统一维护浏览器 runtime facade 约定。
  *
- * 这份文案会同时被：
- * - 自动注入给模型的 skill summary；
- * - 新建 skill 的 `SKILL.md` 模板；
- * - 内置 `skill-creator` 展示的模板示例；
- *
- * 所以这里保持“短而准”，只写模型真正需要知道的调用面与 runtime 约束。
+ * 虽然新通用 scaffold 默认不直接写入这段说明，
+ * 但后续当某个 skill 真正加入 JS runtime 时，
+ * 仍然需要一份稳定、统一、可复用的调用约定。
  */
 export function buildDefaultMicroSkillMountContract() {
   return [
@@ -98,16 +78,10 @@ export function buildDefaultMicroSkillMountContract() {
 
 function buildSkillScaffoldInstructionContent(options = {}) {
   const skillName = normalizeSingleLineText(options.skillName) || 'example-skill';
-  const displayName = normalizeSingleLineText(options.displayName) || titleCaseSkillName(skillName);
-  const description = normalizeSingleLineText(options.description) || 'Describe when this skill should be used.';
+  const skillTitle = normalizeSingleLineText(options.displayName) || titleCaseSkillName(skillName);
+  const description = normalizeSingleLineText(options.description)
+    || '[TODO: Complete and informative explanation of what the skill does and when to use it. Include WHEN to use this skill - specific scenarios, file types, or tasks that trigger it.]';
   const shortDescription = normalizeSingleLineText(options.shortDescription) || description;
-  const defaultPrompt = normalizeSingleLineText(options.defaultPrompt);
-  const matchPatterns = formatMatchPatterns(options.match);
-  const resources = Array.isArray(options.resources) ? options.resources : [];
-  const mountContract = buildDefaultMicroSkillMountContract()
-    .split('\n')
-    .map((line) => `- ${line}`)
-    .join('\n');
 
   return [
     '---',
@@ -117,120 +91,135 @@ function buildSkillScaffoldInstructionContent(options = {}) {
     `  short-description: ${toYamlQuotedString(shortDescription)}`,
     '---',
     '',
-    `# ${displayName}`,
+    `# ${skillTitle}`,
     '',
     '## Overview',
-    'This scaffold was generated automatically by `skill_registry(action="create_skill")`.',
-    'Replace the TODO sections below with instructions that another model can actually execute, not design notes.',
-    `Current trigger description: ${description}`,
     '',
-    '## Scope',
-    'Current `match` patterns:',
-    matchPatterns,
-    buildResourceHintLine(resources),
+    '[TODO: 1-2 sentences explaining what this skill enables]',
     '',
-    '## Inputs',
-    '- `args`: TODO. Document the exposed methods, argument shapes, required inputs, optional inputs, and defaults.',
-    '- Page prerequisites: TODO. Describe required URL patterns, login state, visible regions, or data preparation steps.',
-    defaultPrompt
-      ? `- Suggested default prompt: \`${defaultPrompt}\``
-      : '- Suggested default prompt: TODO. Describe the most typical invocation in one natural-language sentence.',
+    '## Structuring This Skill',
     '',
-    '## Quick start',
-    '```js',
-    `await $methods("${skillName}");`,
-    `await $invoke("${skillName}", "readSummary");`,
-    '```',
+    '[TODO: Choose the structure that best fits this skill\'s purpose. Common patterns:',
     '',
-    '## Usage examples',
-    '```js',
-    `await $invoke("${skillName}", "readSummary");`,
-    `await $skill("${skillName}");`,
-    '```',
+    '**1. Workflow-Based** (best for sequential processes)',
+    '- Works well when there are clear step-by-step procedures.',
+    '- Structure: `## Overview -> ## Workflow Decision Tree -> ## Step 1 -> ## Step 2...`',
     '',
-    '## Workflow',
-    '1. Confirm that the current URL and page state satisfy `match` and all prerequisites.',
-    '2. If extra site notes or structure explanations are needed, move non-runtime content into `references/` and explain when to read it here.',
-    '3. Keep the runtime entry thin and orchestration-focused; move brittle DOM-reading logic into `src/helpers/` first.',
-    '4. Put real side-effectful actions such as clicks or submits into dedicated helpers or `src/actions/` only when needed.',
+    '**2. Task-Based** (best for tool collections)',
+    '- Works well when the skill offers different operations or capabilities.',
+    '- Structure: `## Overview -> ## Quick Start -> ## Task Category 1 -> ## Task Category 2...`',
     '',
-    '## Runtime Contract',
-    mountContract,
+    '**3. Reference / Guidelines** (best for standards or specifications)',
+    '- Works well for policies, coding standards, or operating guidance.',
+    '- Structure: `## Overview -> ## Guidelines -> ## Specifications -> ## Usage...`',
     '',
-    '## Editing Checklist',
-    '- Rename `readSummary()` to method names that better match the actual task.',
-    '- Check whether `description`, `short-description`, and `default_prompt` really help with triggering and usage.',
-    '- If additional resources are needed, add concrete files with top-level `apply_patch` instead of relying on empty-directory intent.'
+    '**4. Capabilities-Based** (best for integrated systems)',
+    '- Works well when the skill provides multiple interrelated features.',
+    '- Structure: `## Overview -> ## Core Capabilities -> ### 1. Feature -> ### 2. Feature...`',
+    '',
+    'Patterns can be mixed and matched as needed.',
+    '',
+    'Delete this entire "Structuring This Skill" section when done - it is only guidance.]',
+    '',
+    '## [TODO: Replace with the first main section based on chosen structure]',
+    '',
+    '[TODO: Add the first real section here. Prefer concrete examples, decision points, or references to specific files over abstract design notes.]',
+    '',
+    '## Resources (optional)',
+    '',
+    'Create only the resource directories this skill actually needs. Delete this section if no resources are required.',
+    '',
+    '### scripts/',
+    'Executable code (Python, Bash, or other deterministic helpers) that can be run directly to perform specific operations.',
+    '',
+    '**Appropriate for:** scripts that do automation, data processing, generation, or deterministic transformations.',
+    '',
+    '### references/',
+    'Documentation and reference material intended to be loaded into context to inform the model\'s process and decisions.',
+    '',
+    '**Appropriate for:** API references, site structure notes, schemas, workflow guides, and detailed background that should not live in the main `SKILL.md`.',
+    '',
+    '### assets/',
+    'Files that are not intended to be loaded into context, but should instead be copied or reused in the final output.',
+    '',
+    '**Appropriate for:** templates, boilerplate code, images, fonts, icons, starter directories, or other output artifacts.',
+    '',
+    '---',
+    '',
+    '**Not every skill requires all three types of resources.**'
   ].join('\n');
 }
 
-function buildSkillScaffoldRuntimeEntryContent() {
+function buildSkillScaffoldExampleScriptContent(options = {}) {
+  const skillName = normalizeSingleLineText(options.skillName) || 'example-skill';
   return [
-    '// Keep the entry file thin: orchestrate helpers and export the final methods.',
-    '// Convention: use async require() for helpers instead of inlining everything into one file.',
+    '#!/usr/bin/env python3',
+    '"""',
+    `Example helper script for ${skillName}`,
     '',
-    'const dom = await require("./helpers/dom.js");',
+    'This is a placeholder script that can be executed directly.',
+    'Replace with actual implementation or delete it if not needed.',
+    '"""',
     '',
-    'return {',
-    '  readSummary() {',
-    '    return {',
-    '      title: dom.readTitle(),',
-    '      href: location.href',
-    '    };',
-    '  }',
-    '};'
-  ].join('\n');
-}
-
-function buildSkillScaffoldDomHelperContent() {
-  return [
-    '// Helper files should isolate brittle DOM selectors and reusable read logic.',
-    '// When the page structure changes, you can patch this file instead of rewriting the whole skill.',
+    'def main():',
+    `    print("This is an example script for ${skillName}")`,
+    '    # TODO: Add actual script logic here.',
     '',
-    'module.exports = {',
-    '  readTitle() {',
-    '    return document.title;',
-    '  }',
-    '};'
-  ].join('\n');
-}
-
-function buildSkillScaffoldExampleScriptContent() {
-  return [
-    '// Example scripts/ file generated by create_skill.',
-    '// Use scripts/ for deterministic helpers, generators, or reusable draft code.',
-    '// It is not mounted into the page runtime automatically; the real runtime entry stays in src/main.js.',
-    '',
-    'module.exports = {',
-    '  describeExampleInput() {',
-    '    return {',
-    '      note: "Replace this placeholder with a deterministic helper script if you really need one."',
-    '    };',
-    '  }',
-    '};'
+    'if __name__ == "__main__":',
+    '    main()'
   ].join('\n');
 }
 
 function buildSkillScaffoldExampleReferenceContent(options = {}) {
-  const displayName = normalizeSingleLineText(options.displayName) || 'Example Skill';
+  const skillTitle = normalizeSingleLineText(options.displayName) || 'Example Skill';
   return [
-    `# ${displayName} Reference`,
+    `# Reference Documentation for ${skillTitle}`,
     '',
-    'This is an example references/ file generated by create_skill.',
+    'This is a placeholder for detailed reference documentation.',
+    'Replace it with real reference content or delete it if not needed.',
     '',
-    '## What to put here',
-    '- Site structure, API fields, business terminology, or known pitfalls.',
-    '- Put content here only when it does not belong in the main `SKILL.md` and should be read on demand.',
+    '## When Reference Docs Are Useful',
     '',
-    '## TODO',
-    '- Replace this placeholder with real page structure notes or concise external documentation summaries.'
+    'Reference docs are ideal for:',
+    '- Comprehensive API documentation',
+    '- Detailed workflow guides',
+    '- Complex multi-step processes',
+    '- Information too lengthy for main SKILL.md',
+    '- Content that is only needed for specific use cases',
+    '',
+    '## Structure Suggestions',
+    '',
+    '### API Reference Example',
+    '- Overview',
+    '- Authentication',
+    '- Endpoints with examples',
+    '- Error codes',
+    '- Rate limits',
+    '',
+    '### Workflow Guide Example',
+    '- Prerequisites',
+    '- Step-by-step instructions',
+    '- Common patterns',
+    '- Troubleshooting',
+    '- Best practices'
   ].join('\n');
 }
 
 function buildSkillScaffoldExampleAssetContent() {
   return [
-    'This is a placeholder asset created by create_skill.',
-    'Replace or delete it when the skill gets real assets.'
+    '# Example Asset File',
+    '',
+    'This placeholder represents where asset files would be stored.',
+    'Replace it with actual asset files or delete it if not needed.',
+    '',
+    'Asset files are not intended to be loaded into context, but rather used within the final output.',
+    '',
+    'Common examples:',
+    '- Templates',
+    '- Images',
+    '- Fonts',
+    '- Boilerplate code',
+    '- Icons'
   ].join('\n');
 }
 
@@ -238,42 +227,29 @@ export function buildSkillScaffoldFiles(options = {}) {
   const prefix = normalizeTemplatePathPrefix(options.pathPrefix);
   const skillName = normalizeSingleLineText(options.skillName) || 'example-skill';
   const displayName = normalizeSingleLineText(options.displayName) || titleCaseSkillName(skillName);
-  const description = normalizeSingleLineText(options.description) || 'Describe when this skill should be used.';
+  const description = normalizeSingleLineText(options.description)
+    || '[TODO: Complete and informative explanation of what the skill does and when to use it. Include WHEN to use this skill - specific scenarios, file types, or tasks that trigger it.]';
   const shortDescription = normalizeSingleLineText(options.shortDescription) || description;
-  const defaultPrompt = normalizeSingleLineText(options.defaultPrompt) || null;
   const resources = Array.isArray(options.resources) ? options.resources : [];
   const examples = options.examples === true;
   const withPrefix = (relativePath) => joinScaffoldPath(prefix, relativePath);
 
-  const files = [
-    {
-      path: withPrefix(SKILL_SCAFFOLD_INSTRUCTION_PATH),
-      content: buildSkillScaffoldInstructionContent({
-        skillName,
-        displayName,
-        description,
-        shortDescription,
-        defaultPrompt,
-        match: options.match,
-        resources
-      })
-    },
-    {
-      path: withPrefix(SKILL_SCAFFOLD_RUNTIME_ENTRY_PATH),
-      content: buildSkillScaffoldRuntimeEntryContent()
-    },
-    {
-      path: withPrefix(SKILL_SCAFFOLD_DOM_HELPER_PATH),
-      content: buildSkillScaffoldDomHelperContent()
-    }
-  ];
+  const files = [{
+    path: withPrefix(SKILL_SCAFFOLD_INSTRUCTION_PATH),
+    content: buildSkillScaffoldInstructionContent({
+      skillName,
+      displayName,
+      description,
+      shortDescription
+    })
+  }];
 
   if (examples === true) {
     if (resources.includes('scripts')) {
       files.push({
-        path: withPrefix('scripts/example.js'),
+        path: withPrefix('scripts/example.py'),
         kind: prefix ? 'template' : 'reference',
-        content: buildSkillScaffoldExampleScriptContent()
+        content: buildSkillScaffoldExampleScriptContent({ skillName })
       });
     }
     if (resources.includes('references')) {
@@ -297,16 +273,15 @@ export function buildSkillScaffoldFiles(options = {}) {
 
 export function buildSkillScaffoldInput(options = {}) {
   const skillName = normalizeSingleLineText(options.skillName) || 'example-skill';
-  const description = normalizeSingleLineText(options.description) || 'Describe when this skill should be used.';
+  const description = normalizeSingleLineText(options.description)
+    || '[TODO: Complete and informative explanation of what the skill does and when to use it. Include WHEN to use this skill - specific scenarios, file types, or tasks that trigger it.]';
   const displayName = normalizeSingleLineText(options.displayName) || titleCaseSkillName(skillName);
   const shortDescription = normalizeSingleLineText(options.shortDescription) || description;
   const defaultPrompt = normalizeSingleLineText(options.defaultPrompt) || null;
-  const match = Array.isArray(options.match) ? options.match : [];
   const resources = Array.isArray(options.resources) ? options.resources : [];
   const examples = options.examples === true;
 
   return {
-    kind: 'page_runtime',
     name: skillName,
     description,
     interface: {
@@ -314,21 +289,19 @@ export function buildSkillScaffoldInput(options = {}) {
       short_description: shortDescription,
       default_prompt: defaultPrompt
     },
-    match,
+    match: Array.isArray(options.match) ? options.match : [],
     enabled: options.enabled === true,
     instruction: {
       path: SKILL_SCAFFOLD_INSTRUCTION_PATH
     },
     runtime: {
-      entry_path: SKILL_SCAFFOLD_RUNTIME_ENTRY_PATH
+      entry_path: null
     },
     files: buildSkillScaffoldFiles({
       skillName,
       displayName,
       description,
       shortDescription,
-      defaultPrompt,
-      match,
       resources,
       examples
     })
@@ -342,14 +315,14 @@ export function buildSkillScaffoldNextSteps(options = {}) {
   const resourceText = resources.length > 0 ? resources.map((value) => `${value}/`).join(', ') : 'scripts/, references/, assets/';
 
   return [
-    'Edit SKILL.md to replace the TODO sections with real trigger rules, inputs, examples, and workflow.',
+    'Edit SKILL.md and replace the placeholder sections with real trigger rules, workflow, and concrete examples.',
     examples
       ? `Replace or delete the placeholder files created under ${resourceText}.`
       : `Add concrete files under ${resourceText} only when the skill actually needs them.`,
-    'Patch src/main.js and src/helpers/dom.js so the exported methods match the real task.',
-    'Patch manifest.json if display_name, short_description, default_prompt, match, or enabled state should change.',
+    'If this skill later needs browser runtime code, patch manifest.json to add match and runtime.entry_path, then add the corresponding JS files with apply_patch.',
+    'Keep references and scripts on-demand; do not turn the scaffold into a large package before the real workflow is clear.',
     enabled
-      ? 'If immediate verification is needed on the active tab, call mount_on_current_page explicitly.'
-      : 'When the scaffold is ready, call enable_skill and then mount_on_current_page only if immediate verification is needed.'
+      ? 'If you intentionally enabled the skill already, verify the summary and files first; only call mount_on_current_page after the skill truly becomes a page runtime skill.'
+      : 'When the skill is ready, call enable_skill; only call mount_on_current_page after the skill truly becomes a page runtime skill.'
   ];
 }

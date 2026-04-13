@@ -10,7 +10,7 @@ async function loadMicroSkillContextModule() {
   return import(dataUrl);
 }
 
-test('resolveMicroSkillContextAttachment 只注入摘要并在签名不变时跳过重复注入', async () => {
+test('resolveMicroSkillContextAttachment 只注入官方风格的全局说明与最小 skill 摘要，并在签名不变时跳过重复注入', async () => {
   const {
     buildMicroSkillContextPayload,
     buildMicroSkillContextInputItems,
@@ -24,17 +24,13 @@ test('resolveMicroSkillContextAttachment 只注入摘要并在签名不变时跳
       {
         name: 'skill-creator',
         priority: 0,
-        display_name: 'Skill Creator',
-        short_description: '创建或更新微型 skill 时先读的内置指导 skill',
-        default_prompt: 'Read built-in skill creator detail first.',
-        mount_surface: 'Instruction-only skill.'
+        short_description: '创建或更新 skill 时先读的内置指导 skill',
+        instruction_path: 'SKILL.md'
       },
       {
         name: 'dom-probe',
-        display_name: 'DOM Probe',
         short_description: '读取页面标题和 URL',
-        default_prompt: 'Read the current page title and URL.',
-        mount_surface: '$invoke("dom-probe", "read", { includeUrl: true })'
+        instruction_path: 'SKILL.md'
       }
     ]
   });
@@ -43,11 +39,15 @@ test('resolveMicroSkillContextAttachment 只注入摘要并在签名不变时跳
   assert.equal(items.length, 1);
   const text = items[0].content[0].text;
   assert.match(text, /<micro_skill_context/);
+  assert.match(text, /<how_to_use>/);
+  assert.match(text, /Skills are local instructions stored in `SKILL\.md`\./);
+  assert.match(text, /read that skill&apos;s `SKILL\.md` before using it\./i);
+  assert.match(text, /<instruction_path>SKILL\.md<\/instruction_path>/);
   assert.doesNotMatch(text, /mode=/);
-  assert.match(text, /DOM Probe/);
-  assert.ok(text.indexOf('Skill Creator') < text.indexOf('DOM Probe'));
-  assert.doesNotMatch(text, /source\.code/);
-  assert.match(text, /\$invoke\(&quot;dom-probe&quot;/);
+  assert.doesNotMatch(text, /<display_name>/);
+  assert.doesNotMatch(text, /<default_prompt>/);
+  assert.doesNotMatch(text, /<mount_surface>/);
+  assert.ok(text.indexOf('skill-creator') < text.indexOf('dom-probe'));
 
   const first = resolveMicroSkillContextAttachment({ payload, previousEffectiveSignature: '' });
   assert.ok(first.signature);
@@ -86,4 +86,5 @@ test('空 skill 集只在需要覆盖旧签名时注入', async () => {
   });
   assert.ok(second.signature);
   assert.equal(second.inputItems.length, 1);
+  assert.match(second.inputItems[0].content[0].text, /<how_to_use>/);
 });

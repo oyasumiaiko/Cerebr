@@ -99,7 +99,6 @@ function buildCreateTemplateInput(name = 'DOM Probe') {
       short_description: '读取当前页面标题和 URL',
       default_prompt: 'Read the current page title and URL.'
     },
-    match: ['https://*.example.com/*'],
     resources: ['references'],
     examples: true
   };
@@ -227,6 +226,12 @@ test('buildStoredMicroSkillRecord / saveStoredMicroSkillPackage / getStoredMicro
   assert.equal(fileIndex.files[0].path, 'manifest.json');
   assert.equal(fileIndex.files[0].is_manifest, true);
 
+  const instructionFile = buildMicroSkillFilePayload(loaded, 'SKILL.md');
+  assert.equal(instructionFile.has_runtime, true);
+  assert.equal(instructionFile.runtime_entry_path, 'src/main.js');
+  assert.equal(instructionFile.runtime_file_count, 2);
+  assert.match(instructionFile.runtime_hint, /Read SKILL\.md first/);
+
   const searchResult = searchMicroSkillFiles(loaded, {
     requestedSkillName: 'dom-probe',
     pattern: 'readTitle'
@@ -256,7 +261,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
   assert.doesNotMatch(definition.parameters.properties.action.description, /read_file/);
   assert.doesNotMatch(definition.parameters.properties.action.description, /apply_patch/);
   assert.equal(definition.parameters.properties.skill.required.includes('name'), true);
-  assert.equal(definition.parameters.properties.skill.required.includes('match'), true);
+  assert.equal(definition.parameters.properties.skill.required.includes('match'), false);
   assert.equal(definition.parameters.properties.skill.properties.resources.items.enum.includes('references'), true);
 
   const normalizedCreate = normalizeMicroSkillRegistryToolArguments({
@@ -270,6 +275,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
   assert.equal(normalizedCreate.skill.requested_name, 'DOM Probe');
   assert.equal(normalizedCreate.skill.name, 'dom-probe');
   assert.equal(normalizedCreate.skill.interface.display_name, 'Dom Probe');
+  assert.deepEqual(normalizedCreate.skill.match, []);
   assert.equal(normalizedCreate.skill.enabled, false);
   assert.deepEqual(normalizedCreate.skill.resources, ['references']);
   assert.equal(normalizedCreate.skill.examples, true);
@@ -537,7 +543,7 @@ test('micro skill 读取参数支持字符偏移与按行续读', async () => {
   assert.equal(globalSearch.matches.every((item) => item.file_path.startsWith('src/')), true);
 });
 
-test('buildMicroSkillContextSummary 与默认挂载约定会使用新的 facade 调用说明', async () => {
+test('buildMicroSkillContextSummary 会返回官方风格的最小 skill 摘要', async () => {
   const {
     buildDefaultMicroSkillMountContract,
     buildMicroSkillContextSummary,
@@ -548,10 +554,11 @@ test('buildMicroSkillContextSummary 与默认挂载约定会使用新的 facade 
   const summary = buildMicroSkillContextSummary(record);
   const contract = buildDefaultMicroSkillMountContract();
 
-  assert.match(summary.mount_surface, /\$invoke\("dom-probe", "methodName", \.\.\.args\)/);
-  assert.match(summary.mount_surface, /\$methods\("dom-probe"\)/);
-  assert.match(summary.mount_surface, /\$skill\("dom-probe"\)/);
-  assert.doesNotMatch(summary.mount_surface, /__cerebrMicroSkills\.skills/);
+  assert.equal(summary.name, 'dom-probe');
+  assert.equal(summary.short_description, '读取当前页面标题和 URL');
+  assert.equal(summary.instruction_path, 'SKILL.md');
+  assert.equal(Object.prototype.hasOwnProperty.call(summary, 'display_name'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(summary, 'mount_surface'), false);
   assert.match(contract, /Recommended helpers: `globalThis\.\$skill\(name\)`, `globalThis\.\$invoke\(skillName, methodName, \.\.\.args\)`, `globalThis\.\$methods\(name\)`\./);
   assert.match(contract, /Compatibility runtime registry: `globalThis\.__cerebrMicroSkills`\./);
 });

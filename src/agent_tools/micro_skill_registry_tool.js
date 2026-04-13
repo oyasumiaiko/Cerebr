@@ -40,6 +40,7 @@ export const MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS = 50;
 export const MICRO_SKILL_SEARCH_MAX_RESULTS = 200;
 
 const MICRO_SKILL_KIND_PAGE_RUNTIME = 'page_runtime';
+const MICRO_SKILL_KIND_GUIDANCE = 'guidance';
 const MICRO_SKILL_KIND_BUILTIN_GUIDANCE = 'builtin_guidance';
 const MICRO_SKILL_FILE_KIND_INSTRUCTION = 'instruction';
 const MICRO_SKILL_FILE_KIND_RUNTIME_SOURCE = 'runtime_source';
@@ -122,10 +123,14 @@ export function normalizeMicroSkillName(value) {
   return name;
 }
 
-function normalizeMicroSkillKind(value, fallback = MICRO_SKILL_KIND_PAGE_RUNTIME) {
+function normalizeMicroSkillKind(value, fallback = null) {
   const text = normalizeString(value).toLowerCase();
   if (!text) return fallback;
-  if (text === MICRO_SKILL_KIND_PAGE_RUNTIME || text === MICRO_SKILL_KIND_BUILTIN_GUIDANCE) {
+  if (
+    text === MICRO_SKILL_KIND_PAGE_RUNTIME
+    || text === MICRO_SKILL_KIND_GUIDANCE
+    || text === MICRO_SKILL_KIND_BUILTIN_GUIDANCE
+  ) {
     return text;
   }
   throw new Error(`micro_skill_registry 参数错误：不支持的 skill.kind \`${value}\`。`);
@@ -274,12 +279,11 @@ function normalizeMicroSkillCreateTemplateInput(rawSkill) {
     throw new Error('skill_registry 参数错误：create_skill.skill.examples=true 时必须同时提供 create_skill.skill.resources。');
   }
   return {
-    kind: MICRO_SKILL_KIND_PAGE_RUNTIME,
     requested_name: requestedName,
     name: safeName,
     description,
     interface: buildMicroSkillCreateTemplateInterface(skill.interface, description, safeName),
-    match: normalizeMicroSkillMatchPatterns(skill.match, { allowEmpty: false }),
+    match: normalizeMicroSkillMatchPatterns(skill.match, { allowEmpty: true }),
     enabled: normalizeBoolean(skill.enabled, false),
     resources,
     examples
@@ -350,7 +354,7 @@ export function parseMicroSkillVirtualManifestContent(content, existingRecord = 
   }
 
   return {
-    kind: existing?.kind || MICRO_SKILL_KIND_PAGE_RUNTIME,
+    kind: existing?.builtin === true ? existing.kind : null,
     name: existing?.name || null,
     description: normalizeString(parsed.description || existing?.description),
     interface: {
@@ -804,29 +808,64 @@ function normalizeMicroSkillInstruction(rawInstruction, files) {
   };
 }
 
-function normalizeMicroSkillRuntime(rawRuntime, files, kind) {
+function normalizeMicroSkillRuntime(rawRuntime, files) {
   const input = ensurePlainObject(rawRuntime);
   const requestedPath = normalizeOptionalString(input.entry_path || input.entry)
     ? normalizeMicroSkillFilePath(input.entry_path || input.entry)
     : null;
   const runtimeEntryFile = requestedPath
     ? files.find((file) => file.path === requestedPath)
-    : (files.find((file) => file.path === pickDefaultMicroSkillRuntimeEntryPath(files)) || null);
-
-  if (kind === MICRO_SKILL_KIND_PAGE_RUNTIME) {
-    if (!runtimeEntryFile) {
-      throw new Error('micro_skill_registry 参数错误：page runtime skill 必须提供 runtime.entry_path。');
-    }
-    if (!isMicroSkillRuntimeSourcePath(runtimeEntryFile.path)) {
-      throw new Error(`micro_skill_registry 参数错误：runtime.entry_path \`${runtimeEntryFile.path}\` 必须指向可执行的 JS runtime 文件。`);
-    }
-  }
+    : null;
 
   if (!runtimeEntryFile) {
     return { entry_path: null };
   }
+  if (!isMicroSkillRuntimeSourcePath(runtimeEntryFile.path)) {
+    throw new Error(`micro_skill_registry 参数错误：runtime.entry_path \`${runtimeEntryFile.path}\` 必须指向可执行的 JS runtime 文件。`);
+  }
   return {
     entry_path: runtimeEntryFile.path
+  };
+}
+
+function inferMicroSkillKindFromContent(options = {}) {
+  const explicitKind = normalizeMicroSkillKind(options.kind, null);
+  if (explicitKind) {
+    return explicitKind;
+  }
+  if (options.builtin === true) {
+    return MICRO_SKILL_KIND_BUILTIN_GUIDANCE;
+  }
+  if (options.runtimeEntryPath && Array.isArray(options.match) && options.match.length > 0) {
+    return MICRO_SKILL_KIND_PAGE_RUNTIME;
+  }
+  return MICRO_SKILL_KIND_GUIDANCE;
+}
+
+function countMicroSkillRuntimeSourceFiles(files) {
+  return (Array.isArray(files) ? files : []).filter((file) => file.kind === MICRO_SKILL_FILE_KIND_RUNTIME_SOURCE).length;
+}
+
+function buildMicroSkillRuntimeHint(record) {
+  const skill = normalizeStoredMicroSkillRecord(record);
+  if (!skill) return null;
+  const runtimeFileCount = countMicroSkillRuntimeSourceFiles(skill.files);
+  if (runtimeFileCount <= 0) {
+    return null;
+  }
+  if (skill.runtime.entry_path) {
+    return {
+      has_runtime: true,
+      runtime_entry_path: skill.runtime.entry_path,
+      runtime_file_count: runtimeFileCount,
+      runtime_hint: 'This skill includes JS runtime files. Read SKILL.md first, then inspect runtime_entry_path and related helpers as needed.'
+    };
+  }
+  return {
+    has_runtime: true,
+    runtime_entry_path: null,
+    runtime_file_count: runtimeFileCount,
+    runtime_hint: 'This skill includes JS files, but no runtime.entry_path is configured yet. Read SKILL.md first, then inspect the JS files and manifest if you want to turn it into a page runtime skill.'
   };
 }
 
@@ -939,7 +978,6 @@ export function microSkillMatchPatternMatchesUrl(pattern, url) {
 
 export function normalizeMicroSkillInput(rawSkill, options = {}) {
   const skill = ensurePlainObject(rawSkill);
-  const kind = normalizeMicroSkillKind(skill.kind, MICRO_SKILL_KIND_PAGE_RUNTIME);
   const description = normalizeString(skill.description);
   if (!description) {
     throw new Error('micro_skill_registry 参数错误：skill.description 不能为空。');
@@ -953,7 +991,20 @@ export function normalizeMicroSkillInput(rawSkill, options = {}) {
     requireContent: options?.requireContent !== false
   });
   const instruction = normalizeMicroSkillInstruction(skill.instruction, rawNormalizedFiles);
-  const runtime = normalizeMicroSkillRuntime(skill.runtime, rawNormalizedFiles, kind);
+  const runtime = normalizeMicroSkillRuntime(skill.runtime, rawNormalizedFiles);
+  const requestedKind = normalizeMicroSkillKind(skill.kind, null);
+  const match = normalizeMicroSkillMatchPatterns(skill.match, {
+    allowEmpty: requestedKind !== MICRO_SKILL_KIND_PAGE_RUNTIME || !runtime.entry_path
+  });
+  const kind = inferMicroSkillKindFromContent({
+    kind: requestedKind,
+    builtin: skill.builtin === true,
+    runtimeEntryPath: runtime.entry_path,
+    match
+  });
+  if (kind === MICRO_SKILL_KIND_PAGE_RUNTIME && !runtime.entry_path) {
+    throw new Error('micro_skill_registry 参数错误：page runtime skill 必须提供 runtime.entry_path。');
+  }
   const files = rawNormalizedFiles.map((file) => ({
     ...file,
     kind: inferMicroSkillFileKindForPath(file.path, {
@@ -968,9 +1019,7 @@ export function normalizeMicroSkillInput(rawSkill, options = {}) {
     name: normalizeMicroSkillName(skill.name),
     description,
     interface: normalizeMicroSkillInterface(skill.interface, description),
-    match: normalizeMicroSkillMatchPatterns(skill.match, {
-      allowEmpty: kind !== MICRO_SKILL_KIND_PAGE_RUNTIME
-    }),
+    match,
     enabled: normalizeBoolean(skill.enabled, true),
     instruction,
     runtime,
@@ -981,7 +1030,6 @@ export function normalizeMicroSkillInput(rawSkill, options = {}) {
 export function normalizeStoredMicroSkillRecord(rawRecord) {
   const record = ensurePlainObject(rawRecord);
   let normalizedInput = null;
-  let inferredKind = MICRO_SKILL_KIND_PAGE_RUNTIME;
   let hasFullFiles = false;
   try {
     hasFullFiles = record.has_file_contents === true
@@ -989,13 +1037,8 @@ export function normalizeStoredMicroSkillRecord(rawRecord) {
         Array.isArray(record.files)
         && record.files.some((file) => typeof file?.content === 'string' && file.content.length > 0)
       );
-    inferredKind = normalizeMicroSkillKind(
-      record.kind,
-      record.builtin === true ? MICRO_SKILL_KIND_BUILTIN_GUIDANCE : MICRO_SKILL_KIND_PAGE_RUNTIME
-    );
     normalizedInput = normalizeMicroSkillInput({
-      ...record,
-      kind: inferredKind
+      ...record
     }, {
       requireFiles: true,
       requireContent: hasFullFiles
@@ -1006,7 +1049,7 @@ export function normalizeStoredMicroSkillRecord(rawRecord) {
 
   const createdAt = toIsoTimestamp(record.created_at) || new Date(0).toISOString();
   const updatedAt = toIsoTimestamp(record.updated_at) || createdAt;
-  const builtin = record.builtin === true || inferredKind === MICRO_SKILL_KIND_BUILTIN_GUIDANCE;
+  const builtin = record.builtin === true || normalizedInput.kind === MICRO_SKILL_KIND_BUILTIN_GUIDANCE;
 
   return {
     ...normalizedInput,
@@ -1216,6 +1259,9 @@ export function buildMicroSkillFilePayload(record, filePath, options = {}) {
   const contentRead = buildMicroSkillTextReadResult(file.content, options?.contentReadArgs || null, {
     allowLineRange: true
   });
+  const runtimeHint = normalizedPath === skill.instruction.path
+    ? buildMicroSkillRuntimeHint(skill)
+    : null;
   return {
     kind: skill.kind,
     builtin: skill.builtin === true,
@@ -1229,6 +1275,7 @@ export function buildMicroSkillFilePayload(record, filePath, options = {}) {
     runtime: {
       entry_path: skill.runtime.entry_path
     },
+    ...(runtimeHint || {}),
     file: {
       path: file.path,
       kind: file.kind,
@@ -1349,12 +1396,8 @@ export function buildMicroSkillContextSummary(record) {
   return {
     priority: skill.kind === MICRO_SKILL_KIND_BUILTIN_GUIDANCE ? 0 : 1000,
     name: skill.name,
-    display_name: skill.interface.display_name || skill.name,
     short_description: skill.interface.short_description || skill.description,
-    default_prompt: skill.interface.default_prompt,
-    mount_surface: skill.kind === MICRO_SKILL_KIND_BUILTIN_GUIDANCE
-      ? '先读取这条 skill 的详情，再按需读文件或修改目标 skill。'
-      : `优先用 \`$invoke("${skill.name}", "methodName", ...args)\`；可用 \`$methods("${skill.name}")\` 查看方法名，或用 \`$skill("${skill.name}")\` 查看已挂载导出。`
+    instruction_path: skill.instruction.path
   };
 }
 
@@ -1489,7 +1532,7 @@ function buildMicroSkillCreateTemplateInputSchemaDescription() {
     type: ['object', 'null'],
     description: [
       'create_skill 时使用的模板脚手架参数。',
-      '它会生成标准 SKILL.md / src/main.js / src/helpers/dom.js，后续再用 read_file / apply_patch 继续修改。'
+      '它会先生成更接近官方 Codex 的通用 SKILL.md 骨架；如果后续真的需要页面 runtime，再继续补 manifest 和 JS 文件。'
     ].join(' '),
     additionalProperties: false,
     properties: {
@@ -1510,11 +1553,6 @@ function buildMicroSkillCreateTemplateInputSchemaDescription() {
           default_prompt: { type: ['string', 'null'] }
         }
       },
-      match: {
-        type: 'array',
-        description: '必填。page runtime skill 的 URL 匹配范围。',
-        items: { type: 'string' }
-      },
       enabled: {
         type: ['boolean', 'null'],
         description: '可选。默认 false；建议先创建模板、补完文件后再启用。'
@@ -1532,7 +1570,7 @@ function buildMicroSkillCreateTemplateInputSchemaDescription() {
         description: '可选。为选中的 resources 生成示例文件；若为 true，resources 不能为空。'
       }
     },
-    required: ['name', 'description', 'match']
+    required: ['name', 'description']
   };
 }
 

@@ -2,9 +2,9 @@
  * 隐藏的 micro_skill_context。
  *
  * 设计目标：
- * - 只向模型暴露“当前 URL 下有哪些微型 skill 可用”的轻量摘要；
- * - 不默认暴露完整 `SKILL.md`、references 或 runtime 源码；
- * - 使用与 page/environment context 一致的签名去重策略，避免每轮重复注入同样摘要。
+ * - 尽量贴近官方 Codex skills section，只注入轻量 skill 摘要；
+ * - 每轮只统一注入一次 how-to-use，而不是给每个 skill 都重复一遍调用说明；
+ * - 具体细节仍然由模型按需去读目标 skill 的 `SKILL.md` 与相关文件。
  */
 
 function escapeXmlText(value) {
@@ -16,25 +16,29 @@ function escapeXmlText(value) {
     .replace(/'/g, '&apos;');
 }
 
+function buildMicroSkillContextHowToUseText() {
+  return [
+    'Skills are local instructions stored in `SKILL.md`.',
+    'When a listed skill looks relevant, read that skill\'s `SKILL.md` before using it.',
+    'Only continue to read `references/`, `scripts/`, or other files when the main instruction points you there or the task truly needs more detail.'
+  ].join('\n');
+}
+
 function normalizeMicroSkillContextSkills(skills) {
   return (Array.isArray(skills) ? skills : [])
     .map((skill, index) => {
       if (!skill || typeof skill !== 'object' || Array.isArray(skill)) return null;
       const name = typeof skill.name === 'string' ? skill.name.trim() : '';
-      const displayName = typeof skill.display_name === 'string' ? skill.display_name.trim() : '';
       const shortDescription = typeof skill.short_description === 'string' ? skill.short_description.trim() : '';
-      const defaultPrompt = typeof skill.default_prompt === 'string' ? skill.default_prompt.trim() : '';
-      const mountSurface = typeof skill.mount_surface === 'string' ? skill.mount_surface.trim() : '';
+      const instructionPath = typeof skill.instruction_path === 'string' ? skill.instruction_path.trim() : '';
       const priority = Number.isFinite(Number(skill.priority)) ? Number(skill.priority) : 1000;
-      if (!name || !shortDescription || !mountSurface) return null;
+      if (!name || !shortDescription || !instructionPath) return null;
       return {
         _index: index,
         priority,
         name,
-        display_name: displayName || name,
         short_description: shortDescription,
-        default_prompt: defaultPrompt,
-        mount_surface: mountSurface
+        instruction_path: instructionPath
       };
     })
     .filter(Boolean)
@@ -56,6 +60,7 @@ export function buildMicroSkillContextPayload(options = {}) {
     type: 'micro_skill_context',
     mode,
     url,
+    how_to_use: buildMicroSkillContextHowToUseText(),
     skills: normalizeMicroSkillContextSkills(options?.skills)
   };
 }
@@ -72,19 +77,23 @@ export function buildMicroSkillContextSignature(payload) {
 export function buildMicroSkillContextInputItems(payload) {
   if (!payload || typeof payload !== 'object') return [];
   const skills = normalizeMicroSkillContextSkills(payload.skills);
+  const howToUse = typeof payload.how_to_use === 'string' ? payload.how_to_use.trim() : '';
   const lines = ['<micro_skill_context>'];
   if (payload.url) {
     lines.push(`  <url>${escapeXmlText(payload.url)}</url>`);
   }
+  if (howToUse) {
+    lines.push('  <how_to_use>');
+    for (const line of howToUse.split('\n')) {
+      lines.push(`    ${escapeXmlText(line)}`);
+    }
+    lines.push('  </how_to_use>');
+  }
   lines.push('  <skills>');
   skills.forEach((skill) => {
     lines.push(`    <skill name="${escapeXmlText(skill.name)}">`);
-    lines.push(`      <display_name>${escapeXmlText(skill.display_name)}</display_name>`);
     lines.push(`      <short_description>${escapeXmlText(skill.short_description)}</short_description>`);
-    if (skill.default_prompt) {
-      lines.push(`      <default_prompt>${escapeXmlText(skill.default_prompt)}</default_prompt>`);
-    }
-    lines.push(`      <mount_surface>${escapeXmlText(skill.mount_surface)}</mount_surface>`);
+    lines.push(`      <instruction_path>${escapeXmlText(skill.instruction_path)}</instruction_path>`);
     lines.push('    </skill>');
   });
   lines.push('  </skills>');

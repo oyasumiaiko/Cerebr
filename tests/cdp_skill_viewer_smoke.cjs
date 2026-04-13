@@ -97,7 +97,6 @@ function buildStorageSeed() {
 }
 
 function buildSkillInput(urlString) {
-  const url = new URL(urlString);
   return {
     name: skillName,
     description: 'Read example.com title and href for smoke verification.',
@@ -106,7 +105,6 @@ function buildSkillInput(urlString) {
       short_description: 'Smoke skill for the Skill 管理 panel',
       default_prompt: 'Read the current example.com page title.'
     },
-    match: [`${url.origin}/*`],
     resources: ['references'],
     examples: true
   };
@@ -210,13 +208,23 @@ async function main() {
     const openSidebarResponse = await extensionWorker.evaluate(
       buildSendContentMessageExpression(JSON.stringify({ type: 'OPEN_SIDEBAR' }))
     );
-    if (!openSidebarResponse?.response?.success || openSidebarResponse?.response?.status !== true) {
-      throw new Error(`OPEN_SIDEBAR failed: ${JSON.stringify(openSidebarResponse)}`);
-    }
+    result.openSidebarResponse = openSidebarResponse;
     result.steps.push('sidebar_open_requested');
+
+    await waitFor(async () => {
+      const payload = await extensionWorker.evaluate(
+        buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
+      );
+      return payload?.response?.debugState?.isActuallyVisible ? payload.response.debugState : null;
+    }, { timeoutMs: 20_000, intervalMs: 250, label: 'sidebar visibility' });
+    result.steps.push('sidebar_visible');
 
     const sidebarFrame = await waitForSidebarFrame(page, extensionId, { timeoutMs: 30_000 });
     await sidebarFrame.locator('#message-input').waitFor({ state: 'visible', timeout: 30_000 });
+    await waitFor(
+      () => sidebarFrame.evaluate(() => Array.isArray(window.apiConfigs) && window.apiConfigs.length > 0),
+      { timeoutMs: 20_000, intervalMs: 250, label: 'sidebar api configs ready' }
+    );
     result.steps.push('sidebar_ready');
 
     result.precleanDeletedSkills = await cleanupSmokeSkills(sidebarFrame, 'example-dom-skill');
@@ -291,6 +299,62 @@ async function main() {
 
     await sidebarFrame.locator('body').screenshot({ path: path.join(outputDir, 'skill-viewer.png') });
 
+    const runtimeFilePatched = await sidebarFrame.evaluate(async (skillNameValue) => {
+      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      return await chrome.runtime.sendMessage({
+        type: 'MICRO_SKILL_REGISTRY_ACTION',
+        tabId: typeof tab?.id === 'number' ? tab.id : null,
+        payload: {
+          action: 'apply_patch',
+          skill_name: skillNameValue,
+          patch: [
+            '*** Begin Patch',
+            '*** Add File: src/main.js',
+            '+return {',
+            '+  readSummary() {',
+            '+    return { title: document.title, href: location.href };',
+            '+  }',
+            '+};',
+            '*** End Patch'
+          ].join('\n')
+        }
+      });
+    }, skillName);
+    if (!runtimeFilePatched?.success || runtimeFilePatched?.ok !== true) {
+      throw new Error(`add runtime file failed: ${JSON.stringify(runtimeFilePatched)}`);
+    }
+    result.steps.push('runtime_file_added');
+
+    const runtimeManifestPatched = await sidebarFrame.evaluate(async ({ skillNameValue, urlString }) => {
+      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+      const url = new URL(urlString);
+      return await chrome.runtime.sendMessage({
+        type: 'MICRO_SKILL_REGISTRY_ACTION',
+        tabId: typeof tab?.id === 'number' ? tab.id : null,
+        payload: {
+          action: 'apply_patch',
+          skill_name: skillNameValue,
+          patch: [
+            '*** Begin Patch',
+            '*** Update File: manifest.json',
+            '@@',
+            '-  "match": [],',
+            '+  "match": [',
+            `+    "${url.origin}/*"`,
+            '+  ],',
+            '@@',
+            '-    "entry_path": null',
+            '+    "entry_path": "src/main.js"',
+            '*** End Patch'
+          ].join('\n')
+        }
+      });
+    }, { skillNameValue: skillName, urlString: targetUrl });
+    if (!runtimeManifestPatched?.success || runtimeManifestPatched?.ok !== true || runtimeManifestPatched?.skill?.kind !== 'page_runtime') {
+      throw new Error(`patch runtime manifest failed: ${JSON.stringify(runtimeManifestPatched)}`);
+    }
+    result.steps.push('runtime_manifest_patched');
+
     const enabledState = await sidebarFrame.evaluate(async (skillNameValue) => {
       const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
       return await chrome.runtime.sendMessage({
@@ -306,14 +370,6 @@ async function main() {
       throw new Error(`enable_skill failed: ${JSON.stringify(enabledState)}`);
     }
     result.steps.push('skill_enabled');
-
-    const remountButton = sidebarFrame.getByRole('button', { name: '在当前页重挂载' });
-    await remountButton.click();
-    await waitFor(async () => {
-      const texts = await sidebarFrame.locator('.toast-container .notification').allTextContents().catch(() => []);
-      return texts.find((text) => text.includes('当前页 skill 已挂载')) || null;
-    }, { timeoutMs: 30_000, intervalMs: 250, label: 'skill mount success toast' });
-    result.steps.push('skill_refresh_clicked');
 
     const refreshState = await sidebarFrame.evaluate(async (skillName) => {
       const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
@@ -336,7 +392,7 @@ async function main() {
       throw new Error(`${skillName} not mounted after refresh: ${JSON.stringify(refreshState)}`);
     }
     result.activeSkills = activeSkills;
-    result.steps.push('skill_refresh_verified');
+    result.steps.push('runtime_mount_verified');
 
     result.postRunDeletedSkills = await cleanupSmokeSkills(sidebarFrame, skillName);
     result.steps.push('postclean_completed');

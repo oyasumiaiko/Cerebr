@@ -114,8 +114,7 @@ test('skill_registry create_skill 摘要会显示创建模板动作与技能名'
       action: 'create_skill',
       skill: {
         name: 'DOM Probe Template',
-        description: '读取页面标题和链接',
-        match: ['https://*.example.com/*']
+        description: '读取页面标题和链接'
       }
     })
   };

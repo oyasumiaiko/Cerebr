@@ -470,19 +470,27 @@ export function createMicroSkillManager(options = {}) {
     const builtinSummaries = listBuiltinMicroSkillRecords()
       .map((record) => buildMicroSkillContextSummary(record))
       .filter(Boolean);
+    const storedRecords = await listStoredRecords();
+    const guidanceSummaries = storedRecords
+      .filter((record) => record.enabled === true && record.kind === 'guidance')
+      .map((record) => buildMicroSkillContextSummary(record))
+      .filter(Boolean);
     if (normalizedTabId === null) {
       return {
         ok: true,
         tab_id: null,
         url: '',
         title: '',
-        total_skills: builtinSummaries.length,
-        skills: builtinSummaries
+        total_skills: builtinSummaries.length + guidanceSummaries.length,
+        skills: [
+          ...builtinSummaries,
+          ...guidanceSummaries
+        ]
       };
     }
 
     const { url, title, tab_id } = await getTabUrl(normalizedTabId);
-    const matchingRecords = (await listStoredRecords()).filter((record) => microSkillMatchesUrl(record, url));
+    const matchingRecords = storedRecords.filter((record) => microSkillMatchesUrl(record, url));
     const pageSkillSummaries = matchingRecords
       .map((record) => buildMicroSkillContextSummary(record))
       .filter(Boolean);
@@ -491,9 +499,10 @@ export function createMicroSkillManager(options = {}) {
       tab_id,
       url,
       title,
-      total_skills: builtinSummaries.length + pageSkillSummaries.length,
+      total_skills: builtinSummaries.length + guidanceSummaries.length + pageSkillSummaries.length,
       skills: [
         ...builtinSummaries,
+        ...guidanceSummaries,
         ...pageSkillSummaries
       ]
     };
@@ -525,7 +534,6 @@ export function createMicroSkillManager(options = {}) {
           displayName: skillInput?.interface?.display_name,
           shortDescription: skillInput?.interface?.short_description,
           defaultPrompt: skillInput?.interface?.default_prompt,
-          match: skillInput?.match,
           enabled: skillInput?.enabled === true,
           resources: skillInput?.resources,
           examples: skillInput?.examples === true
