@@ -3003,10 +3003,54 @@ export function createMessageSender(appContext) {
 
   function restoreQueuedTaskToComposer(task) {
     const normalizedTask = normalizeConversationQueuedTask(task);
+    restoreComposerSnapshot({
+      text: typeof normalizedTask.payload?.originalMessageText === 'string'
+        ? normalizedTask.payload.originalMessageText
+        : '',
+      imagesHtmlSnapshot: normalizedTask.payload?.inputImagesHtmlSnapshot || ''
+    });
+  }
+
+  /**
+   * 判断当前输入区是否仍然为空。
+   *
+   * 这个判断主要用于“失败后谨慎恢复输入快照”：
+   * - 如果用户在我们异步执行期间已经开始输入新的内容，就不要再把旧快照覆盖回去；
+   * - 只有在输入框和图片区都保持空白时，才允许恢复之前冻结的草稿。
+   */
+  function isComposerEmpty() {
+    const inputText = inputController
+      ? inputController.getInputText()
+      : String(messageInput?.textContent || '').trim();
+    const hasImages = inputController
+      ? inputController.hasImages()
+      : !!imageContainer?.querySelector?.('.image-tag');
+    return !inputText && !hasImages;
+  }
+
+  /**
+   * 把冻结的输入快照恢复回 composer。
+   *
+   * 设计目标：
+   * - queue 恢复、steer 失败回填统一走同一套 DOM 写回逻辑；
+   * - 对 steer 失败场景支持“仅当当前仍为空时恢复”，避免覆盖用户刚输入的新内容；
+   * - 恢复后显式触发 input 事件和高度刷新，保持 UI 状态一致。
+   *
+   * @param {{ text?: string, imagesHtmlSnapshot?: string }} snapshot
+   * @param {{ onlyIfEmpty?: boolean }} [options]
+   * @returns {boolean}
+   */
+  function restoreComposerSnapshot(snapshot = {}, options = {}) {
+    const normalizedSnapshot = (snapshot && typeof snapshot === 'object') ? snapshot : {};
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    if (normalizedOptions.onlyIfEmpty === true && !isComposerEmpty()) {
+      return false;
+    }
+
     clearInputs();
 
-    const nextText = typeof normalizedTask.payload?.originalMessageText === 'string'
-      ? normalizedTask.payload.originalMessageText
+    const nextText = typeof normalizedSnapshot.text === 'string'
+      ? normalizedSnapshot.text
       : '';
     inputController?.setInputText?.(nextText);
     if (!inputController?.setInputText && messageInput) {
@@ -3015,7 +3059,7 @@ export function createMessageSender(appContext) {
 
     try {
       if (imageContainer) imageContainer.innerHTML = '';
-      const queuedImages = extractQueuedInputImages(normalizedTask.payload?.inputImagesHtmlSnapshot || '');
+      const queuedImages = extractQueuedInputImages(normalizedSnapshot.imagesHtmlSnapshot || '');
       const fragment = document.createDocumentFragment();
       queuedImages.forEach((image) => {
         const imageTag = imageHandler?.createImageTag?.(
@@ -3030,13 +3074,14 @@ export function createMessageSender(appContext) {
         imageContainer.appendChild(fragment);
       }
     } catch (error) {
-      console.warn('恢复排队消息图片到输入框失败:', error);
+      console.warn('恢复输入快照到 composer 失败:', error);
     }
 
     try { messageInput?.dispatchEvent?.(new Event('input')); } catch (_) {}
     try { appContext.services.uiManager?.resetInputHeight?.(); } catch (_) {}
     try { appContext.services.uiManager?.updateSendButtonState?.(); } catch (_) {}
     inputController?.focusToEnd?.();
+    return true;
   }
 
   async function continueQueuedConversationTask(queueKey, taskId) {
@@ -11175,37 +11220,53 @@ export function createMessageSender(appContext) {
       : !!imageContainer.querySelector('img[alt="page-screenshot.png"]');
 
     if (shouldSendAsSteer) {
-      const pendingSteer = await buildPendingConversationSteer(singleOpts, {
-        baseText,
-        imagesHtmlSnapshot,
-        hasImagesInInput,
-        hasScreenshotSnapshot
-      });
-      if (!pendingSteer) {
-        showNotification?.({ message: '当前输入无法构造成标准 steer', type: 'warning', duration: 1800 });
-        return { ok: false, reason: 'invalid_pending_steer' };
-      }
-      const result = await requestConversationSteer({
-        queueKey: currentConversationQueueKey,
-        pendingSteer,
-        targetAttempt: targetSteerAttempt
-      });
-      if (result?.ok && typeof showNotification === 'function') {
-        clearInputs();
-        inputController?.focusToEnd?.();
-        showNotification({
-          message: `已加入当前生成的转向输入（待提交 ${result.pendingCount || 1} 条）`,
-          type: 'info',
-          duration: 2200
+      const frozenComposerSnapshot = {
+        text: baseText,
+        imagesHtmlSnapshot
+      };
+
+      // 标准 steer 发送是纯前端异步流程，如果等异步完成后再清空输入框，
+      // 用户连续快速输入下一条 steer 时，就可能被上一条 steer 的延迟 clear/focus 打乱。
+      // 因此这里基于已经冻结的快照立即清空 composer；若后续失败，再只在 composer 仍为空时恢复。
+      clearInputs();
+      inputController?.focusToEnd?.();
+
+      try {
+        const pendingSteer = await buildPendingConversationSteer(singleOpts, {
+          baseText,
+          imagesHtmlSnapshot,
+          hasImagesInInput,
+          hasScreenshotSnapshot
         });
-      } else if (result?.error && typeof showNotification === 'function') {
-        showNotification({
-          message: `转向失败：${result.error.message || '未知错误'}`,
-          type: 'warning',
-          duration: 2200
+        if (!pendingSteer) {
+          restoreComposerSnapshot(frozenComposerSnapshot, { onlyIfEmpty: true });
+          showNotification?.({ message: '当前输入无法构造成标准 steer', type: 'warning', duration: 1800 });
+          return { ok: false, reason: 'invalid_pending_steer' };
+        }
+        const result = await requestConversationSteer({
+          queueKey: currentConversationQueueKey,
+          pendingSteer,
+          targetAttempt: targetSteerAttempt
         });
+        if (result?.ok && typeof showNotification === 'function') {
+          showNotification({
+            message: `已加入当前生成的转向输入（待提交 ${result.pendingCount || 1} 条）`,
+            type: 'info',
+            duration: 2200
+          });
+        } else if (result?.error && typeof showNotification === 'function') {
+          restoreComposerSnapshot(frozenComposerSnapshot, { onlyIfEmpty: true });
+          showNotification({
+            message: `转向失败：${result.error.message || '未知错误'}`,
+            type: 'warning',
+            duration: 2200
+          });
+        }
+        return result;
+      } catch (error) {
+        restoreComposerSnapshot(frozenComposerSnapshot, { onlyIfEmpty: true });
+        throw error;
       }
-      return result;
     }
 
     const nextJob = await buildAppendConversationJob(singleOpts, {
