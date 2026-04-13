@@ -55,6 +55,11 @@ import {
   mergeConversationApiLockState,
   mergeConversationSaveMetadataState
 } from './conversation_state_merge.js';
+import {
+  copyConversationDocuments,
+  listConversationDocuments,
+  replaceConversationDocuments
+} from '../storage/conversation_document_store.js';
 
 /**
  * 创建聊天历史UI管理器
@@ -10812,6 +10817,14 @@ export function createChatHistoryUI(appContext) {
               stripMeta: forceStripMeta,
               keepImageRefs: false
             });
+            const documents = await listConversationDocuments(meta.id);
+            if (documents.length > 0) {
+              cleaned.documents = documents.map((doc) => ({
+                path: doc.path,
+                content: doc.content,
+                updated_at: doc.updated_at
+              }));
+            }
             const endTime = Number(cleaned?.endTime) || Number(meta?.endTime) || 0;
             if (endTime > maxEndTime) maxEndTime = endTime;
             yield cleaned;
@@ -10966,14 +10979,29 @@ export function createChatHistoryUI(appContext) {
         // 逐条写入：存在且不覆盖则跳过，存在且覆盖则替换
         for (const conv of mergedConversations) {
           try {
+            const hasDocumentSnapshot = Array.isArray(conv?.documents);
+            const documentSnapshot = hasDocumentSnapshot
+              ? conv.documents.map((doc) => ({
+                  path: doc?.path,
+                  content: doc?.content,
+                  updated_at: doc?.updated_at
+                }))
+              : [];
+            const { documents: _ignoredDocuments, ...conversationToStore } = conv || {};
             // 恢复时移除推理签名，避免无意义占用空间
-            try { removeThoughtSignatureFromMessages(conv?.messages); } catch (_) {}
-            const existing = await getConversationById(conv.id, false);
+            try { removeThoughtSignatureFromMessages(conversationToStore?.messages); } catch (_) {}
+            const existing = await getConversationById(conversationToStore.id, false);
             if (!existing) {
-              await putConversation(conv);
+              await putConversation(conversationToStore);
+              if (hasDocumentSnapshot) {
+                await replaceConversationDocuments(conversationToStore.id, documentSnapshot);
+              }
               countAdded++;
             } else if (overwrite) {
-              await putConversation(conv);
+              await putConversation(conversationToStore);
+              if (hasDocumentSnapshot) {
+                await replaceConversationDocuments(conversationToStore.id, documentSnapshot);
+              }
               countOverwritten++;
             } else {
               countSkipped++;
@@ -14462,6 +14490,9 @@ export function createChatHistoryUI(appContext) {
       
       // 保存新会话到数据库
       await putConversation(newConversation);
+      if (parentConversationId) {
+        await copyConversationDocuments(parentConversationId, newConversationId);
+      }
       invalidateMetadataCache();
       
       // 清空当前会话并加载新创建的会话

@@ -316,7 +316,8 @@ const DEFAULT_PURIFY_CONFIG = {
   // - file              本地文件（用于扩展内展示下载到本地的图片）
   // - data:image/...    仅允许图片类型的 data URL，禁止其它 data: 方案
   // - 相对路径 / ? #    站内链接
-  ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|file):|data:image\/[a-z0-9.+-]+;base64,|[\/\?#])/i
+  // - 额外允许“不带 scheme 的裸相对路径”，供对话级虚拟文档链接如 `docs/plan.md` 使用
+  ALLOWED_URI_REGEXP: /^(?:(?:https?|mailto|tel|file):|data:image\/[a-z0-9.+-]+;base64,|[\/\?#]|(?!\/\/)(?![a-z][a-z0-9+.-]*:).+)/i
 };
 
 /**

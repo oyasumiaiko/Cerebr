@@ -10510,6 +10510,115 @@ body.chat-empty .empty-state-content {
   .inline-editor-cancel {
     border-color: color-mix(in srgb, var(--cerebr-red) 50%, var(--cerebr-border-color));
   }
+
+  .conversation-document-card {
+    margin: 10px 0;
+    border: 1px solid var(--cerebr-border-color, rgba(127, 127, 127, 0.22));
+    border-radius: 12px;
+    background: var(--cerebr-surface-2, rgba(127, 127, 127, 0.06));
+    overflow: hidden;
+  }
+
+  .conversation-document-card__summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 10px 12px;
+    cursor: pointer;
+    list-style: none;
+  }
+
+  .conversation-document-card__summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .conversation-document-card__title-wrap {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .conversation-document-card__title {
+    font-weight: 600;
+    color: var(--cerebr-text-color);
+  }
+
+  .conversation-document-card__path,
+  .conversation-document-card__meta {
+    font-size: 12px;
+    color: color-mix(in srgb, var(--cerebr-text-color) 68%, transparent);
+  }
+
+  .conversation-document-card__meta {
+    padding: 0 12px 10px;
+  }
+
+  .conversation-document-card__actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .conversation-document-card__button {
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 72%, transparent);
+    background: color-mix(in srgb, var(--cerebr-bg-color) 88%, transparent);
+    color: var(--cerebr-text-color);
+    border-radius: 999px;
+    padding: 4px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  .conversation-document-card__button.is-primary {
+    background: color-mix(in srgb, var(--cerebr-blue) 14%, var(--cerebr-bg-color));
+  }
+
+  .conversation-document-card__body {
+    padding: 0 12px 12px;
+  }
+
+  .conversation-document-card__status {
+    padding: 12px;
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--cerebr-bg-color) 92%, transparent);
+    color: color-mix(in srgb, var(--cerebr-text-color) 72%, transparent);
+    font-size: 13px;
+  }
+
+  .conversation-document-card__content,
+  .conversation-document-card__editor {
+    width: 100%;
+    box-sizing: border-box;
+    margin: 0;
+    padding: 12px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 72%, transparent);
+    background: var(--cerebr-input-bg);
+    color: var(--cerebr-text-color);
+    font-family: var(--cerebr-font-mono, "Consolas", "SFMono-Regular", monospace);
+    font-size: 12px;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
+  .conversation-document-card__editor-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 10px;
+  }
+
+  .conversation-document-card.is-loading .conversation-document-card__meta {
+    opacity: 0.7;
+  }
+
+  .conversation-document-card.is-missing {
+    border-style: dashed;
+  }
   
   /* 滚动条样式统一至全局 */
 

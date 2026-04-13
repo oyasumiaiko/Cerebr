@@ -202,6 +202,11 @@ function attachDebugShortcuts(appContext) {
     scanDataUrlsInDb: (limit) => chatHistoryUI?.scanDataUrlsInDb?.(limit),
     getJsRuntimeStatus: () => appContext.utils.getJsRuntimeStatus?.(),
     executeJsRuntime: (code, options) => appContext.utils.executeJsRuntime?.(code, options),
+    // 仅暴露给本地调试 / 浏览器回归脚本：
+    // - chatHistoryUI 便于在页面重载后重新载入指定会话；
+    // - messageProcessor 便于检查消息 DOM 渲染路径。
+    chatHistoryUI: appContext.services.chatHistoryUI,
+    messageProcessor: appContext.services.messageProcessor,
     messageSender: appContext.services.messageSender
   };
 }

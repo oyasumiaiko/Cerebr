@@ -1197,6 +1197,35 @@ export function buildResponsesMicroSkillRegistryToolOutputContentItems(result, o
   return buildResponsesGenericXmlToolOutputContentItems('micro_skill_registry_result', normalized, options);
 }
 
+export function buildResponsesConversationDocumentToolOutputContentItems(toolName, result, options = {}) {
+  const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
+  const rootTag = `${String(toolName || 'conversation_document').trim() || 'conversation_document'}_result`;
+  if (normalized.ok === true && String(toolName || '').trim() === 'apply_patch') {
+    const affected = (normalized?.affected_files && typeof normalized.affected_files === 'object') ? normalized.affected_files : {};
+    const lines = [];
+    for (const value of Array.isArray(affected.added) ? affected.added : []) {
+      const path = typeof value === 'string' ? value.trim() : '';
+      if (path) lines.push(`A ${path}`);
+    }
+    for (const value of Array.isArray(affected.modified) ? affected.modified : []) {
+      const path = typeof value === 'string' ? value.trim() : '';
+      if (path) lines.push(`M ${path}`);
+    }
+    for (const value of Array.isArray(affected.deleted) ? affected.deleted : []) {
+      const path = typeof value === 'string' ? value.trim() : '';
+      if (path) lines.push(`D ${path}`);
+    }
+    const summaryText = lines.length > 0
+      ? `Success. Updated the following files:\n${lines.join('\n')}`
+      : 'Patch applied successfully.';
+    return buildResponsesGenericXmlToolOutputContentItems(rootTag, {
+      ok: true,
+      value: summaryText
+    }, options);
+  }
+  return buildResponsesGenericXmlToolOutputContentItems(rootTag, normalized, options);
+}
+
 export function buildResponsesGenericXmlToolOutputContentItems(rootTag, result, options = {}) {
   const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : { value: result };
   const metadata = {

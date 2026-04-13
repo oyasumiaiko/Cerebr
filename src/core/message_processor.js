@@ -21,7 +21,10 @@ import { getAssistantActivityTimeline } from '../utils/assistant_activity_timeli
 import { resolveResponseActivityPanelModeState } from '../utils/response_activity_panel_mode.js';
 import { resolveResponseActivityToolExpansionState } from '../utils/response_activity_tool_auto_collapse.js';
 import { normalizeAssistantPreResponseStatus } from '../utils/assistant_pre_response_status.js';
-import { buildMicroSkillApplyPatchPreview } from '../utils/micro_skill_patch_preview.js';
+import {
+  buildConversationDocumentApplyPatchPreview,
+  buildMicroSkillApplyPatchPreview
+} from '../utils/micro_skill_patch_preview.js';
 import {
   buildMicroSkillRegistryPrimaryText,
   buildMicroSkillRegistrySummaryParts,
@@ -29,10 +32,23 @@ import {
   isMicroSkillRegistryToolCall
 } from '../utils/response_activity_tool_summary.js';
 import {
+  buildConversationDocumentPrimaryText,
+  buildConversationDocumentSummaryParts,
+  getConversationDocumentToolTypeLabel,
+  isConversationDocumentToolCall
+} from '../utils/conversation_document_tool_summary.js';
+import {
   extractResponsesToolOutputInputImages,
   formatResponsesToolOutputForDisplay,
   hasResponsesToolOutputBody
 } from '../agent_tools/responses_tool_output.js';
+import {
+  CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME,
+  CONVERSATION_DOCUMENT_INTERNAL_READ_FILE_FULL_ACTION,
+  CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION,
+  executeConversationDocumentAction,
+  normalizeConversationDocumentPath
+} from '../agent_tools/conversation_document_tools.js';
 import {
   computeContiguousDiffWindow,
   resolveRenderedSurfaceDiffBaseSignatures,
@@ -119,6 +135,12 @@ function buildMarkdownLinkContext(baseUrl, isStandalone) {
   };
 }
 
+function buildConversationDocumentDownloadName(path) {
+  const normalized = (typeof path === 'string') ? path.trim() : '';
+  if (!normalized) return 'document.txt';
+  return normalized.replace(/[\\/]+/g, '__');
+}
+
 /**
  * 解析 Markdown 链接并产出“打开策略”。
  *
@@ -193,6 +215,353 @@ export function createMessageProcessor(appContext) {
   const scrollToBottom = utils.scrollToBottom;
   const settingsManager = services.settingsManager;
   const apiManager = services.apiManager;
+  const conversationDocumentCardState = new WeakMap();
+  let conversationDocumentChangeListenerInstalled = false;
+
+  function normalizeConversationDocumentUiString(value) {
+    return (typeof value === 'string' || typeof value === 'number')
+      ? String(value).trim()
+      : '';
+  }
+
+  function isConversationDocumentRelativeHref(rawHref) {
+    const href = (typeof rawHref === 'string') ? rawHref.trim() : '';
+    if (!href) return false;
+    if (/^(?:[a-z][a-z0-9+.-]*:)/i.test(href)) return false;
+    if (href.startsWith('/') || href.startsWith('./') || href.startsWith('../')) return false;
+    if (href.startsWith('?') || href.startsWith('#')) return false;
+    try {
+      normalizeConversationDocumentPath(href);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function resolveCurrentConversationDocumentId() {
+    const conversationId = services.chatHistoryUI?.getCurrentConversationId?.();
+    return (typeof conversationId === 'string') ? conversationId.trim() : '';
+  }
+
+  async function executeConversationDocumentUiAction(action, payload = {}) {
+    const conversationId = resolveCurrentConversationDocumentId();
+    if (!conversationId) {
+      return {
+        ok: false,
+        error: {
+          message: '当前对话尚未持久化，暂时无法读取或编辑文档。',
+          name: 'ConversationDocumentUnavailableError',
+          stack: ''
+        }
+      };
+    }
+    const result = await executeConversationDocumentAction(action, payload, {
+      conversationId,
+      allowInternalActions: true
+    });
+    if (result?.ok === true && result?.change_event) {
+      try {
+        document.dispatchEvent(new CustomEvent(CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME, {
+          detail: result.change_event
+        }));
+      } catch (_) {}
+    }
+    return result;
+  }
+
+  function getConversationDocumentCardState(card) {
+    let state = conversationDocumentCardState.get(card);
+    if (!state) {
+      state = {
+        loadingPromise: null,
+        content: '',
+        loaded: false,
+        editing: false,
+        missing: false,
+        refs: {
+          meta: null,
+          body: null,
+          copyButton: null,
+          downloadButton: null,
+          editButton: null
+        }
+      };
+      conversationDocumentCardState.set(card, state);
+    }
+    return state;
+  }
+
+  function setConversationDocumentCardMeta(card, text) {
+    const state = getConversationDocumentCardState(card);
+    if (state.refs.meta && state.refs.meta.textContent !== text) {
+      state.refs.meta.textContent = text;
+    }
+  }
+
+  function renderConversationDocumentCardContent(card, file) {
+    const state = getConversationDocumentCardState(card);
+    if (!state.refs.body) return;
+    state.refs.body.replaceChildren();
+
+    if (!file) {
+      const empty = document.createElement('div');
+      empty.className = 'conversation-document-card__status';
+      empty.textContent = '文档不存在';
+      state.refs.body.appendChild(empty);
+      card.classList.add('is-missing');
+      state.missing = true;
+      return;
+    }
+
+    const pre = document.createElement('pre');
+    pre.className = 'conversation-document-card__content';
+    pre.textContent = file.content || '';
+    state.refs.body.appendChild(pre);
+    card.classList.remove('is-missing');
+    state.missing = false;
+    state.loaded = true;
+    state.content = file.content || '';
+
+    const metaParts = [];
+    if (Number.isFinite(Number(file.size_chars))) {
+      metaParts.push(`${Number(file.size_chars).toLocaleString()} chars`);
+    }
+    if (typeof file.updated_at === 'string' && file.updated_at.trim()) {
+      metaParts.push(new Date(file.updated_at).toLocaleString());
+    }
+    setConversationDocumentCardMeta(card, metaParts.join(' · ') || card.dataset.documentPath || '');
+  }
+
+  async function loadConversationDocumentCard(card, options = {}) {
+    const state = getConversationDocumentCardState(card);
+    if (!normalizeConversationDocumentUiString(card.dataset.conversationId)) {
+      card.dataset.conversationId = resolveCurrentConversationDocumentId();
+    }
+    if (state.loadingPromise && options.force !== true) {
+      return state.loadingPromise;
+    }
+    if (state.loaded && options.force !== true) {
+      return {
+        ok: true,
+        file: {
+          path: card.dataset.documentPath || '',
+          content: state.content,
+          size_chars: Array.from(state.content || '').length
+        }
+      };
+    }
+
+    card.classList.add('is-loading');
+    const request = executeConversationDocumentUiAction(CONVERSATION_DOCUMENT_INTERNAL_READ_FILE_FULL_ACTION, {
+      file_path: card.dataset.documentPath || ''
+    }).then((result) => {
+      if (result?.ok === true && result?.file) {
+        renderConversationDocumentCardContent(card, result.file);
+      } else {
+        renderConversationDocumentCardContent(card, null);
+      }
+      return result;
+    }).finally(() => {
+      card.classList.remove('is-loading');
+      state.loadingPromise = null;
+    });
+    state.loadingPromise = request;
+    return request;
+  }
+
+  function autoResizeConversationDocumentEditor(textarea) {
+    if (!textarea) return;
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(520, Math.max(textarea.scrollHeight, 140))}px`;
+  }
+
+  async function enterConversationDocumentEditMode(card) {
+    const state = getConversationDocumentCardState(card);
+    if (state.editing) return;
+    const loadResult = await loadConversationDocumentCard(card);
+    if (loadResult?.ok !== true || !loadResult.file) return;
+
+    state.editing = true;
+    card.classList.add('is-editing');
+    const body = state.refs.body;
+    if (!body) return;
+    body.replaceChildren();
+
+    const textarea = document.createElement('textarea');
+    textarea.className = 'conversation-document-card__editor';
+    textarea.value = state.content || '';
+    autoResizeConversationDocumentEditor(textarea);
+    textarea.addEventListener('input', () => autoResizeConversationDocumentEditor(textarea));
+
+    const actions = document.createElement('div');
+    actions.className = 'conversation-document-card__editor-actions';
+
+    const saveButton = document.createElement('button');
+    saveButton.type = 'button';
+    saveButton.className = 'conversation-document-card__button is-primary';
+    saveButton.textContent = 'Save';
+    saveButton.addEventListener('click', async (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const result = await executeConversationDocumentUiAction(CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION, {
+        file_path: card.dataset.documentPath || '',
+        content: textarea.value
+      });
+      if (result?.ok !== true || !result.file) return;
+      state.editing = false;
+      card.classList.remove('is-editing');
+      renderConversationDocumentCardContent(card, result.file);
+    });
+
+    const cancelButton = document.createElement('button');
+    cancelButton.type = 'button';
+    cancelButton.className = 'conversation-document-card__button';
+    cancelButton.textContent = 'Cancel';
+    cancelButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      state.editing = false;
+      card.classList.remove('is-editing');
+      renderConversationDocumentCardContent(card, {
+        path: card.dataset.documentPath || '',
+        content: state.content,
+        size_chars: Array.from(state.content || '').length
+      });
+    });
+
+    actions.appendChild(saveButton);
+    actions.appendChild(cancelButton);
+    body.appendChild(textarea);
+    body.appendChild(actions);
+    textarea.focus({ preventScroll: true });
+  }
+
+  async function copyConversationDocumentCard(card) {
+    const result = await loadConversationDocumentCard(card);
+    if (result?.ok !== true || !result.file || !navigator.clipboard?.writeText) return;
+    await navigator.clipboard.writeText(result.file.content || '');
+  }
+
+  async function downloadConversationDocumentCard(card) {
+    const result = await loadConversationDocumentCard(card);
+    if (result?.ok !== true || !result.file) return;
+    const blob = new Blob([result.file.content || ''], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    try {
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = buildConversationDocumentDownloadName(result.file.path || '');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
+  function createConversationDocumentCard(link) {
+    const path = normalizeConversationDocumentPath(link.getAttribute('href') || '');
+    const conversationId = resolveCurrentConversationDocumentId();
+    const title = (link.textContent || '').trim() || path;
+
+    const card = document.createElement('details');
+    card.className = 'conversation-document-card';
+    card.dataset.documentPath = path;
+    card.dataset.conversationId = conversationId;
+
+    const summary = document.createElement('summary');
+    summary.className = 'conversation-document-card__summary';
+
+    const titleWrap = document.createElement('span');
+    titleWrap.className = 'conversation-document-card__title-wrap';
+
+    const titleEl = document.createElement('span');
+    titleEl.className = 'conversation-document-card__title';
+    titleEl.textContent = title;
+    titleWrap.appendChild(titleEl);
+
+    const pathEl = document.createElement('span');
+    pathEl.className = 'conversation-document-card__path';
+    pathEl.textContent = path;
+    titleWrap.appendChild(pathEl);
+    summary.appendChild(titleWrap);
+
+    const actions = document.createElement('span');
+    actions.className = 'conversation-document-card__actions';
+    const makeButton = (label, handler, refKey) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'conversation-document-card__button';
+      button.textContent = label;
+      button.addEventListener('click', async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        await handler();
+      });
+      const state = getConversationDocumentCardState(card);
+      state.refs[refKey] = button;
+      actions.appendChild(button);
+    };
+    makeButton('Edit', () => enterConversationDocumentEditMode(card), 'editButton');
+    makeButton('Copy', () => copyConversationDocumentCard(card), 'copyButton');
+    makeButton('Download', () => downloadConversationDocumentCard(card), 'downloadButton');
+    summary.appendChild(actions);
+
+    const meta = document.createElement('div');
+    meta.className = 'conversation-document-card__meta';
+    meta.textContent = '展开后加载文档内容';
+    const body = document.createElement('div');
+    body.className = 'conversation-document-card__body';
+    const status = document.createElement('div');
+    status.className = 'conversation-document-card__status';
+    status.textContent = conversationId
+      ? '展开后加载文档内容'
+      : '当前对话尚未持久化，暂时无法读取文档';
+    body.appendChild(status);
+
+    const state = getConversationDocumentCardState(card);
+    state.refs.meta = meta;
+    state.refs.body = body;
+
+    card.appendChild(summary);
+    card.appendChild(meta);
+    card.appendChild(body);
+    card.addEventListener('toggle', () => {
+      if (card.open && !state.editing) {
+        void loadConversationDocumentCard(card);
+      }
+    });
+    return card;
+  }
+
+  function installConversationDocumentChangeListener() {
+    if (conversationDocumentChangeListenerInstalled) return;
+    document.addEventListener(CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME, (event) => {
+      const detail = event?.detail || {};
+      const conversationId = normalizeConversationDocumentUiString(detail.conversation_id);
+      const changedPaths = new Set([
+        ...(Array.isArray(detail.updated_paths) ? detail.updated_paths : []),
+        ...(Array.isArray(detail.deleted_paths) ? detail.deleted_paths : [])
+      ].map((value) => normalizeConversationDocumentUiString(value)).filter(Boolean));
+      if (!conversationId || changedPaths.size <= 0) return;
+
+      document.querySelectorAll('.conversation-document-card').forEach((card) => {
+        if (!(card instanceof HTMLElement)) return;
+        if (!normalizeConversationDocumentUiString(card.dataset.conversationId)) {
+          card.dataset.conversationId = resolveCurrentConversationDocumentId();
+        }
+        if (normalizeConversationDocumentUiString(card.dataset.conversationId) !== conversationId) return;
+        if (!changedPaths.has(normalizeConversationDocumentUiString(card.dataset.documentPath))) return;
+        const state = getConversationDocumentCardState(card);
+        if (state.editing) return;
+        state.loaded = false;
+        if (card.open) {
+          void loadConversationDocumentCard(card, { force: true });
+        }
+      });
+    });
+    conversationDocumentChangeListenerInstalled = true;
+  }
   
   // 保留占位：数学渲染现改为在 Markdown 渲染阶段由 KaTeX 完成
 
@@ -217,8 +586,20 @@ export function createMessageProcessor(appContext) {
       uniqueContainers.push(rootElement);
     }
     uniqueContainers.forEach((container) => {
-      container.querySelectorAll('a').forEach((link) => {
+      Array.from(container.querySelectorAll('a')).forEach((link) => {
         const rawHref = link.getAttribute('href') || '';
+        if (isConversationDocumentRelativeHref(rawHref)) {
+          try {
+            const card = createConversationDocumentCard(link);
+            const blockParent = link.parentElement;
+            if (blockParent && blockParent.tagName === 'P' && blockParent.childElementCount === 1 && blockParent.textContent.trim() === link.textContent.trim()) {
+              blockParent.replaceWith(card);
+            } else {
+              link.replaceWith(card);
+            }
+          } catch (_) {}
+          return;
+        }
         const policy = getMarkdownLinkPolicy(rawHref, linkContext);
         const isSamePage = policy.target === '_top';
         const rawTextFragment = typeof rawHref === 'string' && rawHref.includes(':~:text=');
@@ -1470,6 +1851,10 @@ export function createMessageProcessor(appContext) {
     return isMicroSkillRegistryToolCall(record);
   }
 
+  function isResponseActivityConversationDocumentEntry(record) {
+    return isConversationDocumentToolCall(record);
+  }
+
   function getResponseActivityJsRuntimeMeta(record) {
     const parsedArgs = parseResponseToolCallArgumentsObject(record?.arguments);
     const code = (typeof parsedArgs?.code === 'string') ? parsedArgs.code : '';
@@ -1621,8 +2006,12 @@ export function createMessageProcessor(appContext) {
   }
 
   function renderResponseActivityMicroSkillApplyPatchPreview(toolBodyInner, entry) {
-    if (!toolBodyInner || !isResponseActivityMicroSkillRegistryEntry(entry)) return false;
-    const preview = buildMicroSkillApplyPatchPreview(entry.arguments);
+    if (!toolBodyInner) return false;
+    const preview = isResponseActivityMicroSkillRegistryEntry(entry)
+      ? buildMicroSkillApplyPatchPreview(entry.arguments)
+      : (isResponseActivityConversationDocumentEntry(entry)
+          ? buildConversationDocumentApplyPatchPreview(entry.arguments)
+          : null);
     if (!preview || !Array.isArray(preview.files) || preview.files.length <= 0) return false;
 
     const summary = document.createElement('div');
@@ -1813,6 +2202,7 @@ export function createMessageProcessor(appContext) {
     if (type === 'web_search_call') return '搜索';
     if (type === 'code_interpreter_call') return '代码解释器';
     if (isResponseActivityJsRuntimeEntry(record)) return 'JS';
+    if (isResponseActivityConversationDocumentEntry(record)) return getConversationDocumentToolTypeLabel(record);
     if (isResponseActivityMicroSkillRegistryEntry(record)) return getMicroSkillRegistryToolTypeLabel(record);
     if (type === 'function_call') return '函数';
     return type || 'tool';
@@ -1857,6 +2247,9 @@ export function createMessageProcessor(appContext) {
     if (isResponseActivityJsRuntimeEntry(record)) {
       const parts = buildResponseActivityJsRuntimeSummaryParts(record, options);
       return `${parts.action} ${parts.value}`.trim();
+    }
+    if (isResponseActivityConversationDocumentEntry(record)) {
+      return buildConversationDocumentPrimaryText(record, options);
     }
     if (isResponseActivityMicroSkillRegistryEntry(record)) {
       return buildMicroSkillRegistryPrimaryText(record, options);
@@ -1912,6 +2305,17 @@ export function createMessageProcessor(appContext) {
     }
     if (isResponseActivityJsRuntimeEntry(record)) {
       return buildResponseActivityJsRuntimeSummaryParts(record, options);
+    }
+    if (isResponseActivityConversationDocumentEntry(record)) {
+      return buildConversationDocumentSummaryParts(record, options) || {
+        action: '',
+        value: '文档',
+        valueUrl: '',
+        meta: '',
+        locationAction: '',
+        locationValue: '',
+        locationUrl: ''
+      };
     }
     if (isResponseActivityMicroSkillRegistryEntry(record)) {
       return buildMicroSkillRegistrySummaryParts(record, options) || {
@@ -4459,6 +4863,7 @@ export function createMessageProcessor(appContext) {
 
   // 在创建消息处理器时安装一次全局链接拦截器
   installMarkdownLinkInterceptor();
+  installConversationDocumentChangeListener();
   messageVirtualizer.init();
 
   /**

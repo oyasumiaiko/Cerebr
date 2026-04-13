@@ -81,9 +81,13 @@ function finalizeFilePreview(file, options = {}) {
   };
 }
 
-export function buildMicroSkillApplyPatchPreview(rawArguments, options = {}) {
+function buildApplyPatchPreview(rawArguments, options = {}) {
   const args = parseArgumentsObject(rawArguments);
-  if (!args || String(args.action || '').trim() !== 'apply_patch') {
+  if (!args) {
+    return null;
+  }
+  const requireAction = options.requireAction !== false;
+  if (requireAction && String(args.action || '').trim() !== 'apply_patch') {
     return null;
   }
 
@@ -246,4 +250,18 @@ export function buildMicroSkillApplyPatchPreview(rawArguments, options = {}) {
     files: filePreviews,
     truncatedFiles: Math.max(0, discoveredFileCount - totalFiles)
   };
+}
+
+export function buildMicroSkillApplyPatchPreview(rawArguments, options = {}) {
+  return buildApplyPatchPreview(rawArguments, {
+    ...options,
+    requireAction: true
+  });
+}
+
+export function buildConversationDocumentApplyPatchPreview(rawArguments, options = {}) {
+  return buildApplyPatchPreview(rawArguments, {
+    ...options,
+    requireAction: false
+  });
 }

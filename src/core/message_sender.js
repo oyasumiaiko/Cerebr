@@ -62,6 +62,7 @@ import {
   buildResponsesAskableModelsToolOutputContentItems,
   buildResponsesAskOtherAiToolOutputContentItems,
   buildResponsesRequestUserInputToolOutputContentItems,
+  buildResponsesConversationDocumentToolOutputContentItems,
   buildResponsesMicroSkillRegistryToolOutputContentItems,
   buildResponsesGenericXmlToolOutputContentItems
 } from '../agent_tools/responses_tool_output.js';
@@ -105,6 +106,22 @@ import {
   MICRO_SKILL_REGISTRY_TOOL_NAME,
   buildMicroSkillRegistryFunctionToolDefinition
 } from '../agent_tools/micro_skill_registry_tool.js';
+import {
+  CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
+  CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME,
+  CONVERSATION_DOCUMENT_INTERNAL_READ_FILE_FULL_ACTION,
+  CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION,
+  CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
+  CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
+  CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
+  buildConversationDocumentApplyPatchFunctionToolDefinition,
+  buildConversationDocumentListFilesFunctionToolDefinition,
+  buildConversationDocumentReadFileFunctionToolDefinition,
+  buildConversationDocumentSearchFilesFunctionToolDefinition,
+  executeConversationDocumentAction,
+  isConversationDocumentToolAction,
+  isConversationDocumentMutationAction
+} from '../agent_tools/conversation_document_tools.js';
 import {
   JS_RUNTIME_ENV_BOUND_HOST_PAGE,
   JS_RUNTIME_ENV_ISOLATED_SANDBOX,
@@ -155,6 +172,10 @@ const RESPONSES_REQUEST_USER_INPUT_TOOL_NAME = REQUEST_USER_INPUT_TOOL_NAME;
 const RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME = LIST_ASKABLE_MODELS_TOOL_NAME;
 const RESPONSES_ASK_OTHER_AI_TOOL_NAME = ASK_OTHER_AI_TOOL_NAME;
 const RESPONSES_MICRO_SKILL_REGISTRY_TOOL_NAME = MICRO_SKILL_REGISTRY_TOOL_NAME;
+const RESPONSES_CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME = CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME;
+const RESPONSES_CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME = CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME;
+const RESPONSES_CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME = CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME;
+const RESPONSES_CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME = CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME;
 const RESPONSES_LOCAL_COMPACTION_MARKER_TEXT = '已压缩上下文（基于上一轮上下文大小）';
 const RESPONSES_LOCAL_COMPACTION_PENDING_TEXT = '上下文压缩中';
 const RESPONSES_LOCAL_COMPACTION_ERROR_TEXT = '上下文压缩失败';
@@ -7987,6 +8008,10 @@ export function createMessageSender(appContext) {
   function getResponsesCustomFunctionTools(usedApiConfig, pageToolEnvironment = resolveResponsesPageToolEnvironment()) {
     if (!isOpenAIResponsesApiConfig(usedApiConfig)) return [];
     const tools = [
+      buildConversationDocumentApplyPatchFunctionToolDefinition(),
+      buildConversationDocumentListFilesFunctionToolDefinition(),
+      buildConversationDocumentReadFileFunctionToolDefinition(),
+      buildConversationDocumentSearchFilesFunctionToolDefinition(),
       buildMicroSkillRegistryFunctionToolDefinition(),
       buildRequestUserInputFunctionToolDefinition(),
       buildViewImageFunctionToolDefinition(),
@@ -8156,6 +8181,17 @@ export function createMessageSender(appContext) {
           maxChars: MICRO_SKILL_READ_MAX_CHARS,
           mode: 'tail'
         }
+      });
+    }
+  }
+
+  function serializeResponsesConversationDocumentFunctionToolOutput(toolName, value) {
+    try {
+      return buildResponsesConversationDocumentToolOutputContentItems(toolName, value);
+    } catch (error) {
+      return buildResponsesConversationDocumentToolOutputContentItems(toolName, {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
       });
     }
   }
@@ -9021,6 +9057,59 @@ export function createMessageSender(appContext) {
     }
   }
 
+  function dispatchConversationDocumentChange(detail) {
+    if (!detail || typeof document === 'undefined' || typeof document.dispatchEvent !== 'function') {
+      return;
+    }
+    try {
+      document.dispatchEvent(new CustomEvent(CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME, {
+        detail
+      }));
+    } catch (_) {}
+  }
+
+  async function resolveConversationIdForConversationDocumentTool(options = {}) {
+    const attemptState = options?.attemptState || null;
+    let conversationId = normalizeConversationId(
+      options?.conversationIdHint
+      || attemptState?.boundConversationId
+      || currentConversationId
+      || chatHistoryUI?.getCurrentConversationId?.()
+    );
+    if (conversationId) return conversationId;
+
+    if (attemptState) {
+      const savedConversation = await persistAttemptConversationSnapshot(attemptState, { force: true });
+      conversationId = normalizeConversationId(
+        savedConversation?.id
+        || attemptState?.boundConversationId
+        || currentConversationId
+        || chatHistoryUI?.getCurrentConversationId?.()
+      );
+    }
+    if (conversationId) return conversationId;
+
+    throw new Error('当前对话尚未持久化，无法访问对话文档。');
+  }
+
+  async function executeResponsesConversationDocumentFunction(toolName, rawArgs, options = {}) {
+    try {
+      const conversationId = await resolveConversationIdForConversationDocumentTool(options);
+      const result = await executeConversationDocumentAction(toolName, rawArgs, {
+        conversationId
+      });
+      if (result?.ok === true && result?.change_event) {
+        dispatchConversationDocumentChange(result.change_event);
+      }
+      return result;
+    } catch (error) {
+      return {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      };
+    }
+  }
+
   /**
    * 执行扩展侧 JS 脚本注册表工具。
    *
@@ -9100,6 +9189,8 @@ export function createMessageSender(appContext) {
     let outputPayload = null;
     if (functionName === RESPONSES_JS_RUNTIME_TOOL_NAME) {
       outputPayload = await executeResponsesJsRuntimeFunction(parsedArgs, options);
+    } else if (isConversationDocumentToolAction(functionName)) {
+      outputPayload = await executeResponsesConversationDocumentFunction(functionName, parsedArgs, options);
     } else if (functionName === RESPONSES_MICRO_SKILL_REGISTRY_TOOL_NAME) {
       outputPayload = await executeResponsesMicroSkillRegistryFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME) {
@@ -9139,6 +9230,8 @@ export function createMessageSender(appContext) {
       output:
         functionName === RESPONSES_JS_RUNTIME_TOOL_NAME
             ? serializeResponsesJsRuntimeFunctionToolOutput(outputPayload)
+          : isConversationDocumentToolAction(functionName)
+            ? serializeResponsesConversationDocumentFunctionToolOutput(functionName, outputPayload)
           : functionName === RESPONSES_MICRO_SKILL_REGISTRY_TOOL_NAME
             ? serializeResponsesMicroSkillRegistryFunctionToolOutput(outputPayload)
           : functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME

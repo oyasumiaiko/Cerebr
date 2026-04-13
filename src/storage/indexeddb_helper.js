@@ -2,6 +2,8 @@
  * IndexedDB 工具模块，用于存储聊天记录
  */
 
+const CONVERSATION_DOCUMENT_STORE = 'conversation_documents';
+
 /**
  * 打开或创建 "ChatHistoryDB" 数据库以及 "conversations" 对象存储
  * @returns {Promise<IDBDatabase>}
@@ -15,10 +17,12 @@ export function openChatHistoryDB() {
   if (cachedDbPromise) return cachedDbPromise;
 
   cachedDbPromise = new Promise((resolve, reject) => {
-    // v3: 为性能优化新增 conversations.endTime 与 conversations.url 索引
+    // v4: 新增按会话归属的 conversation_documents store，用于保存“对话级虚拟文档”。
+    // - conversations.endTime/url 仍用于历史列表与 URL 筛选；
+    // - conversation_documents 采用 [conversation_id, path] 复合主键，便于级联删除与全文列举。
     // - endTime：用于快速按“最近对话”分页加载（避免全量扫描 + 排序）
     // - url：用于“按当前 URL 快速筛选历史会话”（按前缀范围查询）
-    const request = indexedDB.open('ChatHistoryDB', 3);
+    const request = indexedDB.open('ChatHistoryDB', 4);
     request.onerror = () => {
       cachedDbPromise = null;
       reject(request.error);
@@ -61,9 +65,32 @@ export function openChatHistoryDB() {
           console.warn('升级 conversations 索引失败（可能由浏览器兼容性/事务状态导致）:', e);
         }
       }
+
+      if (!db.objectStoreNames.contains(CONVERSATION_DOCUMENT_STORE)) {
+        const store = db.createObjectStore(CONVERSATION_DOCUMENT_STORE, {
+          keyPath: ['conversation_id', 'path']
+        });
+        store.createIndex('conversation_id', 'conversation_id', { unique: false });
+        store.createIndex('conversation_id_updated_at', ['conversation_id', 'updated_at'], { unique: false });
+      } else {
+        try {
+          const store = tx.objectStore(CONVERSATION_DOCUMENT_STORE);
+          if (store && !store.indexNames.contains('conversation_id')) {
+            store.createIndex('conversation_id', 'conversation_id', { unique: false });
+          }
+          if (store && !store.indexNames.contains('conversation_id_updated_at')) {
+            store.createIndex('conversation_id_updated_at', ['conversation_id', 'updated_at'], { unique: false });
+          }
+        } catch (e) {
+          console.warn('升级 conversation_documents 索引失败（可能由浏览器兼容性/事务状态导致）:', e);
+        }
+      }
       
       if (event.oldVersion < 3) {
         console.log('升级数据库：为 conversations 增加 endTime/url 索引（提升历史列表与 URL 筛选性能）');
+      }
+      if (event.oldVersion < 4) {
+        console.log('升级数据库：新增 conversation_documents store（用于对话级文档虚拟文件）');
       }
     };
   });
@@ -686,13 +713,34 @@ export async function putConversation(conversation, separateContent = false) {
 export async function deleteConversation(conversationId) {
   const db = await openChatHistoryDB();
   
-  const transaction = db.transaction('conversations', 'readwrite');
+  const transaction = db.transaction(['conversations', CONVERSATION_DOCUMENT_STORE], 'readwrite');
   const conversationStore = transaction.objectStore('conversations');
+  const documentStore = transaction.objectStore(CONVERSATION_DOCUMENT_STORE);
   
-  // 删除会话记录
+  // 删除会话记录，并级联清理该会话的虚拟文档。
   return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
     const request = conversationStore.delete(conversationId);
-    request.onsuccess = () => resolve();
+    request.onsuccess = () => {
+      try {
+        const index = documentStore.index('conversation_id');
+        const range = IDBKeyRange.only(String(conversationId || ''));
+        const cursorRequest = index.openKeyCursor(range);
+        cursorRequest.onerror = () => reject(cursorRequest.error);
+        cursorRequest.onsuccess = () => {
+          const cursor = cursorRequest.result;
+          if (!cursor) {
+            return;
+          }
+          documentStore.delete(cursor.primaryKey);
+          cursor.continue();
+        };
+      } catch (error) {
+        reject(error);
+      }
+    };
     request.onerror = () => reject(request.error);
   });
 }
@@ -964,8 +1012,20 @@ export async function getDatabaseStats() {
       return { textSize, imageSize, hasImage };
     };
     
-    // 获取所有会话
+    // 获取所有会话与对话级文档。
+    const db = await openChatHistoryDB();
     const conversations = await getAllConversations(false);
+    const conversationDocuments = await new Promise((resolve, reject) => {
+      try {
+        const transaction = db.transaction(CONVERSATION_DOCUMENT_STORE, 'readonly');
+        const store = transaction.objectStore(CONVERSATION_DOCUMENT_STORE);
+        const request = store.getAll();
+        request.onsuccess = () => resolve(Array.isArray(request.result) ? request.result : []);
+        request.onerror = () => reject(request.error);
+      } catch (error) {
+        reject(error);
+      }
+    });
     
     // 计算统计信息
     let totalMessages = 0;
@@ -973,6 +1033,8 @@ export async function getDatabaseStats() {
     let totalTextSize = 0;
     let totalImageSize = 0;
     let totalMetaSize = 0;
+    let totalDocumentCount = 0;
+    let totalDocumentSize = 0;
     let largestMessage = 0;
     let oldestMessageDate = Date.now();
     let newestMessageDate = 0;
@@ -1035,6 +1097,12 @@ export async function getDatabaseStats() {
         });
       }
     });
+
+    totalDocumentCount = Array.isArray(conversationDocuments) ? conversationDocuments.length : 0;
+    (Array.isArray(conversationDocuments) ? conversationDocuments : []).forEach((doc) => {
+      const content = typeof doc?.content === 'string' ? doc.content : '';
+      totalDocumentSize += encoder.encode(content).length;
+    });
     
     // 生成域名 Top 10
     const topDomains = Array.from(domainCounts.entries())
@@ -1066,6 +1134,8 @@ export async function getDatabaseStats() {
     const conversationsCount = conversations.length;
     const avgMessagesPerConversation = conversationsCount > 0 ? (totalMessages / conversationsCount) : 0;
     const avgTextBytesPerMessage = totalMessages > 0 ? (totalTextSize / totalMessages) : 0;
+    const avgDocumentsPerConversation = conversationsCount > 0 ? (totalDocumentCount / conversationsCount) : 0;
+    const avgDocumentBytes = totalDocumentCount > 0 ? (totalDocumentSize / totalDocumentCount) : 0;
 
     return {
       conversationsCount,
@@ -1077,14 +1147,20 @@ export async function getDatabaseStats() {
       totalImageSizeFormatted: formatSize(totalImageSize),
       totalMetaSize,
       totalMetaSizeFormatted: formatSize(totalMetaSize),
-      totalSize: totalTextSize + totalImageSize + totalMetaSize,
-      totalSizeFormatted: formatSize(totalTextSize + totalImageSize + totalMetaSize),
+      documentsCount: totalDocumentCount,
+      totalDocumentSize,
+      totalDocumentSizeFormatted: formatSize(totalDocumentSize),
+      totalSize: totalTextSize + totalImageSize + totalMetaSize + totalDocumentSize,
+      totalSizeFormatted: formatSize(totalTextSize + totalImageSize + totalMetaSize + totalDocumentSize),
       largestMessageSize: largestMessage,
       largestMessageSizeFormatted: formatSize(largestMessage),
       oldestMessageDate: oldestMessageDate !== Date.now() ? new Date(oldestMessageDate) : null,
       newestMessageDate: newestMessageDate !== 0 ? new Date(newestMessageDate) : null,
       timeSpanDays: timeSpanDays > 0 ? Math.round(timeSpanDays) : 0,
       avgMessagesPerConversation,
+      avgDocumentsPerConversation,
+      avgDocumentBytes,
+      avgDocumentBytesFormatted: formatSize(Math.round(avgDocumentBytes)),
       avgTextBytesPerMessage,
       avgTextBytesPerMessageFormatted: formatSize(Math.round(avgTextBytesPerMessage)),
       topDomains,
