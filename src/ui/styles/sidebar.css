@@ -9844,6 +9844,12 @@ body.chat-empty .empty-state-content {
     text-overflow: ellipsis;
 }
 
+.message .response-activity-tool-meta {
+    flex: 0 0 auto;
+    color: color-mix(in srgb, var(--cerebr-text-color) 46%, transparent);
+    white-space: nowrap;
+}
+
 .message .response-activity-tool-link {
     text-decoration: none;
 }

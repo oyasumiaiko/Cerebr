@@ -23,6 +23,12 @@ import { resolveResponseActivityToolExpansionState } from '../utils/response_act
 import { normalizeAssistantPreResponseStatus } from '../utils/assistant_pre_response_status.js';
 import { buildMicroSkillApplyPatchPreview } from '../utils/micro_skill_patch_preview.js';
 import {
+  buildMicroSkillRegistryPrimaryText,
+  buildMicroSkillRegistrySummaryParts,
+  getMicroSkillRegistryToolTypeLabel,
+  isMicroSkillRegistryToolCall
+} from '../utils/response_activity_tool_summary.js';
+import {
   extractResponsesToolOutputInputImages,
   formatResponsesToolOutputForDisplay,
   hasResponsesToolOutputBody
@@ -1444,8 +1450,6 @@ export function createMessageProcessor(appContext) {
   }
 
   const RESPONSE_ACTIVITY_JS_RUNTIME_TOOL_NAME = 'js_runtime_execute';
-  const RESPONSE_ACTIVITY_MICRO_SKILL_REGISTRY_TOOL_NAME = 'micro_skill_registry';
-
   function parseResponseToolCallArgumentsObject(rawArguments) {
     const text = (typeof rawArguments === 'string') ? rawArguments.trim() : '';
     if (!text) return null;
@@ -1463,8 +1467,7 @@ export function createMessageProcessor(appContext) {
   }
 
   function isResponseActivityMicroSkillRegistryEntry(record) {
-    return String(record?.type || '').toLowerCase() === 'function_call'
-      && String(record?.name || '').trim().toLowerCase() === RESPONSE_ACTIVITY_MICRO_SKILL_REGISTRY_TOOL_NAME;
+    return isMicroSkillRegistryToolCall(record);
   }
 
   function getResponseActivityJsRuntimeMeta(record) {
@@ -1810,6 +1813,7 @@ export function createMessageProcessor(appContext) {
     if (type === 'web_search_call') return '搜索';
     if (type === 'code_interpreter_call') return '代码解释器';
     if (isResponseActivityJsRuntimeEntry(record)) return 'JS';
+    if (isResponseActivityMicroSkillRegistryEntry(record)) return getMicroSkillRegistryToolTypeLabel(record);
     if (type === 'function_call') return '函数';
     return type || 'tool';
   }
@@ -1853,6 +1857,9 @@ export function createMessageProcessor(appContext) {
     if (isResponseActivityJsRuntimeEntry(record)) {
       const parts = buildResponseActivityJsRuntimeSummaryParts(record, options);
       return `${parts.action} ${parts.value}`.trim();
+    }
+    if (isResponseActivityMicroSkillRegistryEntry(record)) {
+      return buildMicroSkillRegistryPrimaryText(record, options);
     }
     if (type === 'function_call') {
       const name = (typeof record.name === 'string' && record.name.trim()) ? record.name.trim() : '匿名函数';
@@ -1905,6 +1912,17 @@ export function createMessageProcessor(appContext) {
     }
     if (isResponseActivityJsRuntimeEntry(record)) {
       return buildResponseActivityJsRuntimeSummaryParts(record, options);
+    }
+    if (isResponseActivityMicroSkillRegistryEntry(record)) {
+      return buildMicroSkillRegistrySummaryParts(record, options) || {
+        action: '',
+        value: '技能',
+        valueUrl: '',
+        meta: '',
+        locationAction: '',
+        locationValue: '',
+        locationUrl: ''
+      };
     }
     if (type === 'function_call') {
       const name = (typeof record.name === 'string' && record.name.trim()) ? record.name.trim() : '匿名函数';
@@ -2927,6 +2945,13 @@ export function createMessageProcessor(appContext) {
           value.textContent = primaryParts.value;
           primary.appendChild(value);
         }
+      }
+
+      if (primaryParts.meta) {
+        const meta = document.createElement('span');
+        meta.className = 'response-activity-tool-meta';
+        meta.textContent = primaryParts.meta;
+        primary.appendChild(meta);
       }
 
       if (primaryParts.locationAction && primaryParts.locationValue) {
