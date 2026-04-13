@@ -370,6 +370,23 @@ test('buildResponsesMicroSkillRegistryToolOutputContentItems 对 read_file 仍�
   assert.match(text, /"content": "Alpha"/);
 });
 
+test('buildResponsesMicroSkillRegistryToolOutputContentItems 会把 mount_on_current_page 压成简洁挂载摘要', async () => {
+  const { buildResponsesMicroSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesMicroSkillRegistryToolOutputContentItems({
+    ok: true,
+    action: 'mount_on_current_page',
+    skill: {
+      name: 'dom-probe',
+      revision: 3
+    },
+    mounted_on_current_page: true,
+    active_skills: ['dom-probe']
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /Mounted skill dom-probe on current page\./);
+  assert.doesNotMatch(text, /"active_skills"/);
+});
+
 test('buildResponsesPdfContentToolOutputContentItems 使用 overview / selection / content XML 分块', async () => {
   const { buildResponsesPdfContentToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesPdfContentToolOutputContentItems({

@@ -103,3 +103,28 @@ test('skill_registry search_files 摘要会优先显示 action、pattern 和技�
     locationUrl: ''
   });
 });
+
+test('skill_registry mount_on_current_page 摘要会显示当前页挂载动作与技能名', async () => {
+  const { buildMicroSkillRegistrySummaryParts, buildMicroSkillRegistryPrimaryText } = await loadModule();
+
+  const record = {
+    type: 'function_call',
+    name: 'skill_registry',
+    arguments: JSON.stringify({
+      action: 'mount_on_current_page',
+      skill_name: 'dom-probe'
+    })
+  };
+
+  const parts = buildMicroSkillRegistrySummaryParts(record);
+  assert.deepEqual(parts, {
+    action: '挂载到当前页',
+    value: 'dom-probe',
+    valueUrl: '',
+    meta: '',
+    locationAction: '',
+    locationValue: '',
+    locationUrl: ''
+  });
+  assert.equal(buildMicroSkillRegistryPrimaryText(record), '挂载到当前页 dom-probe');
+});

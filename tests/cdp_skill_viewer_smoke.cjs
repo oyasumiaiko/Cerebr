@@ -309,8 +309,8 @@ async function main() {
     await remountButton.click();
     await waitFor(async () => {
       const texts = await sidebarFrame.locator('.toast-container .notification').allTextContents().catch(() => []);
-      return texts.find((text) => text.includes('当前页 skill 已刷新')) || null;
-    }, { timeoutMs: 30_000, intervalMs: 250, label: 'skill refresh success toast' });
+      return texts.find((text) => text.includes('当前页 skill 已挂载')) || null;
+    }, { timeoutMs: 30_000, intervalMs: 250, label: 'skill mount success toast' });
     result.steps.push('skill_refresh_clicked');
 
     const refreshState = await sidebarFrame.evaluate(async (skillName) => {
@@ -319,16 +319,16 @@ async function main() {
         type: 'MICRO_SKILL_REGISTRY_ACTION',
         tabId: typeof tab?.id === 'number' ? tab.id : null,
         payload: {
-          action: 'refresh_current_document',
+          action: 'mount_on_current_page',
           skill_name: skillName
         }
       });
     }, skillName);
-    if (!refreshState?.success || refreshState?.ok !== true) {
-      throw new Error(`refresh_current_document failed after UI click: ${JSON.stringify(refreshState)}`);
+    if (!refreshState?.success || refreshState?.ok !== true || refreshState?.mounted_on_current_page !== true) {
+      throw new Error(`mount_on_current_page failed after UI click: ${JSON.stringify(refreshState)}`);
     }
-    const activeSkills = Array.isArray(refreshState?.refresh_result?.active_skills)
-      ? refreshState.refresh_result.active_skills
+    const activeSkills = Array.isArray(refreshState?.active_skills)
+      ? refreshState.active_skills
       : [];
     if (!activeSkills.includes(skillName)) {
       throw new Error(`${skillName} not mounted after refresh: ${JSON.stringify(refreshState)}`);

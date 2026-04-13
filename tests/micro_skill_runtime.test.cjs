@@ -51,6 +51,8 @@ function buildSkill(name) {
 test('buildMicroSkillDocumentRefreshSource 与 buildRegisteredMicroSkillUserScript 生成可编译源码', async () => {
   const {
     buildMicroSkillDocumentRefreshSource,
+    buildMicroSkillMountOnCurrentPageSource,
+    buildMicroSkillUnmountFromCurrentPageSource,
     buildRegisteredMicroSkillUserScript
   } = await loadMicroSkillRuntimeModule();
 
@@ -58,8 +60,12 @@ test('buildMicroSkillDocumentRefreshSource 与 buildRegisteredMicroSkillUserScri
     buildSkill('dom-probe'),
     buildSkill('api-reader')
   ]);
+  const mountSource = buildMicroSkillMountOnCurrentPageSource(buildSkill('dom-probe'));
+  const unmountSource = buildMicroSkillUnmountFromCurrentPageSource('dom-probe');
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   assert.doesNotThrow(() => new AsyncFunction(refreshSource));
+  assert.doesNotThrow(() => new AsyncFunction(mountSource));
+  assert.doesNotThrow(() => new AsyncFunction(unmountSource));
 
   const registered = buildRegisteredMicroSkillUserScript(buildSkill('dom-probe'));
   assert.equal(registered.world, 'USER_SCRIPT');

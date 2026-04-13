@@ -9444,33 +9444,31 @@ export function createChatHistoryUI(appContext) {
       try {
         remountBtn.disabled = true;
         const result = await executeMicroSkillViewerAction({
-          action: 'refresh_current_document',
+          action: 'mount_on_current_page',
           skill_name: skillDetail.name
         });
-        const refreshResult = result?.refresh_result;
-        const activeSkills = Array.isArray(refreshResult?.active_skills)
-          ? refreshResult.active_skills.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim())
-          : (Array.isArray(refreshResult?.value?.active_skills)
-            ? refreshResult.value.active_skills.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim())
+        const activeSkills = Array.isArray(result?.active_skills)
+          ? result.active_skills.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim())
+          : (Array.isArray(result?.value?.active_skills)
+            ? result.value.active_skills.filter((item) => typeof item === 'string' && item.trim()).map((item) => item.trim())
             : []);
-        if (result?.ok !== true || refreshResult?.ok !== true) {
-          throw new Error((typeof refreshResult?.error?.message === 'string' && refreshResult.error.message.trim())
-            ? refreshResult.error.message.trim()
-            : '当前页 skill refresh 失败。');
+        if (result?.ok !== true || result?.mounted_on_current_page !== true) {
+          throw new Error((typeof result?.error?.message === 'string' && result.error.message.trim())
+            ? result.error.message.trim()
+            : '当前页 skill 挂载失败。');
         }
-        const requestedSkillMounted = activeSkills.includes(skillDetail.name);
         showNotification?.({
-          message: requestedSkillMounted ? '当前页 skill 已刷新' : '当前页已刷新，但该 skill 未挂载',
+          message: '当前页 skill 已挂载',
           description: activeSkills.length > 0
             ? `当前实际已挂载：${activeSkills.join(', ')}`
             : '当前页没有任何已挂载的 page runtime skill。',
-          type: requestedSkillMounted ? 'success' : 'warning',
-          duration: requestedSkillMounted ? 2400 : 3200
+          type: 'success',
+          duration: 2400
         });
       } catch (error) {
-        console.error('刷新当前页 skill 挂载失败:', error);
+        console.error('当前页 skill 挂载失败:', error);
         showNotification?.({
-          message: '刷新当前页 skill 挂载失败',
+          message: '当前页 skill 挂载失败',
           description: String(error?.message || error),
           type: 'error',
           duration: 3200

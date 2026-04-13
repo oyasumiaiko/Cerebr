@@ -1091,6 +1091,11 @@ export function buildResponsesRequestUserInputToolOutputContentItems(result, opt
 }
 
 function extractMicroSkillActiveSkillNames(refreshResult) {
+  if (Array.isArray(refreshResult?.active_skills)) {
+    return refreshResult.active_skills
+      .map((item) => (typeof item === 'string' ? item.trim() : ''))
+      .filter(Boolean);
+  }
   const names = new Set();
   const activeSkills = Array.isArray(refreshResult?.active_skills)
     ? refreshResult.active_skills
@@ -1168,6 +1173,9 @@ function buildMicroSkillMutationSummaryText(result) {
     case 'delete':
     case 'delete_skill':
       summary = `Deleted skill ${skillName || '(unknown)'}.`;
+      break;
+    case 'mount_on_current_page':
+      summary = `Mounted skill ${skillName || '(unknown)'} on current page.`;
       break;
     case 'refresh_current_document':
       summary = activeSkillNames.length > 0

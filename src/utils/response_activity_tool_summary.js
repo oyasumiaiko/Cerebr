@@ -88,6 +88,8 @@ function resolveMicroSkillActionLabel(action, options = {}) {
       return isInProgress ? '正在启用技能' : '启用技能';
     case 'disable_skill':
       return isInProgress ? '正在停用技能' : '停用技能';
+    case 'mount_on_current_page':
+      return isInProgress ? '正在挂载到当前页' : '挂载到当前页';
     case 'refresh_current_document':
       return isInProgress ? '正在刷新当前文档挂载' : '刷新当前文档挂载';
     default:
@@ -137,9 +139,10 @@ function buildMicroSkillRegistryTargetParts(args, options = {}) {
         meta: (skillName && filePath) ? skillName : ''
       };
     case 'refresh_current_document':
+    case 'mount_on_current_page':
       return {
         action,
-        value: skillName || '当前文档',
+        value: skillName || '技能',
         meta: ''
       };
     default:

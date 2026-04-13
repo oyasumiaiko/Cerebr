@@ -287,6 +287,41 @@ return {
 `.trim();
 }
 
+export function buildMicroSkillMountOnCurrentPageSource(record) {
+  const skill = normalizeStoredMicroSkillRecord(record);
+  if (!skill) {
+    throw new Error('无法为无效的技能构造当前页挂载源码。');
+  }
+  if (skill.kind !== 'page_runtime') {
+    throw new Error(`技能 ${skill.name} 不是页面 runtime skill，不能构造当前页挂载源码。`);
+  }
+
+  return `
+${buildRuntimeBootstrapSource()}
+${buildMicroSkillMountSource(skill, { includeBootstrap: false })}
+return {
+  mount_surface: ${encodeInlineJson(CEREBR_MICRO_SKILL_MOUNT_SURFACE)},
+  active_skills: __cerebrMicroSkillRuntime.list()
+};
+`.trim();
+}
+
+export function buildMicroSkillUnmountFromCurrentPageSource(skillName) {
+  const normalizedSkillName = String(skillName || '').trim();
+  if (!normalizedSkillName) {
+    throw new Error('构造当前页卸载源码时 skillName 不能为空。');
+  }
+
+  return `
+${buildRuntimeBootstrapSource()}
+await __cerebrMicroSkillRuntime.unmount(${encodeInlineJson(normalizedSkillName)});
+return {
+  mount_surface: ${encodeInlineJson(CEREBR_MICRO_SKILL_MOUNT_SURFACE)},
+  active_skills: __cerebrMicroSkillRuntime.list()
+};
+`.trim();
+}
+
 export function buildRegisteredMicroSkillUserScript(record) {
   const skill = normalizeStoredMicroSkillRecord(record);
   if (!skill) {

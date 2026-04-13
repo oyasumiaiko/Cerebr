@@ -24,8 +24,10 @@ import {
 import { applyMicroSkillPackagePatch } from '../agent_tools/micro_skill_apply_patch.js';
 import {
   buildMicroSkillDocumentRefreshSource,
+  buildMicroSkillMountOnCurrentPageSource,
   buildRegisteredMicroSkillScriptId,
-  buildRegisteredMicroSkillUserScript
+  buildRegisteredMicroSkillUserScript,
+  buildMicroSkillUnmountFromCurrentPageSource
 } from './micro_skill_runtime.js';
 import { createIndexedDbMicroSkillStore } from '../storage/micro_skill_store.js';
 
@@ -92,6 +94,76 @@ async function normalizeRefreshExecutionResult(rawResult, matchedRecords) {
           stack: ''
         }
       : null
+  };
+}
+
+function buildSingleSkillMountErrorMessage(skillName, requestedStatus, runtimeMessage = '') {
+  if (runtimeMessage) return runtimeMessage;
+  switch (String(requestedStatus || '').trim()) {
+    case 'disabled':
+      return `技能 ${skillName} 已停用，不能挂载到当前页。`;
+    case 'not_page_runtime':
+      return `技能 ${skillName} 不是页面 runtime skill，不能挂载到当前页。`;
+    case 'url_not_matched':
+      return `技能 ${skillName} 与当前页 URL 不匹配，不能挂载到当前页。`;
+    default:
+      return `技能 ${skillName} 挂载到当前页失败。`;
+  }
+}
+
+async function normalizeSingleSkillMountExecutionResult(rawResult, skillRecord, options = {}) {
+  const skill = normalizeStoredMicroSkillRecord(skillRecord);
+  const result = (rawResult && typeof rawResult === 'object' && !Array.isArray(rawResult))
+    ? rawResult
+    : {};
+  const requestedSkillName = skill?.name || String(options?.requestedSkillName || '').trim();
+  const activeSkillNames = extractActiveSkillNamesFromRefreshValue(result?.value);
+  const mountedOnCurrentPage = requestedSkillName ? activeSkillNames.includes(requestedSkillName) : false;
+  const firstItemErrorMessage = (() => {
+    for (const item of Array.isArray(result?.items) ? result.items : []) {
+      const message = typeof item?.error?.message === 'string' ? item.error.message.trim() : '';
+      if (message) return message;
+    }
+    return '';
+  })();
+
+  let requestedSkillStatus = String(options?.requestedSkillStatus || '').trim();
+  if (!requestedSkillStatus) {
+    requestedSkillStatus = mountedOnCurrentPage ? 'mounted' : 'runtime_failed';
+  } else if (requestedSkillStatus === 'mounted' && !mountedOnCurrentPage) {
+    requestedSkillStatus = 'runtime_failed';
+  }
+
+  const ok = result.ok === true && requestedSkillStatus === 'mounted' && mountedOnCurrentPage;
+  const errorMessage = ok
+    ? ''
+    : buildSingleSkillMountErrorMessage(
+        requestedSkillName,
+        requestedSkillStatus,
+        (typeof result?.error === 'string' && result.error.trim())
+          ? result.error.trim()
+          : firstItemErrorMessage
+      );
+
+  return {
+    ok,
+    tab_id: normalizeTabId(result?.tabId),
+    skill: skill ? buildMicroSkillSummary(skill) : null,
+    requested_skill_name: requestedSkillName || null,
+    requested_skill_status: requestedSkillStatus || 'runtime_failed',
+    mounted_on_current_page: mountedOnCurrentPage,
+    active_skills: activeSkillNames,
+    current_page_url: typeof options?.currentPageUrl === 'string' ? options.currentPageUrl : '',
+    value: result?.value ?? null,
+    logs: Array.isArray(result?.logs) ? result.logs : [],
+    items: Array.isArray(result?.items) ? result.items : [],
+    error: ok
+      ? null
+      : {
+          message: errorMessage,
+          name: 'MicroSkillMountError',
+          stack: ''
+        }
   };
 }
 
@@ -345,6 +417,51 @@ export function createMicroSkillManager(options = {}) {
     });
 
     return await normalizeRefreshExecutionResult(rawResult, matchingRecords);
+  }
+
+  async function mountSkillOnCurrentPage(skillName, options = {}) {
+    if (!jsRuntimeManager || typeof jsRuntimeManager.execute !== 'function') {
+      throw new Error('当前扩展没有可用的 JS Runtime 执行入口，无法将技能挂载到当前页。');
+    }
+
+    const record = await getSkillRecord(skillName);
+    if (!record) {
+      throw new Error(`技能 ${skillName} 不存在。`);
+    }
+    const normalizedRecord = normalizeStoredMicroSkillRecord(record);
+    const { tab_id, url } = options?.explicitUrl
+      ? { tab_id: normalizeTabId(options?.tabId), url: options.explicitUrl }
+      : await getTabUrl(options?.tabId);
+    if (!url) {
+      throw new Error('当前标签页没有可用 URL，无法判断技能是否可挂载。');
+    }
+
+    let requestedSkillStatus = 'mounted';
+    let code = '';
+    if (normalizedRecord?.enabled !== true) {
+      requestedSkillStatus = 'disabled';
+      code = buildMicroSkillUnmountFromCurrentPageSource(normalizedRecord?.name || skillName);
+    } else if (normalizedRecord?.kind !== 'page_runtime') {
+      requestedSkillStatus = 'not_page_runtime';
+      code = buildMicroSkillUnmountFromCurrentPageSource(normalizedRecord?.name || skillName);
+    } else if (!microSkillMatchesUrl(normalizedRecord, url)) {
+      requestedSkillStatus = 'url_not_matched';
+      code = buildMicroSkillUnmountFromCurrentPageSource(normalizedRecord.name);
+    } else {
+      code = buildMicroSkillMountOnCurrentPageSource(normalizedRecord);
+    }
+
+    const rawResult = await jsRuntimeManager.execute({
+      tabId: tab_id,
+      code,
+      injectImmediately: true
+    });
+
+    return await normalizeSingleSkillMountExecutionResult(rawResult, normalizedRecord, {
+      requestedSkillStatus,
+      requestedSkillName: normalizedRecord?.name || skillName,
+      currentPageUrl: url
+    });
   }
 
   async function listMatchingSkillSummariesForTab(tabId) {
@@ -655,6 +772,11 @@ export function createMicroSkillManager(options = {}) {
         return await setSkillEnabled(normalizedArgs.skill_name, true, { tabId: options?.tabId });
       case 'disable_skill':
         return await setSkillEnabled(normalizedArgs.skill_name, false, { tabId: options?.tabId });
+      case 'mount_on_current_page':
+        return {
+          action: 'mount_on_current_page',
+          ...(await mountSkillOnCurrentPage(normalizedArgs.skill_name, { tabId: options?.tabId }))
+        };
       case 'refresh_current_document': {
         if (normalizedArgs.skill_name) {
           const record = await getSkillRecord(normalizedArgs.skill_name);

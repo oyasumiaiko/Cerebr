@@ -238,6 +238,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
   const definition = buildMicroSkillRegistryFunctionToolDefinition();
   assert.equal(definition.name, MICRO_SKILL_REGISTRY_TOOL_NAME);
   assert.match(definition.parameters.properties.action.description, /create_skill/);
+  assert.match(definition.parameters.properties.action.description, /mount_on_current_page/);
   assert.doesNotMatch(definition.parameters.properties.action.description, /read_file/);
   assert.doesNotMatch(definition.parameters.properties.action.description, /apply_patch/);
 
@@ -369,6 +370,32 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     read_options: null,
     include_line_numbers: false,
     deprecated_compat_action: true,
+    next_instruction_path: null,
+    next_runtime_entry_path: null
+  });
+
+  const normalizedMount = normalizeMicroSkillRegistryToolArguments({
+    action: 'mount_on_current_page',
+    skill_name: 'dom-probe'
+  });
+  assert.deepEqual(normalizedMount, {
+    original_action: 'mount_on_current_page',
+    action: 'mount_on_current_page',
+    skill_name: 'dom-probe',
+    skill: null,
+    file_path: null,
+    file: null,
+    patch: null,
+    pattern: null,
+    regex: false,
+    case_mode: 'smart',
+    path_glob: null,
+    context_before: 0,
+    context_after: 0,
+    max_results: 50,
+    read_options: null,
+    include_line_numbers: false,
+    deprecated_compat_action: false,
     next_instruction_path: null,
     next_runtime_entry_path: null
   });

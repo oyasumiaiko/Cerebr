@@ -1446,13 +1446,19 @@ function isLegacySkillRegistryFileAction(action) {
   ]).has(normalizeString(action).toLowerCase());
 }
 
+function isLegacySkillRegistryCompatAction(action) {
+  return new Set([
+    'refresh_current_document'
+  ]).has(normalizeString(action).toLowerCase());
+}
+
 export function buildMicroSkillRegistryFunctionToolDefinition() {
   return {
     type: 'function',
     name: SKILL_REGISTRY_TOOL_NAME,
     description: [
       '管理浏览器里的 skill 生命周期与当前页挂载。',
-      '只负责列出、创建、删除、启用、停用 skill，以及在需要时刷新当前网页。'
+      '只负责列出、创建、删除、启用、停用 skill，以及在需要时把指定 skill 挂载到当前页。'
     ].join(' '),
     strict: false,
     parameters: {
@@ -1461,11 +1467,11 @@ export function buildMicroSkillRegistryFunctionToolDefinition() {
       properties: {
         action: {
           type: 'string',
-          description: '必填。支持 list、create_skill、delete_skill、enable_skill、disable_skill、refresh_current_document。'
+          description: '必填。支持 list、create_skill、delete_skill、enable_skill、disable_skill、mount_on_current_page。'
         },
         skill_name: {
           type: ['string', 'null'],
-          description: '目标 skill 的稳定 key。对 create_skill 不需要；其余 action 作用于单个 skill 时使用。'
+          description: '目标 skill 的稳定 key。对 create_skill 不需要；delete_skill、enable_skill、disable_skill、mount_on_current_page 以及兼容层旧 action 作用于单个 skill 时使用。'
         },
         skill: buildMicroSkillRecordInputSchemaDescription()
       },
@@ -1495,10 +1501,11 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
     'delete_skill',
     'enable_skill',
     'disable_skill',
-    'refresh_current_document'
+    'mount_on_current_page'
   ]);
   const allowLegacyFileActions = isLegacySkillRegistryFileAction(action);
-  if (!supportedActions.has(action) && !allowLegacyFileActions) {
+  const allowLegacyCompatAction = isLegacySkillRegistryCompatAction(action);
+  if (!supportedActions.has(action) && !allowLegacyFileActions && !allowLegacyCompatAction) {
     throw new Error(`skill_registry 参数错误：不支持的 action \`${originalAction || action}\`。`);
   }
 
@@ -1605,7 +1612,10 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
     };
   }
 
-  if (action === 'refresh_current_document') {
+  if (action === 'mount_on_current_page') {
+    if (!skillName) {
+      throw new Error('skill_registry 参数错误：action=mount_on_current_page 时 skill_name 不能为空。');
+    }
     return {
       original_action: originalAction || action,
       action,
@@ -1624,6 +1634,30 @@ export function normalizeMicroSkillRegistryToolArguments(rawArgs) {
       read_options: null,
       include_line_numbers: false,
       deprecated_compat_action: false,
+      next_instruction_path: null,
+      next_runtime_entry_path: null
+    };
+  }
+
+  if (action === 'refresh_current_document') {
+    return {
+      original_action: originalAction || action,
+      action,
+      skill_name: skillName,
+      skill: null,
+      file_path: null,
+      file: null,
+      patch: null,
+      pattern: null,
+      regex: false,
+      case_mode: 'smart',
+      path_glob: null,
+      context_before: 0,
+      context_after: 0,
+      max_results: MICRO_SKILL_SEARCH_DEFAULT_MAX_RESULTS,
+      read_options: null,
+      include_line_numbers: false,
+      deprecated_compat_action: true,
       next_instruction_path: null,
       next_runtime_entry_path: null
     };
