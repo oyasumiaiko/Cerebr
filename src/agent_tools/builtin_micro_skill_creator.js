@@ -129,7 +129,7 @@ function buildSkillCreatorTemplateFiles() {
     skillName: 'example-page-skill',
     displayName: 'Example Page Skill',
     description: 'Read or control a specific web page workflow without guessing brittle DOM details.',
-    shortDescription: '示例页面 skill 模板',
+    shortDescription: 'Example page skill scaffold',
     defaultPrompt: 'Read the current page state for the example page skill.',
     match: ['https://example.com/*'],
     resources: ['scripts', 'references', 'assets'],
