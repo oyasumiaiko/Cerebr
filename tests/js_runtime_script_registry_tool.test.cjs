@@ -495,6 +495,25 @@ test('micro skill 读取参数支持字符偏移与按行续读', async () => {
   assert.equal(globalSearch.matches.every((item) => item.file_path.startsWith('src/')), true);
 });
 
+test('buildMicroSkillContextSummary 与默认挂载约定会使用新的 facade 调用说明', async () => {
+  const {
+    buildDefaultMicroSkillMountContract,
+    buildMicroSkillContextSummary,
+    buildStoredMicroSkillRecord
+  } = await loadMicroSkillRegistryToolModule();
+
+  const record = buildStoredMicroSkillRecord(buildSkillInput());
+  const summary = buildMicroSkillContextSummary(record);
+  const contract = buildDefaultMicroSkillMountContract();
+
+  assert.match(summary.mount_surface, /\$invoke\("dom-probe", "methodName", \.\.\.args\)/);
+  assert.match(summary.mount_surface, /\$methods\("dom-probe"\)/);
+  assert.match(summary.mount_surface, /\$skill\("dom-probe"\)/);
+  assert.doesNotMatch(summary.mount_surface, /__cerebrMicroSkills\.skills/);
+  assert.match(contract, /Recommended helpers: `globalThis\.\$skill\(name\)`, `globalThis\.\$invoke\(skillName, methodName, \.\.\.args\)`, `globalThis\.\$methods\(name\)`\./);
+  assert.match(contract, /Compatibility runtime registry: `globalThis\.__cerebrMicroSkills`\./);
+});
+
 test('searchMicroSkillFiles 支持 regex、smart case、路径过滤与上下文行', async () => {
   const {
     buildStoredMicroSkillRecord,

@@ -34,7 +34,7 @@ test('resolveMicroSkillContextAttachment 只注入摘要并在签名不变时跳
         display_name: 'DOM Probe',
         short_description: '读取页面标题和 URL',
         default_prompt: 'Read the current page title and URL.',
-        mount_surface: 'globalThis.__cerebrMicroSkills.skills["dom-probe"]'
+        mount_surface: '$invoke("dom-probe", "read", { includeUrl: true })'
       }
     ]
   });
@@ -47,6 +47,7 @@ test('resolveMicroSkillContextAttachment 只注入摘要并在签名不变时跳
   assert.match(text, /DOM Probe/);
   assert.ok(text.indexOf('Skill Creator') < text.indexOf('DOM Probe'));
   assert.doesNotMatch(text, /source\.code/);
+  assert.match(text, /\$invoke\(&quot;dom-probe&quot;/);
 
   const first = resolveMicroSkillContextAttachment({ payload, previousEffectiveSignature: '' });
   assert.ok(first.signature);

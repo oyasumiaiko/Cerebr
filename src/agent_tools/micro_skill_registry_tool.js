@@ -762,9 +762,11 @@ function normalizeMicroSkillRuntime(rawRuntime, files, kind) {
  */
 export function buildDefaultMicroSkillMountContract() {
   return [
-    'Mount surface: `globalThis.__cerebrMicroSkills`.',
-    'Use `globalThis.__cerebrMicroSkills.skills[name]` to access mounted exports.',
-    'Use `globalThis.__cerebrMicroSkills.invoke("skill.method", ...args)` to call a mounted method.',
+    'Recommended helpers: `globalThis.$skill(name)`, `globalThis.$invoke(skillName, methodName, ...args)`, `globalThis.$methods(name)`.',
+    '`$skill(name)` returns mounted exports or `null`.',
+    '`$methods(name)` returns the callable top-level method names exposed by the mounted exports.',
+    '`$invoke(skillName, methodName, ...args)` calls a mounted top-level method with clearer parameter boundaries.',
+    'Compatibility runtime registry: `globalThis.__cerebrMicroSkills`.',
     'Runtime source files run as async CommonJS-like bodies with `ctx`, `module`, `exports`, `require` available.',
     '`require()` is async in this runtime, so helper imports should use `await require("./helper.js")`.',
     'Entry file can `return { methods... }`, or assign `module.exports = { ... }`; advanced style: call `ctx.mount(exports)` manually.',
@@ -1287,7 +1289,7 @@ export function buildMicroSkillContextSummary(record) {
     default_prompt: skill.interface.default_prompt,
     mount_surface: skill.kind === MICRO_SKILL_KIND_BUILTIN_GUIDANCE
       ? '先读取这条 skill 的详情，再按需读文件或修改目标 skill。'
-      : `${CEREBR_MICRO_SKILL_MOUNT_SURFACE}.skills["${skill.name}"] / ${CEREBR_MICRO_SKILL_MOUNT_SURFACE}.invoke("${skill.name}.method", ...args)`
+      : `优先用 \`$invoke("${skill.name}", "methodName", ...args)\`；可用 \`$methods("${skill.name}")\` 查看方法名，或用 \`$skill("${skill.name}")\` 查看已挂载导出。`
   };
 }
 

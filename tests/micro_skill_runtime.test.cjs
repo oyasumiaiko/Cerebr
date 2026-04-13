@@ -34,7 +34,7 @@ function buildSkill(name) {
       {
         path: 'src/main.js',
         kind: 'runtime_source',
-        content: `const helper = await require('./helper.js'); return { ping() { return helper.readValue(); } };`
+        content: `const helper = await require('./helper.js'); return { ping() { return helper.readValue(); }, label: helper.readValue() };`
       },
       {
         path: 'src/helper.js',
@@ -71,4 +71,60 @@ test('buildMicroSkillDocumentRefreshSource 与 buildRegisteredMicroSkillUserScri
   assert.equal(registered.world, 'USER_SCRIPT');
   assert.equal(registered.js.length, 1);
   assert.doesNotThrow(() => new Function(registered.js[0].code));
+});
+
+test('runtime bootstrap 会暴露 $skill/$invoke/$methods facade 且与内部注册表共用状态', async () => {
+  const {
+    buildMicroSkillMountOnCurrentPageSource,
+    buildMicroSkillUnmountFromCurrentPageSource
+  } = await loadMicroSkillRuntimeModule();
+
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const previousRuntime = globalThis.__cerebrMicroSkills;
+  const previousSkill = globalThis.$skill;
+  const previousInvoke = globalThis.$invoke;
+  const previousMethods = globalThis.$methods;
+
+  try {
+    delete globalThis.__cerebrMicroSkills;
+    delete globalThis.$skill;
+    delete globalThis.$invoke;
+    delete globalThis.$methods;
+
+    await new AsyncFunction(buildMicroSkillMountOnCurrentPageSource(buildSkill('dom-probe')))();
+
+    assert.equal(typeof globalThis.$skill, 'function');
+    assert.equal(typeof globalThis.$invoke, 'function');
+    assert.equal(typeof globalThis.$methods, 'function');
+    assert.equal(globalThis.$skill('missing-skill'), null);
+    assert.deepEqual(globalThis.$methods('missing-skill'), []);
+    assert.equal(globalThis.$skill('dom-probe').label, 'dom-probe');
+    assert.deepEqual(globalThis.$methods('dom-probe'), ['ping']);
+    assert.equal(await globalThis.$invoke('dom-probe', 'ping'), 'dom-probe');
+    await assert.rejects(
+      () => globalThis.$invoke('', 'ping'),
+      /non-empty skill name/
+    );
+    await assert.rejects(
+      () => globalThis.$invoke('dom-probe', ''),
+      /non-empty method name/
+    );
+    await assert.rejects(
+      () => globalThis.$invoke('dom-probe', 'missingMethod'),
+      /Mounted micro skill method not found: dom-probe\.missingMethod/
+    );
+
+    await new AsyncFunction(buildMicroSkillUnmountFromCurrentPageSource('dom-probe'))();
+    assert.equal(globalThis.$skill('dom-probe'), null);
+    assert.deepEqual(globalThis.$methods('dom-probe'), []);
+  } finally {
+    if (previousRuntime === undefined) delete globalThis.__cerebrMicroSkills;
+    else globalThis.__cerebrMicroSkills = previousRuntime;
+    if (previousSkill === undefined) delete globalThis.$skill;
+    else globalThis.$skill = previousSkill;
+    if (previousInvoke === undefined) delete globalThis.$invoke;
+    else globalThis.$invoke = previousInvoke;
+    if (previousMethods === undefined) delete globalThis.$methods;
+    else globalThis.$methods = previousMethods;
+  }
 });

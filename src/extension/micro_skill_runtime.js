@@ -47,6 +47,13 @@ const __cerebrEnsureMicroSkillRuntime = () => {
     get(name) {
       return this.skills[String(name || '')] || null;
     },
+    methods(name) {
+      const skill = this.get(name);
+      if (!skill || typeof skill !== 'object') return [];
+      return Object.keys(skill)
+        .filter((key) => typeof skill[key] === 'function')
+        .sort();
+    },
     async unmount(name) {
       const key = String(name || '');
       const current = this.skills[key];
@@ -67,6 +74,40 @@ const __cerebrEnsureMicroSkillRuntime = () => {
       this.skillMeta[key] = meta && typeof meta === 'object' ? meta : {};
       return this.skills[key];
     },
+    resolveInvocation(skillName, methodName, rawPath = '') {
+      const normalizedSkillName = String(skillName || '').trim();
+      const normalizedMethodName = String(methodName || '').trim();
+      if (!normalizedSkillName) {
+        if (rawPath) {
+          throw new Error(\`Invalid micro skill path: \${rawPath}\`);
+        }
+        throw new Error('Micro skill invocation requires a non-empty skill name.');
+      }
+      if (!normalizedMethodName) {
+        if (rawPath) {
+          throw new Error(\`Invalid micro skill path: \${rawPath}\`);
+        }
+        throw new Error('Micro skill invocation requires a non-empty method name.');
+      }
+      const skill = this.skills[normalizedSkillName];
+      if (!skill) {
+        throw new Error(\`Micro skill not mounted: \${normalizedSkillName}\`);
+      }
+      const method = skill[normalizedMethodName];
+      if (typeof method !== 'function') {
+        throw new Error(\`Mounted micro skill method not found: \${normalizedSkillName}.\${normalizedMethodName}\`);
+      }
+      return {
+        skill,
+        method,
+        skillName: normalizedSkillName,
+        methodName: normalizedMethodName
+      };
+    },
+    async invokeMethod(skillName, methodName, ...args) {
+      const resolved = this.resolveInvocation(skillName, methodName);
+      return await resolved.method(...args);
+    },
     async invoke(path, ...args) {
       const rawPath = String(path || '');
       const firstDot = rawPath.indexOf('.');
@@ -75,19 +116,28 @@ const __cerebrEnsureMicroSkillRuntime = () => {
       }
       const skillName = rawPath.slice(0, firstDot);
       const methodName = rawPath.slice(firstDot + 1);
-      const skill = this.skills[skillName];
-      if (!skill) {
-        throw new Error(\`Micro skill not mounted: \${skillName}\`);
-      }
-      const method = skill[methodName];
-      if (typeof method !== 'function') {
-        throw new Error(\`Mounted micro skill method not found: \${rawPath}\`);
-      }
-      return await method(...args);
+      return await this.invokeMethod(skillName, methodName, ...args);
     }
   };
 
   globalThis.__cerebrMicroSkills = runtime;
+  globalThis.$skill = (name) => __cerebrEnsureMicroSkillRuntime().get(name);
+  globalThis.$methods = (name) => __cerebrEnsureMicroSkillRuntime().methods(name);
+  globalThis.$invoke = async (skillName, methodName, ...args) => {
+    const normalizedSkillName = String(skillName || '').trim();
+    if (!normalizedSkillName) {
+      throw new Error('Micro skill facade $invoke() requires a non-empty skill name.');
+    }
+    const normalizedMethodName = String(methodName || '').trim();
+    if (!normalizedMethodName) {
+      throw new Error('Micro skill facade $invoke() requires a non-empty method name.');
+    }
+    return await __cerebrEnsureMicroSkillRuntime().invokeMethod(
+      normalizedSkillName,
+      normalizedMethodName,
+      ...args
+    );
+  };
   return runtime;
 };
 const __cerebrMicroSkillRuntime = __cerebrEnsureMicroSkillRuntime();
