@@ -41,6 +41,7 @@ button:focus-visible,
     --cerebr-resize-handle-hover-opacity: 0.9;
     --cerebr-font-size: 14px; /* 消息内容字体 */
     --cerebr-ui-font-size: 15px; /* UI 默认字体（不影响消息内容） */
+    --cerebr-document-font-size-scale: 1;
     --cerebr-input-content-inline-inset: 0px;
     --cerebr-request-drawer-inline-gap: 12px;
 
@@ -10741,7 +10742,7 @@ body.chat-empty .empty-state-content {
 
   .conversation-document-card__path,
   .conversation-document-card__meta {
-    font-size: 12px;
+    font-size: calc(12px * var(--cerebr-document-font-size-scale, 1));
     color: color-mix(in srgb, var(--cerebr-text-color) 68%, transparent);
   }
 
@@ -10809,7 +10810,7 @@ body.chat-empty .empty-state-content {
     border-radius: 10px;
     background: color-mix(in srgb, var(--cerebr-bg-color) 92%, transparent);
     color: color-mix(in srgb, var(--cerebr-text-color) 72%, transparent);
-    font-size: 13px;
+    font-size: calc(13px * var(--cerebr-document-font-size-scale, 1));
   }
 
   .conversation-document-card__content,
@@ -10823,7 +10824,7 @@ body.chat-empty .empty-state-content {
     background: var(--cerebr-input-bg);
     color: var(--cerebr-text-color);
     font-family: var(--cerebr-font-mono, "Consolas", "SFMono-Regular", monospace);
-    font-size: 12px;
+    font-size: calc(12px * var(--cerebr-document-font-size-scale, 1));
     line-height: 1.55;
     white-space: pre-wrap;
     overflow-wrap: anywhere;

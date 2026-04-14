@@ -46,6 +46,7 @@ test('conversation_document_viewer 使用无边框图标按钮承载基础文档
 test('settings_manager 已注册文档渲染默认值偏好', async () => {
   const source = await readWorkspaceFile('src/ui/settings_manager.js');
 
+  assert.match(source, /documentFontSizePercent/);
   assert.match(source, /documentRenderMarkdownForMd/);
   assert.match(source, /documentRenderMarkdownForTxt/);
   assert.match(source, /documentHighlightCodeByExtension/);

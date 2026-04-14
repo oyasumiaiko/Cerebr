@@ -1,9 +1,11 @@
 import { renderMarkdownSafe } from './markdown_renderer.js';
 import {
+  clampConversationDocumentFontSizePercent,
   buildNextConversationDocumentRenderMode,
   CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT,
   CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN,
   CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN,
+  DOCUMENT_VIEWER_SETTING_FONT_SIZE_PERCENT,
   DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION,
   DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES,
   DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD,
@@ -96,9 +98,15 @@ export function createConversationDocumentViewer(options = {}) {
 
   const conversationDocumentCardState = new WeakMap();
   let changeListenerInstalled = false;
+  let keyboardShortcutInstalled = false;
 
   function getViewerSettingsSnapshot() {
     return {
+      [DOCUMENT_VIEWER_SETTING_FONT_SIZE_PERCENT]:
+        clampConversationDocumentFontSizePercent(
+          settingsManager?.getSetting?.(DOCUMENT_VIEWER_SETTING_FONT_SIZE_PERCENT),
+          100
+        ),
       [DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD]:
         settingsManager?.getSetting?.(DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD) !== false,
       [DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT]:
@@ -108,6 +116,51 @@ export function createConversationDocumentViewer(options = {}) {
       [DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES]:
         settingsManager?.getSetting?.(DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES) || {}
     };
+  }
+
+  function setConversationDocumentFontSizePercent(value) {
+    if (!settingsManager?.setSettingValue) return;
+    settingsManager.setSettingValue(
+      DOCUMENT_VIEWER_SETTING_FONT_SIZE_PERCENT,
+      clampConversationDocumentFontSizePercent(value, 100)
+    );
+  }
+
+  function getConversationDocumentFontSizePercent() {
+    return getViewerSettingsSnapshot()[DOCUMENT_VIEWER_SETTING_FONT_SIZE_PERCENT];
+  }
+
+  function shouldHandleDocumentFontShortcut(target) {
+    if (!(target instanceof HTMLElement)) return false;
+    return !!target.closest('.conversation-document-card');
+  }
+
+  function normalizeDocumentFontShortcutStep(nextValue) {
+    return clampConversationDocumentFontSizePercent(nextValue, getConversationDocumentFontSizePercent());
+  }
+
+  function installConversationDocumentKeyboardShortcuts() {
+    if (keyboardShortcutInstalled) return;
+    document.addEventListener('keydown', (event) => {
+      if (!event.ctrlKey || event.altKey || event.metaKey) return;
+      if (!shouldHandleDocumentFontShortcut(event.target)) return;
+
+      const key = String(event.key || '').trim();
+      let nextValue = null;
+      if (key === '+' || key === '=') {
+        nextValue = normalizeDocumentFontShortcutStep(getConversationDocumentFontSizePercent() + 5);
+      } else if (key === '-') {
+        nextValue = normalizeDocumentFontShortcutStep(getConversationDocumentFontSizePercent() - 5);
+      } else if (key === '0') {
+        nextValue = 100;
+      }
+      if (nextValue == null) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      setConversationDocumentFontSizePercent(nextValue);
+    }, true);
+    keyboardShortcutInstalled = true;
   }
 
   function getConversationDocumentCardState(card) {
@@ -181,6 +234,7 @@ export function createConversationDocumentViewer(options = {}) {
   function renderPlainContent(content) {
     const pre = document.createElement('pre');
     pre.className = 'conversation-document-card__content conversation-document-card__content--plain';
+    pre.tabIndex = 0;
     pre.textContent = content || '';
     return pre;
   }
@@ -188,6 +242,7 @@ export function createConversationDocumentViewer(options = {}) {
   function renderMarkdownContent(content, enableDollarMath) {
     const container = document.createElement('div');
     container.className = 'conversation-document-card__content conversation-document-card__content--markdown';
+    container.tabIndex = 0;
     container.innerHTML = renderMarkdownSafe(content || '', {
       allowDetails: true,
       enableDollarMath
@@ -198,6 +253,7 @@ export function createConversationDocumentViewer(options = {}) {
   function renderCodeContent(content, language) {
     const pre = document.createElement('pre');
     pre.className = 'conversation-document-card__content conversation-document-card__content--code';
+    pre.tabIndex = 0;
     const code = document.createElement('code');
     code.textContent = content || '';
     if (language) {
@@ -694,6 +750,8 @@ export function createConversationDocumentViewer(options = {}) {
     });
     changeListenerInstalled = true;
   }
+
+  installConversationDocumentKeyboardShortcuts();
 
   return {
     createConversationDocumentCard,

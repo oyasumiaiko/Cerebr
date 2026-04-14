@@ -6,6 +6,7 @@ export const DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD = 'documentRenderMar
 export const DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT = 'documentRenderMarkdownForTxt';
 export const DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION = 'documentHighlightCodeByExtension';
 export const DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES = 'documentViewModeOverrides';
+export const DOCUMENT_VIEWER_SETTING_FONT_SIZE_PERCENT = 'documentFontSizePercent';
 
 const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown']);
 const CODE_LANGUAGE_BY_EXTENSION = Object.freeze({
@@ -95,6 +96,13 @@ export function normalizeConversationDocumentViewModeOverridesSetting(value) {
     result[path] = mode;
   });
   return result;
+}
+
+export function clampConversationDocumentFontSizePercent(value, fallback = 100) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return fallback;
+  const clamped = Math.max(85, Math.min(150, numeric));
+  return Math.round(clamped / 5) * 5;
 }
 
 export function resolveConversationDocumentCodeLanguage(path) {

@@ -668,6 +668,48 @@ async function main() {
       label: 'markdown document toggled to plain'
     });
 
+    const mdContentLocator = mdCardRoot.locator('.conversation-document-card__content');
+    await mdContentLocator.click();
+    result.documentFontSizeBeforeShortcut = await mdContentLocator.evaluate((element) => {
+      return window.getComputedStyle(element).fontSize;
+    });
+    await page.keyboard.press('Control+=');
+    result.documentFontSizeAfterIncrease = await waitFor(async () => {
+      const fontSize = await mdContentLocator.evaluate((element) => window.getComputedStyle(element).fontSize).catch(() => null);
+      return (fontSize && fontSize !== result.documentFontSizeBeforeShortcut) ? fontSize : null;
+    }, {
+      timeoutMs: 10_000,
+      intervalMs: 150,
+      label: 'document font size increase'
+    });
+    await page.keyboard.press('Control+-');
+    result.documentFontSizeAfterDecrease = await waitFor(async () => {
+      const fontSize = await mdContentLocator.evaluate((element) => window.getComputedStyle(element).fontSize).catch(() => null);
+      return (fontSize && fontSize === result.documentFontSizeBeforeShortcut) ? fontSize : null;
+    }, {
+      timeoutMs: 10_000,
+      intervalMs: 150,
+      label: 'document font size decrease'
+    });
+    await page.keyboard.press('Control+=');
+    await waitFor(async () => {
+      const fontSize = await mdContentLocator.evaluate((element) => window.getComputedStyle(element).fontSize).catch(() => null);
+      return (fontSize && fontSize !== result.documentFontSizeBeforeShortcut) ? fontSize : null;
+    }, {
+      timeoutMs: 10_000,
+      intervalMs: 150,
+      label: 'document font size increase again'
+    });
+    await page.keyboard.press('Control+0');
+    result.documentFontSizeAfterReset = await waitFor(async () => {
+      const fontSize = await mdContentLocator.evaluate((element) => window.getComputedStyle(element).fontSize).catch(() => null);
+      return (fontSize && fontSize === result.documentFontSizeBeforeShortcut) ? fontSize : null;
+    }, {
+      timeoutMs: 10_000,
+      intervalMs: 150,
+      label: 'document font size reset'
+    });
+
     await txtCardRoot.locator('summary').click();
     result.txtDefaultRenderState = await waitFor(async () => {
       return await txtCardRoot.evaluate((card) => {

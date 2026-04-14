@@ -12,6 +12,8 @@ import {
   AI_FOOTER_TEMPLATE_VARIABLES
 } from '../utils/api_footer_template.js';
 import {
+  clampConversationDocumentFontSizePercent,
+  DOCUMENT_VIEWER_SETTING_FONT_SIZE_PERCENT,
   DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION,
   DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES,
   DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD,
@@ -1283,6 +1285,19 @@ export function createSettingsManager(appContext) {
       apply: (v) => applyFontSize(v)
     },
     {
+      key: DOCUMENT_VIEWER_SETTING_FONT_SIZE_PERCENT,
+      type: 'range',
+      menu: 'quick',
+      group: 'display',
+      label: '文档字体大小',
+      min: 85,
+      max: 150,
+      step: 5,
+      unit: '%',
+      defaultValue: DEFAULT_SETTINGS[DOCUMENT_VIEWER_SETTING_FONT_SIZE_PERCENT],
+      apply: (v) => applyDocumentFontSizePercent(v)
+    },
+    {
       key: DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD,
       type: 'toggle',
       menu: 'quick',
@@ -1424,6 +1439,9 @@ export function createSettingsManager(appContext) {
     }
     if (key === 'copyImagePadding') {
       return clampCopyImagePadding(value);
+    }
+    if (key === DOCUMENT_VIEWER_SETTING_FONT_SIZE_PERCENT) {
+      return clampConversationDocumentFontSizePercent(value, DEFAULT_SETTINGS[DOCUMENT_VIEWER_SETTING_FONT_SIZE_PERCENT]);
     }
     if (key === 'copyImageFontFamily') {
       return normalizeCopyImageFontFamily(value);
@@ -3017,6 +3035,13 @@ export function createSettingsManager(appContext) {
     if (fontSizeValueDisplay) {
       fontSizeValueDisplay.textContent = `${size}px`;
     }
+  }
+
+  function applyDocumentFontSizePercent(value) {
+    document.documentElement.style.setProperty(
+      '--cerebr-document-font-size-scale',
+      String(clampConversationDocumentFontSizePercent(value, DEFAULT_SETTINGS[DOCUMENT_VIEWER_SETTING_FONT_SIZE_PERCENT]) / 100)
+    );
   }
   
   // 应用缩放比例

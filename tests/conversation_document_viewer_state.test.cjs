@@ -55,9 +55,16 @@ test('全局默认值与按路径 override 会正确合并', async () => {
 });
 
 test('代码语言会按扩展名映射，未知扩展回退空字符串', async () => {
-  const { resolveConversationDocumentCodeLanguage } = await importViewerStateModule();
+  const {
+    clampConversationDocumentFontSizePercent,
+    resolveConversationDocumentCodeLanguage
+  } = await importViewerStateModule();
 
   assert.equal(resolveConversationDocumentCodeLanguage('src/main.tsx'), 'typescript');
   assert.equal(resolveConversationDocumentCodeLanguage('scripts/tool.ps1'), 'powershell');
   assert.equal(resolveConversationDocumentCodeLanguage('notes/unknown.xyz'), '');
+
+  assert.equal(clampConversationDocumentFontSizePercent(83), 85);
+  assert.equal(clampConversationDocumentFontSizePercent(107), 105);
+  assert.equal(clampConversationDocumentFontSizePercent(151), 150);
 });
