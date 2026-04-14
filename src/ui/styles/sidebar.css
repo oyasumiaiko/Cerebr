@@ -6475,11 +6475,11 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
 }
 
 html:not(.fullscreen-mode) body:not(.standalone-mode) #chat-history-panel {
-    left: 8px;
-    right: 8px;
-    width: auto;
-    max-width: none;
-    margin: 0;
+    left: 0;
+    right: 0;
+    width: 50rem;
+    max-width: calc(100vw - 16px);
+    margin: auto;
 }
 
 #chat-history-panel.visible {
