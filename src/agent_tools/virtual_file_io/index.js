@@ -56,6 +56,7 @@ import {
 } from './target.js';
 import {
   buildConversationDocumentCollisionPath,
+  normalizeConversationDocumentHrefPath,
   normalizeConversationDocumentPath
 } from './document_path.js';
 import {
@@ -102,6 +103,7 @@ export {
 export {
   normalizeVirtualFileTarget,
   normalizeConversationDocumentPath,
+  normalizeConversationDocumentHrefPath,
   buildConversationDocumentCollisionPath,
   buildVirtualFileApplyPatchFunctionToolDefinition,
   buildConversationDocumentApplyPatchFunctionToolDefinition,

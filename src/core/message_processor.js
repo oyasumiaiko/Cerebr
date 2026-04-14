@@ -47,6 +47,7 @@ import {
   CONVERSATION_DOCUMENT_INTERNAL_READ_FILE_FULL_ACTION,
   CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION,
   executeConversationDocumentAction,
+  normalizeConversationDocumentHrefPath,
   normalizeConversationDocumentPath
 } from '../agent_tools/virtual_file_io/index.js';
 import {
@@ -231,7 +232,7 @@ export function createMessageProcessor(appContext) {
     if (href.startsWith('/') || href.startsWith('./') || href.startsWith('../')) return false;
     if (href.startsWith('?') || href.startsWith('#')) return false;
     try {
-      normalizeConversationDocumentPath(href);
+      normalizeConversationDocumentHrefPath(href);
       return true;
     } catch (_) {
       return false;
@@ -460,7 +461,7 @@ export function createMessageProcessor(appContext) {
   }
 
   function createConversationDocumentCard(link) {
-    const path = normalizeConversationDocumentPath(link.getAttribute('href') || '');
+    const path = normalizeConversationDocumentHrefPath(link.getAttribute('href') || '');
     const conversationId = resolveCurrentConversationDocumentId();
     const title = (link.textContent || '').trim() || path;
 

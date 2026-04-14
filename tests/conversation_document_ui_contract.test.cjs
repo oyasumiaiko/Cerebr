@@ -23,6 +23,7 @@ test('message_processor 已把裸相对路径链接替换为文档卡片，并�
   const source = await readWorkspaceFile('src/core/message_processor.js');
 
   assert.match(source, /isConversationDocumentRelativeHref\(rawHref\)/);
+  assert.match(source, /normalizeConversationDocumentHrefPath\(link\.getAttribute\('href'\) \|\| ''\)/);
   assert.match(source, /createConversationDocumentCard\(link\)/);
   assert.match(source, /CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME/);
   assert.match(source, /conversation-document-card/);

@@ -20,12 +20,12 @@ const {
   waitForWorktreeExtensionWorker
 } = require('./lib/worktree_unpacked_extension_harness.cjs');
 
-const DOC_PATH = 'docs/plan.md';
+const DOC_PATH = 'docs/随笔-关于学习与判断.md';
 const PATCH_CALL_ID = 'call_conversation_document_apply_patch_1';
 const EXPECTED_FINAL_MARKER = 'CONVERSATION_DOCUMENT_TOOL_OK_20260413';
-const INITIAL_DOC_CONTENT = '# 计划\n\n第一版内容。\n';
-const EDITED_DOC_CONTENT = '# 计划\n\n第二版内容。\n';
-const EXPECTED_DOWNLOAD_NAME = 'docs__plan.md';
+const INITIAL_DOC_CONTENT = '# 随笔\n\n第一版内容。\n';
+const EDITED_DOC_CONTENT = '# 随笔\n\n第二版内容。\n';
+const EXPECTED_DOWNLOAD_NAME = 'docs__随笔-关于学习与判断.md';
 
 const [rawRepoRoot, outputDir, rawArg3 = '', rawArg4 = ''] = process.argv.slice(2);
 const repoRoot = rawRepoRoot ? path.resolve(rawRepoRoot) : '';
@@ -301,7 +301,7 @@ async function runMockResponsesServer() {
           }
 
           functionCallOutputText = collectFunctionOutputText(functionOutput);
-          const finalText = `${EXPECTED_FINAL_MARKER}\n\n[计划](${DOC_PATH})`;
+          const finalText = `${EXPECTED_FINAL_MARKER}\n\n[随笔文档](${DOC_PATH})`;
           const messageItem = createMessageItem('msg_2', finalText);
           writeSseEvent(res, { type: 'response.created', response: { id: 'resp_2' } });
           writeSseEvent(res, { type: 'response.in_progress', response: { id: 'resp_2' } });

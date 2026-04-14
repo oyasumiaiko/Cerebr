@@ -26,6 +26,36 @@ export function normalizeConversationDocumentPath(value) {
   return normalizedPath;
 }
 
+/**
+ * 规范化 Markdown 链接里的对话文档路径。
+ *
+ * 为什么单独提供这层：
+ * - Markdown 渲染后的 `<a href>` 往往会把空格、中文等字符转成 `%20` / `%E4...`；
+ * - 但会话文档实际存储时使用的是“原始逻辑路径”，例如 `docs/随笔.md`；
+ * - 如果 UI 直接拿编码后的 href 去查文档，就会误判为“文档不存在”。
+ *
+ * 这里使用 `decodeURI()` 而不是 `decodeURIComponent()`：
+ * - 会还原中文、空格等常见显示字符；
+ * - 同时保留 `%2F` 这类保留分隔符编码，避免把文件名里的编码斜杠误解成目录层级。
+ *
+ * @param {string} value
+ * @returns {string}
+ */
+export function normalizeConversationDocumentHrefPath(value) {
+  const rawHref = normalizeString(value).replace(/\\/g, '/');
+  if (!rawHref) {
+    return normalizeConversationDocumentPath(rawHref);
+  }
+
+  let decodedHref = rawHref;
+  try {
+    decodedHref = decodeURI(rawHref);
+  } catch (_) {
+    decodedHref = rawHref;
+  }
+  return normalizeConversationDocumentPath(decodedHref);
+}
+
 function splitPathBasenameAndExtension(path) {
   const normalized = normalizeConversationDocumentPath(path);
   const lastSlashIndex = normalized.lastIndexOf('/');

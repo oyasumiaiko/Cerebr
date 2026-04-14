@@ -45,11 +45,22 @@ function createInMemoryDocumentStore(seed = {}) {
 }
 
 test('normalizeConversationDocumentPath 支持空格与 Unicode，并拒绝越界路径', async () => {
-  const { normalizeConversationDocumentPath } = await loadConversationDocumentToolsModule();
+  const {
+    normalizeConversationDocumentHrefPath,
+    normalizeConversationDocumentPath
+  } = await loadConversationDocumentToolsModule();
 
   assert.equal(
     normalizeConversationDocumentPath('docs\\研究 计划(终版).md'),
     'docs/研究 计划(终版).md'
+  );
+  assert.equal(
+    normalizeConversationDocumentHrefPath('docs/%E9%9A%8F%E7%AC%94%20%E7%BB%88%E7%89%88.md'),
+    'docs/随笔 终版.md'
+  );
+  assert.equal(
+    normalizeConversationDocumentHrefPath('docs/a%2Fb.md'),
+    'docs/a%2Fb.md'
   );
   assert.throws(
     () => normalizeConversationDocumentPath('../secret.txt'),
