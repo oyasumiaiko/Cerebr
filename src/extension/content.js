@@ -733,6 +733,11 @@ class CerebrSidebar {
         } catch (e) {
           console.warn('同步 iframe Alt 状态失败（忽略）:', e);
         }
+        try {
+          this.notifyIframeEmbedScale();
+        } catch (e) {
+          console.warn('同步 iframe 嵌入缩放失败（忽略）:', e);
+        }
       });
 
       content.appendChild(iframe);
@@ -947,6 +952,9 @@ class CerebrSidebar {
         case 'REQUEST_ALT_KEY_STATE':
           this.notifyIframeAltKeyState(this.isAltKeyPressed);
           break;
+        case 'REQUEST_HOST_EMBED_SCALE':
+          this.notifyIframeEmbedScale();
+          break;
         case 'TEMP_MODE_STATE_CHANGED':
           this.isTemporaryMode = !!event.data?.isOn;
           break;
@@ -1148,16 +1156,22 @@ class CerebrSidebar {
     });
   }
 
+  getIframeEmbedScale() {
+    const dpr = Number(window.devicePixelRatio);
+    const baseScale = (Number.isFinite(dpr) && dpr > 0) ? (1 / dpr) : 1;
+    return baseScale * this.scaleFactor;
+  }
+
   updateScale() {
     const iframe = this.sidebar?.querySelector('.cerebr-sidebar__iframe');
     if (iframe) {
-      const baseScale = 1 / window.devicePixelRatio;
-      const scale = baseScale * this.scaleFactor;
+      const scale = this.getIframeEmbedScale();
       iframe.style.transformOrigin = 'top left';
       iframe.style.zoom = `${scale}`;
       iframe.style.width = `${100}%`;
       iframe.style.height = `${100}%`;
       this.sidebar.style.setProperty('--scale-ratio', scale);
+      this.notifyIframeEmbedScale(scale);
       this.updateWidth(this.sidebarWidth);
     }
   }
@@ -1272,6 +1286,20 @@ class CerebrSidebar {
         }, '*');
       } catch (error) {
         console.log('通知 iframe Alt 状态失败:', error);
+      }
+    }
+  }
+
+  notifyIframeEmbedScale(scale = this.getIframeEmbedScale()) {
+    const iframe = this.sidebar.querySelector('.cerebr-sidebar__iframe');
+    if (iframe && iframe.contentWindow) {
+      try {
+        iframe.contentWindow.postMessage({
+          type: 'HOST_EMBED_SCALE_SYNC',
+          scale
+        }, '*');
+      } catch (error) {
+        console.log('通知 iframe 嵌入缩放失败:', error);
       }
     }
   }

@@ -147,6 +147,7 @@ export function createSidebarAppContext(isStandalone) {
     state: {
       isStandalone,
       isFullscreen: false,
+      hostEmbedScale: 1,
       isComposing: false,
       pageInfo: isStandalone ? { url: '', title: '独立聊天', standalone: true } : null,
       memoryManagement: {

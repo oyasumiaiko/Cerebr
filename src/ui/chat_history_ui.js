@@ -60,6 +60,14 @@ import {
   listConversationDocuments,
   replaceConversationDocuments
 } from '../storage/conversation_document_store.js';
+import {
+  CHAT_HISTORY_PANEL_LAYOUT_MODE_FULLSCREEN,
+  CHAT_HISTORY_PANEL_LAYOUT_MODE_SIDEBAR,
+  buildChatHistoryPanelStoredLayout,
+  normalizeChatHistoryPanelStoredLayout,
+  readChatHistoryPanelLayoutEntry,
+  resolveChatHistoryPanelInteractionScale
+} from '../utils/chat_history_panel_layout.js';
 
 /**
  * 创建聊天历史UI管理器
@@ -3810,7 +3818,7 @@ export function createChatHistoryUI(appContext) {
   function closeChatHistoryPanel() {
     const panel = document.getElementById('chat-history-panel');
     if (panel && panel.classList.contains('visible')) {
-      persistChatHistoryPanelFullscreenLayout(panel);
+      persistChatHistoryPanelLayout(panel);
       if (typeof panel._cancelDragMove === 'function') {
         panel._cancelDragMove();
       }
@@ -9886,8 +9894,8 @@ export function createChatHistoryUI(appContext) {
   const CHAT_HISTORY_PANEL_PIN_ATTRIBUTE = 'data-outside-click-pinned';
   const CHAT_HISTORY_PANEL_PIN_BUTTON_CLASS = 'chat-history-panel-pin-btn';
   const CHAT_HISTORY_PANEL_PIN_BUTTON_HTML = '<i class="far fa-thumbtack"></i>';
-  const CHAT_HISTORY_PANEL_FULLSCREEN_LAYOUT_STORAGE_KEY = 'cerebr.chat_history_panel_fullscreen_layout_v1';
-  const CHAT_HISTORY_PANEL_LAYOUT_STORAGE_VERSION = 1;
+  const CHAT_HISTORY_PANEL_LAYOUT_STORAGE_KEY = 'cerebr.chat_history_panel_layout_v2';
+  const CHAT_HISTORY_PANEL_LEGACY_FULLSCREEN_LAYOUT_STORAGE_KEY = 'cerebr.chat_history_panel_fullscreen_layout_v1';
 
   function isChatHistoryPanelPinned() {
     const panel = document.getElementById('chat-history-panel');
@@ -9944,27 +9952,79 @@ export function createChatHistoryUI(appContext) {
     return !!(state?.isFullscreen || document.documentElement.classList.contains('fullscreen-mode'));
   }
 
-  // 读取 Esc 面板在全屏模式下的布局快照（仅保存位置/尺寸，不影响侧栏模式）。
-  function readChatHistoryPanelFullscreenLayout() {
-    try {
-      const rawValue = window?.localStorage?.getItem(CHAT_HISTORY_PANEL_FULLSCREEN_LAYOUT_STORAGE_KEY);
-      if (!rawValue) return null;
-      const parsed = JSON.parse(rawValue);
-      if (!parsed || typeof parsed !== 'object') return null;
-      if (Number(parsed.version) !== CHAT_HISTORY_PANEL_LAYOUT_STORAGE_VERSION) return null;
-      return parsed;
-    } catch (_) {
-      return null;
-    }
+  function getChatHistoryPanelLayoutMode() {
+    return isChatHistoryPanelFullscreenLayout()
+      ? CHAT_HISTORY_PANEL_LAYOUT_MODE_FULLSCREEN
+      : CHAT_HISTORY_PANEL_LAYOUT_MODE_SIDEBAR;
   }
 
-  // 持久化当前 Esc 面板布局到 localStorage，仅在全屏模式下执行。
-  function persistChatHistoryPanelFullscreenLayout(panel) {
-    if (!panel || !isChatHistoryPanelFullscreenLayout()) return;
+  function getChatHistoryPanelDocumentZoomFactor() {
+    const root = document.documentElement;
+    if (!root) return 1;
+    const inlineZoom = Number.parseFloat(root.style.zoom || '');
+    if (Number.isFinite(inlineZoom) && inlineZoom > 0) return inlineZoom;
+    const computedZoom = Number.parseFloat(window.getComputedStyle(root).zoom || '');
+    if (Number.isFinite(computedZoom) && computedZoom > 0) return computedZoom;
+    return 1;
+  }
+
+  function getChatHistoryPanelHostEmbedScale() {
+    if (state?.isStandalone || document.documentElement.classList.contains('standalone-mode')) {
+      return 1;
+    }
+    const syncedScale = Number(state?.hostEmbedScale);
+    if (Number.isFinite(syncedScale) && syncedScale > 0) {
+      return syncedScale;
+    }
+    const configuredScaleFactor = Number(settingsManager?.getSetting?.('scaleFactor'));
+    const dpr = Number(window.devicePixelRatio);
+    if (Number.isFinite(configuredScaleFactor) && configuredScaleFactor > 0 && Number.isFinite(dpr) && dpr > 0) {
+      return configuredScaleFactor / dpr;
+    }
+    return 1;
+  }
+
+  function getChatHistoryPanelInteractionZoomFactor() {
+    return resolveChatHistoryPanelInteractionScale({
+      documentZoomFactor: getChatHistoryPanelDocumentZoomFactor(),
+      hostEmbedScale: getChatHistoryPanelHostEmbedScale()
+    });
+  }
+
+  function toChatHistoryPanelLayoutPixels(value, zoomFactor = getChatHistoryPanelInteractionZoomFactor()) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    if (!Number.isFinite(zoomFactor) || zoomFactor <= 0) return numeric;
+    return numeric / zoomFactor;
+  }
+
+  // 读取 Esc 面板布局快照；优先读取新版分模式存储，并兼容旧版 fullscreen-only 数据。
+  function readChatHistoryPanelLayoutSnapshot() {
+    try {
+      const rawValue = window?.localStorage?.getItem(CHAT_HISTORY_PANEL_LAYOUT_STORAGE_KEY);
+      if (rawValue) {
+        return normalizeChatHistoryPanelStoredLayout(JSON.parse(rawValue));
+      }
+    } catch (_) {}
+    try {
+      const legacyRawValue = window?.localStorage?.getItem(CHAT_HISTORY_PANEL_LEGACY_FULLSCREEN_LAYOUT_STORAGE_KEY);
+      if (legacyRawValue) {
+        return normalizeChatHistoryPanelStoredLayout(JSON.parse(legacyRawValue));
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  // 持久化当前 Esc 面板布局到 localStorage。
+  // fullscreen 模式保存位置与尺寸；侧栏模式只保存尺寸，打开时仍保持经典居中。
+  function persistChatHistoryPanelLayout(panel) {
+    if (!panel) return;
     try {
       const rect = panel.getBoundingClientRect();
       if (!rect || !Number.isFinite(rect.width) || !Number.isFinite(rect.height)) return;
 
+      const layoutMode = getChatHistoryPanelLayoutMode();
+      const isFullscreenLayout = layoutMode === CHAT_HISTORY_PANEL_LAYOUT_MODE_FULLSCREEN;
       const dragPositioned = panel.dataset.dragPositioned === '1';
       const sizeCustomized = panel.dataset.sizeCustomized === '1';
       const fallbackLeft = Number.isFinite(rect.left) ? rect.left : null;
@@ -9977,26 +10037,45 @@ export function createChatHistoryUI(appContext) {
       const top = dragPositioned
         ? (Number.isFinite(styleTop) ? styleTop : fallbackTop)
         : fallbackTop;
+      const width = Number.parseFloat(panel.style.width) || panel.offsetWidth || rect.width;
+      const height = Number.parseFloat(panel.style.height) || panel.offsetHeight || rect.height;
 
-      const payload = {
-        version: CHAT_HISTORY_PANEL_LAYOUT_STORAGE_VERSION,
-        width: Math.round(rect.width),
-        height: Math.round(rect.height),
-        left: Number.isFinite(left) ? Math.round(left) : null,
-        top: Number.isFinite(top) ? Math.round(top) : null,
-        dragPositioned,
-        sizeCustomized,
-        updatedAt: Date.now()
-      };
-      window.localStorage.setItem(CHAT_HISTORY_PANEL_FULLSCREEN_LAYOUT_STORAGE_KEY, JSON.stringify(payload));
+      const payload = buildChatHistoryPanelStoredLayout({
+        existingLayout: readChatHistoryPanelLayoutSnapshot(),
+        mode: layoutMode,
+        entry: {
+          width: Math.round(width),
+          height: Math.round(height),
+          left: isFullscreenLayout && Number.isFinite(left) ? Math.round(left) : null,
+          top: isFullscreenLayout && Number.isFinite(top) ? Math.round(top) : null,
+          dragPositioned: isFullscreenLayout ? dragPositioned : false,
+          sizeCustomized,
+          updatedAt: Date.now()
+        }
+      });
+      window.localStorage.setItem(CHAT_HISTORY_PANEL_LAYOUT_STORAGE_KEY, JSON.stringify(payload));
     } catch (_) {}
   }
 
-  // 打开 Esc 面板时尝试恢复上次全屏布局（大小 + 拖拽位置）。
-  function restoreChatHistoryPanelFullscreenLayout(panel) {
-    if (!panel || !isChatHistoryPanelFullscreenLayout()) return;
-    const saved = readChatHistoryPanelFullscreenLayout();
-    if (!saved) return;
+  // 打开 Esc 面板或切换布局模式时恢复当前模式对应的保存结果。
+  function restoreChatHistoryPanelLayout(panel) {
+    if (!panel) return;
+    const savedLayout = readChatHistoryPanelLayoutSnapshot();
+    if (!savedLayout) {
+      resetChatHistoryPanelCustomSize(panel);
+      resetChatHistoryPanelCenterPosition(panel);
+      panel.dataset.layoutMode = getChatHistoryPanelLayoutMode();
+      return;
+    }
+
+    const layoutMode = getChatHistoryPanelLayoutMode();
+    const saved = readChatHistoryPanelLayoutEntry(savedLayout, layoutMode);
+    if (!saved) {
+      resetChatHistoryPanelCustomSize(panel);
+      resetChatHistoryPanelCenterPosition(panel);
+      panel.dataset.layoutMode = layoutMode;
+      return;
+    }
 
     const hasCustomSize = saved.sizeCustomized === true
       && Number.isFinite(Number(saved.width))
@@ -10006,10 +10085,11 @@ export function createChatHistoryUI(appContext) {
       panel.style.height = `${Math.round(Number(saved.height))}px`;
       panel.dataset.sizeCustomized = '1';
     } else {
-      panel.dataset.sizeCustomized = '0';
+      resetChatHistoryPanelCustomSize(panel);
     }
 
-    const hasCustomPosition = saved.dragPositioned === true
+    const hasCustomPosition = layoutMode === CHAT_HISTORY_PANEL_LAYOUT_MODE_FULLSCREEN
+      && saved.dragPositioned === true
       && Number.isFinite(Number(saved.left))
       && Number.isFinite(Number(saved.top));
     if (hasCustomPosition) {
@@ -10023,6 +10103,7 @@ export function createChatHistoryUI(appContext) {
       resetChatHistoryPanelCenterPosition(panel);
     }
 
+    panel.dataset.layoutMode = layoutMode;
     clampChatHistoryPanelSize(panel);
     clampChatHistoryPanelPosition(panel);
   }
@@ -10035,6 +10116,13 @@ export function createChatHistoryUI(appContext) {
     panel.style.right = '';
     panel.style.bottom = '';
     panel.style.margin = '';
+  }
+
+  function resetChatHistoryPanelCustomSize(panel) {
+    if (!panel) return;
+    panel.dataset.sizeCustomized = '0';
+    panel.style.width = '';
+    panel.style.height = '';
   }
 
   function clampChatHistoryPanelPosition(panel, nextLeft = null, nextTop = null) {
@@ -10094,6 +10182,7 @@ export function createChatHistoryUI(appContext) {
 
   function syncChatHistoryPanelLayoutMode(panel) {
     if (!panel) return;
+    panel.dataset.layoutMode = getChatHistoryPanelLayoutMode();
     if (isChatHistoryPanelFullscreenLayout()) {
       clampChatHistoryPanelPosition(panel);
       return;
@@ -10132,8 +10221,14 @@ export function createChatHistoryUI(appContext) {
 
     const handlePointerMove = (event) => {
       if (!dragSession || event.pointerId !== dragSession.pointerId) return;
-      const deltaX = event.clientX - dragSession.startClientX;
-      const deltaY = event.clientY - dragSession.startClientY;
+      const deltaX = toChatHistoryPanelLayoutPixels(
+        event.clientX - dragSession.startClientX,
+        dragSession.zoomFactor
+      );
+      const deltaY = toChatHistoryPanelLayoutPixels(
+        event.clientY - dragSession.startClientY,
+        dragSession.zoomFactor
+      );
       const nextLeft = dragSession.startLeft + deltaX;
       const nextTop = dragSession.startTop + deltaY;
       clampChatHistoryPanelPosition(panel, nextLeft, nextTop);
@@ -10143,7 +10238,7 @@ export function createChatHistoryUI(appContext) {
     const handlePointerEnd = (event) => {
       if (!dragSession) return;
       if (event?.pointerId != null && event.pointerId !== dragSession.pointerId) return;
-      persistChatHistoryPanelFullscreenLayout(panel);
+      persistChatHistoryPanelLayout(panel);
       clearDraggingState();
     };
 
@@ -10160,13 +10255,15 @@ export function createChatHistoryUI(appContext) {
       panel.style.bottom = 'auto';
       panel.style.margin = '0';
       panel.dataset.dragPositioned = '1';
+      const zoomFactor = getChatHistoryPanelInteractionZoomFactor();
 
       dragSession = {
         pointerId: event.pointerId,
         startClientX: event.clientX,
         startClientY: event.clientY,
         startLeft: Number.parseFloat(panel.style.left) || rect.left,
-        startTop: Number.parseFloat(panel.style.top) || rect.top
+        startTop: Number.parseFloat(panel.style.top) || rect.top,
+        zoomFactor
       };
       panel.classList.add('chat-history-panel-dragging');
       document.body.classList.add('chat-history-panel-dragging');
@@ -10214,8 +10311,14 @@ export function createChatHistoryUI(appContext) {
 
     const handleResizePointerMove = (event) => {
       if (!resizeSession || event.pointerId !== resizeSession.pointerId) return;
-      const deltaX = event.clientX - resizeSession.startClientX;
-      const deltaY = event.clientY - resizeSession.startClientY;
+      const deltaX = toChatHistoryPanelLayoutPixels(
+        event.clientX - resizeSession.startClientX,
+        resizeSession.zoomFactor
+      );
+      const deltaY = toChatHistoryPanelLayoutPixels(
+        event.clientY - resizeSession.startClientY,
+        resizeSession.zoomFactor
+      );
       const nextWidth = resizeSession.startWidth + deltaX;
       const nextHeight = resizeSession.startHeight + deltaY;
       clampChatHistoryPanelSize(panel, nextWidth, nextHeight);
@@ -10227,19 +10330,21 @@ export function createChatHistoryUI(appContext) {
     const handleResizePointerEnd = (event) => {
       if (!resizeSession) return;
       if (event?.pointerId != null && event.pointerId !== resizeSession.pointerId) return;
-      persistChatHistoryPanelFullscreenLayout(panel);
+      persistChatHistoryPanelLayout(panel);
       clearResizingState();
     };
 
     resizeHandle.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return;
       const rect = panel.getBoundingClientRect();
+      const zoomFactor = getChatHistoryPanelInteractionZoomFactor();
       resizeSession = {
         pointerId: event.pointerId,
         startClientX: event.clientX,
         startClientY: event.clientY,
-        startWidth: rect.width,
-        startHeight: rect.height
+        startWidth: Number.parseFloat(panel.style.width) || panel.offsetWidth || rect.width,
+        startHeight: Number.parseFloat(panel.style.height) || panel.offsetHeight || rect.height,
+        zoomFactor
       };
       panel.classList.add('chat-history-panel-resizing');
       document.body.classList.add('chat-history-panel-resizing');
@@ -10258,6 +10363,11 @@ export function createChatHistoryUI(appContext) {
       const root = document.documentElement;
       const observer = new MutationObserver(() => {
         if (!panel.classList.contains('visible')) return;
+        const nextLayoutMode = getChatHistoryPanelLayoutMode();
+        const previousLayoutMode = panel.dataset.layoutMode || '';
+        if (nextLayoutMode !== previousLayoutMode) {
+          restoreChatHistoryPanelLayout(panel);
+        }
         syncChatHistoryPanelLayoutMode(panel);
         clampChatHistoryPanelSize(panel);
       });
@@ -10271,7 +10381,7 @@ export function createChatHistoryUI(appContext) {
         if (!panel.classList.contains('visible')) return;
         clampChatHistoryPanelSize(panel);
         syncChatHistoryPanelLayoutMode(panel);
-        persistChatHistoryPanelFullscreenLayout(panel);
+        persistChatHistoryPanelLayout(panel);
       });
     }
   }
@@ -10729,7 +10839,7 @@ export function createChatHistoryUI(appContext) {
     );
     const restoreScrollTop = canRestoreScroll ? snapshot.scrollTop : null;
     panel.style.display = 'flex';
-    restoreChatHistoryPanelFullscreenLayout(panel);
+    restoreChatHistoryPanelLayout(panel);
     syncChatHistoryPanelLayoutMode(panel);
     clampChatHistoryPanelSize(panel);
     void panel.offsetWidth;  

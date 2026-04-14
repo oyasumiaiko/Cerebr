@@ -1180,6 +1180,17 @@ function setupWindowMessageHandlers(appContext) {
         // 这样既能跨焦点生效，也不会把宿主页 Alt 行为劫持到侧栏里。
         appContext.services.uiManager?.setExternalAltKeyPressed?.(data.isPressed);
         break;
+      case 'HOST_EMBED_SCALE_SYNC':
+        if (appContext.state.isStandalone) {
+          break;
+        }
+        {
+          const numericScale = Number(data.scale);
+          appContext.state.hostEmbedScale = (Number.isFinite(numericScale) && numericScale > 0)
+            ? numericScale
+            : 1;
+        }
+        break;
       default:
         break;
     }
@@ -1821,6 +1832,7 @@ function scheduleInitialRequests(appContext) {
       window.parent.postMessage({ type: 'REQUEST_FULLSCREEN_STATE' }, '*');
       window.parent.postMessage({ type: 'REQUEST_TEMP_MODE_STATE' }, '*');
       window.parent.postMessage({ type: 'REQUEST_ALT_KEY_STATE' }, '*');
+      window.parent.postMessage({ type: 'REQUEST_HOST_EMBED_SCALE' }, '*');
     }
 
     if (appContext.state.isFullscreen) {
