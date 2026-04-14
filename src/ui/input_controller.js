@@ -27,16 +27,67 @@ export function createInputController(appContext) {
   const messageInput = dom.messageInput;
   const imageContainer = dom.imageContainer;
 
+  function isContenteditableLineContainer(node) {
+    if (!(node instanceof HTMLElement)) return false;
+    const tagName = (node.tagName || '').toUpperCase();
+    return tagName === 'DIV' || tagName === 'P' || tagName === 'LI';
+  }
+
+  function extractContenteditableNodeText(node) {
+    if (!node) return '';
+    if (node.nodeType === Node.TEXT_NODE) {
+      return node.nodeValue || '';
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      return '';
+    }
+    if ((node.tagName || '').toUpperCase() === 'BR') {
+      return '\n';
+    }
+    return Array.from(node.childNodes || [])
+      .map((child) => extractContenteditableNodeText(child))
+      .join('');
+  }
+
+  /**
+   * 从 contenteditable 输入框中提取“逻辑纯文本”。
+   *
+   * 关键点：
+   * - `textContent` 对 contenteditable 的多行输入并不可靠，常会把 `<div>/<br>` 之间的换行丢掉；
+   * - `innerText` 会按浏览器的可见文本规则补回逻辑换行，更接近用户真实输入；
+   * - 这里统一把 CRLF 规整为 LF，并裁掉首尾空白，避免后续路径推断/长文本判断失真。
+   */
+  function readMessageInputPlainText() {
+    if (!messageInput) return '';
+    try {
+      const topLevelNodes = Array.from(messageInput.childNodes || []);
+      const rawFromStructure = topLevelNodes.length > 0
+        ? topLevelNodes.map((node) => {
+          if (node.nodeType === Node.ELEMENT_NODE && isContenteditableLineContainer(node)) {
+            return extractContenteditableNodeText(node).replace(/\n+$/g, '');
+          }
+          return extractContenteditableNodeText(node);
+        }).join('\n')
+        : '';
+      const raw = rawFromStructure
+        || ((typeof messageInput.innerText === 'string' && messageInput.innerText.length > 0)
+          ? messageInput.innerText
+          : (messageInput.textContent || ''));
+      return raw
+        .replace(/\u00a0/g, ' ')
+        .replace(/\r\n?/g, '\n')
+        .trim();
+    } catch (_) {
+      return '';
+    }
+  }
+
   /**
    * 获取输入文本
    * @returns {string} 输入文本内容
    */
   function getInputText() {
-    try {
-      return (messageInput?.textContent || '').trim();
-    } catch (_) {
-      return '';
-    }
+    return readMessageInputPlainText();
   }
 
   /**

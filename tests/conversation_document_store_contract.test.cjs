@@ -17,3 +17,16 @@ test('indexeddb_helper 已创建 conversation_documents store 并在删除会话
   assert.match(source, /const transaction = db\.transaction\(\['conversations', CONVERSATION_DOCUMENT_STORE\], 'readwrite'\);/);
   assert.match(source, /const index = documentStore\.index\('conversation_id'\);/);
 });
+
+test('conversation_document_store 会在发起请求前先绑定 transaction 完成监听，避免错过 oncomplete', async () => {
+  const source = await readWorkspaceFile('src/storage/conversation_document_store.js');
+
+  assert.match(
+    source,
+    /const transaction = db\.transaction\(CONVERSATION_DOCUMENT_STORE, 'readonly'\);[\s\S]*?const donePromise = transactionDone\(transaction\);[\s\S]*?await collectDocumentsByConversationId\(store, conversationId\);[\s\S]*?await donePromise;/s
+  );
+  assert.match(
+    source,
+    /const transaction = db\.transaction\(CONVERSATION_DOCUMENT_STORE, 'readonly'\);[\s\S]*?const donePromise = transactionDone\(transaction\);[\s\S]*?await requestToPromise\(store\.get\(\[String\(conversationId \|\| ''\), String\(path \|\| ''\)\]\)\);[\s\S]*?await donePromise;/s
+  );
+});

@@ -1024,7 +1024,7 @@ html:not(.fullscreen-mode) #chat-container {
 
 .chat-scroll-minimap .chat-scroll-minimap__thumb {
     position: absolute;
-    z-index: 2;
+    z-index: 1002;
     left: 2px;
     right: 2px;
     top: 0;
@@ -2163,6 +2163,11 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 #input-container.has-focus #input-api-switcher {
     opacity: 1;
     pointer-events: auto;
+}
+
+#input-container:has(#composer-accessory-region:not(:empty)) #input-api-switcher {
+    opacity: 0;
+    pointer-events: none;
 }
 
 #input-api-switcher:hover {
@@ -9485,6 +9490,47 @@ body.chat-history-panel-resizing {
 
 .composer-document-panel__button.is-primary {
   background: color-mix(in srgb, var(--cerebr-blue) 16%, var(--cerebr-bg-color));
+}
+
+.composer-document-prompt {
+  --composer-request-content-font-size: calc(var(--cerebr-font-size) * 0.72);
+  font-size: var(--composer-request-content-font-size);
+}
+
+.composer-document-prompt-surface {
+  gap: 10px;
+}
+
+.composer-document-prompt__title {
+  font-size: 0.92em;
+  font-weight: 700;
+}
+
+.composer-document-prompt__desc {
+  font-size: 0.84em;
+  line-height: 1.5;
+  color: color-mix(in srgb, var(--cerebr-text-color) 72%, transparent);
+}
+
+.composer-document-prompt__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.composer-document-prompt__button {
+  border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 72%, transparent);
+  background: color-mix(in srgb, var(--cerebr-bg-color) 88%, transparent);
+  color: var(--cerebr-text-color);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 0.84em;
+  cursor: pointer;
+}
+
+.composer-document-prompt__button.is-primary {
+  background: color-mix(in srgb, var(--cerebr-green) 18%, var(--cerebr-bg-color));
 }
 
 .composer-request-question-header {

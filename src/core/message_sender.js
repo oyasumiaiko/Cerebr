@@ -220,6 +220,7 @@ export function createMessageSender(appContext) {
   const chatHistoryUI = services.chatHistoryUI;
   const chatHistoryManager = services.chatHistoryManager;
   const inputController = services.inputController;
+  const conversationDocumentComposer = services.conversationDocumentComposer;
   const getCurrentConversationChain = chatHistoryManager.getCurrentConversationChain;
   const chatContainer = dom.chatContainer;
   const threadContainer = dom.threadContainer;
@@ -11032,8 +11033,51 @@ export function createMessageSender(appContext) {
     }
 
     const markerInfo = extractTrailingControlMarkers(rawText);
-    const baseText = markerInfo.baseText;
+    let baseText = markerInfo.baseText;
     const aspectRatio = markerInfo.aspectRatio;
+
+    const shouldOfferLongTextDocumentPrompt = !opts.regenerateMode
+      && !opts.forceSendFullHistory
+      && !hasExplicitOriginalText
+      && submissionBehavior === 'default'
+      && opts.__skipLongTextDocumentPrompt !== true
+      && !opts.__skipUserMessagePreprocess;
+
+    if (shouldOfferLongTextDocumentPrompt) {
+      const longTextPromptResult = await conversationDocumentComposer?.maybeHandleLongTextBeforeSend?.({
+        text: baseText,
+        hasImages: hasImagesInInput
+      });
+      if (longTextPromptResult?.action === 'cancel') {
+        inputController?.focusToEnd?.();
+        return { ok: true, type: 'conversation_document_prompt_canceled' };
+      }
+      if (longTextPromptResult?.action === 'convert_to_document') {
+        try {
+          const createdDocument = await conversationDocumentComposer?.createDocumentAndInsertLink?.({
+            content: baseText,
+            replaceComposerText: true
+          });
+          if (typeof createdDocument?.markdownLink === 'string' && createdDocument.markdownLink.trim()) {
+            baseText = createdDocument.markdownLink.trim();
+            rawText = baseText;
+          }
+        } catch (error) {
+          console.error('长文本转文档失败:', error);
+          showNotification?.({
+            message: `转为文档失败：${error?.message || '未知错误'}`,
+            type: 'error',
+            duration: 2600
+          });
+          inputController?.focusToEnd?.();
+          return { ok: false, error, type: 'conversation_document_prompt_error' };
+        }
+      }
+      if (typeof longTextPromptResult?.sendText === 'string' && longTextPromptResult.sendText.trim()) {
+        baseText = longTextPromptResult.sendText.trim();
+        rawText = baseText;
+      }
+    }
 
     const singleOpts = { ...opts };
     if (baseText !== rawText) {

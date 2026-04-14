@@ -82,8 +82,9 @@ export async function listConversationDocuments(conversationId) {
   const db = await openChatHistoryDB();
   const transaction = db.transaction(CONVERSATION_DOCUMENT_STORE, 'readonly');
   const store = transaction.objectStore(CONVERSATION_DOCUMENT_STORE);
+  const donePromise = transactionDone(transaction);
   const rows = await collectDocumentsByConversationId(store, conversationId);
-  await transactionDone(transaction);
+  await donePromise;
   return rows.map(cloneStructured);
 }
 
@@ -91,8 +92,9 @@ export async function getConversationDocument(conversationId, path) {
   const db = await openChatHistoryDB();
   const transaction = db.transaction(CONVERSATION_DOCUMENT_STORE, 'readonly');
   const store = transaction.objectStore(CONVERSATION_DOCUMENT_STORE);
+  const donePromise = transactionDone(transaction);
   const row = await requestToPromise(store.get([String(conversationId || ''), String(path || '')]));
-  await transactionDone(transaction);
+  await donePromise;
   return cloneStructured(normalizeStoredConversationDocument(row));
 }
 
@@ -108,8 +110,9 @@ export async function putConversationDocument(conversationId, documentRecord) {
   const db = await openChatHistoryDB();
   const transaction = db.transaction(CONVERSATION_DOCUMENT_STORE, 'readwrite');
   const store = transaction.objectStore(CONVERSATION_DOCUMENT_STORE);
+  const donePromise = transactionDone(transaction);
   store.put(normalized);
-  await transactionDone(transaction);
+  await donePromise;
   return cloneStructured(normalized);
 }
 
@@ -129,9 +132,10 @@ export async function replaceConversationDocuments(conversationId, documents) {
   const db = await openChatHistoryDB();
   const transaction = db.transaction(CONVERSATION_DOCUMENT_STORE, 'readwrite');
   const store = transaction.objectStore(CONVERSATION_DOCUMENT_STORE);
+  const donePromise = transactionDone(transaction);
   await deleteDocumentsByConversationIdInTransaction(store, normalizedConversationId);
   normalizedDocs.forEach((doc) => store.put(doc));
-  await transactionDone(transaction);
+  await donePromise;
   return normalizedDocs.map(cloneStructured);
 }
 
@@ -139,8 +143,9 @@ export async function deleteConversationDocument(conversationId, path) {
   const db = await openChatHistoryDB();
   const transaction = db.transaction(CONVERSATION_DOCUMENT_STORE, 'readwrite');
   const store = transaction.objectStore(CONVERSATION_DOCUMENT_STORE);
+  const donePromise = transactionDone(transaction);
   store.delete([String(conversationId || ''), String(path || '')]);
-  await transactionDone(transaction);
+  await donePromise;
   return { ok: true, conversation_id: String(conversationId || ''), path: String(path || '') };
 }
 
@@ -153,9 +158,10 @@ export async function deleteConversationDocumentsByConversationId(conversationId
   const db = await openChatHistoryDB();
   const transaction = db.transaction(CONVERSATION_DOCUMENT_STORE, 'readwrite');
   const store = transaction.objectStore(CONVERSATION_DOCUMENT_STORE);
+  const donePromise = transactionDone(transaction);
   const existing = await collectDocumentsByConversationId(store, normalizedConversationId);
   await deleteDocumentsByConversationIdInTransaction(store, normalizedConversationId);
-  await transactionDone(transaction);
+  await donePromise;
   return {
     ok: true,
     conversation_id: normalizedConversationId,
