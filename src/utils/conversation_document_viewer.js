@@ -322,6 +322,25 @@ export function createConversationDocumentViewer(options = {}) {
     return request;
   }
 
+  function focusConversationDocumentCard(card) {
+    if (!(card instanceof HTMLElement)) return;
+    const state = getConversationDocumentCardState(card);
+    if (!card.open) {
+      card.open = true;
+    } else if (!state.loaded && !state.editing) {
+      void loadConversationDocumentCard(card);
+    }
+    const summary = card.querySelector('summary');
+    try {
+      summary?.focus?.({ preventScroll: true });
+    } catch (_) {
+      summary?.focus?.();
+    }
+    try {
+      card.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+    } catch (_) {}
+  }
+
   function autoResizeConversationDocumentEditor(textarea) {
     if (!textarea) return;
     textarea.style.height = 'auto';
@@ -527,6 +546,126 @@ export function createConversationDocumentViewer(options = {}) {
     });
   }
 
+  function getMessageDocumentCards(messageElement) {
+    if (!(messageElement instanceof HTMLElement)) return [];
+    return Array.from(messageElement.querySelectorAll('.conversation-document-card[data-document-path]'))
+      .filter((card) => !card.closest('.conversation-document-attachments__expanded'));
+  }
+
+  function createConversationDocumentAttachmentTile({ path, title, onClick }) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'conversation-document-attachments__tile';
+    button.setAttribute('aria-label', `打开文档 ${title || path}`);
+    button.title = path;
+
+    const icon = document.createElement('i');
+    icon.className = 'fa-solid fa-file-lines conversation-document-attachments__tile-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    button.appendChild(icon);
+
+    const labelWrap = document.createElement('span');
+    labelWrap.className = 'conversation-document-attachments__tile-label-wrap';
+
+    const titleEl = document.createElement('span');
+    titleEl.className = 'conversation-document-attachments__tile-title';
+    titleEl.textContent = title || path;
+    labelWrap.appendChild(titleEl);
+
+    const pathEl = document.createElement('span');
+    pathEl.className = 'conversation-document-attachments__tile-path';
+    pathEl.textContent = path;
+    labelWrap.appendChild(pathEl);
+
+    button.appendChild(labelWrap);
+    if (typeof onClick === 'function') {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onClick();
+      });
+    }
+    return button;
+  }
+
+  function syncConversationDocumentAttachmentStrip(messageElement) {
+    if (!(messageElement instanceof HTMLElement)) return;
+
+    const documentCards = getMessageDocumentCards(messageElement);
+    const existingContainer = Array.from(messageElement.children || []).find((child) => (
+      child?.classList?.contains('conversation-document-attachments')
+    )) || null;
+
+    if (documentCards.length <= 0) {
+      existingContainer?.remove();
+      return;
+    }
+
+    const descriptors = [];
+    const seenPaths = new Set();
+    documentCards.forEach((card) => {
+      const path = normalizeViewerString(card.getAttribute('data-document-path'));
+      if (!path || seenPaths.has(path)) return;
+      seenPaths.add(path);
+      descriptors.push({
+        path,
+        title: normalizeViewerString(card.querySelector('.conversation-document-card__title')?.textContent) || path,
+        card
+      });
+    });
+    if (descriptors.length <= 0) {
+      existingContainer?.remove();
+      return;
+    }
+
+    const container = existingContainer || document.createElement('div');
+    container.className = 'conversation-document-attachments';
+
+    const tiles = document.createElement('div');
+    tiles.className = 'conversation-document-attachments__tiles';
+
+    const expandedHost = document.createElement('div');
+    expandedHost.className = 'conversation-document-attachments__expanded';
+
+    descriptors.forEach((descriptor) => {
+      tiles.appendChild(createConversationDocumentAttachmentTile({
+        path: descriptor.path,
+        title: descriptor.title,
+        onClick: () => {
+          if (descriptor.card) {
+            focusConversationDocumentCard(descriptor.card);
+            return;
+          }
+          expandedHost.replaceChildren();
+          const fallbackCard = createConversationDocumentCard({
+            path: descriptor.path,
+            title: descriptor.title,
+            conversationId: resolveConversationId()
+          });
+          expandedHost.appendChild(fallbackCard);
+          focusConversationDocumentCard(fallbackCard);
+        }
+      }));
+    });
+
+    container.replaceChildren(tiles, expandedHost);
+
+    const apiFooter = Array.from(messageElement.children || []).find((child) => (
+      child?.classList?.contains('api-footer')
+    )) || null;
+    if (container.parentElement !== messageElement) {
+      if (apiFooter) {
+        messageElement.insertBefore(container, apiFooter);
+      } else {
+        messageElement.appendChild(container);
+      }
+    } else if (apiFooter && container.nextElementSibling !== apiFooter) {
+      messageElement.insertBefore(container, apiFooter);
+    } else if (!apiFooter && messageElement.lastElementChild !== container) {
+      messageElement.appendChild(container);
+    }
+  }
+
   function installConversationDocumentChangeListener() {
     if (changeListenerInstalled) return;
     document.addEventListener(CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME, (event) => {
@@ -559,6 +698,7 @@ export function createConversationDocumentViewer(options = {}) {
   return {
     createConversationDocumentCard,
     createConversationDocumentCardFromLink,
+    syncConversationDocumentAttachmentStrip,
     installConversationDocumentChangeListener,
     loadConversationDocumentCard
   };

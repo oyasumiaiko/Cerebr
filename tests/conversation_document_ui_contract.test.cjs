@@ -25,9 +25,11 @@ test('message_processor 已把裸相对路径链接替换为文档卡片，并�
 
   assert.match(source, /isConversationDocumentRelativeHref\(rawHref\)/);
   assert.match(source, /createConversationDocumentViewer/);
+  assert.match(source, /syncConversationDocumentAttachmentStrip/);
   assert.match(source, /createConversationDocumentCard\(link\)/);
   assert.match(source, /CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME/);
   assert.match(viewerSource, /conversation-document-card/);
+  assert.match(viewerSource, /conversation-document-attachments/);
 });
 
 test('conversation_document_viewer 使用无边框图标按钮承载基础文档操作', async () => {

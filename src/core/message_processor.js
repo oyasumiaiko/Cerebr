@@ -331,6 +331,20 @@ export function createMessageProcessor(appContext) {
         link.dataset.cerebrTextFragment = hasTextFragment ? 'true' : 'false';
       });
     });
+
+    const ownerMessages = new Set();
+    uniqueContainers.forEach((container) => {
+      const messageElement = container?.closest?.('.message');
+      if (messageElement instanceof HTMLElement) {
+        ownerMessages.add(messageElement);
+      }
+    });
+    if (rootElement instanceof HTMLElement && rootElement.classList?.contains('message')) {
+      ownerMessages.add(rootElement);
+    }
+    ownerMessages.forEach((messageElement) => {
+      conversationDocumentViewer.syncConversationDocumentAttachmentStrip(messageElement);
+    });
   }
 
   let markdownLinkInterceptorInstalled = false;

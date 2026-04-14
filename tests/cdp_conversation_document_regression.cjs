@@ -606,11 +606,31 @@ async function main() {
       throw new Error(`document link was not replaced by card: ${JSON.stringify(result.cardRenderState)}`);
     }
 
+    result.attachmentStripState = await waitFor(async () => {
+      return await sidebarFrame.evaluate(() => {
+        const lastMessage = Array.from(document.querySelectorAll('.message.ai-message')).slice(-1)[0] || null;
+        if (!lastMessage) return null;
+        const strip = lastMessage.querySelector('.conversation-document-attachments');
+        if (!strip) return null;
+        const tiles = Array.from(strip.querySelectorAll('.conversation-document-attachments__tile')).map((tile) => ({
+          text: (tile.textContent || '').trim(),
+          title: tile.getAttribute('title') || ''
+        }));
+        if (tiles.length < 3) return null;
+        return { tileCount: tiles.length, tiles };
+      }).catch(() => null);
+    }, {
+      timeoutMs: 30_000,
+      intervalMs: 250,
+      label: 'document attachment strip'
+    });
+    result.steps.push('document_attachment_strip_rendered');
+
     const mdCardRoot = sidebarFrame.locator(`.message.ai-message:last-child .conversation-document-card[data-document-path="${MD_DOC_PATH}"]`);
     const txtCardRoot = sidebarFrame.locator(`.message.ai-message:last-child .conversation-document-card[data-document-path="${TXT_DOC_PATH}"]`);
     const codeCardRoot = sidebarFrame.locator(`.message.ai-message:last-child .conversation-document-card[data-document-path="${CODE_DOC_PATH}"]`);
 
-    await mdCardRoot.locator('summary').click();
+    await sidebarFrame.locator(`.message.ai-message:last-child .conversation-document-attachments__tile[title="${MD_DOC_PATH}"]`).click();
     result.initialCardContent = await waitFor(async () => {
       return await mdCardRoot.evaluate((card) => {
         const content = card.querySelector('.conversation-document-card__content');

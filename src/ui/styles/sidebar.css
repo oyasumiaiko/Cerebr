@@ -10862,6 +10862,66 @@ body.chat-empty .empty-state-content {
   .conversation-document-card.is-missing {
     border-style: dashed;
   }
+
+  .conversation-document-attachments {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  .conversation-document-attachments__tiles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+
+  .conversation-document-attachments__tile {
+    display: inline-flex;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+    max-width: min(240px, 100%);
+    padding: 8px 10px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 70%, transparent);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--cerebr-bg-color) 88%, transparent);
+    color: var(--cerebr-text-color);
+    cursor: pointer;
+    text-align: left;
+  }
+
+  .conversation-document-attachments__tile:hover,
+  .conversation-document-attachments__tile:focus-visible {
+    border-color: color-mix(in srgb, var(--cerebr-blue) 50%, var(--cerebr-border-color));
+    background: color-mix(in srgb, var(--cerebr-blue) 10%, var(--cerebr-bg-color));
+    outline: none;
+  }
+
+  .conversation-document-attachments__tile-icon {
+    margin-top: 2px;
+    color: color-mix(in srgb, var(--cerebr-blue) 72%, var(--cerebr-text-color));
+  }
+
+  .conversation-document-attachments__tile-label-wrap {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .conversation-document-attachments__tile-title {
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.35;
+  }
+
+  .conversation-document-attachments__tile-path {
+    font-size: 11px;
+    line-height: 1.35;
+    color: color-mix(in srgb, var(--cerebr-text-color) 65%, transparent);
+    overflow-wrap: anywhere;
+  }
   
   /* 滚动条样式统一至全局 */
 
