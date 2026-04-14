@@ -27,8 +27,12 @@ import {
 } from '../utils/skill_patch_preview.js';
 import {
   buildSkillRegistryPrimaryText,
+  buildResponseActivityCustomToolPrimaryText,
+  buildResponseActivityCustomToolSummaryParts,
   buildSkillRegistrySummaryParts,
+  getResponseActivityCustomToolTypeLabel,
   getSkillRegistryToolTypeLabel,
+  isResponseActivityCustomToolCall,
   isSkillRegistryToolCall
 } from '../utils/response_activity_tool_summary.js';
 import {
@@ -37,12 +41,6 @@ import {
   getVirtualFileToolTypeLabel,
   isVirtualFileToolCall
 } from '../utils/conversation_document_tool_summary.js';
-import {
-  buildResponseActivityCustomToolPrimaryText,
-  buildResponseActivityCustomToolSummaryParts,
-  getResponseActivityCustomToolTypeLabel,
-  isResponseActivityCustomToolCall
-} from '../utils/response_activity_custom_tool_summary.js';
 import {
   extractResponsesToolOutputInputImages,
   formatResponsesToolOutputForDisplay,
