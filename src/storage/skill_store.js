@@ -11,8 +11,11 @@ export const SKILL_DB_NAME = 'CerebrSkillDB';
 export const SKILL_DB_VERSION = 1;
 export const SKILL_MANIFEST_STORE = 'skill_manifests';
 export const SKILL_FILE_STORE = 'skill_files';
+export const LEGACY_MICRO_SKILL_DB_NAME = 'CerebrMicroSkillDB';
+export const LEGACY_MICRO_SKILL_DB_VERSION = 1;
 
 let cachedSkillDbPromise = null;
+let skillDbMigrationPromise = null;
 
 function ensureIndexedDbAvailable() {
   if (!globalThis?.indexedDB || typeof globalThis.indexedDB.open !== 'function') {
@@ -40,6 +43,125 @@ function cloneStructured(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
+function openNamedSkillDb(indexedDb, dbName, dbVersion) {
+  return new Promise((resolve, reject) => {
+    const request = indexedDb.open(dbName, dbVersion);
+
+    request.onerror = () => reject(request.error || new Error(`打开数据库 ${dbName} 失败。`));
+
+    request.onsuccess = () => {
+      const db = request.result;
+      db.onversionchange = () => {
+        try { db.close(); } catch (_) {}
+      };
+      resolve(db);
+    };
+  });
+}
+
+async function listIndexedDbNames(indexedDb) {
+  if (!indexedDb || typeof indexedDb.databases !== 'function') {
+    return [];
+  }
+  try {
+    const databases = await indexedDb.databases();
+    return (Array.isArray(databases) ? databases : [])
+      .map((entry) => (typeof entry?.name === 'string') ? entry.name.trim() : '')
+      .filter(Boolean);
+  } catch (_) {
+    return [];
+  }
+}
+
+export function shouldMigrateLegacySkillDb({
+  availableDbNames,
+  currentManifestCount,
+  currentFileCount
+} = {}) {
+  const names = Array.isArray(availableDbNames)
+    ? availableDbNames
+        .map((name) => (typeof name === 'string') ? name.trim() : '')
+        .filter(Boolean)
+    : [];
+  const normalizedManifestCount = Number(currentManifestCount) || 0;
+  const normalizedFileCount = Number(currentFileCount) || 0;
+  const currentDbHasData = normalizedManifestCount > 0 || normalizedFileCount > 0;
+  if (currentDbHasData) return false;
+  return names.includes(LEGACY_MICRO_SKILL_DB_NAME);
+}
+
+async function countStoreRecords(store) {
+  return await requestToPromise(store.count());
+}
+
+async function getAllStoreRecords(store) {
+  return await requestToPromise(store.getAll());
+}
+
+async function ensureLegacyMicroSkillDbMigrated(currentDb) {
+  if (!currentDb) return;
+  if (skillDbMigrationPromise) {
+    await skillDbMigrationPromise;
+    return;
+  }
+
+  skillDbMigrationPromise = (async () => {
+    const indexedDb = ensureIndexedDbAvailable();
+    const availableDbNames = await listIndexedDbNames(indexedDb);
+
+    const currentCountTx = currentDb.transaction([SKILL_MANIFEST_STORE, SKILL_FILE_STORE], 'readonly');
+    const currentManifestStore = currentCountTx.objectStore(SKILL_MANIFEST_STORE);
+    const currentFileStore = currentCountTx.objectStore(SKILL_FILE_STORE);
+    const [currentManifestCount, currentFileCount] = await Promise.all([
+      countStoreRecords(currentManifestStore),
+      countStoreRecords(currentFileStore)
+    ]);
+    await transactionDone(currentCountTx);
+
+    if (!shouldMigrateLegacySkillDb({
+      availableDbNames,
+      currentManifestCount,
+      currentFileCount
+    })) {
+      return;
+    }
+
+    const legacyDb = await openNamedSkillDb(indexedDb, LEGACY_MICRO_SKILL_DB_NAME, LEGACY_MICRO_SKILL_DB_VERSION);
+    try {
+      const legacyReadTx = legacyDb.transaction([SKILL_MANIFEST_STORE, SKILL_FILE_STORE], 'readonly');
+      const legacyManifestStore = legacyReadTx.objectStore(SKILL_MANIFEST_STORE);
+      const legacyFileStore = legacyReadTx.objectStore(SKILL_FILE_STORE);
+      const [legacyManifests, legacyFiles] = await Promise.all([
+        getAllStoreRecords(legacyManifestStore),
+        getAllStoreRecords(legacyFileStore)
+      ]);
+      await transactionDone(legacyReadTx);
+
+      if ((!Array.isArray(legacyManifests) || legacyManifests.length <= 0)
+        && (!Array.isArray(legacyFiles) || legacyFiles.length <= 0)) {
+        return;
+      }
+
+      const currentWriteTx = currentDb.transaction([SKILL_MANIFEST_STORE, SKILL_FILE_STORE], 'readwrite');
+      const writeManifestStore = currentWriteTx.objectStore(SKILL_MANIFEST_STORE);
+      const writeFileStore = currentWriteTx.objectStore(SKILL_FILE_STORE);
+      (Array.isArray(legacyManifests) ? legacyManifests : []).forEach((manifest) => {
+        writeManifestStore.put(cloneStructured(manifest));
+      });
+      (Array.isArray(legacyFiles) ? legacyFiles : []).forEach((file) => {
+        writeFileStore.put(cloneStructured(file));
+      });
+      await transactionDone(currentWriteTx);
+    } finally {
+      try { legacyDb.close(); } catch (_) {}
+    }
+  })().finally(() => {
+    skillDbMigrationPromise = null;
+  });
+
+  await skillDbMigrationPromise;
+}
+
 export function openSkillDb() {
   if (cachedSkillDbPromise) return cachedSkillDbPromise;
 
@@ -58,7 +180,14 @@ export function openSkillDb() {
         try { db.close(); } catch (_) {}
         cachedSkillDbPromise = null;
       };
-      resolve(db);
+      Promise.resolve()
+        .then(() => ensureLegacyMicroSkillDbMigrated(db))
+        .then(() => resolve(db))
+        .catch((error) => {
+          cachedSkillDbPromise = null;
+          try { db.close(); } catch (_) {}
+          reject(error || new Error('迁移 legacy micro skill 数据库失败。'));
+        });
     };
 
     request.onupgradeneeded = (event) => {
