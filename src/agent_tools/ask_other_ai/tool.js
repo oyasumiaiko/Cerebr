@@ -20,6 +20,19 @@ function normalizeBoolean(value) {
   return value === true;
 }
 
+function normalizeStringArray(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const next = [];
+  value.forEach((item) => {
+    const text = normalizeString(item);
+    if (!text || seen.has(text)) return;
+    seen.add(text);
+    next.push(text);
+  });
+  return next;
+}
+
 function normalizeNullableString(value) {
   const text = normalizeString(value);
   return text || null;
@@ -129,7 +142,7 @@ export function buildAskOtherAiFunctionToolDefinition() {
 
 export function buildAskOtherAiCatalog(configs, options = {}) {
   const source = Array.isArray(configs) ? configs : [];
-  void options;
+  const enabledConfigIdSet = new Set(normalizeStringArray(options?.enabledConfigIds));
 
   const models = source
     .map((config, index) => {
@@ -140,7 +153,7 @@ export function buildAskOtherAiCatalog(configs, options = {}) {
       const baseUrl = normalizeString(config.baseUrl);
       const connectionType = normalizeNullableString(config.connectionType);
       const connectionSourceName = normalizeNullableString(config.connectionSourceName);
-      const enabled = normalizeBoolean(config.enableAskOtherAiTool);
+      const enabled = enabledConfigIdSet.has(configId);
       if (!enabled || !configId || !modelName || !baseUrl) return null;
 
       return {

@@ -10,15 +10,14 @@ async function loadAskOtherAiToolModule() {
   return import(dataUrl);
 }
 
-test('buildAskOtherAiCatalog 只返回启用且配置完整的候选模型', async () => {
+test('buildAskOtherAiCatalog 只返回偏好设置中显式选中的且配置完整的候选模型', async () => {
   const { buildAskOtherAiCatalog } = await loadAskOtherAiToolModule();
   const result = buildAskOtherAiCatalog([
     {
       id: 'cfg-current',
       modelName: 'gpt-5.4',
       displayName: 'Current',
-      baseUrl: 'https://example.com/responses',
-      enableAskOtherAiTool: true
+      baseUrl: 'https://example.com/responses'
     },
     {
       id: 'cfg-a',
@@ -28,17 +27,17 @@ test('buildAskOtherAiCatalog 只返回启用且配置完整的候选模型', asy
       connectionType: 'openai',
       connectionSourceName: 'OpenAI Proxy',
       isFavorite: true,
-      customSystemPrompt: 'be strict',
-      enableAskOtherAiTool: true
+      customSystemPrompt: 'be strict'
     },
     {
       id: 'cfg-b',
       modelName: 'gemini-2.5-pro',
       displayName: '',
-      baseUrl: 'https://generativelanguage.googleapis.com',
-      enableAskOtherAiTool: false
+      baseUrl: 'https://generativelanguage.googleapis.com'
     }
-  ]);
+  ], {
+    enabledConfigIds: ['cfg-current', 'cfg-a']
+  });
 
   assert.equal(result.ok, true);
   assert.equal(result.total_models, 2);

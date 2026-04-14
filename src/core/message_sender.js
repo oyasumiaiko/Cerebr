@@ -8628,7 +8628,9 @@ export function createMessageSender(appContext) {
   async function executeResponsesListAskableModelsFunction(_rawArgs, options = {}) {
     try {
       const configs = apiManager.getAllConfigs();
-      return buildAskOtherAiCatalog(configs);
+      return buildAskOtherAiCatalog(configs, {
+        enabledConfigIds: settingsManager?.getSetting?.('askOtherAiEnabledApiIds')
+      });
     } catch (error) {
       return {
         ok: false,
@@ -8641,7 +8643,9 @@ export function createMessageSender(appContext) {
     try {
       const { requests } = normalizeAskOtherAiArguments(rawArgs);
       const allConfigs = apiManager.getAllConfigs();
-      const catalog = buildAskOtherAiCatalog(allConfigs);
+      const catalog = buildAskOtherAiCatalog(allConfigs, {
+        enabledConfigIds: settingsManager?.getSetting?.('askOtherAiEnabledApiIds')
+      });
       const askableConfigIdSet = new Set((catalog.models || []).map((item) => item.config_id));
       const catalogById = new Map((catalog.models || []).map((item) => [item.config_id, item]));
       const answers = [];
@@ -8658,7 +8662,7 @@ export function createMessageSender(appContext) {
             status: 'error',
             question: request.question,
             answer: '',
-            error: `目标 config_id 不存在，或尚未启用“AI提问工具可用”：${configId}`
+            error: `目标 config_id 不存在，或未在偏好设置的“向其他AI提问可用 API”里选中：${configId}`
           });
           continue;
         }

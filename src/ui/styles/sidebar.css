@@ -3456,7 +3456,7 @@ input:checked + .slider::before {
 }
 
 .responses-settings-panel {
-    --responses-setting-control-width: 50%;
+    --responses-setting-control-width: 34%;
     margin-top: 10px;
     padding-top: 10px;
     border-top: 1px solid var(--cerebr-control-border);
@@ -3567,6 +3567,12 @@ input:checked + .slider::before {
     justify-content: flex-end;
     gap: 6px;
     min-width: 0;
+    width: 100%;
+    justify-self: end;
+}
+
+.responses-setting-control:has(.responses-setting-bool-switch) {
+    width: auto;
 }
 
 .responses-setting-control[hidden] {
@@ -3595,7 +3601,7 @@ input:checked + .slider::before {
 .responses-setting-select,
 .responses-setting-input,
 .responses-setting-textarea {
-    width: auto;
+    width: 100%;
     min-width: 0;
     border: 1px solid var(--cerebr-control-border);
     border-radius: 6px;
@@ -3615,16 +3621,16 @@ input:checked + .slider::before {
     box-shadow: 0 0 0 2px color-mix(in srgb, var(--cerebr-highlight) 20%, transparent);
 }
 
-.responses-setting-select,
-.responses-setting-input {
-    max-width: 220px;
-}
-
 .responses-setting-range {
-    width: min(220px, 100%);
+    order: 1;
+    flex: 1 1 auto;
+    min-width: 0;
+    width: 100%;
 }
 
 .responses-setting-inline-value {
+    order: 2;
+    flex: 0 0 34px;
     min-width: 34px;
     text-align: right;
     font-size: 12px;
@@ -3632,6 +3638,7 @@ input:checked + .slider::before {
 }
 
 .responses-setting-editor-toggle {
+    width: 100%;
     border: 1px solid var(--cerebr-control-border);
     border-radius: 6px;
     background: var(--cerebr-control-bg);
@@ -8178,6 +8185,103 @@ body.chat-history-panel-resizing {
     width: 100%;
     max-width: 100%;
     min-width: 0;
+}
+
+#chat-history-panel .settings-tab-content .menu-item--multi-select {
+    align-items: start;
+}
+
+#chat-history-panel .settings-tab-content .settings-multiselect {
+    position: relative;
+    width: 100%;
+}
+
+#chat-history-panel .settings-tab-content .settings-multiselect-toggle {
+    width: 100%;
+    min-height: 32px;
+    padding: 6px 10px;
+    border: 1px solid var(--cerebr-control-border);
+    border-radius: 8px;
+    background: var(--cerebr-control-bg);
+    color: var(--cerebr-text-color);
+    text-align: left;
+    cursor: pointer;
+    font-size: 12px;
+    line-height: 1.35;
+}
+
+#chat-history-panel .settings-tab-content .settings-multiselect-toggle:hover {
+    background: var(--cerebr-control-bg-hover);
+    border-color: var(--cerebr-control-border-hover);
+}
+
+#chat-history-panel .settings-tab-content .settings-multiselect-panel {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    z-index: 20;
+    max-height: 240px;
+    overflow-y: auto;
+    padding: 6px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 75%, transparent);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--cerebr-control-bg) 96%, transparent);
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18);
+}
+
+#chat-history-panel .settings-tab-content .settings-multiselect.is-open .settings-multiselect-panel {
+    display: block;
+}
+
+#chat-history-panel .settings-tab-content .settings-multiselect-options {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+#chat-history-panel .settings-tab-content .settings-multiselect-option {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+#chat-history-panel .settings-tab-content .settings-multiselect-option:hover {
+    background: color-mix(in srgb, var(--cerebr-ui-hover-bg, var(--cerebr-control-bg-hover)) 92%, transparent);
+}
+
+#chat-history-panel .settings-tab-content .settings-multiselect-option input[type="checkbox"] {
+    margin-top: 2px;
+}
+
+#chat-history-panel .settings-tab-content .settings-multiselect-option-text {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+#chat-history-panel .settings-tab-content .settings-multiselect-option-title {
+    font-size: 12px;
+    line-height: 1.35;
+    color: var(--cerebr-text-color);
+}
+
+#chat-history-panel .settings-tab-content .settings-multiselect-option-meta,
+#chat-history-panel .settings-tab-content .settings-multiselect-empty {
+    font-size: 11px;
+    line-height: 1.35;
+    color: color-mix(in srgb, var(--cerebr-text-color) 68%, transparent);
+}
+
+#chat-history-panel .settings-tab-content .settings-multiselect-empty {
+    padding: 6px 8px;
 }
 
 #chat-history-panel .settings-tab-content .menu-item--stack {

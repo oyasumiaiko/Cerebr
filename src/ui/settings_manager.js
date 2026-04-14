@@ -109,6 +109,9 @@ export function createSettingsManager(appContext) {
     autoGenerateTitleForSelection: true,
     // 对话标题生成：默认跟随当前 API
     conversationTitleApi: 'follow_current',
+    // ask_other_ai / list_askable_models 可见的 API 配置 ID 列表。
+    // 这里单独放到偏好设置，避免把“全局工具可见性”误做成单张 API 卡片里的本地字段。
+    askOtherAiEnabledApiIds: [],
     // 对话标题生成：默认提示词（用户可在设置中修改）
     conversationTitlePrompt: '请根据以下对话生成一个简短标题，尽量在20字以内，仅输出标题本身，不要任何前缀或引号。',
     // 是否在发送请求时回传 thoughtSignature 等签名字段（用于部分代理的推理校验/连续性）。
@@ -268,6 +271,138 @@ export function createSettingsManager(appContext) {
     select.value = currentValue || DEFAULT_SETTINGS.conversationTitleApi;
   }
 
+  function normalizeStringArraySetting(value) {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set();
+    const next = [];
+    value.forEach((item) => {
+      const text = (typeof item === 'string') ? item.trim() : '';
+      if (!text || seen.has(text)) return;
+      seen.add(text);
+      next.push(text);
+    });
+    return next;
+  }
+
+  function getAskOtherAiApiOptions() {
+    const apiConfigs = services.apiManager?.getAllConfigs?.() || [];
+    return apiConfigs
+      .map((config, index) => {
+        if (!config || typeof config !== 'object') return null;
+        const value = (typeof config.id === 'string') ? config.id.trim() : '';
+        if (!value) return null;
+        const displayName = (typeof config.displayName === 'string') ? config.displayName.trim() : '';
+        const modelName = (typeof config.modelName === 'string') ? config.modelName.trim() : '';
+        const label = displayName || modelName || `API ${index + 1}`;
+        const meta = [];
+        if (displayName && modelName && displayName !== modelName) {
+          meta.push(modelName);
+        }
+        const connectionSourceName = (typeof config.connectionSourceName === 'string')
+          ? config.connectionSourceName.trim()
+          : '';
+        if (connectionSourceName) {
+          meta.push(connectionSourceName);
+        }
+        return {
+          value,
+          label,
+          description: meta.join(' · ')
+        };
+      })
+      .filter(Boolean);
+  }
+
+  function formatAskOtherAiApiSelectionSummary(selectedIds, options, placeholder) {
+    const optionByValue = new Map(
+      (Array.isArray(options) ? options : [])
+        .map((item) => {
+          if (typeof item === 'string') {
+            return [item, item];
+          }
+          return [item?.value, item?.label || item?.value || ''];
+        })
+        .filter(([value]) => typeof value === 'string' && value.trim())
+    );
+    const labels = normalizeStringArraySetting(selectedIds)
+      .map((value) => optionByValue.get(value) || '')
+      .filter(Boolean);
+    if (labels.length <= 0) return placeholder || '选择 API';
+    if (labels.length === 1) return labels[0];
+    if (labels.length === 2) return labels.join('、');
+    return `已选 ${labels.length} 个 API`;
+  }
+
+  function writeMultiSelectDropdownControl(control, def, value) {
+    if (!control) return;
+    const toggleButton = control.querySelector('.settings-multiselect-toggle');
+    const optionsContainer = control.querySelector('.settings-multiselect-options');
+    if (!toggleButton || !optionsContainer) return;
+
+    const options = typeof def.options === 'function' ? def.options() : (def.options || []);
+    const selectedValues = normalizeStringArraySetting(value);
+    const selectedSet = new Set(selectedValues);
+    optionsContainer.textContent = '';
+
+    if (Array.isArray(options) && options.length > 0) {
+      options.forEach((opt) => {
+        const optionValue = (typeof opt === 'string') ? opt : opt?.value;
+        const optionLabel = (typeof opt === 'string') ? opt : (opt?.label || opt?.value || '');
+        const optionDescription = (typeof opt === 'object' && opt?.description)
+          ? String(opt.description).trim()
+          : '';
+        const normalizedValue = (typeof optionValue === 'string') ? optionValue.trim() : '';
+        if (!normalizedValue) return;
+
+        const optionLabelWrap = document.createElement('label');
+        optionLabelWrap.className = 'settings-multiselect-option';
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = normalizedValue;
+        checkbox.checked = selectedSet.has(normalizedValue);
+
+        const textWrap = document.createElement('div');
+        textWrap.className = 'settings-multiselect-option-text';
+
+        const title = document.createElement('span');
+        title.className = 'settings-multiselect-option-title';
+        title.textContent = optionLabel;
+        textWrap.appendChild(title);
+
+        if (optionDescription) {
+          const meta = document.createElement('span');
+          meta.className = 'settings-multiselect-option-meta';
+          meta.textContent = optionDescription;
+          textWrap.appendChild(meta);
+        }
+
+        optionLabelWrap.appendChild(checkbox);
+        optionLabelWrap.appendChild(textWrap);
+        optionsContainer.appendChild(optionLabelWrap);
+      });
+    }
+
+    if (optionsContainer.childElementCount <= 0) {
+      const empty = document.createElement('div');
+      empty.className = 'settings-multiselect-empty';
+      empty.textContent = def.emptyText || '暂无可选项';
+      optionsContainer.appendChild(empty);
+    }
+
+    const summary = formatAskOtherAiApiSelectionSummary(selectedValues, options, def.placeholder);
+    toggleButton.textContent = summary;
+    toggleButton.title = summary;
+  }
+
+  function refreshAskOtherAiApiOptions() {
+    const control = dynamicElements.get('askOtherAiEnabledApiIds');
+    if (!control) return;
+    const def = getActiveRegistry().find((item) => item.key === 'askOtherAiEnabledApiIds');
+    if (!def) return;
+    writeMultiSelectDropdownControl(control, def, currentSettings.askOtherAiEnabledApiIds ?? def.defaultValue);
+  }
+
   function appendTextToInputEnd(input, text) {
     if (!input) return false;
     const safeText = String(text ?? '');
@@ -287,7 +422,7 @@ export function createSettingsManager(appContext) {
   }
 
   // 动态设置注册表：新增设置仅需在此处登记即可自动渲染与持久化
-  // type: 'toggle' | 'range' | 'select' | 'color' | 'text' | 'textarea'
+  // type: 'toggle' | 'range' | 'select' | 'multi_select_dropdown' | 'color' | 'text' | 'textarea'
   const SETTINGS_REGISTRY = [
     // 主题（复用现有隐藏下拉框，不额外渲染）
     {
@@ -637,6 +772,28 @@ export function createSettingsManager(appContext) {
       group: 'title',
       options: () => getConversationTitleApiOptions(),
       defaultValue: DEFAULT_SETTINGS.conversationTitleApi
+    },
+    {
+      key: 'askOtherAiEnabledApiIds',
+      type: 'multi_select_dropdown',
+      id: 'ask-other-ai-enabled-api-ids',
+      label: '向其他AI提问可用 API',
+      group: 'advanced',
+      options: () => getAskOtherAiApiOptions(),
+      defaultValue: DEFAULT_SETTINGS.askOtherAiEnabledApiIds,
+      placeholder: '选择可用于 ask_other_ai 的 API',
+      emptyText: '暂无可选 API',
+      readFromUI: (el) => normalizeStringArraySetting(
+        Array.from(el?.querySelectorAll?.('.settings-multiselect-option input[type="checkbox"]:checked') || [])
+          .map((input) => input.value)
+      ),
+      writeToUI: (el, value) => {
+        writeMultiSelectDropdownControl(el, {
+          options: () => getAskOtherAiApiOptions(),
+          placeholder: '选择可用于 ask_other_ai 的 API',
+          emptyText: '暂无可选 API'
+        }, value);
+      }
     },
     {
       key: 'conversationTitlePrompt',
@@ -1073,6 +1230,9 @@ export function createSettingsManager(appContext) {
     }
     if (key === 'hideNativeScrollbarInFullscreen') {
       return !!value;
+    }
+    if (key === 'askOtherAiEnabledApiIds') {
+      return normalizeStringArraySetting(value);
     }
     return value;
   }
@@ -1778,6 +1938,70 @@ export function createSettingsManager(appContext) {
         item.appendChild(select);
         targetBucket.appendChild(item);
         dynamicElements.set(def.key, select);
+      } else if (def.type === 'multi_select_dropdown') {
+        item.classList.add('menu-item--select', 'menu-item--multi-select');
+
+        const control = document.createElement('div');
+        control.className = 'settings-multiselect';
+        control.id = def.id || `setting-${def.key}`;
+
+        const toggleButton = document.createElement('button');
+        toggleButton.type = 'button';
+        toggleButton.className = 'settings-multiselect-toggle';
+        toggleButton.setAttribute('aria-haspopup', 'true');
+        toggleButton.setAttribute('aria-expanded', 'false');
+
+        const panel = document.createElement('div');
+        panel.className = 'settings-multiselect-panel';
+
+        const optionsWrap = document.createElement('div');
+        optionsWrap.className = 'settings-multiselect-options';
+        panel.appendChild(optionsWrap);
+
+        const setOpen = (open) => {
+          const nextOpen = open === true;
+          if (nextOpen) {
+            document.querySelectorAll('.settings-multiselect.is-open').forEach((node) => {
+              if (node !== control) {
+                node.classList.remove('is-open');
+                const button = node.querySelector('.settings-multiselect-toggle');
+                if (button) button.setAttribute('aria-expanded', 'false');
+              }
+            });
+          }
+          control.classList.toggle('is-open', nextOpen);
+          toggleButton.setAttribute('aria-expanded', nextOpen ? 'true' : 'false');
+        };
+
+        toggleButton.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          setOpen(!control.classList.contains('is-open'));
+        });
+        panel.addEventListener('click', (event) => {
+          event.stopPropagation();
+        });
+        control.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape') {
+            event.stopPropagation();
+            setOpen(false);
+            toggleButton.focus();
+          }
+        });
+        document.addEventListener('click', (event) => {
+          if (!control.contains(event.target)) {
+            setOpen(false);
+          }
+        });
+
+        control.appendChild(toggleButton);
+        control.appendChild(panel);
+        item.appendChild(control);
+        targetBucket.appendChild(item);
+        dynamicElements.set(def.key, control);
+        if (typeof def.writeToUI === 'function') {
+          try { def.writeToUI(control, currentSettings[def.key] ?? def.defaultValue); } catch (_) {}
+        }
       }
     }
   }
@@ -3298,8 +3522,10 @@ export function createSettingsManager(appContext) {
 
     // API 配置更新后刷新“对话标题生成 API”的下拉选项
     refreshConversationTitleApiOptions();
+    refreshAskOtherAiApiOptions();
     window.addEventListener('apiConfigsUpdated', () => {
       refreshConversationTitleApiOptions();
+      refreshAskOtherAiApiOptions();
     });
   }
   
