@@ -44,6 +44,15 @@ function resolveVirtualFileTarget(args) {
   };
 }
 
+function formatReadLineRangeSuffix(args) {
+  const startLine = Number(args?.start_line);
+  const endLine = Number(args?.end_line);
+  if (!Number.isFinite(startLine) || !Number.isFinite(endLine)) return '';
+  const normalizedStart = Math.max(1, Math.trunc(startLine));
+  const normalizedEnd = Math.max(normalizedStart, Math.trunc(endLine));
+  return `L${normalizedStart}-L${normalizedEnd}`;
+}
+
 export function isVirtualFileToolCall(record) {
   return String(record?.type || '').toLowerCase() === 'function_call'
     && [
@@ -55,10 +64,7 @@ export function isVirtualFileToolCall(record) {
 }
 
 export function getVirtualFileToolTypeLabel(record) {
-  if (!isVirtualFileToolCall(record)) return '';
-  const args = parseArgumentsObject(record?.arguments);
-  const target = resolveVirtualFileTarget(args);
-  return target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能' : '文档';
+  return isVirtualFileToolCall(record) ? '文件' : '';
 }
 
 export function buildVirtualFileSummaryParts(record, options = {}) {
@@ -68,6 +74,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
   const target = resolveVirtualFileTarget(args);
   const isInProgress = options?.isInProgress === true;
   const targetMeta = target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? target.name : '';
+  const lineRangeSuffix = formatReadLineRangeSuffix(args);
 
   if (toolName === VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME) {
     const preview = buildVirtualFileApplyPatchPreview(args);
@@ -79,7 +86,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
       if (preview.totalDeletions > 0) metaParts.push(`-${preview.totalDeletions}`);
       if (preview.totalFiles > 1) metaParts.push(`另 ${preview.totalFiles - 1} 个文件`);
       return {
-        action: isInProgress ? '正在修改' : '修改了',
+        action: isInProgress ? '正在修改' : '修改',
         value: normalizeSummaryText(firstFile?.path) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文档文件'),
         valueUrl: '',
         meta: joinSummaryMeta(metaParts),
@@ -89,7 +96,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
       };
     }
     return {
-      action: isInProgress ? '正在修改文件' : '修改文件',
+      action: isInProgress ? '正在修改' : '修改',
       value: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? (targetMeta || '技能文件') : '当前对话文档',
       valueUrl: '',
       meta: '',
@@ -101,7 +108,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
 
   if (toolName === VIRTUAL_FILE_LIST_FILES_TOOL_NAME) {
     return {
-      action: isInProgress ? '正在查看文件列表' : '查看文件列表',
+      action: isInProgress ? '正在查看列表' : '查看列表',
       value: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? (targetMeta || '全部技能') : (normalizeSummaryText(args?.path_glob) || '当前对话文档'),
       valueUrl: '',
       meta: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? normalizeSummaryText(args?.path_glob) : '',
@@ -113,8 +120,13 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
 
   if (toolName === VIRTUAL_FILE_READ_FILE_TOOL_NAME) {
     return {
-      action: isInProgress ? '正在读取文件' : '读取文件',
-      value: normalizeSummaryText(args?.file_path) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文档文件'),
+      action: isInProgress ? '正在读取' : '读取',
+      value: [
+        normalizeSummaryText(args?.file_path) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文档文件'),
+        lineRangeSuffix
+      ]
+        .filter(Boolean)
+        .join(' '),
       valueUrl: '',
       meta: targetMeta,
       locationAction: '',
@@ -125,7 +137,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
 
   if (toolName === VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME) {
     return {
-      action: isInProgress ? '正在搜索文件' : '搜索文件',
+      action: isInProgress ? '正在搜索' : '搜索',
       value: normalizeSummaryText(args?.pattern) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文档文件'),
       valueUrl: '',
       meta: joinSummaryMeta([targetMeta, normalizeSummaryText(args?.path_glob)]),

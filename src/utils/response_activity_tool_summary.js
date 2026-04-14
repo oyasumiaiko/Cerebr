@@ -35,6 +35,15 @@ function resolveSkillSummaryFilePath(args) {
   return normalizeSummaryText(args?.file_path || args?.file?.path);
 }
 
+function formatReadLineRangeSuffix(args) {
+  const startLine = Number(args?.start_line);
+  const endLine = Number(args?.end_line);
+  if (!Number.isFinite(startLine) || !Number.isFinite(endLine)) return '';
+  const normalizedStart = Math.max(1, Math.trunc(startLine));
+  const normalizedEnd = Math.max(normalizedStart, Math.trunc(endLine));
+  return `L${normalizedStart}-L${normalizedEnd}`;
+}
+
 function buildApplyPatchSummaryParts(args, options = {}) {
   const preview = buildSkillApplyPatchPreview(args);
   const isInProgress = options?.isInProgress === true;
@@ -102,6 +111,7 @@ function buildSkillRegistryTargetParts(args, options = {}) {
   const normalizedAction = normalizeSummaryText(args?.action).toLowerCase();
   const skillName = resolveSkillSummarySkillName(args);
   const filePath = resolveSkillSummaryFilePath(args);
+  const lineRangeSuffix = formatReadLineRangeSuffix(args);
   const pattern = normalizeSummaryText(args?.pattern);
   const pathGlob = normalizeSummaryText(args?.path_glob);
   if (normalizedAction === 'apply_patch') {
@@ -137,7 +147,10 @@ function buildSkillRegistryTargetParts(args, options = {}) {
     case 'delete_file':
       return {
         action,
-        value: filePath || skillName || '技能文件',
+        value: [filePath || skillName || '技能文件', lineRangeSuffix]
+          .map((part) => normalizeSummaryText(part))
+          .filter(Boolean)
+          .join(' '),
         meta: (skillName && filePath) ? skillName : ''
       };
     case 'refresh_current_document':

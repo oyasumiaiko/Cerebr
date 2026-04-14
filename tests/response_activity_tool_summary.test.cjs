@@ -39,6 +39,41 @@ test('skill_registry read_file 摘要会显示技能 action、文件路径和技
   assert.equal(getSkillRegistryToolTypeLabel(record), '技能');
 });
 
+test('skill_registry read_file 在按行范围读取时会把 Lx-Ly 追加到文件路径摘要', async () => {
+  const {
+    buildSkillRegistrySummaryParts,
+    buildSkillRegistryPrimaryText
+  } = await loadModule();
+
+  const record = {
+    type: 'function_call',
+    name: 'skill_registry',
+    arguments: JSON.stringify({
+      action: 'read_file',
+      skill_name: 'worldquant-brain-knowledge-cache',
+      file_path: 'src/cache.js',
+      start_line: 1,
+      end_line: 260,
+      include_line_numbers: true
+    })
+  };
+
+  const parts = buildSkillRegistrySummaryParts(record);
+  assert.deepEqual(parts, {
+    action: '读取文件',
+    value: 'src/cache.js L1-L260',
+    valueUrl: '',
+    meta: 'worldquant-brain-knowledge-cache',
+    locationAction: '',
+    locationValue: '',
+    locationUrl: ''
+  });
+  assert.equal(
+    buildSkillRegistryPrimaryText(record),
+    '读取文件 src/cache.js L1-L260 worldquant-brain-knowledge-cache'
+  );
+});
+
 test('skill_registry apply_patch 摘要会显示首个文件和汇总增删行数', async () => {
   const {
     buildSkillRegistrySummaryParts,
