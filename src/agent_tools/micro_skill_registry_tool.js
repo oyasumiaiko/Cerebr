@@ -858,14 +858,14 @@ function buildMicroSkillRuntimeHint(record) {
       has_runtime: true,
       runtime_entry_path: skill.runtime.entry_path,
       runtime_file_count: runtimeFileCount,
-      runtime_hint: 'This skill includes JS runtime files. Read SKILL.md first, then inspect runtime_entry_path and related helpers as needed.'
+      runtime_hint: `This skill includes JS runtime files. Read SKILL.md first. To call mounted methods, use js_runtime_execute and write code as an async function body, for example: return await $invoke("${skill.name}", "methodName", args).`
     };
   }
   return {
     has_runtime: true,
     runtime_entry_path: null,
     runtime_file_count: runtimeFileCount,
-    runtime_hint: 'This skill includes JS files, but no runtime.entry_path is configured yet. Read SKILL.md first, then inspect the JS files and manifest if you want to turn it into a page runtime skill.'
+    runtime_hint: 'This skill includes JS files, but no runtime.entry_path is configured yet. Read SKILL.md first, then inspect the JS files and manifest if you want to turn it into a page runtime skill. Browser code execution still goes through js_runtime_execute.'
   };
 }
 

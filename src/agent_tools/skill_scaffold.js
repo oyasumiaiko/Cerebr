@@ -64,10 +64,12 @@ export function titleCaseSkillName(skillName) {
  */
 export function buildDefaultMicroSkillMountContract() {
   return [
+    'These helpers are only available inside `js_runtime_execute`; that tool runs your `code` as an async function body, so you can write `await` and `return` directly.',
     'Recommended helpers: `globalThis.$skill(name)`, `globalThis.$invoke(skillName, methodName, ...args)`, `globalThis.$methods(name)`.',
     '`$skill(name)` returns mounted exports or `null`.',
     '`$methods(name)` returns the callable top-level method names exposed by the mounted exports.',
     '`$invoke(skillName, methodName, ...args)` calls a mounted top-level method with clearer parameter boundaries.',
+    'Typical call shape inside `js_runtime_execute`: `return await $invoke("skill-name", "methodName", args);`',
     'Compatibility runtime registry: `globalThis.__cerebrMicroSkills`.',
     'Runtime source files run as async CommonJS-like bodies with `ctx`, `module`, `exports`, `require` available.',
     '`require()` is async in this runtime, so helper imports should use `await require("./helper.js")`.',
@@ -130,9 +132,11 @@ function buildSkillScaffoldInstructionContent(options = {}) {
     'Create only the resource directories this skill actually needs. Delete this section if no resources are required.',
     '',
     '### scripts/',
-    'Executable code (Python, Bash, or other deterministic helpers) that can be run directly to perform specific operations.',
+    'Browser-side JavaScript snippets or deterministic helper code that should be copied or adapted into `js_runtime_execute` or future runtime files.',
     '',
-    '**Appropriate for:** scripts that do automation, data processing, generation, or deterministic transformations.',
+    '**Appropriate for:** reusable JS snippets, selector probes, parser drafts, or logic you expect to paste into `js_runtime_execute.code` or later promote into `runtime.entry_path` / helper files.',
+    '',
+    '**Important:** these files are not executed automatically by the extension. The current browser environment only runs code through `js_runtime_execute`, whose `code` field is executed as an async function body.',
     '',
     '### references/',
     'Documentation and reference material intended to be loaded into context to inform the model\'s process and decisions.',
@@ -153,20 +157,15 @@ function buildSkillScaffoldInstructionContent(options = {}) {
 function buildSkillScaffoldExampleScriptContent(options = {}) {
   const skillName = normalizeSingleLineText(options.skillName) || 'example-skill';
   return [
-    '#!/usr/bin/env python3',
-    '"""',
-    `Example helper script for ${skillName}`,
+    `// Example browser-side JS snippet for ${skillName}`,
+    '// This file is source material, not something the extension executes automatically.',
+    '// If you want to try it, copy or adapt it into `js_runtime_execute`.',
+    '// That tool runs `code` as an async function body, so top-level await/return work directly.',
     '',
-    'This is a placeholder script that can be executed directly.',
-    'Replace with actual implementation or delete it if not needed.',
-    '"""',
-    '',
-    'def main():',
-    `    print("This is an example script for ${skillName}")`,
-    '    # TODO: Add actual script logic here.',
-    '',
-    'if __name__ == "__main__":',
-    '    main()'
+    'return {',
+    '  title: document.title,',
+    '  href: location.href',
+    '};'
   ].join('\n');
 }
 
@@ -244,10 +243,10 @@ export function buildSkillScaffoldFiles(options = {}) {
     })
   }];
 
-  if (examples === true) {
-    if (resources.includes('scripts')) {
-      files.push({
-        path: withPrefix('scripts/example.py'),
+    if (examples === true) {
+      if (resources.includes('scripts')) {
+        files.push({
+        path: withPrefix('scripts/example.js'),
         kind: prefix ? 'template' : 'reference',
         content: buildSkillScaffoldExampleScriptContent({ skillName })
       });

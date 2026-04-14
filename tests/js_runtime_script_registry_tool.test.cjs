@@ -231,6 +231,7 @@ test('buildStoredMicroSkillRecord / saveStoredMicroSkillPackage / getStoredMicro
   assert.equal(instructionFile.runtime_entry_path, 'src/main.js');
   assert.equal(instructionFile.runtime_file_count, 2);
   assert.match(instructionFile.runtime_hint, /Read SKILL\.md first/);
+  assert.match(instructionFile.runtime_hint, /js_runtime_execute/);
 
   const searchResult = searchMicroSkillFiles(loaded, {
     requestedSkillName: 'dom-probe',
