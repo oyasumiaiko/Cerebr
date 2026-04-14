@@ -10756,6 +10756,31 @@ body.chat-empty .empty-state-content {
     flex-wrap: wrap;
   }
 
+  .conversation-document-card__tool-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: color-mix(in srgb, var(--cerebr-text-color) 82%, transparent);
+    border-radius: 8px;
+    cursor: pointer;
+  }
+
+  .conversation-document-card__tool-button:hover,
+  .conversation-document-card__tool-button:focus-visible {
+    background: color-mix(in srgb, var(--cerebr-bg-color) 84%, transparent);
+    color: var(--cerebr-text-color);
+    outline: none;
+  }
+
+  .conversation-document-card__tool-button i {
+    font-size: 13px;
+  }
+
   .conversation-document-card__button {
     border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 72%, transparent);
     background: color-mix(in srgb, var(--cerebr-bg-color) 88%, transparent);

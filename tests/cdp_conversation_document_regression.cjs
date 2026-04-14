@@ -601,7 +601,7 @@ async function main() {
     });
     result.steps.push('document_loaded');
 
-    await cardRoot.locator('.conversation-document-card__button').filter({ hasText: 'Edit' }).click();
+    await cardRoot.locator('.conversation-document-card__tool-button[aria-label="编辑文档"]').click();
     await cardRoot.locator('.conversation-document-card__editor').fill(EDITED_DOC_CONTENT);
     await cardRoot.locator('.conversation-document-card__button.is-primary').click();
     result.editedCardContent = await waitFor(async () => {
@@ -628,7 +628,7 @@ async function main() {
     result.steps.push('document_persisted');
 
     const downloadPromise = page.waitForEvent('download', { timeout: 15_000 });
-    await cardRoot.locator('.conversation-document-card__button').filter({ hasText: 'Download' }).click();
+    await cardRoot.locator('.conversation-document-card__tool-button[aria-label="下载文档"]').click();
     const download = await downloadPromise;
     result.downloadSuggestedFilename = download.suggestedFilename();
     const downloadPath = await download.path().catch(() => null);
