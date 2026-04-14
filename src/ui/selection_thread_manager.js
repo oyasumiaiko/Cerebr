@@ -789,10 +789,12 @@ export function createSelectionThreadManager(appContext) {
 
     const allConfigs = apiManager?.getAllConfigs?.() || [];
     const footerTemplate = settingsManager?.getSetting?.('aiFooterTemplate');
+    const footerInlineSeparator = settingsManager?.getSetting?.('aiFooterInlineSeparator');
     const footerTooltipTemplate = settingsManager?.getSetting?.('aiFooterTooltipTemplate');
     const renderData = buildApiFooterRenderData(node, {
       allConfigs,
       template: footerTemplate,
+      inlineSeparator: footerInlineSeparator,
       tooltipTemplate: footerTooltipTemplate
     });
     footer.textContent = renderData.text;

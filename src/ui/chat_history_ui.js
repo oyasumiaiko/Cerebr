@@ -3284,12 +3284,16 @@ export function createChatHistoryUI(appContext) {
     const footerTemplate = (typeof options.template === 'string')
       ? options.template
       : settingsManager?.getSetting?.('aiFooterTemplate');
+    const footerInlineSeparator = (typeof options.inlineSeparator === 'string')
+      ? options.inlineSeparator
+      : settingsManager?.getSetting?.('aiFooterInlineSeparator');
     const footerTooltipTemplate = (typeof options.tooltipTemplate === 'string')
       ? options.tooltipTemplate
       : settingsManager?.getSetting?.('aiFooterTooltipTemplate');
     const renderData = buildApiFooterRenderData(msg, {
       allConfigs,
       template: footerTemplate,
+      inlineSeparator: footerInlineSeparator,
       tooltipTemplate: footerTooltipTemplate
     });
     footer.textContent = renderData.text;
@@ -3304,6 +3308,7 @@ export function createChatHistoryUI(appContext) {
     const nodeById = new Map(historyMessages.map(node => [node?.id, node]));
     const allConfigs = services.apiManager.getAllConfigs?.() || [];
     const footerTemplate = settingsManager?.getSetting?.('aiFooterTemplate');
+    const footerInlineSeparator = settingsManager?.getSetting?.('aiFooterInlineSeparator');
     const footerTooltipTemplate = settingsManager?.getSetting?.('aiFooterTooltipTemplate');
     const containers = [chatContainer, threadContainer].filter(Boolean);
 
@@ -3317,6 +3322,7 @@ export function createChatHistoryUI(appContext) {
           role: 'ai',
           allConfigs,
           template: footerTemplate,
+          inlineSeparator: footerInlineSeparator,
           tooltipTemplate: footerTooltipTemplate
         });
       });
@@ -3329,6 +3335,7 @@ export function createChatHistoryUI(appContext) {
     } catch (_) {}
   };
   settingsManager?.subscribe?.('aiFooterTemplate', refreshFooterOnSettingChanged);
+  settingsManager?.subscribe?.('aiFooterInlineSeparator', refreshFooterOnSettingChanged);
   settingsManager?.subscribe?.('aiFooterTooltipTemplate', refreshFooterOnSettingChanged);
 
   /**

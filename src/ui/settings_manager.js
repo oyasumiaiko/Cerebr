@@ -7,6 +7,7 @@ import { createThemeManager } from './theme_manager.js';
 import { queueStorageSet, queueStoragePrime } from '../utils/storage_write_queue_bridge.js';
 import {
   DEFAULT_AI_FOOTER_TEMPLATE,
+  DEFAULT_AI_FOOTER_INLINE_SEPARATOR,
   DEFAULT_AI_FOOTER_TOOLTIP_TEMPLATE,
   AI_FOOTER_TEMPLATE_VARIABLES
 } from '../utils/api_footer_template.js';
@@ -149,6 +150,8 @@ export function createSettingsManager(appContext) {
     showModelNameInPlaceholder: true,
     // AI 消息末尾的 API 元数据模板（支持 {{var}} 占位）
     aiFooterTemplate: DEFAULT_AI_FOOTER_TEMPLATE,
+    // AI 消息尾注：仅在同一行内用于拼接非空片段的分隔符。
+    aiFooterInlineSeparator: DEFAULT_AI_FOOTER_INLINE_SEPARATOR,
     // AI 消息末尾 tooltip 模板（支持 {{var}} 占位）
     aiFooterTooltipTemplate: DEFAULT_AI_FOOTER_TOOLTIP_TEMPLATE,
     // 主题透明度拆分：背景层与元素层独立控制
@@ -1024,15 +1027,27 @@ export function createSettingsManager(appContext) {
       label: 'AI 消息尾注模板',
       group: 'display',
       rows: 5,
-      placeholder: '示例：{{display_with_total_tokens_k}} 或 {{apiname}} · {{total_tokens_k}} tok（变量列表见下方）',
+      placeholder: '示例：{{display_label}} · {{datetime}} · {{total_tokens_k}}\n换行后会作为第二行单独处理',
       copyableVariables: AI_FOOTER_TEMPLATE_VARIABLES,
       sharedCopyableVariablesPanelKey: AI_FOOTER_SHARED_VARIABLE_PANEL_KEY,
       sharedCopyableVariablesTitle: '可用变量',
-      sharedCopyableVariablesHint: '先点上面的尾注或 Tooltip 文本框，再点变量会追加到当前文本框末尾。',
+      sharedCopyableVariablesHint: '尾注模板会按“同行分隔符”拆段后智能拼接：同一行里只有非空变量之间才会插入分隔符；不同行只保留换行。',
       sharedCopyableVariablesTargetLabel: '尾注文本',
       hideClearButton: true,
       defaultValue: DEFAULT_SETTINGS.aiFooterTemplate,
       readFromUI: (el) => (typeof el?.value === 'string' ? el.value : ''),
+      writeToUI: (el, value) => {
+        if (el) el.value = (typeof value === 'string') ? value : '';
+      }
+    },
+    {
+      key: 'aiFooterInlineSeparator',
+      type: 'text',
+      label: '尾注同行分隔符',
+      group: 'display',
+      placeholder: '例如  ·  或  | ',
+      defaultValue: DEFAULT_SETTINGS.aiFooterInlineSeparator,
+      readFromUI: (el) => (typeof el?.value === 'string') ? el.value : '',
       writeToUI: (el, value) => {
         if (el) el.value = (typeof value === 'string') ? value : '';
       }

@@ -66,3 +66,22 @@ test('buildApiFooterContext exposes timing and detailed usage variables', async 
   assert.match(context.tooltip_timing_lines, /thinking_duration:/);
   assert.match(context.tooltip_timing_lines, /output_duration:/);
 });
+
+test('renderApiFooterTemplate only applies inline separator joining within the same line', async () => {
+  const { renderApiFooterTemplate } = await loadApiFooterTemplateModule();
+  const rendered = renderApiFooterTemplate(
+    '{{display_label}} · {{datetime}} · {{total_tokens_k}}\n{{signature}} · {{model}}',
+    {
+      display_label: 'gpt-5.4',
+      datetime: '',
+      total_tokens_k: '1.2k',
+      signature: '',
+      model: 'gpt-5.4'
+    },
+    {
+      inlineSeparator: ' · '
+    }
+  );
+
+  assert.equal(rendered, 'gpt-5.4 · 1.2k\ngpt-5.4');
+});

@@ -3958,10 +3958,12 @@ export function createMessageProcessor(appContext) {
       ? (apiManager.getAllConfigs() || [])
       : [];
     const footerTemplate = settingsManager?.getSetting?.('aiFooterTemplate');
+    const footerInlineSeparator = settingsManager?.getSetting?.('aiFooterInlineSeparator');
     const footerTooltipTemplate = settingsManager?.getSetting?.('aiFooterTooltipTemplate');
     const renderData = buildApiFooterRenderData(nodeLike, {
       allConfigs,
       template: footerTemplate,
+      inlineSeparator: footerInlineSeparator,
       tooltipTemplate: footerTooltipTemplate
     });
     const previousSnapshot = surfaceSnapshots.footer || null;

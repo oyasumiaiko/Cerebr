@@ -7,6 +7,7 @@
 
 export const DEFAULT_AI_FOOTER_TEMPLATE = '{{display_label}}';
 export const DEFAULT_AI_FOOTER_TOOLTIP_TEMPLATE = '{{tooltip_api_line}}\n{{tooltip_signature_line}}\n{{tooltip_usage_lines}}{{#tooltip_usage_detail_lines}}\n{{tooltip_usage_detail_lines}}{{/tooltip_usage_detail_lines}}{{#tooltip_timing_lines}}\n{{tooltip_timing_lines}}{{/tooltip_timing_lines}}';
+export const DEFAULT_AI_FOOTER_INLINE_SEPARATOR = ' · ';
 
 // AI footer 可配置模板变量（去重后的“主变量”清单，供设置界面展示/复制）。
 export const AI_FOOTER_TEMPLATE_VARIABLES = Object.freeze([
@@ -198,6 +199,27 @@ function normalizeFooterText(value) {
     .map(line => line.replace(/[ \t]{2,}/g, ' ').trim())
     .filter(line => line.length > 0);
   return lines.join('\n');
+}
+
+function renderFooterTemplateSegment(template, context = {}) {
+  const withSections = applyConditionalSections(template, context);
+  const rendered = withSections.replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_, key) => {
+    const value = context[key];
+    return value == null ? '' : String(value);
+  });
+  return normalizeFooterText(rendered);
+}
+
+function renderFooterTemplateLineWithSeparator(line, context = {}, separator = '') {
+  const safeSeparator = String(separator ?? '');
+  if (!safeSeparator) {
+    return renderFooterTemplateSegment(line, context);
+  }
+  const parts = String(line ?? '')
+    .split(safeSeparator)
+    .map((segment) => renderFooterTemplateSegment(segment, context))
+    .filter((segment) => toTrimmedText(segment).length > 0);
+  return parts.join(safeSeparator);
 }
 
 function resolveMatchedConfig(nodeLike, allConfigs) {
@@ -420,14 +442,19 @@ export function buildApiFooterContext(nodeLike, matchedConfig = null) {
  * - 变量：{{apiname}}
  * - 条件块：{{#total_tokens}}总: {{total_tokens}}{{/total_tokens}}
  */
-export function renderApiFooterTemplate(template, context = {}) {
+export function renderApiFooterTemplate(template, context = {}, options = {}) {
   const source = (typeof template === 'string') ? template : DEFAULT_AI_FOOTER_TEMPLATE;
-  const withSections = applyConditionalSections(source, context);
-  const rendered = withSections.replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_, key) => {
-    const value = context[key];
-    return value == null ? '' : String(value);
-  });
-  return normalizeFooterText(rendered);
+  const inlineSeparator = (typeof options.inlineSeparator === 'string')
+    ? options.inlineSeparator
+    : '';
+  if (!inlineSeparator) {
+    return renderFooterTemplateSegment(source, context);
+  }
+  const renderedLines = String(source ?? '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => renderFooterTemplateLineWithSeparator(line, context, inlineSeparator));
+  return normalizeFooterText(renderedLines.join('\n'));
 }
 
 /**
@@ -447,7 +474,11 @@ export function buildApiFooterRenderData(nodeLike, options = {}) {
   const allConfigs = Array.isArray(options.allConfigs) ? options.allConfigs : [];
   const matchedConfig = resolveMatchedConfig(nodeLike, allConfigs);
   const context = buildApiFooterContext(nodeLike, matchedConfig);
-  const text = renderApiFooterTemplate(options.template, context);
+  const text = renderApiFooterTemplate(options.template, context, {
+    inlineSeparator: (typeof options.inlineSeparator === 'string')
+      ? options.inlineSeparator
+      : DEFAULT_AI_FOOTER_INLINE_SEPARATOR
+  });
   const title = buildApiFooterTitle(context, options.tooltipTemplate);
   return {
     text,
