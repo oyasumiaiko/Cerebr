@@ -2702,10 +2702,81 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     margin-top: 0;
 }
 
+.settings-template-variable-tooltip-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    cursor: pointer;
+    list-style: none;
+}
+
+.settings-template-variable-tooltip-summary::-webkit-details-marker {
+    display: none;
+}
+
+.settings-template-variable-tooltip-summary::after {
+    content: '▾';
+    font-size: 0.85em;
+    opacity: 0.72;
+    transition: transform 0.15s ease;
+}
+
+.settings-template-variable-tooltip[open] .settings-template-variable-tooltip-summary::after {
+    transform: rotate(180deg);
+}
+
 .settings-template-variable-tooltip-title {
     font-size: 0.82em;
     opacity: 0.8;
     line-height: 1.2;
+}
+
+.settings-template-variable-tooltip-body {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.settings-template-variable-targets {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.settings-template-variable-targets-label {
+    font-size: 0.78em;
+    opacity: 0.72;
+}
+
+.settings-template-variable-target-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.settings-template-variable-target-button {
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 75%, transparent);
+    background: transparent;
+    color: inherit;
+    padding: 3px 8px;
+    border-radius: 999px;
+    font-size: 0.78em;
+    line-height: 1.3;
+    cursor: pointer;
+}
+
+.settings-template-variable-target-button.is-active {
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 58%, transparent);
+    background: color-mix(in srgb, var(--cerebr-highlight) 12%, transparent);
+}
+
+.settings-template-variable-target-hint {
+    font-size: 0.78em;
+    opacity: 0.74;
+    line-height: 1.25;
 }
 
 .settings-template-variable-list {
@@ -8016,6 +8087,7 @@ body.chat-history-panel-resizing {
     /* settings 内容作为独立绘制层，确保面板内部控件不被底层交互层盖住。 */
     position: relative;
     z-index: 1;
+    container-type: inline-size;
     background: var(--cerebr-bg-color);
     border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 85%, transparent);
     border-radius: 10px;
@@ -8026,23 +8098,30 @@ body.chat-history-panel-resizing {
 }
 
 #chat-history-panel .settings-tab-content .settings-auto-section[data-scope="panel"] {
-    display: contents;
+    display: block;
+    column-count: 1;
+    gap: 12px;
+    column-gap: 12px;
+    align-items: start;
 }
 
 #chat-history-panel .settings-tab-content .settings-group {
     display: flex;
     flex-direction: column;
     gap: 6px;
-    padding: 8px 0 10px;
+    min-width: 0;
+    width: 100%;
+    margin: 0 0 12px;
+    padding: 10px 12px 12px;
+    break-inside: avoid;
+    page-break-inside: avoid;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 82%, transparent);
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--cerebr-control-bg) 54%, transparent);
 }
 
 #chat-history-panel .settings-tab-content .settings-group[data-group="theme"] {
     gap: 8px;
-}
-
-#chat-history-panel .settings-tab-content .settings-group + .settings-group {
-    border-top: 1px solid color-mix(in srgb, var(--cerebr-border-color) 85%, transparent);
-    padding-top: 12px;
 }
 
 #chat-history-panel .settings-tab-content .settings-group-title {
@@ -8132,7 +8211,7 @@ body.chat-history-panel-resizing {
 }
 
 #chat-history-panel .settings-tab-content .menu-item--color.menu-item--color-rgba {
-    grid-template-columns: minmax(160px, 1fr) minmax(120px, 1.2fr) auto auto auto;
+    grid-template-columns: minmax(160px, 1fr) minmax(120px, 1.2fr) auto auto;
 }
 
 #chat-history-panel .settings-tab-content .menu-item--color input[type="color"] {
@@ -8162,13 +8241,12 @@ body.chat-history-panel-resizing {
 }
 
 #chat-history-panel .settings-tab-content .menu-item--color.menu-item--color-rgba input[type="color"] {
-    grid-column: 5;
+    grid-column: 4;
     grid-row: 1;
 }
 
 #chat-history-panel .settings-tab-content .menu-item--color.menu-item--color-rgba .setting-value {
-    grid-column: 4;
-    grid-row: 1;
+    display: none;
 }
 
 #chat-history-panel .settings-tab-content .menu-item--select {
@@ -8314,6 +8392,12 @@ body.chat-history-panel-resizing {
     flex-wrap: nowrap;
     justify-content: flex-end;
     max-width: 100%;
+}
+
+@container (min-width: 820px) {
+    #chat-history-panel .settings-tab-content .settings-auto-section[data-scope="panel"] {
+        column-count: 2;
+    }
 }
 
 /* 滚动条样式统一至全局 */

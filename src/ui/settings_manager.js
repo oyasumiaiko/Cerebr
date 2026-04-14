@@ -11,6 +11,8 @@ import {
   AI_FOOTER_TEMPLATE_VARIABLES
 } from '../utils/api_footer_template.js';
 
+const AI_FOOTER_SHARED_VARIABLE_PANEL_KEY = 'ai-footer-shared-variables';
+
 /**
  * 创建设置管理器
  * @param {Object} appContext - 应用程序上下文对象
@@ -419,6 +421,180 @@ export function createSettingsManager(appContext) {
     input.dispatchEvent(new Event('input', { bubbles: true }));
     input.dispatchEvent(new Event('change', { bubbles: true }));
     return true;
+  }
+
+  function groupTemplateVariableEntries(entries) {
+    const groupedVariables = new Map();
+    const groupOrder = [];
+    (Array.isArray(entries) ? entries : []).forEach((entry) => {
+      const variableKey = (typeof entry === 'string' ? entry : entry?.key || '').trim();
+      if (!variableKey) return;
+      const groupName = (typeof entry === 'object' && entry?.group)
+        ? String(entry.group).trim()
+        : '';
+      const normalizedGroup = groupName || '__default__';
+      if (!groupedVariables.has(normalizedGroup)) {
+        groupedVariables.set(normalizedGroup, []);
+        groupOrder.push(normalizedGroup);
+      }
+      groupedVariables.get(normalizedGroup).push(entry);
+    });
+    return { groupedVariables, groupOrder };
+  }
+
+  function createTemplateVariablePanel({
+    title,
+    hint,
+    copyableVariables,
+    targets
+  }) {
+    const normalizedTargets = (Array.isArray(targets) ? targets : [])
+      .filter((target) => target && typeof target === 'object' && target.input);
+    const { groupedVariables, groupOrder } = groupTemplateVariableEntries(copyableVariables);
+    if (groupOrder.length <= 0 || normalizedTargets.length <= 0) return null;
+
+    const details = document.createElement('details');
+    details.className = 'settings-template-variable-tooltip settings-template-variable-tooltip--collapsible';
+
+    const summary = document.createElement('summary');
+    summary.className = 'settings-template-variable-tooltip-summary';
+
+    const summaryTitle = document.createElement('span');
+    summaryTitle.className = 'settings-template-variable-tooltip-title';
+    summaryTitle.textContent = title || '可用变量';
+    summary.appendChild(summaryTitle);
+    details.appendChild(summary);
+
+    const body = document.createElement('div');
+    body.className = 'settings-template-variable-tooltip-body';
+    details.appendChild(body);
+
+    let activeTargetKey = normalizedTargets[0]?.key || '';
+    const targetButtons = [];
+    let targetStatus = null;
+
+    const resolveActiveTarget = () => (
+      normalizedTargets.find((target) => target.key === activeTargetKey && target.input)
+      || normalizedTargets.find((target) => target.input)
+      || null
+    );
+
+    const updateTargetUi = () => {
+      const activeTarget = resolveActiveTarget();
+      targetButtons.forEach(({ key, button }) => {
+        button.classList.toggle('is-active', key === activeTarget?.key);
+      });
+      if (targetStatus) {
+        targetStatus.textContent = activeTarget
+          ? `当前插入目标：${activeTarget.label}`
+          : '当前插入目标不可用';
+      }
+    };
+
+    const setActiveTarget = (key, { focusInput = false } = {}) => {
+      if (!key) return;
+      activeTargetKey = key;
+      updateTargetUi();
+      if (focusInput) {
+        const activeTarget = resolveActiveTarget();
+        try {
+          activeTarget?.input?.focus?.();
+        } catch (_) {}
+      }
+    };
+
+    if (normalizedTargets.length > 1) {
+      const targetSection = document.createElement('div');
+      targetSection.className = 'settings-template-variable-targets';
+
+      const targetLabel = document.createElement('span');
+      targetLabel.className = 'settings-template-variable-targets-label';
+      targetLabel.textContent = '插入到';
+      targetSection.appendChild(targetLabel);
+
+      const targetButtonList = document.createElement('div');
+      targetButtonList.className = 'settings-template-variable-target-list';
+      normalizedTargets.forEach((target) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'settings-template-variable-target-button';
+        button.textContent = target.label || target.key;
+        button.addEventListener('click', (evt) => {
+          evt.preventDefault();
+          evt.stopPropagation();
+          setActiveTarget(target.key, { focusInput: true });
+        });
+        targetButtonList.appendChild(button);
+        targetButtons.push({ key: target.key, button });
+        target.input.addEventListener('focus', () => {
+          setActiveTarget(target.key);
+        });
+      });
+      targetSection.appendChild(targetButtonList);
+      body.appendChild(targetSection);
+
+      targetStatus = document.createElement('div');
+      targetStatus.className = 'settings-template-variable-target-hint';
+      body.appendChild(targetStatus);
+    }
+
+    const shouldShowGroupTitle = groupOrder.length > 1;
+    groupOrder.forEach((groupName) => {
+      const entries = groupedVariables.get(groupName) || [];
+      if (!entries.length) return;
+      const groupSection = document.createElement('div');
+      groupSection.className = 'settings-template-variable-group';
+
+      if (shouldShowGroupTitle) {
+        const groupTitle = document.createElement('div');
+        groupTitle.className = 'settings-template-variable-group-title';
+        groupTitle.textContent = (groupName === '__default__') ? '其它' : groupName;
+        groupSection.appendChild(groupTitle);
+      }
+
+      const variableList = document.createElement('div');
+      variableList.className = 'settings-template-variable-list';
+
+      entries.forEach((entry) => {
+        const variableKey = (typeof entry === 'string' ? entry : entry?.key || '').trim();
+        if (!variableKey) return;
+        const description = (typeof entry === 'object' && entry?.description)
+          ? String(entry.description).trim()
+          : '';
+        const variableToken = `{{${variableKey}}}`;
+        const variableButton = document.createElement('button');
+        variableButton.type = 'button';
+        variableButton.className = 'settings-template-variable-chip';
+        variableButton.textContent = variableToken;
+        if (description) {
+          variableButton.title = `${variableKey}：${description}`;
+        }
+        variableButton.addEventListener('click', (evt) => {
+          evt.preventDefault();
+          evt.stopPropagation();
+          const activeTarget = resolveActiveTarget();
+          if (!activeTarget?.input) return;
+          appendTextToInputEnd(activeTarget.input, variableToken);
+        });
+        variableList.appendChild(variableButton);
+      });
+
+      if (variableList.childElementCount > 0) {
+        groupSection.appendChild(variableList);
+        body.appendChild(groupSection);
+      }
+    });
+
+    const hintText = (typeof hint === 'string') ? hint.trim() : '';
+    if (hintText) {
+      const tooltipHint = document.createElement('div');
+      tooltipHint.className = 'settings-template-variable-tooltip-hint';
+      tooltipHint.textContent = hintText;
+      body.appendChild(tooltipHint);
+    }
+
+    updateTargetUi();
+    return details;
   }
 
   // 动态设置注册表：新增设置仅需在此处登记即可自动渲染与持久化
@@ -849,10 +1025,11 @@ export function createSettingsManager(appContext) {
       group: 'display',
       rows: 5,
       placeholder: '示例：{{display_with_total_tokens_k}} 或 {{apiname}} · {{total_tokens_k}} tok（变量列表见下方）',
-      copyableVariablesTitle: '可用变量（点击追加到末尾）',
-      copyableVariablesHint: '点击变量会直接追加到上方输入框末尾，不再复制到剪贴板。',
       copyableVariables: AI_FOOTER_TEMPLATE_VARIABLES,
-      copyableVariablesPlacement: 'after-item',
+      sharedCopyableVariablesPanelKey: AI_FOOTER_SHARED_VARIABLE_PANEL_KEY,
+      sharedCopyableVariablesTitle: '可用变量',
+      sharedCopyableVariablesHint: '先点上面的尾注或 Tooltip 文本框，再点变量会追加到当前文本框末尾。',
+      sharedCopyableVariablesTargetLabel: '尾注文本',
       hideClearButton: true,
       defaultValue: DEFAULT_SETTINGS.aiFooterTemplate,
       readFromUI: (el) => (typeof el?.value === 'string' ? el.value : ''),
@@ -867,10 +1044,12 @@ export function createSettingsManager(appContext) {
       group: 'display',
       rows: 5,
       placeholder: '示例：{{tooltip_api_line}}\n{{tooltip_signature_line}}\n{{tooltip_usage_lines}}',
-      copyableVariablesTitle: '可用变量（点击追加到末尾）',
-      copyableVariablesHint: '已去除同义别名；按分组换行展示，点击会直接追加到上方输入框末尾。',
       copyableVariables: AI_FOOTER_TEMPLATE_VARIABLES,
-      copyableVariablesPlacement: 'after-item',
+      sharedCopyableVariablesPanelKey: AI_FOOTER_SHARED_VARIABLE_PANEL_KEY,
+      sharedCopyableVariablesTitle: '可用变量',
+      sharedCopyableVariablesHint: '先点上面的尾注或 Tooltip 文本框，再点变量会追加到当前文本框末尾。',
+      sharedCopyableVariablesTargetLabel: 'Tooltip 文本',
+      sharedCopyableVariablesHost: true,
       hideClearButton: true,
       defaultValue: DEFAULT_SETTINGS.aiFooterTooltipTemplate,
       readFromUI: (el) => (typeof el?.value === 'string' ? el.value : ''),
@@ -1459,6 +1638,7 @@ export function createSettingsManager(appContext) {
     const quickContainer = settingsMenu || document.getElementById('settings-menu');
     const panelContainer = ensureEscSettingsMenu();
     if (!quickContainer && !panelContainer) return;
+    const sharedTemplateVariablePanels = new Map();
 
     const getElementId = (def) => def.id || `setting-${def.key}`;
     // 避免 Esc 设置容器未挂载时重复渲染导致控件重复
@@ -1821,103 +2001,83 @@ export function createSettingsManager(appContext) {
             item.appendChild(actionBar);
           }
 
-          // 文本模板类设置：在输入框下方展示可点击变量列表，点击后直接追加到当前输入框末尾，
-          // 降低手写占位符的出错率，也避免“先复制再粘贴”的额外步骤。
           if (Array.isArray(def.copyableVariables) && def.copyableVariables.length > 0) {
-            const tooltip = document.createElement('div');
-            tooltip.className = 'settings-template-variable-tooltip';
-
-            const tooltipTitle = document.createElement('div');
-            tooltipTitle.className = 'settings-template-variable-tooltip-title';
-            tooltipTitle.textContent = def.copyableVariablesTitle || '可用变量（点击追加到末尾）';
-            tooltip.appendChild(tooltipTitle);
-
-            const groupedVariables = new Map();
-            const groupOrder = [];
-            def.copyableVariables.forEach((entry) => {
-              const variableKey = (typeof entry === 'string' ? entry : entry?.key || '').trim();
-              if (!variableKey) return;
-              const groupName = (typeof entry === 'object' && entry?.group)
-                ? String(entry.group).trim()
-                : '';
-              const normalizedGroup = groupName || '__default__';
-              if (!groupedVariables.has(normalizedGroup)) {
-                groupedVariables.set(normalizedGroup, []);
-                groupOrder.push(normalizedGroup);
+            const sharedPanelKey = (typeof def.sharedCopyableVariablesPanelKey === 'string')
+              ? def.sharedCopyableVariablesPanelKey.trim()
+              : '';
+            if (sharedPanelKey) {
+              const state = sharedTemplateVariablePanels.get(sharedPanelKey) || {
+                targets: [],
+                title: '',
+                hint: '',
+                copyableVariables: [],
+                hostRendered: false
+              };
+              if (!state.title && typeof def.sharedCopyableVariablesTitle === 'string') {
+                state.title = def.sharedCopyableVariablesTitle.trim();
               }
-              groupedVariables.get(normalizedGroup).push(entry);
-            });
-
-            const shouldShowGroupTitle = groupOrder.length > 1;
-            groupOrder.forEach((groupName) => {
-              const entries = groupedVariables.get(groupName) || [];
-              if (!entries.length) return;
-              const groupSection = document.createElement('div');
-              groupSection.className = 'settings-template-variable-group';
-
-              if (shouldShowGroupTitle) {
-                const groupTitle = document.createElement('div');
-                groupTitle.className = 'settings-template-variable-group-title';
-                groupTitle.textContent = (groupName === '__default__') ? '其它' : groupName;
-                groupSection.appendChild(groupTitle);
+              if (!state.hint && typeof def.sharedCopyableVariablesHint === 'string') {
+                state.hint = def.sharedCopyableVariablesHint.trim();
               }
-
-              const variableList = document.createElement('div');
-              variableList.className = 'settings-template-variable-list';
-
-              entries.forEach((entry) => {
-                const variableKey = (typeof entry === 'string' ? entry : entry?.key || '').trim();
-                if (!variableKey) return;
-                const description = (typeof entry === 'object' && entry?.description)
-                  ? String(entry.description).trim()
-                  : '';
-                const variableToken = `{{${variableKey}}}`;
-                const variableButton = document.createElement('button');
-                variableButton.type = 'button';
-                variableButton.className = 'settings-template-variable-chip';
-                variableButton.textContent = variableToken;
-                if (description) {
-                  variableButton.title = `${variableKey}：${description}`;
-                }
-                variableButton.addEventListener('click', (evt) => {
-                  evt.preventDefault();
-                  evt.stopPropagation();
-                  appendTextToInputEnd(input, variableToken);
-                });
-                variableList.appendChild(variableButton);
+              if ((!Array.isArray(state.copyableVariables) || state.copyableVariables.length <= 0)
+                && Array.isArray(def.copyableVariables)
+                && def.copyableVariables.length > 0) {
+                state.copyableVariables = def.copyableVariables;
+              }
+              state.targets.push({
+                key: def.key,
+                label: (typeof def.sharedCopyableVariablesTargetLabel === 'string' && def.sharedCopyableVariablesTargetLabel.trim())
+                  ? def.sharedCopyableVariablesTargetLabel.trim()
+                  : (def.label || def.key),
+                input
               });
+              sharedTemplateVariablePanels.set(sharedPanelKey, state);
 
-              if (variableList.childElementCount > 0) {
-                groupSection.appendChild(variableList);
-                tooltip.appendChild(groupSection);
+              if (def.sharedCopyableVariablesHost === true && state.hostRendered !== true) {
+                const sharedPanel = createTemplateVariablePanel({
+                  title: state.title || '可用变量',
+                  hint: state.hint,
+                  copyableVariables: state.copyableVariables,
+                  targets: state.targets
+                });
+                if (sharedPanel) {
+                  sharedPanel.classList.add('settings-template-variable-tooltip--detached');
+                  const tooltipPanel = document.createElement('div');
+                  tooltipPanel.className = 'menu-item menu-item--stack menu-item--template-variables';
+                  tooltipPanel.dataset.sharedPanelKey = sharedPanelKey;
+                  tooltipPanel.appendChild(sharedPanel);
+                  deferredTemplateTooltip = tooltipPanel;
+                  state.hostRendered = true;
+                }
               }
-            });
-
-            if (tooltip.querySelector('.settings-template-variable-chip')) {
-              const tooltipHintText = (typeof def.copyableVariablesHint === 'string')
-                ? def.copyableVariablesHint.trim()
-                : '';
-              if (tooltipHintText) {
-                const tooltipHint = document.createElement('div');
-                tooltipHint.className = 'settings-template-variable-tooltip-hint';
-                tooltipHint.textContent = tooltipHintText;
-                tooltip.appendChild(tooltipHint);
-              }
-              if (def.copyableVariablesPlacement === 'after-item') {
-                tooltip.classList.add('settings-template-variable-tooltip--detached');
-                deferredTemplateTooltip = tooltip;
-              } else {
-                item.appendChild(tooltip);
+            } else {
+              const tooltip = createTemplateVariablePanel({
+                title: def.copyableVariablesTitle || '可用变量（点击追加到末尾）',
+                hint: def.copyableVariablesHint,
+                copyableVariables: def.copyableVariables,
+                targets: [{
+                  key: def.key,
+                  label: def.label || def.key,
+                  input
+                }]
+              });
+              if (tooltip) {
+                if (def.copyableVariablesPlacement === 'after-item') {
+                  tooltip.classList.add('settings-template-variable-tooltip--detached');
+                  const tooltipPanel = document.createElement('div');
+                  tooltipPanel.className = 'menu-item menu-item--stack menu-item--template-variables';
+                  tooltipPanel.appendChild(tooltip);
+                  deferredTemplateTooltip = tooltipPanel;
+                } else {
+                  item.appendChild(tooltip);
+                }
               }
             }
           }
 
           targetBucket.appendChild(item);
           if (deferredTemplateTooltip) {
-            const tooltipPanel = document.createElement('div');
-            tooltipPanel.className = 'menu-item menu-item--stack menu-item--template-variables';
-            tooltipPanel.appendChild(deferredTemplateTooltip);
-            targetBucket.appendChild(tooltipPanel);
+            targetBucket.appendChild(deferredTemplateTooltip);
           }
           dynamicElements.set(def.key, input);
         }
