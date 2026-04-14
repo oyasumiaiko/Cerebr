@@ -2,29 +2,48 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 async function readWorkspaceFile(relativePath) {
   const filePath = path.resolve(__dirname, '..', relativePath);
   return fs.readFile(filePath, 'utf8');
 }
 
+async function importWorkspaceModule(relativePath) {
+  const filePath = path.resolve(__dirname, '..', relativePath);
+  return import(`${pathToFileURL(filePath).href}?test=${Date.now()}`);
+}
+
 test('js_runtime_execute 暴露 timeout_ms 并把它接到 sidebar 与 background 执行链', async () => {
+  const jsRuntimeToolModule = await importWorkspaceModule('src/agent_tools/js_runtime_execute/tool.js');
   const messageSenderSource = await readWorkspaceFile('src/core/message_sender.js');
   const sidebarAppContextSource = await readWorkspaceFile('src/ui/sidebar/sidebar_app_context.js');
   const backgroundSource = await readWorkspaceFile('src/extension/background.js');
+  const toolDefinition = jsRuntimeToolModule.buildJsRuntimeExecuteFunctionToolDefinition();
 
-  assert.match(
-    messageSenderSource,
-    /timeout_ms:\s*\{\s*type: \['integer', 'null'\],\s*description: 'The timeout for the execution in milliseconds\.'/s
+  assert.equal(toolDefinition.name, 'js_runtime_execute');
+  assert.equal(
+    toolDefinition.parameters.properties.timeout_ms.description,
+    'The timeout for the execution in milliseconds.'
   );
-  assert.match(
-    messageSenderSource,
-    /required: \['code', 'timeout_ms', 'frame_ids'\]/
+  assert.deepEqual(toolDefinition.parameters.required, ['code', 'timeout_ms', 'frame_ids']);
+  assert.deepEqual(
+    jsRuntimeToolModule.normalizeJsRuntimeExecuteToolArguments({
+      code: 'return 1;',
+      timeout_ms: 1234,
+      frame_ids: [1, '2', 'x']
+    }),
+    {
+      code: 'return 1;',
+      timeoutMs: 1234,
+      frameIds: [1, 2]
+    }
   );
-  assert.match(
-    messageSenderSource,
-    /timeoutMs,\s*frameIds: \(Array\.isArray\(frameIds\) && frameIds\.length > 0\) \? frameIds : null/s
+  assert.throws(
+    () => jsRuntimeToolModule.normalizeJsRuntimeExecuteToolArguments({ code: 'return 1;', timeout_ms: 0 }),
+    /timeout_ms 必须大于 0/
   );
+
   assert.match(
     messageSenderSource,
     /timeoutMs: normalizedArgs\.timeoutMs,\s*frameIds: normalizedArgs\.frameIds/s
