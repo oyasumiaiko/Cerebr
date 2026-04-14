@@ -386,7 +386,7 @@ test('buildResponsesSkillRegistryToolOutputContentItems 会显式提示 refresh 
   assert.doesNotMatch(text, /Mounted on current document:/);
 });
 
-test('buildResponsesSkillRegistryToolOutputContentItems 对 read_file 仍保留结构化详情', async () => {
+test('buildResponsesSkillRegistryToolOutputContentItems 对 read_file 改为 metadata + 原文 content 块', async () => {
   const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesSkillRegistryToolOutputContentItems({
     ok: true,
@@ -395,14 +395,99 @@ test('buildResponsesSkillRegistryToolOutputContentItems 对 read_file 仍保留�
       name: 'skill-creator',
       file: {
         path: 'SKILL.md',
-        content: 'Alpha'
+        content: 'Alpha',
+        content_read: {
+          mode: 'preview',
+          total_chars: 5,
+          returned_chars: 5
+        }
       }
     }
   });
   const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<skill_registry_result>/);
+  assert.match(text, /<metadata>/);
   assert.match(text, /"action": "read_file"/);
   assert.match(text, /"path": "SKILL\.md"/);
-  assert.match(text, /"content": "Alpha"/);
+  assert.match(text, /<content>\s*Alpha\s*<\/content>/);
+  assert.doesNotMatch(text, /"content": "Alpha"/);
+});
+
+test('buildResponsesSkillRegistryToolOutputContentItems 对 search_files 输出 matches + context XML 块', async () => {
+  const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesSkillRegistryToolOutputContentItems({
+    ok: true,
+    action: 'search_files',
+    pattern: 'token',
+    total_matches: 1,
+    returned_match_count: 1,
+    matches: [
+      {
+        match_id: 'm1',
+        skill_name: 'dom-probe',
+        file_path: 'src/main.js',
+        line_number: 2,
+        column_start: 7,
+        column_end: 12,
+        match_text: 'token',
+        line_text: 'alpha token beta',
+        before: [{ line_number: 1, text: 'before line' }],
+        after: [{ line_number: 3, text: 'after line' }]
+      }
+    ]
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<matches>/);
+  assert.match(text, /<match rank="1">/);
+  assert.match(text, /<context>\s*1 \| before line/);
+  assert.match(text, /2 \| alpha token beta/);
+  assert.match(text, /3 \| after line/);
+  assert.doesNotMatch(text, /"line_text": "alpha token beta"/);
+});
+
+test('buildResponsesSkillRegistryToolOutputContentItems 对 read_package 输出多文件原文块', async () => {
+  const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesSkillRegistryToolOutputContentItems({
+    ok: true,
+    action: 'read_package',
+    skill: {
+      name: 'dom-probe',
+      revision: 3,
+      files: {
+        total_count: 2,
+        returned_file_count: 2,
+        files: [
+          {
+            path: 'SKILL.md',
+            kind: 'instruction',
+            content: 'Instruction body',
+            content_read: {
+              mode: 'preview',
+              total_chars: 16,
+              returned_chars: 16
+            }
+          },
+          {
+            path: 'src/main.js',
+            kind: 'runtime_source',
+            content: 'console.log("hi");',
+            content_read: {
+              mode: 'preview',
+              total_chars: 18,
+              returned_chars: 18
+            }
+          }
+        ]
+      }
+    }
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<files>/);
+  assert.match(text, /<file rank="1" path="SKILL\.md">/);
+  assert.match(text, /<file rank="2" path="src\/main\.js">/);
+  assert.match(text, /<content>\s*Instruction body/);
+  assert.match(text, /console\.log\("hi"\);/);
+  assert.doesNotMatch(text, /"content": "Instruction body"/);
 });
 
 test('buildResponsesSkillRegistryToolOutputContentItems 会把 mount_on_current_page 压成简洁挂载摘要', async () => {

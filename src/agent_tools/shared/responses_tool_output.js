@@ -174,6 +174,20 @@ function buildResponsesToolOutputSelectionNoticeText(totalChars, rangeStart, ran
   });
 }
 
+function buildResponsesToolOutputLineSelectionNoticeText(totalLines, startLine, endLine) {
+  const safeTotalLines = Number(totalLines);
+  const safeStartLine = Number(startLine);
+  const safeEndLine = Number(endLine);
+  if (!Number.isFinite(safeTotalLines) || safeTotalLines <= 0) return '';
+  if (!Number.isFinite(safeStartLine) || !Number.isFinite(safeEndLine)) return '';
+  const normalizedStart = Math.max(1, Math.min(Math.trunc(safeStartLine), safeTotalLines));
+  const normalizedEnd = Math.max(normalizedStart, Math.min(Math.trunc(safeEndLine), safeTotalLines));
+  const returnedLines = normalizedEnd - normalizedStart + 1;
+  const omittedLines = Math.max(0, safeTotalLines - returnedLines);
+  if (omittedLines <= 0) return '';
+  return `[... omitted ${omittedLines} lines out of ${safeTotalLines} total lines; returned line range [${normalizedStart}, ${normalizedEnd + 1}) ...]`;
+}
+
 export function buildResponsesToolOutputTruncationInfo(
   text,
   maxCharsOrOptions = RESPONSES_TOOL_OUTPUT_MAX_CHARS,
@@ -674,6 +688,327 @@ function buildResponsesXmlToolOutputContentItems(text, options = {}) {
     type: 'input_text',
     text: chunk
   }));
+}
+
+function isResponsesToolOutputPlainObject(value) {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function cloneResponsesToolOutputWithoutRawContent(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => cloneResponsesToolOutputWithoutRawContent(item));
+  }
+  if (!isResponsesToolOutputPlainObject(value)) {
+    return value;
+  }
+  const cloned = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (key === 'content' || key === 'numbered_content') continue;
+    cloned[key] = cloneResponsesToolOutputWithoutRawContent(item);
+  }
+  return cloned;
+}
+
+function deleteResponsesToolOutputPath(target, path) {
+  const segments = Array.isArray(path) ? path.filter((item) => typeof item === 'string' && item) : [];
+  if (segments.length <= 0 || !isResponsesToolOutputPlainObject(target)) return;
+  let cursor = target;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const key = segments[index];
+    if (!isResponsesToolOutputPlainObject(cursor[key])) return;
+    cursor = cursor[key];
+  }
+  delete cursor[segments[segments.length - 1]];
+}
+
+function buildResponsesFileReadNotice(contentRead, fallbackText = '') {
+  const normalized = isResponsesToolOutputPlainObject(contentRead) ? contentRead : {};
+  if (normalized.mode === 'line_range') {
+    return buildResponsesToolOutputLineSelectionNoticeText(
+      normalized.total_lines,
+      normalized.start_line,
+      normalized.end_line
+    );
+  }
+  const totalChars = Number(normalized.total_chars);
+  const rangeStart = Number.isFinite(Number(normalized.skip_chars)) ? Number(normalized.skip_chars) : 0;
+  const returnedChars = Number.isFinite(Number(normalized.returned_chars))
+    ? Number(normalized.returned_chars)
+    : String(fallbackText ?? '').length;
+  return buildResponsesToolOutputSelectionNoticeText(
+    totalChars,
+    rangeStart,
+    rangeStart + Math.max(0, returnedChars)
+  );
+}
+
+function buildResponsesFileReadBlocks(file) {
+  const normalized = isResponsesToolOutputPlainObject(file) ? file : {};
+  const notice = buildResponsesFileReadNotice(normalized.content_read, normalized.content || '');
+  const blocks = [];
+  if (typeof normalized.content === 'string' && normalized.content.trim()) {
+    blocks.push({
+      tag: 'content',
+      text: appendStandaloneNoticeLine(normalized.content, notice),
+      truncation: null
+    });
+  }
+  if (typeof normalized.numbered_content === 'string' && normalized.numbered_content.trim()) {
+    blocks.push({
+      tag: 'numbered_content',
+      text: appendStandaloneNoticeLine(normalized.numbered_content, notice),
+      truncation: null
+    });
+  }
+  return blocks;
+}
+
+function buildResponsesFileListLine(file) {
+  const normalized = isResponsesToolOutputPlainObject(file) ? file : {};
+  const path = typeof normalized.path === 'string' ? normalized.path.trim() : '';
+  const metaParts = [];
+  if (typeof normalized.skill_name === 'string' && normalized.skill_name.trim()) {
+    metaParts.push(`skill=${normalized.skill_name.trim()}`);
+  }
+  if (typeof normalized.kind === 'string' && normalized.kind.trim()) {
+    metaParts.push(`kind=${normalized.kind.trim()}`);
+  }
+  if (normalized.is_manifest === true) metaParts.push('manifest');
+  if (normalized.is_instruction === true) metaParts.push('instruction');
+  if (normalized.is_runtime_entry === true) metaParts.push('runtime_entry');
+  if (Number.isFinite(Number(normalized.size_chars))) {
+    metaParts.push(`size_chars=${Math.max(0, Math.trunc(Number(normalized.size_chars)))}`);
+  }
+  if (typeof normalized.updated_at === 'string' && normalized.updated_at.trim()) {
+    metaParts.push(`updated_at=${normalized.updated_at.trim()}`);
+  }
+  return path
+    ? `${path}${metaParts.length > 0 ? ` | ${metaParts.join(' | ')}` : ''}`
+    : '';
+}
+
+function buildResponsesFileContextLine(line) {
+  const normalized = isResponsesToolOutputPlainObject(line) ? line : {};
+  const text = typeof normalized.text === 'string' ? normalized.text : '';
+  const lineNumber = Number.isFinite(Number(normalized.line_number))
+    ? Math.max(1, Math.trunc(Number(normalized.line_number)))
+    : null;
+  return lineNumber ? `${lineNumber} | ${text}` : text;
+}
+
+function buildResponsesFileSearchContext(match) {
+  const normalized = isResponsesToolOutputPlainObject(match) ? match : {};
+  const lines = [];
+  const before = Array.isArray(normalized.before) ? normalized.before : [];
+  const after = Array.isArray(normalized.after) ? normalized.after : [];
+  for (const line of before) {
+    const text = buildResponsesFileContextLine(line);
+    if (text) lines.push(text);
+  }
+  if (typeof normalized.line_text === 'string' && normalized.line_text.trim()) {
+    lines.push(buildResponsesFileContextLine({
+      line_number: normalized.line_number,
+      text: normalized.line_text
+    }));
+  }
+  for (const line of after) {
+    const text = buildResponsesFileContextLine(line);
+    if (text) lines.push(text);
+  }
+  return lines.join('\n');
+}
+
+function buildResponsesXmlItemWithOptionalAttributes(tagName, blocks = [], attributes = {}) {
+  const safeTagName = (typeof tagName === 'string' && tagName.trim()) ? tagName.trim() : '';
+  if (!safeTagName) return '';
+  const attrEntries = Object.entries(isResponsesToolOutputPlainObject(attributes) ? attributes : {})
+    .filter(([, value]) => value != null && String(value).trim() !== '')
+    .map(([key, value]) => `${key}="${xmlAttributeEscape(value)}"`);
+  const body = (Array.isArray(blocks) ? blocks : [])
+    .map((block) => {
+      if (!block || typeof block !== 'object') return '';
+      const tag = (typeof block.tag === 'string' && block.tag.trim()) ? block.tag.trim() : '';
+      const text = trimTrailingWhitespace(block.text);
+      if (!tag || !text) return '';
+      return buildXmlBlock(tag, text);
+    })
+    .filter(Boolean)
+    .join('\n\n');
+  const openTag = attrEntries.length > 0
+    ? `<${safeTagName} ${attrEntries.join(' ')}>`
+    : `<${safeTagName}>`;
+  return body
+    ? `${openTag}\n${body}\n</${safeTagName}>`
+    : `${openTag}\n</${safeTagName}>`;
+}
+
+function buildResponsesFileReadToolOutputText(rootTag, result, options = {}) {
+  const normalized = isResponsesToolOutputPlainObject(result) ? result : {};
+  const metadata = cloneResponsesToolOutputWithoutRawContent(normalized);
+  for (const path of Array.isArray(options?.omitMetadataPaths) ? options.omitMetadataPaths : []) {
+    deleteResponsesToolOutputPath(metadata, path);
+  }
+  const file = isResponsesToolOutputPlainObject(options?.file) ? options.file : {};
+  const blocks = [...buildResponsesFileReadBlocks(file)];
+  if (normalized.error) {
+    blocks.push({
+      tag: 'error',
+      text: formatResponsesJsRuntimeErrorText(normalized.error)
+    });
+  }
+  return buildXmlToolResultText(rootTag, metadata, blocks, options?.xmlOptions || {});
+}
+
+function buildResponsesFileListToolOutputText(rootTag, result, options = {}) {
+  const normalized = isResponsesToolOutputPlainObject(result) ? result : {};
+  const metadata = cloneResponsesToolOutputWithoutRawContent(normalized);
+  deleteResponsesToolOutputPath(metadata, ['files']);
+  for (const path of Array.isArray(options?.omitMetadataPaths) ? options.omitMetadataPaths : []) {
+    deleteResponsesToolOutputPath(metadata, path);
+  }
+  const blocks = [];
+  const files = Array.isArray(options?.files) ? options.files : [];
+  if (files.length > 0) {
+    const listText = files
+      .map((file) => buildResponsesFileListLine(file))
+      .filter(Boolean)
+      .join('\n');
+    if (listText) {
+      blocks.push({
+        tag: 'files',
+        text: listText
+      });
+    }
+  }
+  if (normalized.error) {
+    blocks.push({
+      tag: 'error',
+      text: formatResponsesJsRuntimeErrorText(normalized.error)
+    });
+  }
+  return buildXmlToolResultText(rootTag, metadata, blocks, options?.xmlOptions || {});
+}
+
+function buildResponsesFileSearchToolOutputText(rootTag, result, options = {}) {
+  const normalized = isResponsesToolOutputPlainObject(result) ? result : {};
+  const metadata = cloneResponsesToolOutputWithoutRawContent(normalized);
+  deleteResponsesToolOutputPath(metadata, ['matches']);
+  for (const path of Array.isArray(options?.omitMetadataPaths) ? options.omitMetadataPaths : []) {
+    deleteResponsesToolOutputPath(metadata, path);
+  }
+  const blocks = [];
+  const matches = Array.isArray(options?.matches) ? options.matches : [];
+  if (matches.length > 0) {
+    const matchesText = matches.map((match, index) => {
+      const matchMetadata = cloneResponsesToolOutputWithoutRawContent(match);
+      delete matchMetadata.before;
+      delete matchMetadata.after;
+      delete matchMetadata.line_text;
+      const sections = [
+        {
+          tag: 'metadata',
+          text: trimJsonMetadataValue(matchMetadata)
+        }
+      ];
+      const contextText = buildResponsesFileSearchContext(match);
+      if (contextText) {
+        sections.push({
+          tag: 'context',
+          text: contextText
+        });
+      }
+      return buildResponsesXmlItemWithOptionalAttributes('match', sections, {
+        rank: index + 1
+      });
+    }).filter(Boolean).join('\n\n');
+    if (matchesText) {
+      blocks.push({
+        tag: 'matches',
+        text: matchesText
+      });
+    }
+  }
+  if (normalized.error) {
+    blocks.push({
+      tag: 'error',
+      text: formatResponsesJsRuntimeErrorText(normalized.error)
+    });
+  }
+  return buildXmlToolResultText(rootTag, metadata, blocks, options?.xmlOptions || {});
+}
+
+function buildResponsesSkillPackageFilesBlock(files) {
+  const normalizedFiles = Array.isArray(files) ? files : [];
+  return normalizedFiles.map((file, index) => {
+    const metadata = cloneResponsesToolOutputWithoutRawContent(file);
+    const sections = [];
+    const metadataText = trimJsonMetadataValue(metadata);
+    if (metadataText) {
+      sections.push({
+        tag: 'metadata',
+        text: metadataText
+      });
+    }
+    sections.push(...buildResponsesFileReadBlocks(file));
+    return buildResponsesXmlItemWithOptionalAttributes('file', sections, {
+      rank: index + 1,
+      path: typeof file?.path === 'string' ? file.path : ''
+    });
+  }).filter(Boolean).join('\n\n');
+}
+
+function buildResponsesSkillReadDetailToolOutputText(result) {
+  const normalized = isResponsesToolOutputPlainObject(result) ? result : {};
+  const metadata = cloneResponsesToolOutputWithoutRawContent(normalized);
+  deleteResponsesToolOutputPath(metadata, ['skill', 'files', 'files']);
+  const instruction = isResponsesToolOutputPlainObject(normalized?.skill?.instruction)
+    ? normalized.skill.instruction
+    : {};
+  const blocks = [...buildResponsesFileReadBlocks(instruction)];
+  const files = Array.isArray(normalized?.skill?.files?.files) ? normalized.skill.files.files : [];
+  if (files.length > 0) {
+    const filesText = files
+      .map((file) => buildResponsesFileListLine(file))
+      .filter(Boolean)
+      .join('\n');
+    if (filesText) {
+      blocks.push({
+        tag: 'files',
+        text: filesText
+      });
+    }
+  }
+  if (normalized.error) {
+    blocks.push({
+      tag: 'error',
+      text: formatResponsesJsRuntimeErrorText(normalized.error)
+    });
+  }
+  return buildXmlToolResultText('skill_registry_result', metadata, blocks);
+}
+
+function buildResponsesSkillReadPackageToolOutputText(result) {
+  const normalized = isResponsesToolOutputPlainObject(result) ? result : {};
+  const metadata = cloneResponsesToolOutputWithoutRawContent(normalized);
+  deleteResponsesToolOutputPath(metadata, ['skill', 'files', 'files']);
+  const blocks = [];
+  const files = Array.isArray(normalized?.skill?.files?.files) ? normalized.skill.files.files : [];
+  if (files.length > 0) {
+    const filesText = buildResponsesSkillPackageFilesBlock(files);
+    if (filesText) {
+      blocks.push({
+        tag: 'files',
+        text: filesText
+      });
+    }
+  }
+  if (normalized.error) {
+    blocks.push({
+      tag: 'error',
+      text: formatResponsesJsRuntimeErrorText(normalized.error)
+    });
+  }
+  return buildXmlToolResultText('skill_registry_result', metadata, blocks);
 }
 
 function buildResponsesPageContentToolOutputText(result) {
@@ -1245,12 +1580,73 @@ export function buildResponsesSkillRegistryToolOutputContentItems(result, option
       }, options);
     }
   }
+  if (String(normalized.action || '').trim() === 'read_file') {
+    return buildResponsesXmlToolOutputContentItems(
+      buildResponsesFileReadToolOutputText('skill_registry_result', normalized, {
+        file: normalized?.skill?.file,
+        omitMetadataPaths: []
+      }),
+      options
+    );
+  }
+  if (String(normalized.action || '').trim() === 'list_files') {
+    return buildResponsesXmlToolOutputContentItems(
+      buildResponsesFileListToolOutputText('skill_registry_result', normalized, {
+        files: normalized.files
+      }),
+      options
+    );
+  }
+  if (String(normalized.action || '').trim() === 'search_files') {
+    return buildResponsesXmlToolOutputContentItems(
+      buildResponsesFileSearchToolOutputText('skill_registry_result', normalized, {
+        matches: normalized.matches
+      }),
+      options
+    );
+  }
+  if (String(normalized.action || '').trim() === 'read_detail') {
+    return buildResponsesXmlToolOutputContentItems(
+      buildResponsesSkillReadDetailToolOutputText(normalized),
+      options
+    );
+  }
+  if (String(normalized.action || '').trim() === 'read_package') {
+    return buildResponsesXmlToolOutputContentItems(
+      buildResponsesSkillReadPackageToolOutputText(normalized),
+      options
+    );
+  }
   return buildResponsesGenericXmlToolOutputContentItems('skill_registry_result', normalized, options);
 }
 
 export function buildResponsesConversationDocumentToolOutputContentItems(toolName, result, options = {}) {
   const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
   const rootTag = `${String(toolName || 'conversation_document').trim() || 'conversation_document'}_result`;
+  if (normalized.ok === true && String(toolName || '').trim() === 'read_file') {
+    return buildResponsesXmlToolOutputContentItems(
+      buildResponsesFileReadToolOutputText(rootTag, normalized, {
+        file: normalized.file
+      }),
+      options
+    );
+  }
+  if (normalized.ok === true && String(toolName || '').trim() === 'list_files') {
+    return buildResponsesXmlToolOutputContentItems(
+      buildResponsesFileListToolOutputText(rootTag, normalized, {
+        files: normalized.files
+      }),
+      options
+    );
+  }
+  if (normalized.ok === true && String(toolName || '').trim() === 'search_files') {
+    return buildResponsesXmlToolOutputContentItems(
+      buildResponsesFileSearchToolOutputText(rootTag, normalized, {
+        matches: normalized.matches
+      }),
+      options
+    );
+  }
   if (normalized.ok === true && String(toolName || '').trim() === 'apply_patch') {
     const affected = (normalized?.affected_files && typeof normalized.affected_files === 'object') ? normalized.affected_files : {};
     const lines = [];
