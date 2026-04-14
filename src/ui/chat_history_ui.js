@@ -1973,6 +1973,44 @@ export function createChatHistoryUI(appContext) {
       : 0;
     const promptCacheKey = normalizeResponsesPromptCacheKey(chatHistory?.promptCacheKey);
     if (rawMessages.length === 0) {
+      if (targetConversationId) {
+        const documents = await listConversationDocuments(targetConversationId).catch(() => []);
+        if (Array.isArray(documents) && documents.length > 0) {
+          const now = Date.now();
+          const pageTitle = (typeof state.pageInfo?.title === 'string' && state.pageInfo.title.trim())
+            ? state.pageInfo.title.trim()
+            : '未命名对话';
+          const pageUrl = (typeof state.pageInfo?.url === 'string') ? state.pageInfo.url.trim() : '';
+          const existingConversation = (activeConversation?.id === targetConversationId)
+            ? activeConversation
+            : await getConversationById(targetConversationId).catch(() => null);
+          const conversation = {
+            id: targetConversationId,
+            url: existingConversation?.url || pageUrl,
+            title: existingConversation?.title || pageTitle,
+            startTime: Number(existingConversation?.startTime) || now,
+            endTime: now,
+            messages: [],
+            conversationRevision,
+            summary: existingConversation?.summary || pageTitle,
+            messageCount: 0,
+            mainMessageCount: 0,
+            threadMessageCount: 0,
+            threadCount: 0
+          };
+          if (existingConversation?.apiLock) {
+            conversation.apiLock = existingConversation.apiLock;
+          }
+          await putConversation(conversation);
+          invalidateMetadataCache();
+          if (updateActiveState) {
+            currentConversationId = conversation.id;
+            activeConversation = conversation;
+          }
+          updateConversationInCache(conversation);
+          return conversation;
+        }
+      }
       // 仅在“当前激活会话”的更新路径下执行删除，避免后台保存误删其它会话。
       if (isUpdate && updateActiveState && targetConversationId) {
         await deleteConversationRecord(targetConversationId);
@@ -2177,6 +2215,48 @@ export function createChatHistoryUI(appContext) {
     updateConversationInCache(conversation);
     
     return conversation;
+  }
+
+  async function ensureCurrentConversationId(options = {}) {
+    const existingId = (typeof currentConversationId === 'string') ? currentConversationId.trim() : '';
+    if (existingId) {
+      return existingId;
+    }
+
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const now = Date.now();
+    const newConversationId = `conv_${now}_${Math.random().toString(36).substr(2, 9)}`;
+    const pageTitle = (typeof state.pageInfo?.title === 'string' && state.pageInfo.title.trim())
+      ? state.pageInfo.title.trim()
+      : '未命名对话';
+    const pageUrl = (typeof state.pageInfo?.url === 'string') ? state.pageInfo.url.trim() : '';
+    const summary = (typeof normalizedOptions.summary === 'string' && normalizedOptions.summary.trim())
+      ? normalizedOptions.summary.trim()
+      : pageTitle;
+    const conversation = {
+      id: newConversationId,
+      url: pageUrl,
+      title: pageTitle,
+      startTime: now,
+      endTime: now,
+      messages: [],
+      conversationRevision: 0,
+      summary,
+      messageCount: 0,
+      mainMessageCount: 0,
+      threadMessageCount: 0,
+      threadCount: 0
+    };
+
+    await putConversation(conversation);
+    invalidateMetadataCache();
+    currentConversationId = newConversationId;
+    activeConversation = conversation;
+    updateConversationInCache(conversation);
+    try {
+      services.messageSender?.setCurrentConversationId?.(newConversationId);
+    } catch (_) {}
+    return newConversationId;
   }
 
   /**
@@ -14720,6 +14800,7 @@ export function createChatHistoryUI(appContext) {
     refreshActiveConversationThreadOverviewDrawer,
     updatePageInfo,
     getCurrentConversationId: () => currentConversationId,
+    ensureCurrentConversationId,
     getActiveConversationApiLock,
     resolveActiveConversationApiConfig,
     setConversationApiLock,

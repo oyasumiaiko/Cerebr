@@ -1738,6 +1738,11 @@ function setupChatActionButtons(appContext) {
   });
 
   appContext.dom.quickSummary.addEventListener('click', () => appContext.services.messageSender.performQuickSummary());
+  if (appContext.dom.documentButton) {
+    appContext.dom.documentButton.addEventListener('click', () => {
+      appContext.services.conversationDocumentComposer?.toggleCreatePanel?.();
+    });
+  }
   appContext.dom.sendButton.addEventListener('click', () => {
     appContext.utils.hideSlashCommandHints?.();
     appContext.services.messageSender.sendMessage();

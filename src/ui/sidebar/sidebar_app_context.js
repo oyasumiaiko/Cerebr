@@ -60,6 +60,7 @@ export function createSidebarAppContext(isStandalone) {
     threadResizeEdgeLeft: document.getElementById('thread-resize-edge-left'),
     threadResizeEdgeRight: document.getElementById('thread-resize-edge-right'),
     messageInput: document.getElementById('message-input'),
+    documentButton: document.getElementById('document-button'),
     inputApiSwitcher,
     inputApiCurrent: inputApiSwitcher?.querySelector('.input-api-current') || null,
     inputApiList: inputApiSwitcher?.querySelector('.input-api-list') || null,

@@ -7471,7 +7471,8 @@ html:not(.fullscreen-mode) body:not(.standalone-mode) #chat-history-panel {
 }
 
 /* 新增截屏按钮样式 */
-#screenshot-button {
+#screenshot-button,
+#document-button {
     padding: 12px;
     height: 100%;
     background: none;
@@ -7486,10 +7487,12 @@ html:not(.fullscreen-mode) body:not(.standalone-mode) #chat-history-panel {
     opacity: 0.6;
     transition: opacity 0.2s ease;
 }
-#screenshot-button:hover {
+#screenshot-button:hover,
+#document-button:hover {
     opacity: 1;
 }
-#screenshot-button:active {
+#screenshot-button:active,
+#document-button:active {
     transform: scale(0.95);
 }
 
@@ -9405,6 +9408,83 @@ body.chat-history-panel-resizing {
   gap: 8px;
   padding-top: 12px;
   padding-bottom: 12px;
+}
+
+.composer-document-panel {
+  --composer-request-content-font-size: calc(var(--cerebr-font-size) * 0.72);
+  font-size: var(--composer-request-content-font-size);
+}
+
+.composer-document-surface {
+  gap: 10px;
+}
+
+.composer-document-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.composer-document-panel__title {
+  font-size: 0.92em;
+  font-weight: 700;
+}
+
+.composer-document-panel__hint {
+  font-size: 0.82em;
+  color: color-mix(in srgb, var(--cerebr-text-color) 66%, transparent);
+  line-height: 1.45;
+}
+
+.composer-document-panel__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.composer-document-panel__label {
+  font-size: 0.8em;
+  font-weight: 600;
+  color: color-mix(in srgb, var(--cerebr-text-color) 78%, transparent);
+}
+
+.composer-document-panel__input,
+.composer-document-panel__textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 72%, transparent);
+  background: var(--cerebr-input-bg);
+  color: var(--cerebr-text-color);
+  padding: 10px 12px;
+  font-size: 0.88em;
+  line-height: 1.5;
+}
+
+.composer-document-panel__textarea {
+  min-height: 150px;
+  resize: vertical;
+}
+
+.composer-document-panel__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.composer-document-panel__button {
+  border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 72%, transparent);
+  background: color-mix(in srgb, var(--cerebr-bg-color) 88%, transparent);
+  color: var(--cerebr-text-color);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 0.84em;
+  cursor: pointer;
+}
+
+.composer-document-panel__button.is-primary {
+  background: color-mix(in srgb, var(--cerebr-blue) 16%, var(--cerebr-bg-color));
 }
 
 .composer-request-question-header {

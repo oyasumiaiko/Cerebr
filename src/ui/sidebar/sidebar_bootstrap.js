@@ -10,6 +10,7 @@ import { createSettingsManager } from '../settings_manager.js';
 import { createContextMenuManager } from '../context_menu_manager.js';
 import { createUIManager } from '../ui_manager.js';
 import { createInputController } from '../input_controller.js';
+import { createConversationDocumentComposer } from '../conversation_document_composer.js';
 import { createSelectionThreadManager } from '../selection_thread_manager.js';
 import { createConversationPresence } from '../../utils/conversation_presence.js';
 import { applyStandaloneAdjustments } from './sidebar_app_context.js';
@@ -55,6 +56,7 @@ export async function initializeSidebarServices(appContext) {
 
   appContext.services.chatHistoryUI = createChatHistoryUI(appContext);
   appContext.services.inputController = createInputController(appContext);
+  appContext.services.conversationDocumentComposer = createConversationDocumentComposer(appContext);
 
   appContext.services.messageSender = createMessageSender(appContext);
   appContext.services.messageSender.setCurrentConversationId(appContext.services.chatHistoryUI.getCurrentConversationId());

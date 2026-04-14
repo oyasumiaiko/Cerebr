@@ -20,6 +20,7 @@
  * @property {() => boolean} hasScreenshot 是否包含页面截图图片（alt="page-screenshot.png"）
  * @property {() => void} clear 清空输入与图片，并重置输入高度
  * @property {() => void} focusToEnd 聚焦输入框并将光标移动到末尾
+ * @property {(text: string) => void} insertTextAtCursor 在当前光标处插入文本
  */
 export function createInputController(appContext) {
   const { dom, services } = appContext;
@@ -113,9 +114,51 @@ export function createInputController(appContext) {
     } catch (_) {}
   }
 
+  /**
+   * 在输入框当前光标位置插入文本。
+   * 若当前选区不在输入框内，则回退为追加到末尾。
+   *
+   * @param {string} text
+   * @returns {void}
+   */
+  function insertTextAtCursor(text) {
+    if (!messageInput) return;
+    const nextText = String(text ?? '');
+    try {
+      messageInput.focus();
+      const selection = window.getSelection();
+      let range = null;
+      if (selection && selection.rangeCount > 0) {
+        const candidate = selection.getRangeAt(0);
+        if (messageInput.contains(candidate.commonAncestorContainer)) {
+          range = candidate.cloneRange();
+        }
+      }
+      if (!range) {
+        range = document.createRange();
+        range.selectNodeContents(messageInput);
+        range.collapse(false);
+      }
+      range.deleteContents();
+      const textNode = document.createTextNode(nextText);
+      range.insertNode(textNode);
+      range.setStartAfter(textNode);
+      range.collapse(true);
+      selection?.removeAllRanges?.();
+      selection?.addRange?.(range);
+      messageInput.dispatchEvent(new Event('input', { bubbles: true }));
+    } catch (_) {
+      setInputText((getInputText() ? `${getInputText()}\n` : '') + nextText);
+      try {
+        messageInput.dispatchEvent(new Event('input', { bubbles: true }));
+      } catch (_) {}
+    }
+  }
+
   return {
     getInputText,
     setInputText,
+    insertTextAtCursor,
     hasImages,
     getImagesHTML,
     hasScreenshot,
