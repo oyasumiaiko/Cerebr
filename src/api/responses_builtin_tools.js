@@ -9,6 +9,7 @@
  */
 
 export const RESPONSES_WEB_SEARCH_SOURCE_INCLUDE = 'web_search_call.action.sources';
+const RESPONSES_WEB_SEARCH_USER_LOCATION_TYPE_OPTIONS = Object.freeze(['approximate']);
 
 /**
  * 规范化字符串数组：去空白、去重，仅保留非空字符串。
@@ -102,6 +103,7 @@ export const RESPONSES_BUILTIN_TOOL_SPECS = Object.freeze([
         key: 'builtin_tools.web_search.external_web_access',
         label: '实时外网搜索',
         kind: 'boolean',
+        displayPath: ['external_web_access'],
         help: '显式控制 web_search 是否允许实时访问外部网页；未启用时沿用 OpenAI 默认策略。'
       },
       {
@@ -109,6 +111,7 @@ export const RESPONSES_BUILTIN_TOOL_SPECS = Object.freeze([
         key: 'builtin_tools.web_search.include_sources',
         label: '返回搜索来源',
         kind: 'boolean',
+        displayPath: ['include_sources'],
         help: '启用后会自动在 include 中附加 web_search_call.action.sources，便于展示与存档来源。'
       },
       {
@@ -118,18 +121,62 @@ export const RESPONSES_BUILTIN_TOOL_SPECS = Object.freeze([
         kind: 'json',
         jsonMode: 'array',
         rows: 4,
+        displayPath: ['filters', 'allowed_domains'],
         placeholder: '[\n  "openai.com"\n]',
         help: '仅允许搜索指定域名；填写 JSON 数组。'
       },
       {
+        path: ['builtin_tools', 'web_search', 'user_location', 'type'],
+        key: 'builtin_tools.web_search.user_location.type',
+        label: '位置类型',
+        kind: 'select',
+        options: RESPONSES_WEB_SEARCH_USER_LOCATION_TYPE_OPTIONS,
+        defaultValue: 'approximate',
+        displayPath: ['user_location', 'type'],
+        help: '官方 `user_location.type`。当前常见值为 approximate。'
+      },
+      {
+        path: ['builtin_tools', 'web_search', 'user_location', 'country'],
+        key: 'builtin_tools.web_search.user_location.country',
+        label: '国家',
+        kind: 'text',
+        displayPath: ['user_location', 'country'],
+        placeholder: '例如 US'
+      },
+      {
+        path: ['builtin_tools', 'web_search', 'user_location', 'city'],
+        key: 'builtin_tools.web_search.user_location.city',
+        label: '城市',
+        kind: 'text',
+        displayPath: ['user_location', 'city'],
+        placeholder: '例如 San Francisco'
+      },
+      {
+        path: ['builtin_tools', 'web_search', 'user_location', 'region'],
+        key: 'builtin_tools.web_search.user_location.region',
+        label: '地区/州',
+        kind: 'text',
+        displayPath: ['user_location', 'region'],
+        placeholder: '例如 California'
+      },
+      {
+        path: ['builtin_tools', 'web_search', 'user_location', 'timezone'],
+        key: 'builtin_tools.web_search.user_location.timezone',
+        label: '时区',
+        kind: 'text',
+        displayPath: ['user_location', 'timezone'],
+        placeholder: '例如 America/Los_Angeles'
+      },
+      {
         path: ['builtin_tools', 'web_search', 'user_location'],
         key: 'builtin_tools.web_search.user_location',
-        label: '搜索用户位置',
+        label: '搜索用户位置（原始 JSON）',
         kind: 'json',
         jsonMode: 'object',
         rows: 6,
+        displayPath: ['user_location'],
         placeholder: '{\n  "type": "approximate",\n  "country": "US",\n  "city": "San Francisco",\n  "region": "California",\n  "timezone": "America/Los_Angeles"\n}',
-        help: '传给 web_search 的 user_location 对象。'
+        help: '传给 web_search 的 user_location 对象；常见字段已拆成结构化控件。'
       }
     ],
     buildRequestOverride(toolSettings, helpers = {}) {

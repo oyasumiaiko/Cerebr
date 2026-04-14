@@ -3518,10 +3518,16 @@ input:checked + .slider::before {
 }
 
 .responses-setting-field {
+    --responses-setting-nest-level: 0;
+    --responses-setting-indent-size: 14px;
     min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 4px;
+}
+
+.responses-setting-field--nested {
+    padding-left: calc(var(--responses-setting-nest-level) * var(--responses-setting-indent-size));
 }
 
 .responses-setting-field--disabled .responses-setting-row {

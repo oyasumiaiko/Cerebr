@@ -19,6 +19,7 @@ import {
 } from '../utils/sync_chunk.js';
 import { cloneResponsesInputItems } from '../utils/responses_input_items.js';
 import {
+  RESPONSES_WEB_SEARCH_SOURCE_INCLUDE,
   RESPONSES_BUILTIN_TOOL_SPECS,
   buildResponsesBuiltinToolOverrides as buildResponsesBuiltinToolOverridesFromRegistry
 } from './responses_builtin_tools.js';
@@ -66,6 +67,30 @@ const RESPONSES_PROMPT_CACHE_RETENTION_OPTIONS = Object.freeze(['in-memory', '24
 const RESPONSES_SERVICE_TIER_OPTIONS = Object.freeze(['auto', 'default', 'flex', 'scale', 'priority']);
 const RESPONSES_TRUNCATION_OPTIONS = Object.freeze(['auto', 'disabled']);
 const RESPONSES_TEXT_VERBOSITY_OPTIONS = Object.freeze(['low', 'medium', 'high']);
+const RESPONSES_TEXT_FORMAT_TYPE_OPTIONS = Object.freeze(['text', 'json_schema']);
+const RESPONSES_TOOL_CHOICE_MODE_OPTIONS = Object.freeze([
+  'none',
+  'auto',
+  'required',
+  'allowed_tools:auto',
+  'allowed_tools:required'
+]);
+const RESPONSES_INCLUDE_PRESET_SPECS = Object.freeze([
+  Object.freeze({
+    value: 'reasoning.encrypted_content',
+    key: 'include.reasoning.encrypted_content',
+    label: '返回加密推理内容',
+    help: '把 reasoning.encrypted_content 加入 include，便于 store=false / 手动重放上下文时保留加密推理项。',
+    displayPath: ['include', 'reasoning', 'encrypted_content']
+  }),
+  Object.freeze({
+    value: RESPONSES_WEB_SEARCH_SOURCE_INCLUDE,
+    key: 'include.web_search_call.action.sources',
+    label: '返回搜索来源',
+    help: '把 web_search_call.action.sources 加入 include，便于展示或存档搜索来源。',
+    displayPath: ['include', 'web_search_call', 'action', 'sources']
+  })
+]);
 const RESPONSES_MAIN_FIELD_SPECS = Object.freeze([
   {
     path: ['reasoning', 'effort'],
@@ -139,7 +164,7 @@ const RESPONSES_MAIN_FIELD_SPECS = Object.freeze([
     help: '显式控制是否将响应保存到 OpenAI。'
   }
 ]);
-const RESPONSES_ADVANCED_FIELD_SPECS = Object.freeze([
+const RESPONSES_ADVANCED_FIELD_BASE_SPECS = Object.freeze([
   {
     path: ['background'],
     key: 'background',
@@ -247,12 +272,12 @@ const RESPONSES_ADVANCED_FIELD_SPECS = Object.freeze([
   {
     path: ['include'],
     key: 'include',
-    label: 'Include',
+    label: 'Include（原始 JSON）',
     kind: 'json',
     jsonMode: 'array',
     rows: 4,
     placeholder: '[\n  \"reasoning.encrypted_content\"\n]',
-    help: '填写 JSON 数组。'
+    help: '填写 JSON 数组；结构化开关只覆盖官方常见预制项，其余 include 值仍可在这里手写。'
   },
   {
     path: ['metadata'],
@@ -267,41 +292,41 @@ const RESPONSES_ADVANCED_FIELD_SPECS = Object.freeze([
   {
     path: ['prompt'],
     key: 'prompt',
-    label: 'Prompt',
+    label: 'Prompt（原始 JSON）',
     kind: 'json',
     jsonMode: 'object',
     rows: 5,
     placeholder: '{\n  \"id\": \"pmpt_...\",\n  \"version\": \"1\",\n  \"variables\": { \"foo\": \"bar\" }\n}',
-    help: '填写 prompt 模板对象。'
+    help: '填写 prompt 模板对象；常见字段已拆成结构化控件，仍可在这里补充原始 JSON。'
   },
   {
     path: ['context_management'],
     key: 'context_management',
-    label: 'Context Management',
+    label: 'Context Management（原始 JSON）',
     kind: 'json',
     jsonMode: 'array',
     rows: 5,
     placeholder: '[\n  { \"type\": \"compaction\", \"compact_threshold\": 120000 }\n]',
-    help: '填写 JSON 数组。'
+    help: '填写 JSON 数组；常见 compaction 配置已拆成结构化控件。'
   },
   {
     path: ['text', 'format'],
     key: 'text.format',
-    label: 'Text Format',
+    label: 'Text Format（原始 JSON）',
     kind: 'json',
     jsonMode: 'object',
     rows: 5,
     placeholder: '{\n  \"type\": \"json_schema\",\n  \"name\": \"output\",\n  \"schema\": {}\n}',
-    help: '填写 Responses API text.format 对象。'
+    help: '填写 Responses API text.format 对象；常见结构化输出字段已拆成控件。'
   },
   {
     path: ['tool_choice'],
     key: 'tool_choice',
-    label: 'Tool Choice',
+    label: 'Tool Choice（原始值）',
     kind: 'json_or_string',
     rows: 4,
     placeholder: 'auto\n或\n{\n  \"type\": \"allowed_tools\",\n  \"mode\": \"required\",\n  \"tools\": [\"web_search\"]\n}',
-    help: '可填写 none/auto/required，也可填写 JSON 对象。'
+    help: '可填写 none/auto/required，也可填写 JSON 对象；常见模式已拆成结构化控件。'
   },
   {
     path: ['tools'],
@@ -799,6 +824,366 @@ export function createApiManager(appContext) {
       compactValue: compactResponsesApiSettingValue,
       normalizeStringArray: normalizeResponsesStringArray
     });
+  }
+
+  /**
+   * 生成 Include 的官方预制项开关。
+   *
+   * 设计说明：
+   * - `include` 本身是字符串数组，不适合直接映射为简单 path；
+   * - 这里把常见官方预制项抽成布尔开关，读写时由自定义 getter/setter
+   *   负责在数组里增删对应字符串；
+   * - 原始 `include` JSON 编辑器仍然保留，用于补充未来的新值或少见值。
+   *
+   * @returns {Array<Object>}
+   */
+  function createResponsesIncludePresetFieldSpecs() {
+    return RESPONSES_INCLUDE_PRESET_SPECS.map((spec) => ({
+      key: spec.key,
+      label: spec.label,
+      kind: 'boolean',
+      defaultValue: false,
+      autoEnableValue: true,
+      help: spec.help,
+      displayPath: spec.displayPath,
+      getValue(settings) {
+        const include = normalizeResponsesStringArray(settings?.include);
+        return include?.includes(spec.value) ? true : undefined;
+      },
+      setValue(draft, value) {
+        const include = normalizeResponsesStringArray(draft?.include) || [];
+        const filtered = include.filter((item) => item !== spec.value);
+        if (value === true) {
+          filtered.push(spec.value);
+        }
+        const next = normalizeResponsesStringArray(filtered);
+        if (next) {
+          draft.include = next;
+        } else {
+          delete draft.include;
+        }
+      }
+    }));
+  }
+
+  /**
+   * 为 prompt 对象生成结构化字段。
+   *
+   * 这里仅覆盖 OpenAI 文档已经稳定的 `id / version / variables`，
+   * 其余未知或新增字段继续交给原始 JSON 编辑器承载。
+   *
+   * @returns {Array<Object>}
+   */
+  function createResponsesPromptFieldSpecs() {
+    return [
+      {
+        path: ['prompt', 'id'],
+        key: 'prompt.id',
+        label: '模板 ID',
+        kind: 'text',
+        displayPath: ['prompt', 'id'],
+        placeholder: '例如 pmpt_...',
+        help: 'Prompt 模板的稳定 ID。'
+      },
+      {
+        path: ['prompt', 'version'],
+        key: 'prompt.version',
+        label: '模板版本',
+        kind: 'text',
+        displayPath: ['prompt', 'version'],
+        placeholder: '例如 1'
+      },
+      {
+        path: ['prompt', 'variables'],
+        key: 'prompt.variables',
+        label: '模板变量',
+        kind: 'json',
+        jsonMode: 'object',
+        rows: 4,
+        displayPath: ['prompt', 'variables'],
+        placeholder: '{\n  \"foo\": \"bar\"\n}',
+        help: '填写 prompt 模板变量对象。'
+      }
+    ];
+  }
+
+  /**
+   * 从 `context_management` 数组里读取第一个 `type=compaction` 的官方项。
+   *
+   * @param {Object|undefined} settings
+   * @returns {Object|null}
+   */
+  function getResponsesCompactionContextEntry(settings) {
+    const items = Array.isArray(settings?.context_management) ? settings.context_management : [];
+    return items.find((item) => item && typeof item === 'object' && !Array.isArray(item) && item.type === 'compaction') || null;
+  }
+
+  /**
+   * 把 `context_management` 中的官方 compaction 项做增删改。
+   *
+   * 设计目标：
+   * - 只碰 `type=compaction` 这一项；
+   * - 保留数组里用户手写的其他上下文管理项；
+   * - 当 compaction 项被删空后，回收空数组。
+   *
+   * @param {Object} draft
+   * @param {(entry: Object|null) => (Object|null|undefined)} producer
+   */
+  function updateResponsesCompactionContextEntry(draft, producer) {
+    const items = Array.isArray(draft?.context_management)
+      ? draft.context_management.filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+      : [];
+    const otherItems = items.filter((item) => item.type !== 'compaction');
+    const currentEntry = items.find((item) => item.type === 'compaction') || null;
+    const nextEntry = producer(currentEntry ? cloneJsonCompatible(currentEntry) : null);
+    const nextItems = otherItems.slice();
+    const compactedEntry = compactResponsesApiSettingValue(nextEntry);
+    if (compactedEntry && typeof compactedEntry === 'object' && !Array.isArray(compactedEntry)) {
+      nextItems.push(compactedEntry);
+    }
+    if (nextItems.length > 0) {
+      draft.context_management = nextItems;
+    } else {
+      delete draft.context_management;
+    }
+  }
+
+  /**
+   * 为 `context_management` 的官方 compaction 路径生成结构化字段。
+   *
+   * @returns {Array<Object>}
+   */
+  function createResponsesContextManagementFieldSpecs() {
+    return [
+      {
+        key: 'context_management.compaction.enabled',
+        label: '启用 compaction',
+        kind: 'boolean',
+        defaultValue: false,
+        autoEnableValue: true,
+        displayPath: ['context_management', 'compaction', 'enabled'],
+        help: '在 context_management 数组里加入或移除官方 compaction 项。',
+        getValue(settings) {
+          return getResponsesCompactionContextEntry(settings) ? true : undefined;
+        },
+        setValue(draft, value) {
+          updateResponsesCompactionContextEntry(draft, (entry) => {
+            if (value !== true) return null;
+            return entry && typeof entry === 'object'
+              ? { ...entry, type: 'compaction' }
+              : { type: 'compaction' };
+          });
+        }
+      },
+      {
+        key: 'context_management.compaction.compact_threshold',
+        label: '压缩阈值',
+        kind: 'number',
+        min: 1,
+        step: 1,
+        displayPath: ['context_management', 'compaction', 'compact_threshold'],
+        placeholder: '例如 120000',
+        help: '写入 compaction 项的 compact_threshold。',
+        getValue(settings) {
+          const entry = getResponsesCompactionContextEntry(settings);
+          return Number.isFinite(entry?.compact_threshold) ? Number(entry.compact_threshold) : undefined;
+        },
+        setValue(draft, value) {
+          updateResponsesCompactionContextEntry(draft, (entry) => {
+            const base = entry && typeof entry === 'object' ? { ...entry, type: 'compaction' } : { type: 'compaction' };
+            if (typeof value === 'undefined') {
+              delete base.compact_threshold;
+            } else {
+              base.compact_threshold = value;
+            }
+            return base;
+          });
+        },
+        isVisible(settings) {
+          return !!getResponsesCompactionContextEntry(settings);
+        }
+      }
+    ];
+  }
+
+  /**
+   * 读取 `text.format` 当前类型。
+   *
+   * @param {Object|undefined} settings
+   * @returns {string|undefined}
+   */
+  function getResponsesTextFormatType(settings) {
+    const value = getNestedValue(settings, ['text', 'format']);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const type = (typeof value.type === 'string') ? value.type.trim() : '';
+    return type || undefined;
+  }
+
+  /**
+   * 为 `text.format` 生成结构化字段。
+   *
+   * 目前仅覆盖最常用、文档稳定的 `type=text/json_schema` 路径。
+   *
+   * @returns {Array<Object>}
+   */
+  function createResponsesTextFormatFieldSpecs() {
+    return [
+      {
+        key: 'text.format.type',
+        label: '格式类型',
+        kind: 'select',
+        options: RESPONSES_TEXT_FORMAT_TYPE_OPTIONS,
+        defaultValue: 'text',
+        displayPath: ['text', 'format', 'type'],
+        help: 'Responses API `text.format.type`。切换类型时会重建该对象的官方基础结构。',
+        getValue: getResponsesTextFormatType,
+        setValue(draft, value) {
+          if (typeof value === 'undefined') {
+            deleteNestedValue(draft, ['text', 'format']);
+            return;
+          }
+          if (value === 'text') {
+            setNestedValue(draft, ['text', 'format'], { type: 'text' });
+            return;
+          }
+          const existing = getNestedValue(draft, ['text', 'format']);
+          const next = (existing && typeof existing === 'object' && !Array.isArray(existing))
+            ? { ...existing, type: 'json_schema' }
+            : { type: 'json_schema', name: 'output' };
+          if (typeof next.name !== 'string' || !next.name.trim()) {
+            next.name = 'output';
+          }
+          setNestedValue(draft, ['text', 'format'], next);
+        }
+      },
+      {
+        path: ['text', 'format', 'name'],
+        key: 'text.format.name',
+        label: 'Schema 名称',
+        kind: 'text',
+        displayPath: ['text', 'format', 'name'],
+        placeholder: '例如 output',
+        isVisible(settings) {
+          return getResponsesTextFormatType(settings) === 'json_schema';
+        }
+      },
+      {
+        path: ['text', 'format', 'schema'],
+        key: 'text.format.schema',
+        label: 'Schema JSON',
+        kind: 'json',
+        jsonMode: 'object',
+        rows: 5,
+        displayPath: ['text', 'format', 'schema'],
+        placeholder: '{\n  \"type\": \"object\",\n  \"properties\": {}\n}',
+        help: '填写 json_schema 的 schema 对象。',
+        isVisible(settings) {
+          return getResponsesTextFormatType(settings) === 'json_schema';
+        }
+      },
+      {
+        path: ['text', 'format', 'strict'],
+        key: 'text.format.strict',
+        label: '严格模式',
+        kind: 'boolean',
+        displayPath: ['text', 'format', 'strict'],
+        isVisible(settings) {
+          return getResponsesTextFormatType(settings) === 'json_schema';
+        }
+      }
+    ];
+  }
+
+  /**
+   * 读取 `tool_choice` 当前模式，并把官方 `allowed_tools` 结构压平到单个 select 值。
+   *
+   * @param {Object|undefined} settings
+   * @returns {string|undefined}
+   */
+  function getResponsesToolChoiceMode(settings) {
+    const toolChoice = settings?.tool_choice;
+    if (typeof toolChoice === 'string') {
+      return toolChoice.trim() || undefined;
+    }
+    if (!toolChoice || typeof toolChoice !== 'object' || Array.isArray(toolChoice)) {
+      return undefined;
+    }
+    if (toolChoice.type === 'allowed_tools') {
+      const mode = (typeof toolChoice.mode === 'string' && toolChoice.mode.trim()) ? toolChoice.mode.trim() : 'auto';
+      return `allowed_tools:${mode}`;
+    }
+    return undefined;
+  }
+
+  /**
+   * 为 `tool_choice` 生成结构化字段。
+   *
+   * 这里覆盖文档里最常见的字符串模式与 `allowed_tools` 模式；
+   * 若用户需要更复杂对象，仍可继续使用原始 JSON 编辑器。
+   *
+   * @returns {Array<Object>}
+   */
+  function createResponsesToolChoiceFieldSpecs() {
+    return [
+      {
+        key: 'tool_choice.mode',
+        label: '模式',
+        kind: 'select',
+        options: RESPONSES_TOOL_CHOICE_MODE_OPTIONS,
+        defaultValue: 'auto',
+        displayPath: ['tool_choice', 'mode'],
+        help: '官方常见的 tool_choice 预制模式。`allowed_tools:*` 会构造对象模式。',
+        getValue: getResponsesToolChoiceMode,
+        setValue(draft, value) {
+          if (typeof value === 'undefined') {
+            delete draft.tool_choice;
+            return;
+          }
+          if (typeof value === 'string' && value.startsWith('allowed_tools:')) {
+            const current = draft.tool_choice;
+            const currentTools = (current && typeof current === 'object' && !Array.isArray(current) && Array.isArray(current.tools))
+              ? current.tools
+              : [];
+            draft.tool_choice = compactResponsesApiSettingValue({
+              type: 'allowed_tools',
+              mode: value.split(':')[1] || 'auto',
+              tools: currentTools
+            });
+            return;
+          }
+          draft.tool_choice = value;
+        }
+      },
+      {
+        key: 'tool_choice.allowed_tools',
+        label: 'Allowed Tools',
+        kind: 'json',
+        jsonMode: 'array',
+        rows: 4,
+        displayPath: ['tool_choice', 'allowed_tools', 'tools'],
+        placeholder: '[\n  \"web_search\"\n]',
+        help: '当模式为 `allowed_tools:*` 时，填写允许的工具列表。',
+        getValue(settings) {
+          const toolChoice = settings?.tool_choice;
+          if (!toolChoice || typeof toolChoice !== 'object' || Array.isArray(toolChoice) || toolChoice.type !== 'allowed_tools') {
+            return undefined;
+          }
+          return Array.isArray(toolChoice.tools) ? toolChoice.tools : undefined;
+        },
+        setValue(draft, value) {
+          const modeToken = getResponsesToolChoiceMode(draft) || 'allowed_tools:auto';
+          const mode = modeToken.startsWith('allowed_tools:') ? (modeToken.split(':')[1] || 'auto') : 'auto';
+          draft.tool_choice = compactResponsesApiSettingValue({
+            type: 'allowed_tools',
+            mode,
+            tools: value
+          });
+        },
+        isVisible(settings) {
+          return String(getResponsesToolChoiceMode(settings) || '').startsWith('allowed_tools:');
+        }
+      }
+    ];
   }
 
   /**
@@ -3271,6 +3656,7 @@ export function createApiManager(appContext) {
       advancedSpecs,
       sectionToggleSpec = null,
       getSettingsSnapshot,
+      setSettingsSnapshot,
       updateSettingAtPath
     }) => {
       const section = document.createElement('section');
@@ -3334,6 +3720,7 @@ export function createApiManager(appContext) {
       body.appendChild(advancedDetails);
       const transientFieldKeys = new Set();
       const fieldEntries = [];
+      let refreshFields = () => {};
       const getSectionEnabled = () => {
         if (!sectionToggleSpec) return true;
         return getNestedValue(getSettingsSnapshot(), sectionToggleSpec.path) === true;
@@ -3351,22 +3738,48 @@ export function createApiManager(appContext) {
        * 3. Gemini / Responses 两套额外配置语义保持一致，不需要各自维护特例。
        */
       const renderFieldPlacement = () => {
-        const enabledFields = [];
-        const disabledFields = [];
+        const enabledEntries = [];
+        const disabledEntries = [];
+
+        const hasDisplayPathPrefix = (candidatePath, prefixPath) => (
+          Array.isArray(candidatePath)
+          && Array.isArray(prefixPath)
+          && prefixPath.length > 0
+          && candidatePath.length >= prefixPath.length
+          && prefixPath.every((segment, index) => candidatePath[index] === segment)
+        );
+
+        const applyEffectiveNestLevels = (entries) => {
+          const visiblePaths = [];
+          entries.forEach((entry) => {
+            const currentPath = Array.isArray(entry.displayPath) ? entry.displayPath : [];
+            const baseNestLevel = Math.max(0, currentPath.length - 1);
+            const hasVisibleParent = baseNestLevel > 0 && visiblePaths.some((visiblePath) => (
+              visiblePath.length < currentPath.length
+              && hasDisplayPathPrefix(currentPath, visiblePath)
+            ));
+            entry.applyNestLevel(hasVisibleParent ? baseNestLevel : 0);
+            visiblePaths.push(currentPath);
+          });
+        };
 
         fieldEntries.forEach((entry) => {
           if (!entry?.field) return;
+          if (typeof entry.isVisible === 'function' && !entry.isVisible()) return;
           if (entry.isEnabled()) {
-            enabledFields.push(entry.field);
+            enabledEntries.push(entry);
           } else {
-            disabledFields.push(entry.field);
+            disabledEntries.push(entry);
           }
         });
 
-        mainGrid.replaceChildren(...enabledFields);
-        advancedGrid.replaceChildren(...disabledFields);
-        mainGrid.hidden = enabledFields.length <= 0;
-        advancedDetails.hidden = disabledFields.length <= 0;
+        applyEffectiveNestLevels(enabledEntries);
+        applyEffectiveNestLevels(disabledEntries);
+
+        mainGrid.replaceChildren(...enabledEntries.map((entry) => entry.field));
+        advancedGrid.replaceChildren(...disabledEntries.map((entry) => entry.field));
+        mainGrid.hidden = enabledEntries.length <= 0;
+        advancedDetails.hidden = disabledEntries.length <= 0;
         if (advancedDetails.hidden) {
           advancedDetails.open = false;
         }
@@ -3376,6 +3789,17 @@ export function createApiManager(appContext) {
         const field = document.createElement('div');
         field.className = 'responses-setting-field';
         field.dataset.fieldKey = spec.key;
+        const displayPath = Array.isArray(spec.displayPath)
+          ? spec.displayPath
+          : (Array.isArray(spec.path) ? spec.path : []);
+        const applyNestLevel = (nestLevel) => {
+          const normalizedLevel = Number.isFinite(nestLevel)
+            ? Math.max(0, nestLevel)
+            : Math.max(0, displayPath.length - 1);
+          field.style.setProperty('--responses-setting-nest-level', String(normalizedLevel));
+          field.classList.toggle('responses-setting-field--nested', normalizedLevel > 0);
+        };
+        applyNestLevel(Math.max(0, displayPath.length - 1));
 
         const header = document.createElement('div');
         header.className = 'responses-setting-row';
@@ -3417,8 +3841,30 @@ export function createApiManager(appContext) {
         const isEditorField = spec.kind === 'textarea' || spec.kind === 'json' || spec.kind === 'json_or_string';
         let editorWrap = null;
         let editorToggle = null;
-        const getStoredValue = () => getNestedValue(getSettingsSnapshot(), spec.path);
+        const getStoredValue = () => {
+          if (typeof spec.getValue === 'function') {
+            return spec.getValue(getSettingsSnapshot());
+          }
+          return getNestedValue(getSettingsSnapshot(), spec.path);
+        };
+        const setFieldValue = (value, { persist = true } = {}) => {
+          if (typeof spec.setValue === 'function') {
+            const draft = cloneJsonCompatible(getSettingsSnapshot()) || {};
+            spec.setValue(draft, value);
+            if (typeof setSettingsSnapshot === 'function') {
+              setSettingsSnapshot(draft, { persist });
+            }
+            return;
+          }
+          updateSettingAtPath(spec.path, value, { persist });
+        };
         const isEnabled = () => transientFieldKeys.has(spec.key) || typeof getStoredValue() !== 'undefined';
+        const isVisible = () => {
+          if (typeof spec.isVisible === 'function') {
+            return spec.isVisible(getSettingsSnapshot()) !== false;
+          }
+          return true;
+        };
         const resolveFallbackValue = () => {
           if (typeof spec.defaultValue !== 'undefined') return spec.defaultValue;
           if (spec.kind === 'boolean') return true;
@@ -3440,6 +3886,7 @@ export function createApiManager(appContext) {
       const syncControlVisibility = () => {
         controlWrap.hidden = false;
         enableToggle.checked = isEnabled();
+        field.hidden = !isVisible();
         if (editorWrap) {
           editorWrap.hidden = !field.classList.contains('is-editor-open');
         }
@@ -3459,7 +3906,8 @@ export function createApiManager(appContext) {
           boolLabel.appendChild(boolSlider);
           control.addEventListener('change', () => {
             clearError();
-            updateSettingAtPath(spec.path, !!control.checked);
+            setFieldValue(!!control.checked);
+            refreshFields();
           });
           controlWrap.appendChild(boolLabel);
         } else if (spec.kind === 'select') {
@@ -3473,7 +3921,8 @@ export function createApiManager(appContext) {
           });
           control.addEventListener('change', () => {
             clearError();
-            updateSettingAtPath(spec.path, control.value || undefined);
+            setFieldValue(control.value || undefined);
+            refreshFields();
           });
           controlWrap.appendChild(control);
         } else if (spec.kind === 'range') {
@@ -3496,7 +3945,8 @@ export function createApiManager(appContext) {
           control.addEventListener('change', () => {
             clearError();
             const numericValue = Number(control.value);
-            updateSettingAtPath(spec.path, Number.isFinite(numericValue) ? numericValue : undefined);
+            setFieldValue(Number.isFinite(numericValue) ? numericValue : undefined);
+            refreshFields();
           });
           controlWrap.appendChild(control);
         } else if (spec.kind === 'number' || spec.kind === 'text') {
@@ -3516,21 +3966,18 @@ export function createApiManager(appContext) {
                 showError(parsed.message);
                 return;
               }
-              updateSettingAtPath(spec.path, parsed.value);
+              setFieldValue(parsed.value);
               if (typeof parsed.value === 'undefined') {
                 transientFieldKeys.delete(spec.key);
-                syncControlVisibility();
-                renderFieldPlacement();
               }
             } else {
               const nextValue = compactResponsesApiSettingValue(control.value);
-              updateSettingAtPath(spec.path, nextValue);
+              setFieldValue(nextValue);
               if (typeof nextValue === 'undefined') {
                 transientFieldKeys.delete(spec.key);
-                syncControlVisibility();
-                renderFieldPlacement();
               }
             }
+            refreshFields();
           };
           control.addEventListener('change', commitValue);
           control.addEventListener('blur', commitValue);
@@ -3575,12 +4022,11 @@ export function createApiManager(appContext) {
             control.value = nextFormatted;
             lastJsonFormattedValue = nextFormatted;
             jsonValueBeforeEdit = nextFormatted;
-            updateSettingAtPath(spec.path, parsed.value);
+            setFieldValue(parsed.value);
             if (typeof parsed.value === 'undefined') {
               transientFieldKeys.delete(spec.key);
-              syncControlVisibility();
-              renderFieldPlacement();
             }
+            refreshFields();
           };
           control.addEventListener('focus', () => {
             jsonValueBeforeEdit = lastJsonFormattedValue || control.value;
@@ -3657,16 +4103,17 @@ export function createApiManager(appContext) {
           if (enableToggle.checked) {
             transientFieldKeys.add(spec.key);
             if (spec.kind === 'boolean' && control) {
-              updateSettingAtPath(spec.path, !!control.checked);
+              const nextValue = Object.prototype.hasOwnProperty.call(spec, 'autoEnableValue')
+                ? spec.autoEnableValue
+                : !!control.checked;
+              setFieldValue(nextValue);
             }
           } else {
             transientFieldKeys.delete(spec.key);
-            updateSettingAtPath(spec.path, undefined);
+            setFieldValue(undefined);
             field.classList.remove('is-editor-open');
           }
-          syncControlValue();
-          syncControlVisibility();
-          renderFieldPlacement();
+          refreshFields();
         });
 
         syncControlValue();
@@ -3675,7 +4122,14 @@ export function createApiManager(appContext) {
         return {
           spec,
           field,
-          isEnabled
+          displayPath,
+          isEnabled,
+          isVisible,
+          applyNestLevel,
+          refresh() {
+            syncControlValue();
+            syncControlVisibility();
+          }
         };
       };
 
@@ -3683,6 +4137,12 @@ export function createApiManager(appContext) {
         const entry = createField(spec);
         fieldEntries.push(entry);
       });
+      refreshFields = () => {
+        fieldEntries.forEach((entry) => {
+          entry.refresh?.();
+        });
+        renderFieldPlacement();
+      };
       renderFieldPlacement();
 
       const syncSectionVisibility = () => {
@@ -3709,12 +4169,47 @@ export function createApiManager(appContext) {
 
       return section;
     };
+    const buildResponsesAdvancedFieldSpecs = () => {
+      const byKey = new Map(
+        RESPONSES_ADVANCED_FIELD_BASE_SPECS.map((spec) => [spec.key, spec])
+      );
+      const pick = (key) => byKey.get(key);
+      return [
+        pick('background'),
+        pick('instructions'),
+        pick('conversation'),
+        pick('previous_response_id'),
+        pick('max_tool_calls'),
+        pick('top_logprobs'),
+        pick('prompt_cache_key'),
+        pick('prompt_cache_retention'),
+        pick('safety_identifier'),
+        pick('stream_options.include_obfuscation'),
+        pick('include'),
+        ...createResponsesIncludePresetFieldSpecs(),
+        pick('metadata'),
+        pick('prompt'),
+        ...createResponsesPromptFieldSpecs(),
+        pick('context_management'),
+        ...createResponsesContextManagementFieldSpecs(),
+        pick('text.format'),
+        ...createResponsesTextFormatFieldSpecs(),
+        pick('tool_choice'),
+        ...createResponsesToolChoiceFieldSpecs(),
+        pick('tools')
+        ,
+        pick('reasoning.summary'),
+        pick('reasoning.generate_summary'),
+        pick('user')
+      ].filter(Boolean);
+    };
     const createResponsesSettingsSection = () => createApiFieldSettingsSection({
       title: 'Responses API 字段',
       description: '已启用的字段才会写入 /responses 请求体；未启用字段不会占用同步存储。',
       mainSpecs: RESPONSES_MAIN_FIELD_SPECS,
-      advancedSpecs: RESPONSES_ADVANCED_FIELD_SPECS,
+      advancedSpecs: buildResponsesAdvancedFieldSpecs(),
       getSettingsSnapshot: getResponsesSettingsSnapshot,
+      setSettingsSnapshot: setResponsesSettingsSnapshot,
       updateSettingAtPath: updateResponsesSettingAtPath
     });
     const createResponsesBuiltinToolSection = (toolSpec) => createApiFieldSettingsSection({
@@ -3724,6 +4219,7 @@ export function createApiManager(appContext) {
       advancedSpecs: Array.isArray(toolSpec.advancedSpecs) ? toolSpec.advancedSpecs : [],
       sectionToggleSpec: toolSpec.sectionToggleSpec,
       getSettingsSnapshot: getResponsesSettingsSnapshot,
+      setSettingsSnapshot: setResponsesSettingsSnapshot,
       updateSettingAtPath: updateResponsesSettingAtPath
     });
     const createResponsesLocalCompactionSection = () => createApiFieldSettingsSection({
@@ -3732,6 +4228,7 @@ export function createApiManager(appContext) {
       mainSpecs: RESPONSES_LOCAL_COMPACTION_FIELD_SPECS,
       advancedSpecs: [],
       getSettingsSnapshot: getResponsesLocalCompactionSnapshot,
+      setSettingsSnapshot: setResponsesLocalCompactionSnapshot,
       updateSettingAtPath: updateResponsesLocalCompactionAtPath
     });
     const createGeminiSettingsSection = () => createApiFieldSettingsSection({
@@ -3740,6 +4237,7 @@ export function createApiManager(appContext) {
       mainSpecs: GEMINI_MAIN_FIELD_SPECS,
       advancedSpecs: GEMINI_ADVANCED_FIELD_SPECS,
       getSettingsSnapshot: getGeminiSettingsSnapshot,
+      setSettingsSnapshot: setGeminiSettingsSnapshot,
       updateSettingAtPath: updateGeminiSettingAtPath
     });
 
