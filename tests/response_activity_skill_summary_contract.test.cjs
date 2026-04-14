@@ -15,6 +15,9 @@ test('response activity 已接入顶层虚拟文件摘要与 meta 样式', async
   assert.match(messageProcessorSource, /buildVirtualFileSummaryParts/);
   assert.match(messageProcessorSource, /buildVirtualFilePrimaryText/);
   assert.match(messageProcessorSource, /getVirtualFileToolTypeLabel/);
+  assert.match(messageProcessorSource, /buildResponseActivityCustomToolSummaryParts/);
+  assert.match(messageProcessorSource, /buildResponseActivityCustomToolPrimaryText/);
+  assert.match(messageProcessorSource, /getResponseActivityCustomToolTypeLabel/);
   assert.match(messageProcessorSource, /response-activity-tool-meta/);
 
   assert.match(sidebarCssSource, /\.message \.response-activity-tool-meta/);

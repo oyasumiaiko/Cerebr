@@ -38,6 +38,12 @@ import {
   isVirtualFileToolCall
 } from '../utils/conversation_document_tool_summary.js';
 import {
+  buildResponseActivityCustomToolPrimaryText,
+  buildResponseActivityCustomToolSummaryParts,
+  getResponseActivityCustomToolTypeLabel,
+  isResponseActivityCustomToolCall
+} from '../utils/response_activity_custom_tool_summary.js';
+import {
   extractResponsesToolOutputInputImages,
   formatResponsesToolOutputForDisplay,
   hasResponsesToolOutputBody
@@ -2205,6 +2211,7 @@ export function createMessageProcessor(appContext) {
     if (isResponseActivityJsRuntimeEntry(record)) return 'JS';
     if (isResponseActivityConversationDocumentEntry(record)) return getVirtualFileToolTypeLabel(record);
     if (isResponseActivitySkillRegistryEntry(record)) return getSkillRegistryToolTypeLabel(record);
+    if (isResponseActivityCustomToolCall(record)) return getResponseActivityCustomToolTypeLabel(record);
     if (type === 'function_call') return '函数';
     return type || 'tool';
   }
@@ -2254,6 +2261,9 @@ export function createMessageProcessor(appContext) {
     }
     if (isResponseActivitySkillRegistryEntry(record)) {
       return buildSkillRegistryPrimaryText(record, options);
+    }
+    if (isResponseActivityCustomToolCall(record)) {
+      return buildResponseActivityCustomToolPrimaryText(record, options);
     }
     if (type === 'function_call') {
       const name = (typeof record.name === 'string' && record.name.trim()) ? record.name.trim() : '匿名函数';
@@ -2322,6 +2332,17 @@ export function createMessageProcessor(appContext) {
       return buildSkillRegistrySummaryParts(record, options) || {
         action: '',
         value: '技能',
+        valueUrl: '',
+        meta: '',
+        locationAction: '',
+        locationValue: '',
+        locationUrl: ''
+      };
+    }
+    if (isResponseActivityCustomToolCall(record)) {
+      return buildResponseActivityCustomToolSummaryParts(record, options) || {
+        action: '',
+        value: '工具',
         valueUrl: '',
         meta: '',
         locationAction: '',
