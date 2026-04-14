@@ -37,6 +37,17 @@ test('conversation_document_viewer 使用无边框图标按钮承载基础文档
   assert.match(source, /fa-regular fa-pen-to-square/);
   assert.match(source, /fa-regular fa-copy/);
   assert.match(source, /fa-solid fa-download/);
+  assert.match(source, /fa-brands fa-markdown/);
+  assert.match(source, /fa-solid fa-code/);
+});
+
+test('settings_manager 已注册文档渲染默认值偏好', async () => {
+  const source = await readWorkspaceFile('src/ui/settings_manager.js');
+
+  assert.match(source, /documentRenderMarkdownForMd/);
+  assert.match(source, /documentRenderMarkdownForTxt/);
+  assert.match(source, /documentHighlightCodeByExtension/);
+  assert.match(source, /documentViewModeOverrides/);
 });
 
 test('chat_history_ui 已在 fork 与备份恢复链路中处理对话文档', async () => {

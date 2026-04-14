@@ -20,11 +20,15 @@ const {
   waitForWorktreeExtensionWorker
 } = require('./lib/worktree_unpacked_extension_harness.cjs');
 
-const DOC_PATH = 'docs/随笔-关于学习与判断.md';
+const MD_DOC_PATH = 'docs/随笔-关于学习与判断.md';
+const TXT_DOC_PATH = 'docs/文本文档.txt';
+const CODE_DOC_PATH = 'snippets/example.js';
 const PATCH_CALL_ID = 'call_conversation_document_apply_patch_1';
 const EXPECTED_FINAL_MARKER = 'CONVERSATION_DOCUMENT_TOOL_OK_20260413';
-const INITIAL_DOC_CONTENT = '# 随笔\n\n第一版内容。\n';
-const EDITED_DOC_CONTENT = '# 随笔\n\n第二版内容。\n';
+const INITIAL_MD_DOC_CONTENT = '# 随笔\n\n第一版内容。\n';
+const INITIAL_TXT_DOC_CONTENT = '# 文本标题\n\n这是一段可以切换为 Markdown 渲染的 txt 内容。\n';
+const INITIAL_CODE_DOC_CONTENT = 'const answer = 42;\nconsole.log(answer);\n';
+const EDITED_MD_DOC_CONTENT = '# 随笔\n\n第二版内容。\n';
 const EXPECTED_DOWNLOAD_NAME = 'docs__随笔-关于学习与判断.md';
 
 const [rawRepoRoot, outputDir, rawArg3 = '', rawArg4 = ''] = process.argv.slice(2);
@@ -47,8 +51,12 @@ function createApplyPatchPayload() {
   return {
     patch: [
       '*** Begin Patch',
-      `*** Add File: ${DOC_PATH}`,
-      ...INITIAL_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
+      `*** Add File: ${MD_DOC_PATH}`,
+      ...INITIAL_MD_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
+      `*** Add File: ${TXT_DOC_PATH}`,
+      ...INITIAL_TXT_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
+      `*** Add File: ${CODE_DOC_PATH}`,
+      ...INITIAL_CODE_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
       '*** End Patch'
     ].join('\n')
   };
@@ -301,7 +309,13 @@ async function runMockResponsesServer() {
           }
 
           functionCallOutputText = collectFunctionOutputText(functionOutput);
-          const finalText = `${EXPECTED_FINAL_MARKER}\n\n[随笔文档](${DOC_PATH})`;
+          const finalText = [
+            EXPECTED_FINAL_MARKER,
+            '',
+            `[Markdown 文档](${MD_DOC_PATH})`,
+            `[文本说明](${TXT_DOC_PATH})`,
+            `[代码示例](${CODE_DOC_PATH})`
+          ].join('\n');
           const messageItem = createMessageItem('msg_2', finalText);
           writeSseEvent(res, { type: 'response.created', response: { id: 'resp_2' } });
           writeSseEvent(res, { type: 'response.in_progress', response: { id: 'resp_2' } });
@@ -527,8 +541,10 @@ async function main() {
         throw new Error(`first request missing tool ${toolName}: ${JSON.stringify(result.firstRequestToolNames)}`);
       }
     }
-    if (!result.functionCallOutputText.includes(DOC_PATH)) {
-      throw new Error(`apply_patch follow-up output missing ${DOC_PATH}: ${result.functionCallOutputText}`);
+    for (const requiredPath of [MD_DOC_PATH, TXT_DOC_PATH, CODE_DOC_PATH]) {
+      if (!result.functionCallOutputText.includes(requiredPath)) {
+        throw new Error(`apply_patch follow-up output missing ${requiredPath}: ${result.functionCallOutputText}`);
+      }
     }
 
     result.finalAssistantText = await waitFor(async () => {
@@ -562,22 +578,23 @@ async function main() {
         anchors,
         containsDocPathText: (lastMessage.innerText || '').includes(docPath)
       };
-    }, DOC_PATH);
+    }, MD_DOC_PATH);
 
     result.cardRenderState = await waitFor(async () => {
       const state = await sidebarFrame.evaluate((docPath) => {
         const aiMessages = Array.from(document.querySelectorAll('.message.ai-message'));
         const lastMessage = aiMessages[aiMessages.length - 1] || null;
         if (!lastMessage) return null;
-        const card = lastMessage.querySelector('.conversation-document-card');
+        const card = Array.from(lastMessage.querySelectorAll('.conversation-document-card'))
+          .find((node) => (node.getAttribute('data-document-path') || '') === docPath) || null;
         if (!card) return null;
         return {
           cardPath: card.getAttribute('data-document-path') || '',
           hasRawLink: !!lastMessage.querySelector(`a[href="${docPath}"]`),
           title: (card.querySelector('.conversation-document-card__title')?.textContent || '').trim()
         };
-      }, DOC_PATH);
-      return state?.cardPath === DOC_PATH ? state : null;
+      }, MD_DOC_PATH);
+      return state?.cardPath === MD_DOC_PATH ? state : null;
     }, {
       timeoutMs: 30_000,
       intervalMs: 250,
@@ -589,28 +606,146 @@ async function main() {
       throw new Error(`document link was not replaced by card: ${JSON.stringify(result.cardRenderState)}`);
     }
 
-    const cardRoot = sidebarFrame.locator('.message.ai-message:last-child .conversation-document-card');
-    await cardRoot.locator('summary').click();
+    const mdCardRoot = sidebarFrame.locator(`.message.ai-message:last-child .conversation-document-card[data-document-path="${MD_DOC_PATH}"]`);
+    const txtCardRoot = sidebarFrame.locator(`.message.ai-message:last-child .conversation-document-card[data-document-path="${TXT_DOC_PATH}"]`);
+    const codeCardRoot = sidebarFrame.locator(`.message.ai-message:last-child .conversation-document-card[data-document-path="${CODE_DOC_PATH}"]`);
+
+    await mdCardRoot.locator('summary').click();
     result.initialCardContent = await waitFor(async () => {
-      const text = await cardRoot.locator('.conversation-document-card__content').textContent().catch(() => null);
-      return text && text.includes('第一版内容') ? text : null;
+      return await mdCardRoot.evaluate((card) => {
+        const content = card.querySelector('.conversation-document-card__content');
+        if (!content) return null;
+        const isMarkdown = content.classList.contains('conversation-document-card__content--markdown');
+        const text = content.textContent || '';
+        if (!isMarkdown || !text.includes('第一版内容')) return null;
+        return {
+          modeClass: Array.from(content.classList),
+          text
+        };
+      }).catch(() => null);
     }, {
       timeoutMs: 30_000,
       intervalMs: 250,
-      label: 'initial document content'
+      label: 'initial markdown document content'
+    });
+
+    await mdCardRoot.locator('.conversation-document-card__tool-button--mode').click();
+    result.toggledMarkdownPlainState = await waitFor(async () => {
+      return await mdCardRoot.evaluate((card) => {
+        const content = card.querySelector('.conversation-document-card__content');
+        if (!content) return null;
+        const isPlain = content.classList.contains('conversation-document-card__content--plain');
+        const text = content.textContent || '';
+        if (!isPlain || !text.includes('# 随笔')) return null;
+        return {
+          modeClass: Array.from(content.classList),
+          text
+        };
+      }).catch(() => null);
+    }, {
+      timeoutMs: 30_000,
+      intervalMs: 250,
+      label: 'markdown document toggled to plain'
+    });
+
+    await txtCardRoot.locator('summary').click();
+    result.txtDefaultRenderState = await waitFor(async () => {
+      return await txtCardRoot.evaluate((card) => {
+        const content = card.querySelector('.conversation-document-card__content');
+        if (!content) return null;
+        const isPlain = content.classList.contains('conversation-document-card__content--plain');
+        const text = content.textContent || '';
+        if (!isPlain || !text.includes('# 文本标题')) return null;
+        return {
+          modeClass: Array.from(content.classList),
+          text
+        };
+      }).catch(() => null);
+    }, {
+      timeoutMs: 30_000,
+      intervalMs: 250,
+      label: 'txt default plain content'
+    });
+
+    await txtCardRoot.locator('.conversation-document-card__tool-button--mode').click();
+    result.txtMarkdownRenderState = await waitFor(async () => {
+      return await txtCardRoot.evaluate((card) => {
+        const content = card.querySelector('.conversation-document-card__content');
+        if (!content) return null;
+        const isMarkdown = content.classList.contains('conversation-document-card__content--markdown');
+        const text = content.textContent || '';
+        if (!isMarkdown || !text.includes('文本标题')) return null;
+        return {
+          modeClass: Array.from(content.classList),
+          text
+        };
+      }).catch(() => null);
+    }, {
+      timeoutMs: 30_000,
+      intervalMs: 250,
+      label: 'txt toggled to markdown'
+    });
+
+    await codeCardRoot.locator('summary').click();
+    result.codeHighlightedState = await waitFor(async () => {
+      return await codeCardRoot.evaluate((card) => {
+        const content = card.querySelector('.conversation-document-card__content');
+        const code = card.querySelector('.conversation-document-card__content code');
+        if (!content || !code) return null;
+        const isCode = content.classList.contains('conversation-document-card__content--code');
+        const hasHighlightClass = code.classList.contains('hljs');
+        if (!isCode) return null;
+        return {
+          modeClass: Array.from(content.classList),
+          codeClass: Array.from(code.classList),
+          hasHighlightClass
+        };
+      }).catch(() => null);
+    }, {
+      timeoutMs: 30_000,
+      intervalMs: 250,
+      label: 'code highlighted content'
+    });
+
+    await codeCardRoot.locator('.conversation-document-card__tool-button--mode').click();
+    result.codePlainState = await waitFor(async () => {
+      return await codeCardRoot.evaluate((card) => {
+        const content = card.querySelector('.conversation-document-card__content');
+        if (!content) return null;
+        const isPlain = content.classList.contains('conversation-document-card__content--plain');
+        const text = content.textContent || '';
+        if (!isPlain || !text.includes('const answer = 42;')) return null;
+        return {
+          modeClass: Array.from(content.classList),
+          text
+        };
+      }).catch(() => null);
+    }, {
+      timeoutMs: 30_000,
+      intervalMs: 250,
+      label: 'code toggled to plain'
     });
     result.steps.push('document_loaded');
 
-    await cardRoot.locator('.conversation-document-card__tool-button[aria-label="编辑文档"]').click();
-    await cardRoot.locator('.conversation-document-card__editor').fill(EDITED_DOC_CONTENT);
-    await cardRoot.locator('.conversation-document-card__button.is-primary').click();
+    await mdCardRoot.locator('.conversation-document-card__tool-button[aria-label="编辑文档"]').click();
+    await mdCardRoot.locator('.conversation-document-card__editor').fill(EDITED_MD_DOC_CONTENT);
+    await mdCardRoot.locator('.conversation-document-card__button.is-primary').click();
     result.editedCardContent = await waitFor(async () => {
-      const text = await cardRoot.locator('.conversation-document-card__content').textContent().catch(() => null);
-      return text && text.includes('第二版内容') ? text : null;
+      return await mdCardRoot.evaluate((card) => {
+        const content = card.querySelector('.conversation-document-card__content');
+        if (!content) return null;
+        const isPlain = content.classList.contains('conversation-document-card__content--plain');
+        const text = content.textContent || '';
+        if (!isPlain || !text.includes('第二版内容')) return null;
+        return {
+          modeClass: Array.from(content.classList),
+          text
+        };
+      }).catch(() => null);
     }, {
       timeoutMs: 30_000,
       intervalMs: 250,
-      label: 'edited document content'
+      label: 'edited markdown document content'
     });
     result.steps.push('document_edited');
 
@@ -621,14 +756,14 @@ async function main() {
       throw new Error('conversation id not available after document tool flow');
     }
 
-    result.indexedDbDocument = await readIndexedDbDocument(sidebarFrame, result.conversationId, DOC_PATH);
-    if (!result.indexedDbDocument || result.indexedDbDocument.content !== EDITED_DOC_CONTENT) {
+    result.indexedDbDocument = await readIndexedDbDocument(sidebarFrame, result.conversationId, MD_DOC_PATH);
+    if (!result.indexedDbDocument || result.indexedDbDocument.content !== EDITED_MD_DOC_CONTENT) {
       throw new Error(`indexeddb document mismatch: ${JSON.stringify(result.indexedDbDocument)}`);
     }
     result.steps.push('document_persisted');
 
     const downloadPromise = page.waitForEvent('download', { timeout: 15_000 });
-    await cardRoot.locator('.conversation-document-card__tool-button[aria-label="下载文档"]').click();
+    await mdCardRoot.locator('.conversation-document-card__tool-button[aria-label="下载文档"]').click();
     const download = await downloadPromise;
     result.downloadSuggestedFilename = download.suggestedFilename();
     const downloadPath = await download.path().catch(() => null);
@@ -638,7 +773,7 @@ async function main() {
     if (result.downloadSuggestedFilename !== EXPECTED_DOWNLOAD_NAME) {
       throw new Error(`unexpected download filename: ${result.downloadSuggestedFilename}`);
     }
-    if (result.downloadedFileContent !== EDITED_DOC_CONTENT) {
+    if (result.downloadedFileContent !== EDITED_MD_DOC_CONTENT) {
       throw new Error(`unexpected downloaded content: ${JSON.stringify(result.downloadedFileContent)}`);
     }
     result.steps.push('document_downloaded');
@@ -666,11 +801,20 @@ async function main() {
     }, result.conversationId);
     result.steps.push('conversation_reloaded');
 
-    const reloadedCard = sidebarFrame.locator('.message.ai-message:last-child .conversation-document-card');
+    const reloadedCard = sidebarFrame.locator(`.message.ai-message:last-child .conversation-document-card[data-document-path="${MD_DOC_PATH}"]`);
     await reloadedCard.locator('summary').click();
     result.reloadedCardContent = await waitFor(async () => {
-      const text = await reloadedCard.locator('.conversation-document-card__content').textContent().catch(() => null);
-      return text && text.includes('第二版内容') ? text : null;
+      return await reloadedCard.evaluate((card) => {
+        const content = card.querySelector('.conversation-document-card__content');
+        if (!content) return null;
+        const isPlain = content.classList.contains('conversation-document-card__content--plain');
+        const text = content.textContent || '';
+        if (!isPlain || !text.includes('第二版内容')) return null;
+        return {
+          modeClass: Array.from(content.classList),
+          text
+        };
+      }).catch(() => null);
     }, {
       timeoutMs: 30_000,
       intervalMs: 250,

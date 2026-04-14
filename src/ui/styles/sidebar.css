@@ -10777,6 +10777,11 @@ body.chat-empty .empty-state-content {
     outline: none;
   }
 
+  .conversation-document-card__tool-button.is-active {
+    background: color-mix(in srgb, var(--cerebr-blue) 12%, var(--cerebr-bg-color));
+    color: color-mix(in srgb, var(--cerebr-blue) 68%, var(--cerebr-text-color));
+  }
+
   .conversation-document-card__tool-button i {
     font-size: 13px;
   }
@@ -10822,6 +10827,25 @@ body.chat-empty .empty-state-content {
     line-height: 1.55;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
+  }
+
+  .conversation-document-card__content--markdown {
+    font-family: inherit;
+    white-space: normal;
+  }
+
+  .conversation-document-card__content--markdown :last-child {
+    margin-bottom: 0;
+  }
+
+  .conversation-document-card__content--code {
+    white-space: pre;
+    overflow-x: auto;
+  }
+
+  .conversation-document-card__content--code code {
+    display: block;
+    min-width: max-content;
   }
 
   .conversation-document-card__editor-actions {

@@ -11,6 +11,13 @@ import {
   DEFAULT_AI_FOOTER_TOOLTIP_TEMPLATE,
   AI_FOOTER_TEMPLATE_VARIABLES
 } from '../utils/api_footer_template.js';
+import {
+  DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION,
+  DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES,
+  DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD,
+  DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT,
+  normalizeConversationDocumentViewModeOverridesSetting
+} from '../utils/conversation_document_viewer_state.js';
 
 const AI_FOOTER_SHARED_VARIABLE_PANEL_KEY = 'ai-footer-shared-variables';
 
@@ -100,6 +107,11 @@ export function createSettingsManager(appContext) {
     // 说明：历史版本中全屏布局复用了 sidebarWidth；这里新增独立配置以便分别调整。
     fullscreenWidth: 800,
     fontSize: 14,
+    documentFontSizePercent: 100,
+    documentRenderMarkdownForMd: true,
+    documentRenderMarkdownForTxt: false,
+    documentHighlightCodeByExtension: true,
+    documentViewModeOverrides: {},
     lineHeight: 1.5, // Added for better text readability control
     chatWidth: 100, // Percentage of sidebar width
     autoScroll: true,
@@ -1270,6 +1282,30 @@ export function createSettingsManager(appContext) {
       defaultValue: DEFAULT_SETTINGS.fontSize,
       apply: (v) => applyFontSize(v)
     },
+    {
+      key: DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD,
+      type: 'toggle',
+      menu: 'quick',
+      group: 'display',
+      label: 'Markdown 文件默认渲染',
+      defaultValue: DEFAULT_SETTINGS[DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD]
+    },
+    {
+      key: DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT,
+      type: 'toggle',
+      menu: 'quick',
+      group: 'display',
+      label: 'TXT 默认按 Markdown 渲染',
+      defaultValue: DEFAULT_SETTINGS[DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT]
+    },
+    {
+      key: DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION,
+      type: 'toggle',
+      menu: 'quick',
+      group: 'display',
+      label: '代码文件默认高亮',
+      defaultValue: DEFAULT_SETTINGS[DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION]
+    },
     // 缩放比例
     {
       key: 'scaleFactor',
@@ -1418,6 +1454,16 @@ export function createSettingsManager(appContext) {
     }
     if (key === 'scrollMinimapAutoHide') {
       return !!value;
+    }
+    if (
+      key === DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD
+      || key === DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT
+      || key === DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION
+    ) {
+      return !!value;
+    }
+    if (key === DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES) {
+      return normalizeConversationDocumentViewModeOverridesSetting(value);
     }
     if (key === 'scrollMinimapMessageMode') {
       return normalizeScrollMinimapMessageMode(value);
@@ -3785,6 +3831,9 @@ export function createSettingsManager(appContext) {
   
   // 设置缩放比例
   function setScaleFactor(value) { setSetting('scaleFactor', value); }
+
+  // 通用设置入口：供文档 viewer 等“非设置面板直接交互”模块写回偏好使用。
+  function setSettingValue(key, value) { setSetting(key, value); }
   
   // 设置自动滚动
   function setAutoScroll(enabled) { setSetting('autoScroll', enabled); }
@@ -3873,6 +3922,7 @@ export function createSettingsManager(appContext) {
     clampFullscreenWidth,
     setFontSize,
     setScaleFactor,
+    setSettingValue,
     setAutoScroll,
     setStopAtTop,
     setSendChatHistory,

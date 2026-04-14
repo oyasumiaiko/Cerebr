@@ -259,7 +259,8 @@ export function createMessageProcessor(appContext) {
   }
   const conversationDocumentViewer = createConversationDocumentViewer({
     executeAction: executeConversationDocumentUiAction,
-    resolveConversationId: resolveCurrentConversationDocumentId
+    resolveConversationId: resolveCurrentConversationDocumentId,
+    settingsManager
   });
 
   function createConversationDocumentCard(link) {

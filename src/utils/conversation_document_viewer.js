@@ -1,3 +1,15 @@
+import { renderMarkdownSafe } from './markdown_renderer.js';
+import {
+  buildNextConversationDocumentRenderMode,
+  CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT,
+  CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN,
+  CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN,
+  DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION,
+  DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES,
+  DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD,
+  DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT,
+  resolveConversationDocumentRenderState
+} from './conversation_document_viewer_state.js';
 import {
   CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME,
   CONVERSATION_DOCUMENT_INTERNAL_READ_FILE_FULL_ACTION,
@@ -45,17 +57,32 @@ function createDocumentActionIconButton({
   return button;
 }
 
+function applyToolButtonVisualState(button, { iconClass = '', active = false, title = '', ariaLabel = '' } = {}) {
+  if (!button) return;
+  const icon = button.querySelector('i');
+  if (icon) {
+    icon.className = iconClass;
+  }
+  button.classList.toggle('is-active', active === true);
+  button.title = title || ariaLabel || '';
+  button.setAttribute('aria-label', ariaLabel || title || '');
+}
+
 /**
  * 对话文档 viewer。
  *
  * 设计目标：
  * - 把消息内行内文档卡片的 DOM 逻辑从 message_processor 中抽离出来；
- * - 后续消息尾部附件区、渲染模式切换、字号控制都复用这一层；
- * - 当前 v1 先保持“全文以纯文本 pre 展示”的现有行为，只整理结构与图标按钮。
+ * - 文档显示模式、编辑、复制、下载、后续附件区共用同一套状态层；
+ * - 让“扩展名推断 + 默认偏好 + 每文档 override”只在一处实现。
  *
  * @param {{
  *   executeAction: (action: string, payload?: Record<string, any>) => Promise<any>,
- *   resolveConversationId: () => string
+ *   resolveConversationId: () => string,
+ *   settingsManager?: {
+ *     getSetting?: (key: string) => any,
+ *     setSettingValue?: (key: string, value: any) => void
+ *   }
  * }} options
  */
 export function createConversationDocumentViewer(options = {}) {
@@ -65,9 +92,23 @@ export function createConversationDocumentViewer(options = {}) {
   const resolveConversationId = typeof options.resolveConversationId === 'function'
     ? options.resolveConversationId
     : (() => '');
+  const settingsManager = options.settingsManager || null;
 
   const conversationDocumentCardState = new WeakMap();
   let changeListenerInstalled = false;
+
+  function getViewerSettingsSnapshot() {
+    return {
+      [DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD]:
+        settingsManager?.getSetting?.(DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD) !== false,
+      [DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT]:
+        settingsManager?.getSetting?.(DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT) === true,
+      [DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION]:
+        settingsManager?.getSetting?.(DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION) !== false,
+      [DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES]:
+        settingsManager?.getSetting?.(DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES) || {}
+    };
+  }
 
   function getConversationDocumentCardState(card) {
     let state = conversationDocumentCardState.get(card);
@@ -75,12 +116,14 @@ export function createConversationDocumentViewer(options = {}) {
       state = {
         loadingPromise: null,
         content: '',
+        file: null,
         loaded: false,
         editing: false,
         missing: false,
         refs: {
           meta: null,
-          body: null
+          body: null,
+          modeButton: null
         }
       };
       conversationDocumentCardState.set(card, state);
@@ -95,6 +138,99 @@ export function createConversationDocumentViewer(options = {}) {
     }
   }
 
+  function resolveCardRenderState(card) {
+    return resolveConversationDocumentRenderState(
+      card?.dataset?.documentPath || '',
+      getViewerSettingsSnapshot()
+    );
+  }
+
+  function syncConversationDocumentModeButton(card) {
+    const state = getConversationDocumentCardState(card);
+    const button = state.refs.modeButton;
+    if (!button) return;
+
+    const renderState = resolveCardRenderState(card);
+    const hasToggle = renderState.allowMarkdownToggle || renderState.allowCodeHighlightToggle;
+    button.hidden = !hasToggle;
+    button.disabled = !hasToggle;
+    if (!hasToggle) {
+      return;
+    }
+
+    if (renderState.allowMarkdownToggle) {
+      const isMarkdown = renderState.mode === CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN;
+      applyToolButtonVisualState(button, {
+        iconClass: isMarkdown ? 'fa-brands fa-markdown' : 'fa-solid fa-paragraph',
+        active: isMarkdown,
+        title: isMarkdown ? '当前按 Markdown 渲染，点击切换为纯文本' : '当前按纯文本显示，点击切换为 Markdown 渲染',
+        ariaLabel: isMarkdown ? '切换为纯文本视图' : '切换为 Markdown 视图'
+      });
+      return;
+    }
+
+    const isHighlighted = renderState.mode === CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT;
+    applyToolButtonVisualState(button, {
+      iconClass: isHighlighted ? 'fa-solid fa-code' : 'fa-solid fa-file-lines',
+      active: isHighlighted,
+      title: isHighlighted ? '当前已启用代码高亮，点击切换为纯文本' : '当前按纯文本显示，点击切换为代码高亮',
+      ariaLabel: isHighlighted ? '切换为纯文本视图' : '切换为代码高亮视图'
+    });
+  }
+
+  function renderPlainContent(content) {
+    const pre = document.createElement('pre');
+    pre.className = 'conversation-document-card__content conversation-document-card__content--plain';
+    pre.textContent = content || '';
+    return pre;
+  }
+
+  function renderMarkdownContent(content, enableDollarMath) {
+    const container = document.createElement('div');
+    container.className = 'conversation-document-card__content conversation-document-card__content--markdown';
+    container.innerHTML = renderMarkdownSafe(content || '', {
+      allowDetails: true,
+      enableDollarMath
+    });
+    return container;
+  }
+
+  function renderCodeContent(content, language) {
+    const pre = document.createElement('pre');
+    pre.className = 'conversation-document-card__content conversation-document-card__content--code';
+    const code = document.createElement('code');
+    code.textContent = content || '';
+    if (language) {
+      code.classList.add(`language-${language}`);
+    }
+    pre.appendChild(code);
+
+    try {
+      if (window.hljs?.highlightElement && language && window.hljs.getLanguage?.(language)) {
+        window.hljs.highlightElement(code);
+      }
+    } catch (_) {}
+
+    return pre;
+  }
+
+  function persistConversationDocumentViewMode(card, nextMode) {
+    const path = normalizeViewerString(card?.dataset?.documentPath);
+    if (!path || !settingsManager?.setSettingValue) return;
+
+    const settingsSnapshot = getViewerSettingsSnapshot();
+    const renderState = resolveConversationDocumentRenderState(path, settingsSnapshot);
+    const nextOverrides = {
+      ...(settingsSnapshot[DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES] || {})
+    };
+    if (nextMode === renderState.defaultMode) {
+      delete nextOverrides[path];
+    } else {
+      nextOverrides[path] = nextMode;
+    }
+    settingsManager.setSettingValue(DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES, nextOverrides);
+  }
+
   function renderConversationDocumentCardContent(card, file) {
     const state = getConversationDocumentCardState(card);
     if (!state.refs.body) return;
@@ -107,17 +243,35 @@ export function createConversationDocumentViewer(options = {}) {
       state.refs.body.appendChild(empty);
       card.classList.add('is-missing');
       state.missing = true;
+      state.file = null;
+      syncConversationDocumentModeButton(card);
       return;
     }
 
-    const pre = document.createElement('pre');
-    pre.className = 'conversation-document-card__content';
-    pre.textContent = file.content || '';
-    state.refs.body.appendChild(pre);
-    card.classList.remove('is-missing');
-    state.missing = false;
+    state.file = {
+      path: file.path,
+      updated_at: file.updated_at,
+      size_chars: file.size_chars,
+      content: file.content || ''
+    };
     state.loaded = true;
     state.content = file.content || '';
+
+    const renderState = resolveCardRenderState(card);
+    const enableDollarMath = settingsManager?.getSetting?.('enableDollarMath') !== false;
+    let contentNode = null;
+    if (renderState.mode === CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN) {
+      contentNode = renderMarkdownContent(file.content || '', enableDollarMath);
+    } else if (renderState.mode === CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT) {
+      contentNode = renderCodeContent(file.content || '', renderState.language);
+    } else {
+      contentNode = renderPlainContent(file.content || '');
+    }
+
+    state.refs.body.appendChild(contentNode);
+    card.classList.remove('is-missing');
+    state.missing = false;
+    syncConversationDocumentModeButton(card);
 
     const metaParts = [];
     if (Number.isFinite(Number(file.size_chars))) {
@@ -137,13 +291,15 @@ export function createConversationDocumentViewer(options = {}) {
     if (state.loadingPromise && options.force !== true) {
       return state.loadingPromise;
     }
-    if (state.loaded && options.force !== true) {
+    if (state.loaded && options.force !== true && state.file) {
+      renderConversationDocumentCardContent(card, state.file);
       return {
         ok: true,
         file: {
-          path: card.dataset.documentPath || '',
-          content: state.content,
-          size_chars: Array.from(state.content || '').length
+          path: state.file.path || card.dataset.documentPath || '',
+          content: state.file.content || '',
+          size_chars: state.file.size_chars ?? Array.from(state.file.content || '').length,
+          updated_at: state.file.updated_at || ''
         }
       };
     }
@@ -170,6 +326,27 @@ export function createConversationDocumentViewer(options = {}) {
     if (!textarea) return;
     textarea.style.height = 'auto';
     textarea.style.height = `${Math.min(520, Math.max(textarea.scrollHeight, 140))}px`;
+  }
+
+  async function cycleConversationDocumentViewMode(card) {
+    const renderState = resolveCardRenderState(card);
+    if ((renderState.allowedModes || []).length <= 1) return;
+
+    const nextMode = buildNextConversationDocumentRenderMode(
+      card.dataset.documentPath || '',
+      renderState.mode,
+      getViewerSettingsSnapshot()
+    );
+    if (nextMode === renderState.mode) return;
+
+    persistConversationDocumentViewMode(card, nextMode);
+    syncConversationDocumentModeButton(card);
+    const state = getConversationDocumentCardState(card);
+    if (state.file) {
+      renderConversationDocumentCardContent(card, state.file);
+      return;
+    }
+    await loadConversationDocumentCard(card);
   }
 
   async function enterConversationDocumentEditMode(card) {
@@ -219,7 +396,7 @@ export function createConversationDocumentViewer(options = {}) {
       event.stopPropagation();
       state.editing = false;
       card.classList.remove('is-editing');
-      renderConversationDocumentCardContent(card, {
+      renderConversationDocumentCardContent(card, state.file || {
         path: card.dataset.documentPath || '',
         content: state.content,
         size_chars: Array.from(state.content || '').length
@@ -281,6 +458,17 @@ export function createConversationDocumentViewer(options = {}) {
 
     const actions = document.createElement('span');
     actions.className = 'conversation-document-card__actions';
+
+    const state = getConversationDocumentCardState(card);
+    const modeButton = createDocumentActionIconButton({
+      iconClass: 'fa-brands fa-markdown',
+      title: '切换文档显示模式',
+      ariaLabel: '切换文档显示模式',
+      className: 'conversation-document-card__tool-button--mode',
+      onClick: () => cycleConversationDocumentViewMode(card)
+    });
+    state.refs.modeButton = modeButton;
+    actions.appendChild(modeButton);
     actions.appendChild(createDocumentActionIconButton({
       iconClass: 'fa-regular fa-pen-to-square',
       title: '编辑文档',
@@ -313,13 +501,13 @@ export function createConversationDocumentViewer(options = {}) {
       : '当前对话尚未持久化，暂时无法读取文档';
     body.appendChild(status);
 
-    const state = getConversationDocumentCardState(card);
     state.refs.meta = meta;
     state.refs.body = body;
 
     card.appendChild(summary);
     card.appendChild(meta);
     card.appendChild(body);
+    syncConversationDocumentModeButton(card);
     card.addEventListener('toggle', () => {
       if (card.open && !state.editing) {
         void loadConversationDocumentCard(card);
