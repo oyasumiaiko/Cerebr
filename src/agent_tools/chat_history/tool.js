@@ -7,17 +7,149 @@ import {
   extractMessagePlainText,
   isThreadMessageLike,
   scanConversationMessagesForSearch
-} from '../utils/chat_history_search_shared.js';
+} from '../../utils/chat_history_search_shared.js';
 import {
   findBestCandidateUrlPrefixMatch,
   generateCandidateUrls
-} from '../utils/url_candidates.js';
+} from '../../utils/url_candidates.js';
 
+export const HISTORY_SEARCH_TOOL_NAME = 'history_search';
+export const HISTORY_READ_TOOL_NAME = 'history_read';
 export const HISTORY_SEARCH_TOOL_DEFAULT_MAX_RESULTS = 20;
 export const HISTORY_SEARCH_TOOL_MAX_RESULTS = 100;
 export const HISTORY_SEARCH_EXCERPT_CONTEXT_CHARS = 40;
 export const HISTORY_SEARCH_MAX_EXCERPTS = 3;
 export const HISTORY_READ_MESSAGE_DEFAULT_MAX_CHARS = 5_000;
+
+/**
+ * 构造给 Responses API 使用的 history_search 自定义函数工具定义。
+ *
+ * 这里把“工具对模型可见的契约”收口到工具目录内，避免继续散落在 sender 大文件里。
+ *
+ * @returns {Object}
+ */
+export function buildHistorySearchFunctionToolDefinition() {
+  const properties = {
+    text_all: {
+      type: ['array', 'null'],
+      description: '可选。正文里必须同时出现的词或短语列表（AND 关系）。每一项都按完整字符串匹配，可直接填写短语。',
+      items: { type: 'string' }
+    },
+    text_not: {
+      type: ['array', 'null'],
+      description: '可选。正文里不得出现的词或短语列表。',
+      items: { type: 'string' }
+    },
+    url_contains: {
+      type: ['string', 'null'],
+      description: '可选。只返回 URL 中包含该子串的会话。'
+    },
+    current_page_only: {
+      type: ['boolean', 'null'],
+      description: '可选。true 时只返回与当前页面 URL 前缀匹配的会话。'
+    },
+    min_message_count: {
+      type: ['integer', 'null'],
+      description: '可选。只返回消息条数不少于该值的会话。'
+    },
+    max_message_count: {
+      type: ['integer', 'null'],
+      description: '可选。只返回消息条数不多于该值的会话。'
+    },
+    date_from: {
+      type: ['string', 'null'],
+      description: '可选。只返回结束时间不早于该时间点的会话。支持 YYYY-MM-DD、YYYYMMDD、10位秒时间戳、13位毫秒时间戳。'
+    },
+    date_to: {
+      type: ['string', 'null'],
+      description: '可选。只返回开始时间不晚于该时间点的会话。支持 YYYY-MM-DD、YYYYMMDD、10位秒时间戳、13位毫秒时间戳。'
+    },
+    recent_within: {
+      type: ['string', 'null'],
+      description: '可选。只返回最近一段时间内有活动的会话，例如 5d、1w、1m、1y。'
+    },
+    scope: {
+      type: ['string', 'null'],
+      description: '可选。message 表示每个正向词必须在同一条消息内同时命中；session 表示同一会话内不同消息共同满足也算命中。'
+    },
+    result_mode: {
+      type: ['string', 'null'],
+      description: '可选。matches 返回元数据 + 命中摘要；metadata_only 只返回会话元数据列表，适合结合 recent_within 之类条件做最近对话清单。'
+    },
+    max_results: {
+      type: ['integer', 'null'],
+      description: '可选。最多返回多少条命中会话，默认 20。'
+    }
+  };
+  return {
+    type: 'function',
+    name: HISTORY_SEARCH_TOOL_NAME,
+    description: [
+      '搜索已保存的聊天记录。',
+      '默认搜索全库会话，包含主线与线程消息，结果按最近会话优先返回。',
+      '它只搜索用户可见聊天正文，不搜索 tool output、hidden contextual items、footer 元数据或 replay items。',
+      '若只想列出当前页面相关会话，可传 current_page_only=true',
+      '返回的每条结果都会带会话元数据，例如创建时间、最近时间、消息条数、线程数量等。',
+      'result_mode=matches 时返回会话级结果与命中位置：主线命中使用 msg_index，线程命中使用 thread_ref + thread_msg_index；result_mode=metadata_only 时只返回元数据列表。',
+      'conv_ref 是当前聊天记录快照中的 1-based 会话编号，最新会话编号最大；若要继续读取正文窗口，请使用 history_read。'
+    ].join(' '),
+    strict: true,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties,
+      required: Object.keys(properties)
+    }
+  };
+}
+
+/**
+ * 构造给 Responses API 使用的 history_read 自定义函数工具定义。
+ *
+ * @returns {Object}
+ */
+export function buildHistoryReadFunctionToolDefinition() {
+  const properties = {
+    conv_ref: {
+      type: 'integer',
+      description: '必填。会话外部编号，1-based，最新会话编号最大。建议先通过 history_search 获取。'
+    },
+    start: {
+      type: 'integer',
+      description: '必填。读取窗口起点，1-based，闭区间。'
+    },
+    end: {
+      type: 'integer',
+      description: '必填。读取窗口终点，1-based，闭区间。'
+    },
+    thread_ref: {
+      type: ['integer', 'null'],
+      description: '可选。若提供，则读取该线程内的 thread_msg_index 窗口；不传则读取主线消息窗口。'
+    },
+    read_full_messages: {
+      type: ['boolean', 'null'],
+      description: `可选。true 时不对单条消息正文应用默认 ${HISTORY_READ_MESSAGE_DEFAULT_MAX_CHARS} 字符截断；不传或 false 时，每条消息正文最多返回 ${HISTORY_READ_MESSAGE_DEFAULT_MAX_CHARS} 字符，并在正文末尾附统一的截断提示。`
+    }
+  };
+  return {
+    type: 'function',
+    name: HISTORY_READ_TOOL_NAME,
+    description: [
+      '按窗口读取单个已保存会话的聊天正文。',
+      '传入 conv_ref 与 1-based 闭区间 start/end；默认读取主线消息 msg_index。',
+      '若要读取线程消息，则额外传入 thread_ref，此时读取该线程内的 thread_msg_index 窗口。',
+      '它只返回用户可见聊天正文，不返回内部 tool output、hidden contextual items 或 replay items。',
+      `默认每条消息正文最多返回 ${HISTORY_READ_MESSAGE_DEFAULT_MAX_CHARS} 字符；若确实需要完整正文，可显式传 read_full_messages=true。`
+    ].join(' '),
+    strict: true,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties,
+      required: Object.keys(properties)
+    }
+  };
+}
 
 function clampPositiveInt(value, fallback, max = Number.POSITIVE_INFINITY) {
   const numeric = Number(value);

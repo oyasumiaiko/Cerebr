@@ -8,16 +8,17 @@ const { pathToFileURL } = require('node:url');
 async function loadViewImageToolModule() {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cerebr-view-image-tool-'));
   await fs.writeFile(path.join(tempDir, 'package.json'), JSON.stringify({ type: 'module' }), 'utf8');
-  await fs.mkdir(path.join(tempDir, 'src', 'agent_tools'), { recursive: true });
+  await fs.mkdir(path.join(tempDir, 'src', 'agent_tools', 'shared'), { recursive: true });
+  await fs.mkdir(path.join(tempDir, 'src', 'agent_tools', 'view_image'), { recursive: true });
   await fs.copyFile(
-    path.resolve(__dirname, '../src/agent_tools/prompt_image_tool_shared.js'),
-    path.join(tempDir, 'src', 'agent_tools', 'prompt_image_tool_shared.js')
+    path.resolve(__dirname, '../src/agent_tools/shared/prompt_image_tool_shared.js'),
+    path.join(tempDir, 'src', 'agent_tools', 'shared', 'prompt_image_tool_shared.js')
   );
   await fs.copyFile(
-    path.resolve(__dirname, '../src/agent_tools/view_image_tool.js'),
-    path.join(tempDir, 'src', 'agent_tools', 'view_image_tool.js')
+    path.resolve(__dirname, '../src/agent_tools/view_image/tool.js'),
+    path.join(tempDir, 'src', 'agent_tools', 'view_image', 'tool.js')
   );
-  return import(`${pathToFileURL(path.join(tempDir, 'src', 'agent_tools', 'view_image_tool.js')).href}?test=${Date.now()}`);
+  return import(`${pathToFileURL(path.join(tempDir, 'src', 'agent_tools', 'view_image', 'tool.js')).href}?test=${Date.now()}`);
 }
 
 test('normalizeViewImageArguments 支持 path 与 original detail', async () => {

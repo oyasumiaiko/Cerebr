@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 
 async function loadResponsesToolOutputModule() {
-  const filePath = path.resolve(__dirname, '../src/agent_tools/responses_tool_output.js');
+  const filePath = path.resolve(__dirname, '../src/agent_tools/shared/responses_tool_output.js');
   const source = await fs.readFile(filePath, 'utf8');
   const dataUrl = `data:text/javascript;base64,${Buffer.from(source, 'utf8').toString('base64')}`;
   return import(dataUrl);

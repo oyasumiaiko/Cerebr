@@ -8,16 +8,17 @@ const { pathToFileURL } = require('node:url');
 async function loadWebpageScreenshotToolModule() {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cerebr-webpage-screenshot-tool-'));
   await fs.writeFile(path.join(tempDir, 'package.json'), JSON.stringify({ type: 'module' }), 'utf8');
-  await fs.mkdir(path.join(tempDir, 'src', 'agent_tools'), { recursive: true });
+  await fs.mkdir(path.join(tempDir, 'src', 'agent_tools', 'shared'), { recursive: true });
+  await fs.mkdir(path.join(tempDir, 'src', 'agent_tools', 'webpage_screenshot'), { recursive: true });
   await fs.copyFile(
-    path.resolve(__dirname, '../src/agent_tools/prompt_image_tool_shared.js'),
-    path.join(tempDir, 'src', 'agent_tools', 'prompt_image_tool_shared.js')
+    path.resolve(__dirname, '../src/agent_tools/shared/prompt_image_tool_shared.js'),
+    path.join(tempDir, 'src', 'agent_tools', 'shared', 'prompt_image_tool_shared.js')
   );
   await fs.copyFile(
-    path.resolve(__dirname, '../src/agent_tools/webpage_screenshot_tool.js'),
-    path.join(tempDir, 'src', 'agent_tools', 'webpage_screenshot_tool.js')
+    path.resolve(__dirname, '../src/agent_tools/webpage_screenshot/tool.js'),
+    path.join(tempDir, 'src', 'agent_tools', 'webpage_screenshot', 'tool.js')
   );
-  return import(`${pathToFileURL(path.join(tempDir, 'src', 'agent_tools', 'webpage_screenshot_tool.js')).href}?test=${Date.now()}`);
+  return import(`${pathToFileURL(path.join(tempDir, 'src', 'agent_tools', 'webpage_screenshot', 'tool.js')).href}?test=${Date.now()}`);
 }
 
 test('normalizeWebpageScreenshotArguments 默认走压缩模式，并允许 original', async () => {

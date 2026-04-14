@@ -4,7 +4,7 @@ import {
   PROMPT_IMAGE_MAX_WIDTH,
   buildPromptImageDetailSchemaDescription,
   normalizePromptImageDetail
-} from './prompt_image_tool_shared.js';
+} from '../shared/prompt_image_tool_shared.js';
 
 /**
  * 网页截图工具定义。

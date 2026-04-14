@@ -4,7 +4,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 async function loadConversationDocumentToolsModule() {
-  const filePath = path.resolve(__dirname, '../src/agent_tools/conversation_document_tools.js');
+  const filePath = path.resolve(__dirname, '../src/agent_tools/conversation_document/tools.js');
   return import(`${pathToFileURL(filePath).href}?test=${Date.now()}`);
 }
 

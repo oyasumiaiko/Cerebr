@@ -7,7 +7,7 @@
  * - 让会话加载逻辑只消费一个极小、稳定的恢复结果对象。
  */
 
-import { REQUEST_USER_INPUT_TOOL_NAME, normalizeRequestUserInputArguments } from '../agent_tools/request_user_input_tool.js';
+import { REQUEST_USER_INPUT_TOOL_NAME, normalizeRequestUserInputArguments } from '../agent_tools/request_user_input/tool.js';
 import { getAssistantActivityTimeline } from './assistant_activity_timeline.js';
 
 function normalizeString(value) {

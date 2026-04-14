@@ -12,12 +12,12 @@
  * - 列表/上下文注入只读 manifest，不再每次把整包源码都拉进来。
  */
 
-import { getBuiltinMicroSkillRecordByName, getBuiltinMicroSkillRecords } from './builtin_micro_skill_creator.js';
-import { createIndexedDbMicroSkillStore, MICRO_SKILL_DB_NAME } from '../storage/micro_skill_store.js';
+import { getBuiltinMicroSkillRecordByName, getBuiltinMicroSkillRecords } from './builtin_creator.js';
+import { createIndexedDbMicroSkillStore, MICRO_SKILL_DB_NAME } from '../../storage/micro_skill_store.js';
 import {
   PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS,
   PAGE_CONTENT_READ_MAX_CHARS
-} from './page_content_read_tool.js';
+} from '../page_content_read/tool.js';
 import {
   buildDefaultMicroSkillMountContract as buildSharedDefaultMicroSkillMountContract,
   normalizeSkillScaffoldName,

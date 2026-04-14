@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 
 async function loadPageToolEnvironmentModule() {
-  const filePath = path.resolve(__dirname, '../src/agent_tools/page_tool_environment.js');
+  const filePath = path.resolve(__dirname, '../src/agent_tools/shared/page_tool_environment.js');
   const source = await fs.readFile(filePath, 'utf8');
   const dataUrl = `data:text/javascript;base64,${Buffer.from(source, 'utf8').toString('base64')}`;
   return import(dataUrl);

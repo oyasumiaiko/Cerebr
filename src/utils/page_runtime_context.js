@@ -1,7 +1,7 @@
 import {
   JS_RUNTIME_ENV_BOUND_HOST_PAGE,
   JS_RUNTIME_ENV_ISOLATED_SANDBOX
-} from '../agent_tools/page_tool_environment.js';
+} from '../agent_tools/shared/page_tool_environment.js';
 
 /**
  * 规范化 frame 快照，确保签名稳定且字段顺序固定。

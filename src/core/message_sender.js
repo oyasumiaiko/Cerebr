@@ -65,27 +65,40 @@ import {
   buildResponsesConversationDocumentToolOutputContentItems,
   buildResponsesMicroSkillRegistryToolOutputContentItems,
   buildResponsesGenericXmlToolOutputContentItems
-} from '../agent_tools/responses_tool_output.js';
+} from '../agent_tools/shared/responses_tool_output.js';
 import {
   ensureResponsesReplayOutputItemsIncludeFunctionCalls
 } from '../utils/responses_follow_up.js';
 import {
+  JS_RUNTIME_EXECUTE_TOOL_NAME,
+  buildJsRuntimeExecuteFunctionToolDefinition,
+  normalizeJsRuntimeExecuteToolArguments
+} from '../agent_tools/js_runtime_execute/tool.js';
+import {
+  PAGE_CONTENT_READ_TOOL_NAME,
+  buildPageContentReadFunctionToolDefinition
+} from '../agent_tools/page_content_read/tool.js';
+import {
   PDF_CONTENT_READ_TOOL_NAME,
   buildPdfContentReadFunctionToolDefinition
-} from '../agent_tools/pdf_content_read_tool.js';
+} from '../agent_tools/pdf_content_read/tool.js';
 import {
   WEBPAGE_SCREENSHOT_TOOL_NAME,
   buildWebpageScreenshotFunctionToolDefinition
-} from '../agent_tools/webpage_screenshot_tool.js';
+} from '../agent_tools/webpage_screenshot/tool.js';
 import {
   VIEW_IMAGE_TOOL_NAME,
   buildViewImageFunctionToolDefinition
-} from '../agent_tools/view_image_tool.js';
+} from '../agent_tools/view_image/tool.js';
 import {
+  HISTORY_READ_TOOL_NAME,
+  HISTORY_SEARCH_TOOL_NAME,
   buildConversationReferenceSnapshot,
+  buildHistoryReadFunctionToolDefinition,
+  buildHistorySearchFunctionToolDefinition,
   executeHistoryReadTool,
   executeHistorySearchTool
-} from '../agent_tools/chat_history_tool.js';
+} from '../agent_tools/chat_history/tool.js';
 import {
   ASK_OTHER_AI_TOOL_NAME,
   LIST_ASKABLE_MODELS_TOOL_NAME,
@@ -94,19 +107,19 @@ import {
   buildAskOtherAiUserMessage,
   buildListAskableModelsFunctionToolDefinition,
   normalizeAskOtherAiArguments
-} from '../agent_tools/ask_other_ai_tool.js';
+} from '../agent_tools/ask_other_ai/tool.js';
 import {
   REQUEST_USER_INPUT_TOOL_NAME,
   buildRequestUserInputFunctionToolDefinition,
   buildRequestUserInputResult,
   normalizeRequestUserInputArguments
-} from '../agent_tools/request_user_input_tool.js';
+} from '../agent_tools/request_user_input/tool.js';
 import {
   MICRO_SKILL_READ_MAX_CHARS,
   LEGACY_MICRO_SKILL_REGISTRY_TOOL_NAME,
   MICRO_SKILL_REGISTRY_TOOL_NAME,
   buildMicroSkillRegistryFunctionToolDefinition
-} from '../agent_tools/micro_skill_registry_tool.js';
+} from '../agent_tools/micro_skill/registry_tool.js';
 import {
   CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
   CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME,
@@ -125,12 +138,12 @@ import {
   isVirtualFileToolAction,
   normalizeVirtualFileResultFromSkillRegistryAction,
   normalizeVirtualFileToolArguments
-} from '../agent_tools/conversation_document_tools.js';
+} from '../agent_tools/conversation_document/tools.js';
 import {
   JS_RUNTIME_ENV_BOUND_HOST_PAGE,
   JS_RUNTIME_ENV_ISOLATED_SANDBOX,
   resolvePageToolEnvironment
-} from '../agent_tools/page_tool_environment.js';
+} from '../agent_tools/shared/page_tool_environment.js';
 import {
   createAssistantPreResponseStatus,
   deriveAssistantPreResponseStatusFromLocalStage,
@@ -165,13 +178,13 @@ import {
   getConversationsByIds
 } from '../storage/indexeddb_helper.js';
 
-const RESPONSES_JS_RUNTIME_TOOL_NAME = 'js_runtime_execute';
-const RESPONSES_PAGE_CONTENT_TOOL_NAME = 'page_content_read';
+const RESPONSES_JS_RUNTIME_TOOL_NAME = JS_RUNTIME_EXECUTE_TOOL_NAME;
+const RESPONSES_PAGE_CONTENT_TOOL_NAME = PAGE_CONTENT_READ_TOOL_NAME;
 const RESPONSES_PDF_CONTENT_TOOL_NAME = PDF_CONTENT_READ_TOOL_NAME;
 const RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME = WEBPAGE_SCREENSHOT_TOOL_NAME;
 const RESPONSES_VIEW_IMAGE_TOOL_NAME = VIEW_IMAGE_TOOL_NAME;
-const RESPONSES_HISTORY_SEARCH_TOOL_NAME = 'history_search';
-const RESPONSES_HISTORY_READ_TOOL_NAME = 'history_read';
+const RESPONSES_HISTORY_SEARCH_TOOL_NAME = HISTORY_SEARCH_TOOL_NAME;
+const RESPONSES_HISTORY_READ_TOOL_NAME = HISTORY_READ_TOOL_NAME;
 const RESPONSES_REQUEST_USER_INPUT_TOOL_NAME = REQUEST_USER_INPUT_TOOL_NAME;
 const RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME = LIST_ASKABLE_MODELS_TOOL_NAME;
 const RESPONSES_ASK_OTHER_AI_TOOL_NAME = ASK_OTHER_AI_TOOL_NAME;
@@ -7750,253 +7763,6 @@ export function createMessageSender(appContext) {
 
 
   /**
-   * 构造给 Responses API 使用的 js_runtime_execute 自定义函数工具定义。
-   *
-   * 说明：
-   * - 这是模型“看到”的工具面；
-   * - 模型在代码体里可以直接 `await` / `return`；
-   * - 不额外注入扩展对象；
-   * - 返回值会被序列化为文本片段回传给模型：对象/数组默认 JSON 化，超长输出会自动截断。
-   *
-   * @param {ReturnType<typeof resolvePageToolEnvironment>} pageToolEnvironment
-   * @returns {Object}
-   */
-  function buildResponsesJsRuntimeFunctionToolDefinition(pageToolEnvironment = resolveResponsesPageToolEnvironment()) {
-    const descriptionLines = [
-      '在浏览器脚本环境中执行一次性 JavaScript。',
-      'code 字段会作为 async 函数体运行，可直接使用 await 和 return。',
-      '若需要跨多次调用复用状态，请显式把对象或值挂到 globalThis；同一页面环境未刷新时，后续 IIFE 可继续读取这些 globalThis 字段。',
-      '除非能确定当前页面是单页应用且不会销毁当前运行环境，否则禁止刷新页面或导航到其他网址；这会直接中断当前宿主页里的会话执行。',
-      '可访问当前执行环境的 DOM / Web API，不要假设能直接访问页面主世界里的自定义 JS 对象。',
-      'console.log/info/warn/error/debug 的输出会被捕获并一并回传，可用于调试或分步观察。',
-      '若需要回传大量长字符串或多行文本，优先使用 console.log 输出；为避免长字符串作为 return 值时变成 JSON 字符串表现，return 更适合简洁结果值。',
-      '工具返回结果采用 XML 分块文本：通常包含 <metadata>、<return_value>、<console_logs>、<error>；多 frame 时还可能包含 <frame_results>。',
-      '其中 metadata 是小型 JSON，其余正文块是纯文本；过长块会自动截断。请尽量返回紧凑、可序列化的小结果。'
-    ];
-    const frameDescription = '可选的 frame ID 数组。省略、传空数组或 null 时，默认在顶层 frame 执行；若当前请求附带 page_runtime_context，可从中读取可用 frame_id。';
-    return {
-      type: 'function',
-      name: RESPONSES_JS_RUNTIME_TOOL_NAME,
-      description: descriptionLines.join(' '),
-      strict: true,
-      parameters: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          code: {
-            type: 'string',
-            description: '要执行的 JavaScript 代码片段。它会作为 async 函数体执行，可直接使用 await、return 和 console.log/info/warn/error/debug。若需要回传大量长字符串或多行文本，优先使用 console.log 输出；return 更适合简洁结果值。'
-          },
-          timeout_ms: {
-            type: ['integer', 'null'],
-            description: 'The timeout for the execution in milliseconds.'
-          },
-          frame_ids: {
-            type: ['array', 'null'],
-            description: frameDescription,
-            items: {
-              type: 'integer'
-            }
-          }
-        },
-        required: ['code', 'timeout_ms', 'frame_ids']
-      }
-    };
-  }
-
-  /**
-   * 构造给 Responses API 使用的 page_content_read 自定义函数工具定义。
-   *
-   * 这个工具的定位非常克制：
-   * - 只返回“当前网页 + 可访问 iframe”的预提取纯文本；
-   * - 文本会做逐行 trim 与空白折叠，更适合快速通读；
-   * - 不承诺 DOM 级结构、选择器级定位或属性提取；
-   * - 若当前页面是 PDF 且需要按章节 / 片段读取，请优先改用 pdf_content_read；
-   * - 若模型需要 DOM 级结构化读取，请优先改用 js_runtime_execute。
-   *
-   * @returns {Object}
-   */
-  function buildResponsesPageContentFunctionToolDefinition() {
-    const properties = {
-      skip_chars: {
-        type: ['integer', 'null'],
-        description: '可选。要跳过的字符数，用于读取指定偏移后的连续片段。省略时默认从头开始。'
-      },
-      max_chars: {
-        type: ['integer', 'null'],
-        description: '可选。读取的连续字符长度。默认 10000，最大 50000。若与 skip_chars 一起提供，则返回从 skip_chars 开始的连续片段；若两者都省略，则返回默认从开头开始的截断预览。'
-      }
-    };
-    return {
-      type: 'function',
-      name: RESPONSES_PAGE_CONTENT_TOOL_NAME,
-      description: [
-        '快速读取当前侧栏绑定网页标签页的预提取文本内容。',
-        '它会返回页面正文与可访问 iframe 文本的预包装读取结果，并对多行做 trim 与空白折叠，更适合一次快速通读页面内容。',
-        '若用户在对话开头说“这个”或未明确指代对象，默认指当前网页环境上下文，请先调用本工具读取页面再回答。',
-        '这不是 DOM 结构化提取工具；若当前页面是 PDF 且需要按章节 / 片段读取，请优先使用 pdf_content_read；若需要按元素、选择器、属性进行结构化定位与提取，请优先使用 js_runtime_execute。',
-        '默认返回从开头开始的 10000 字符预览，最大单次读取 50000 字符；正文若被截断，会在正文末尾附带统一的截断提示。也可通过 skip_chars 与 max_chars 读取指定连续片段。'
-      ].join(' '),
-      strict: true,
-      parameters: {
-        type: 'object',
-        additionalProperties: false,
-        properties,
-        required: Object.keys(properties)
-      }
-    };
-  }
-
-  /**
-   * 列出当前允许被“向其他 AI 提问”工具使用的目标模型目录。
-   *
-   * 这把工具只做目录发现与使用须知说明：
-   * - 不直接发起任何模型调用；
-   * - 返回的 config_id 可直接用于 ask_other_ai；
-   * - 是否包含当前配置完全由用户勾选决定，这里不额外替用户做裁剪。
-   *
-   * @returns {Object}
-   */
-  /**
-   * 构造给 Responses API 使用的 history_search 自定义函数工具定义。
-   *
-   * 设计说明：
-   * - 它面向“已保存聊天记录”的全文检索；
-   * - 复用当前 UI 的 query 语法，避免模型侧和 UI 侧出现两套搜索规则；
-   * - 返回的是会话级结果 + 命中位置索引，不直接倾倒整段聊天正文；
-   * - 若模型需要继续看全文，应再调用 history_read。
-   *
-   * @returns {Object}
-   */
-  function buildResponsesHistorySearchFunctionToolDefinition() {
-    const properties = {
-      text_all: {
-        type: ['array', 'null'],
-        description: '可选。正文里必须同时出现的词或短语列表（AND 关系）。每一项都按完整字符串匹配，可直接填写短语。',
-        items: { type: 'string' }
-      },
-      text_not: {
-        type: ['array', 'null'],
-        description: '可选。正文里不得出现的词或短语列表。',
-        items: { type: 'string' }
-      },
-      url_contains: {
-        type: ['string', 'null'],
-        description: '可选。只返回 URL 中包含该子串的会话。'
-      },
-      current_page_only: {
-        type: ['boolean', 'null'],
-        description: '可选。true 时只返回与当前页面 URL 前缀匹配的会话。'
-      },
-      min_message_count: {
-        type: ['integer', 'null'],
-        description: '可选。只返回消息条数不少于该值的会话。'
-      },
-      max_message_count: {
-        type: ['integer', 'null'],
-        description: '可选。只返回消息条数不多于该值的会话。'
-      },
-      date_from: {
-        type: ['string', 'null'],
-        description: '可选。只返回结束时间不早于该时间点的会话。支持 YYYY-MM-DD、YYYYMMDD、10位秒时间戳、13位毫秒时间戳。'
-      },
-      date_to: {
-        type: ['string', 'null'],
-        description: '可选。只返回开始时间不晚于该时间点的会话。支持 YYYY-MM-DD、YYYYMMDD、10位秒时间戳、13位毫秒时间戳。'
-      },
-      recent_within: {
-        type: ['string', 'null'],
-        description: '可选。只返回最近一段时间内有活动的会话，例如 5d、1w、1m、1y。'
-      },
-      scope: {
-        type: ['string', 'null'],
-        description: '可选。message 表示每个正向词必须在同一条消息内同时命中；session 表示同一会话内不同消息共同满足也算命中。'
-      },
-      result_mode: {
-        type: ['string', 'null'],
-        description: '可选。matches 返回元数据 + 命中摘要；metadata_only 只返回会话元数据列表，适合结合 recent_within 之类条件做最近对话清单。'
-      },
-      max_results: {
-        type: ['integer', 'null'],
-        description: '可选。最多返回多少条命中会话，默认 20。'
-      }
-    };
-    return {
-      type: 'function',
-      name: RESPONSES_HISTORY_SEARCH_TOOL_NAME,
-      description: [
-        '搜索已保存的聊天记录。',
-        '默认搜索全库会话，包含主线与线程消息，结果按最近会话优先返回。',
-        '它只搜索用户可见聊天正文，不搜索 tool output、hidden contextual items、footer 元数据或 replay items。',
-        '若只想列出当前页面相关会话，可传 current_page_only=true',
-        '返回的每条结果都会带会话元数据，例如创建时间、最近时间、消息条数、线程数量等。',
-        'result_mode=matches 时返回会话级结果与命中位置：主线命中使用 msg_index，线程命中使用 thread_ref + thread_msg_index；result_mode=metadata_only 时只返回元数据列表。',
-        'conv_ref 是当前聊天记录快照中的 1-based 会话编号，最新会话编号最大；若要继续读取正文窗口，请使用 history_read。'
-      ].join(' '),
-      strict: true,
-      parameters: {
-        type: 'object',
-        additionalProperties: false,
-        properties,
-        required: Object.keys(properties)
-      }
-    };
-  }
-
-  /**
-   * 构造给 Responses API 使用的 history_read 自定义函数工具定义。
-   *
-   * 设计说明：
-   * - 它只负责“按窗口读取聊天正文”，不负责搜索；
-   * - 主线与线程分开编号，不做拍平；
-   * - 读取范围使用 1-based 闭区间 start/end，与搜索结果返回的索引一致。
-   *
-   * @returns {Object}
-   */
-  function buildResponsesHistoryReadFunctionToolDefinition() {
-    const properties = {
-      conv_ref: {
-        type: 'integer',
-        description: '必填。会话外部编号，1-based，最新会话编号最大。建议先通过 history_search 获取。'
-      },
-      start: {
-        type: 'integer',
-        description: '必填。读取窗口起点，1-based，闭区间。'
-      },
-      end: {
-        type: 'integer',
-        description: '必填。读取窗口终点，1-based，闭区间。'
-      },
-      thread_ref: {
-        type: ['integer', 'null'],
-        description: '可选。若提供，则读取该线程内的 thread_msg_index 窗口；不传则读取主线消息窗口。'
-      },
-      read_full_messages: {
-        type: ['boolean', 'null'],
-        description: '可选。true 时不对单条消息正文应用默认 5000 字符截断；不传或 false 时，每条消息正文最多返回 5000 字符，并在正文末尾附统一的截断提示。'
-      }
-    };
-    return {
-      type: 'function',
-      name: RESPONSES_HISTORY_READ_TOOL_NAME,
-      description: [
-        '按窗口读取单个已保存会话的聊天正文。',
-        '传入 conv_ref 与 1-based 闭区间 start/end；默认读取主线消息 msg_index。',
-        '若要读取线程消息，则额外传入 thread_ref，此时读取该线程内的 thread_msg_index 窗口。',
-        '它只返回用户可见聊天正文，不返回内部 tool output、hidden contextual items 或 replay items。',
-        '默认每条消息正文最多返回 5000 字符；若确实需要完整正文，可显式传 read_full_messages=true。'
-      ].join(' '),
-      strict: true,
-      parameters: {
-        type: 'object',
-        additionalProperties: false,
-        properties,
-        required: Object.keys(properties)
-      }
-    };
-  }
-
-  /**
    * 返回当前这次发送应该暴露给 Responses API 的自定义函数工具列表。
    *
    * 当前工具暴露规则：
@@ -8022,16 +7788,16 @@ export function createMessageSender(appContext) {
       buildViewImageFunctionToolDefinition(),
       buildListAskableModelsFunctionToolDefinition(),
       buildAskOtherAiFunctionToolDefinition(),
-      buildResponsesHistorySearchFunctionToolDefinition(),
-      buildResponsesHistoryReadFunctionToolDefinition()
+      buildHistorySearchFunctionToolDefinition(),
+      buildHistoryReadFunctionToolDefinition()
     ];
     if (pageToolEnvironment?.exposePageContentTool) {
       tools.push(buildWebpageScreenshotFunctionToolDefinition());
       tools.push(buildPdfContentReadFunctionToolDefinition());
-      tools.push(buildResponsesPageContentFunctionToolDefinition());
+      tools.push(buildPageContentReadFunctionToolDefinition());
     }
     if (typeof utils?.executeJsRuntime === 'function') {
-      tools.unshift(buildResponsesJsRuntimeFunctionToolDefinition(pageToolEnvironment));
+      tools.unshift(buildJsRuntimeExecuteFunctionToolDefinition(pageToolEnvironment));
     }
     return tools;
   }
@@ -8349,46 +8115,6 @@ export function createMessageSender(appContext) {
   }
 
   /**
-   * 规范化 js_runtime_execute 的参数。
-   *
-   * @param {any} rawArgs
-   * @returns {{code:string, timeoutMs:number|null, frameIds:number[]|null}}
-   */
-  function normalizeResponsesJsRuntimeToolArguments(rawArgs) {
-    const args = (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs))
-      ? rawArgs
-      : {};
-    const code = (typeof args.code === 'string') ? args.code : '';
-    if (!code.trim()) {
-      throw new Error('js_runtime_execute 参数错误：code 不能为空。');
-    }
-    const timeoutMs = (() => {
-      if (args.timeout_ms === null || typeof args.timeout_ms === 'undefined') return null;
-      const parsed = Number(args.timeout_ms);
-      if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) {
-        throw new Error('js_runtime_execute 参数错误：timeout_ms 必须是整数。');
-      }
-      if (parsed <= 0) {
-        throw new Error('js_runtime_execute 参数错误：timeout_ms 必须大于 0。');
-      }
-      return Math.trunc(parsed);
-    })();
-
-    const frameIds = Array.isArray(args.frame_ids)
-      ? args.frame_ids
-        .map(value => Number(value))
-        .filter(value => Number.isFinite(value))
-        .map(value => Math.trunc(value))
-      : null;
-
-    return {
-      code,
-      timeoutMs,
-      frameIds: (Array.isArray(frameIds) && frameIds.length > 0) ? frameIds : null
-    };
-  }
-
-  /**
    * 执行 js_runtime_execute 并返回稳定结果对象。
    *
    * @param {any} rawArgs
@@ -8409,7 +8135,7 @@ export function createMessageSender(appContext) {
     }
 
     try {
-      const normalizedArgs = normalizeResponsesJsRuntimeToolArguments(rawArgs);
+      const normalizedArgs = normalizeJsRuntimeExecuteToolArguments(rawArgs);
       const runtimeEnvironment = (typeof options?.runtimeEnvironment === 'string' && options.runtimeEnvironment)
         ? options.runtimeEnvironment
         : resolveResponsesPageToolEnvironment(options?.attemptState).jsRuntimeEnvironment;

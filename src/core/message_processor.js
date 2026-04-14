@@ -41,14 +41,14 @@ import {
   extractResponsesToolOutputInputImages,
   formatResponsesToolOutputForDisplay,
   hasResponsesToolOutputBody
-} from '../agent_tools/responses_tool_output.js';
+} from '../agent_tools/shared/responses_tool_output.js';
 import {
   CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME,
   CONVERSATION_DOCUMENT_INTERNAL_READ_FILE_FULL_ACTION,
   CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION,
   executeConversationDocumentAction,
   normalizeConversationDocumentPath
-} from '../agent_tools/conversation_document_tools.js';
+} from '../agent_tools/conversation_document/tools.js';
 import {
   computeContiguousDiffWindow,
   resolveRenderedSurfaceDiffBaseSignatures,

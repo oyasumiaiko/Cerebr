@@ -2,7 +2,7 @@ import {
   PROMPT_IMAGE_JPEG_QUALITY,
   PROMPT_IMAGE_MAX_HEIGHT,
   PROMPT_IMAGE_MAX_WIDTH
-} from '../agent_tools/prompt_image_tool_shared.js';
+} from '../agent_tools/shared/prompt_image_tool_shared.js';
 
 const SOURCE_FALLBACK_MIME_TYPE = 'image/png';
 const OUTPUT_JPEG_MIME_TYPE = 'image/jpeg';

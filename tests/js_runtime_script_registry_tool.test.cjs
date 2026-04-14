@@ -4,7 +4,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 async function loadMicroSkillRegistryToolModule() {
-  const filePath = path.resolve(__dirname, '../src/agent_tools/micro_skill_registry_tool.js');
+  const filePath = path.resolve(__dirname, '../src/agent_tools/micro_skill/registry_tool.js');
   return import(`${pathToFileURL(filePath).href}?test=${Date.now()}`);
 }
 

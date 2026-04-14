@@ -2,7 +2,7 @@ import {
   CEREBR_MICRO_SKILL_MOUNT_SURFACE,
   buildMicroSkillContextSummary,
   normalizeStoredMicroSkillRecord
-} from '../agent_tools/micro_skill_registry_tool.js';
+} from '../agent_tools/micro_skill/registry_tool.js';
 
 export const CEREBR_MICRO_SKILL_WORLD_ID = 'cerebr-micro-skills';
 export const CEREBR_MICRO_SKILL_SCRIPT_ID_PREFIX = 'cerebr-micro-skill--';

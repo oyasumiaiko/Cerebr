@@ -11,18 +11,18 @@
 import {
   PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS,
   PAGE_CONTENT_READ_MAX_CHARS
-} from './page_content_read_tool.js';
-import { derivePatchedFileContent, parseApplyPatch } from './apply_patch_core.js';
+} from '../page_content_read/tool.js';
+import { derivePatchedFileContent, parseApplyPatch } from '../shared/apply_patch_core.js';
 import {
   normalizeMicroSkillFilePath,
   normalizeMicroSkillName
-} from './micro_skill_registry_tool.js';
+} from '../micro_skill/registry_tool.js';
 import {
   getConversationDocument,
   listConversationDocuments,
   putConversationDocument,
   replaceConversationDocuments
-} from '../storage/conversation_document_store.js';
+} from '../../storage/conversation_document_store.js';
 
 export const VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME = 'apply_patch';
 export const VIRTUAL_FILE_LIST_FILES_TOOL_NAME = 'list_files';

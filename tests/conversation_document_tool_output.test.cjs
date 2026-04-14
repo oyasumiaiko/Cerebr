@@ -4,7 +4,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 async function loadToolOutputModule() {
-  const filePath = path.resolve(__dirname, '../src/agent_tools/responses_tool_output.js');
+  const filePath = path.resolve(__dirname, '../src/agent_tools/shared/responses_tool_output.js');
   return import(`${pathToFileURL(filePath).href}?test=${Date.now()}`);
 }
 

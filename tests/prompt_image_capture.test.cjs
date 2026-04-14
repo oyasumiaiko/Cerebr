@@ -9,15 +9,10 @@ async function loadPromptImageCaptureModule() {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cerebr-prompt-image-capture-'));
   await fs.writeFile(path.join(tempDir, 'package.json'), JSON.stringify({ type: 'module' }), 'utf8');
   await fs.mkdir(path.join(tempDir, 'src', 'extension'), { recursive: true });
-  await fs.mkdir(path.join(tempDir, 'src', 'agent_tools'), { recursive: true });
+  await fs.mkdir(path.join(tempDir, 'src', 'agent_tools', 'shared'), { recursive: true });
   await fs.copyFile(
-    path.resolve(__dirname, '../src/agent_tools/prompt_image_tool_shared.js'),
-    path.join(tempDir, 'src', 'agent_tools', 'prompt_image_tool_shared.js')
-  );
-  // 这里复制最小依赖集到临时 ESM 沙箱，避免直接受仓库 CommonJS 测试环境影响。
-  await fs.copyFile(
-    path.resolve(__dirname, '../src/agent_tools/webpage_screenshot_tool.js'),
-    path.join(tempDir, 'src', 'agent_tools', 'webpage_screenshot_tool.js')
+    path.resolve(__dirname, '../src/agent_tools/shared/prompt_image_tool_shared.js'),
+    path.join(tempDir, 'src', 'agent_tools', 'shared', 'prompt_image_tool_shared.js')
   );
   await fs.copyFile(
     path.resolve(__dirname, '../src/extension/prompt_image_capture.js'),

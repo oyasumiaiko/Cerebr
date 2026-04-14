@@ -8,8 +8,47 @@
  * - 它不做 DOM 级结构化定位，因此不替代 js_runtime_execute。
  */
 
+export const PAGE_CONTENT_READ_TOOL_NAME = 'page_content_read';
 export const PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS = 10_000;
 export const PAGE_CONTENT_READ_MAX_CHARS = 50_000;
+
+/**
+ * 构造给 Responses API 使用的 page_content_read 自定义函数工具定义。
+ *
+ * 工具定义与结果构造逻辑放在同目录里，后续若继续拆分页读取子模块时不会再回流到 sender。
+ *
+ * @returns {Object}
+ */
+export function buildPageContentReadFunctionToolDefinition() {
+  const properties = {
+    skip_chars: {
+      type: ['integer', 'null'],
+      description: '可选。要跳过的字符数，用于读取指定偏移后的连续片段。省略时默认从头开始。'
+    },
+    max_chars: {
+      type: ['integer', 'null'],
+      description: `可选。读取的连续字符长度。默认 ${PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS}，最大 ${PAGE_CONTENT_READ_MAX_CHARS}。若与 skip_chars 一起提供，则返回从 skip_chars 开始的连续片段；若两者都省略，则返回默认从开头开始的截断预览。`
+    }
+  };
+  return {
+    type: 'function',
+    name: PAGE_CONTENT_READ_TOOL_NAME,
+    description: [
+      '快速读取当前侧栏绑定网页标签页的预提取文本内容。',
+      '它会返回页面正文与可访问 iframe 文本的预包装读取结果，并对多行做 trim 与空白折叠，更适合一次快速通读页面内容。',
+      '若用户在对话开头说“这个”或未明确指代对象，默认指当前网页环境上下文，请先调用本工具读取页面再回答。',
+      '这不是 DOM 结构化提取工具；若当前页面是 PDF 且需要按章节 / 片段读取，请优先使用 pdf_content_read；若需要按元素、选择器、属性进行结构化定位与提取，请优先使用 js_runtime_execute。',
+      `默认返回从开头开始的 ${PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS} 字符预览，最大单次读取 ${PAGE_CONTENT_READ_MAX_CHARS} 字符；正文若被截断，会在正文末尾附带统一的截断提示。也可通过 skip_chars 与 max_chars 读取指定连续片段。`
+    ].join(' '),
+    strict: true,
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties,
+      required: Object.keys(properties)
+    }
+  };
+}
 
 function clampNonNegativeInt(value, fallback) {
   const numeric = Number(value);

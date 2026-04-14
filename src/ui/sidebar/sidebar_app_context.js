@@ -7,7 +7,7 @@ import { createSidebarJsSandboxRuntime } from './js_sandbox_runtime.js';
 import {
   JS_RUNTIME_ENV_BOUND_HOST_PAGE,
   resolvePageToolEnvironment
-} from '../../agent_tools/page_tool_environment.js';
+} from '../../agent_tools/shared/page_tool_environment.js';
 import {
   REQUEST_USER_INPUT_OTHER_OPTION_VALUE,
   buildRequestUserInputAnswerMap,
@@ -21,7 +21,7 @@ import {
   executeConversationDocumentAction,
   normalizeVirtualFileResultFromSkillRegistryAction,
   normalizeVirtualFileToolArguments
-} from '../../agent_tools/conversation_document_tools.js';
+} from '../../agent_tools/conversation_document/tools.js';
 
 const JS_RUNTIME_STATUS_TIMEOUT_MS = 5000;
 const JS_RUNTIME_FRAME_SNAPSHOT_TIMEOUT_MS = 5000;

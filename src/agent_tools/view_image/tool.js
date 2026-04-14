@@ -2,7 +2,7 @@ import {
   PROMPT_IMAGE_DETAIL_ORIGINAL,
   buildPromptImageDetailSchemaDescription,
   normalizePromptImageDetail
-} from './prompt_image_tool_shared.js';
+} from '../shared/prompt_image_tool_shared.js';
 
 /**
  * 读取图片工具定义。

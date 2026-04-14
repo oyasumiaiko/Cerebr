@@ -8,8 +8,8 @@ import { fetchPromptImageSourceBlob } from './prompt_image_source.js';
 import { resolveSidebarRequestTargetTabId } from '../utils/sidebar_target_tab.js';
 import {
   normalizeWebpageScreenshotArguments
-} from '../agent_tools/webpage_screenshot_tool.js';
-import { normalizeViewImageArguments } from '../agent_tools/view_image_tool.js';
+} from '../agent_tools/webpage_screenshot/tool.js';
+import { normalizeViewImageArguments } from '../agent_tools/view_image/tool.js';
 
 // 确保 Service Worker 立即激活
 self.addEventListener('install', (event) => {

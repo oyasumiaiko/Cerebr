@@ -20,8 +20,8 @@ import {
   searchMicroSkillFiles,
   normalizeStoredMicroSkillRecord,
   saveStoredMicroSkillPackage
-} from '../agent_tools/micro_skill_registry_tool.js';
-import { applyMicroSkillPackagePatch } from '../agent_tools/micro_skill_apply_patch.js';
+} from '../agent_tools/micro_skill/registry_tool.js';
+import { applyMicroSkillPackagePatch } from '../agent_tools/micro_skill/apply_patch.js';
 import {
   buildMicroSkillDocumentRefreshSource,
   buildMicroSkillMountOnCurrentPageSource,
@@ -30,7 +30,7 @@ import {
   buildMicroSkillUnmountFromCurrentPageSource
 } from './micro_skill_runtime.js';
 import { createIndexedDbMicroSkillStore } from '../storage/micro_skill_store.js';
-import { buildSkillScaffoldInput, buildSkillScaffoldNextSteps } from '../agent_tools/skill_scaffold.js';
+import { buildSkillScaffoldInput, buildSkillScaffoldNextSteps } from '../agent_tools/micro_skill/skill_scaffold.js';
 
 function normalizeTabId(value) {
   const numeric = Number(value);

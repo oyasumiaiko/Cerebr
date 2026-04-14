@@ -4,12 +4,12 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 async function loadSkillScaffoldModule() {
-  const filePath = path.resolve(__dirname, '../src/agent_tools/skill_scaffold.js');
+  const filePath = path.resolve(__dirname, '../src/agent_tools/micro_skill/skill_scaffold.js');
   return import(`${pathToFileURL(filePath).href}?test=${Date.now()}`);
 }
 
 async function loadBuiltinSkillCreatorModule() {
-  const filePath = path.resolve(__dirname, '../src/agent_tools/builtin_micro_skill_creator.js');
+  const filePath = path.resolve(__dirname, '../src/agent_tools/micro_skill/builtin_creator.js');
   return import(`${pathToFileURL(filePath).href}?test=${Date.now()}`);
 }
 

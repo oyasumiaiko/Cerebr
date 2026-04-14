@@ -24,12 +24,12 @@ import {
   pickDefaultMicroSkillInstructionPath,
   pickDefaultMicroSkillRuntimeEntryPath,
   serializeMicroSkillVirtualManifest
-} from './micro_skill_registry_tool.js';
+} from './registry_tool.js';
 import {
   derivePatchedFileContent,
   parseApplyPatch,
   seekSequence
-} from './apply_patch_core.js';
+} from '../shared/apply_patch_core.js';
 
 export function parseMicroSkillApplyPatch(patch, options = {}) {
   return parseApplyPatch(patch, options);
