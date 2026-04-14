@@ -120,7 +120,7 @@ async function cleanupSmokeSkills(sidebarFrame, prefix) {
     const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const tabId = typeof tab?.id === 'number' ? tab.id : null;
     const listed = await chrome.runtime.sendMessage({
-      type: 'MICRO_SKILL_REGISTRY_ACTION',
+      type: 'SKILL_REGISTRY_ACTION',
       tabId,
       payload: {
         action: 'list'
@@ -132,7 +132,7 @@ async function cleanupSmokeSkills(sidebarFrame, prefix) {
       const name = typeof skill?.name === 'string' ? skill.name.trim() : '';
       if (!name || !name.startsWith(skillPrefix)) continue;
       await chrome.runtime.sendMessage({
-        type: 'MICRO_SKILL_REGISTRY_ACTION',
+        type: 'SKILL_REGISTRY_ACTION',
         tabId,
         payload: {
           action: 'delete_skill',
@@ -233,7 +233,7 @@ async function main() {
     const created = await sidebarFrame.evaluate(async (skill) => {
       const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
       return await chrome.runtime.sendMessage({
-        type: 'MICRO_SKILL_REGISTRY_ACTION',
+        type: 'SKILL_REGISTRY_ACTION',
         tabId: typeof tab?.id === 'number' ? tab.id : null,
         payload: {
           action: 'create_skill',
@@ -267,34 +267,34 @@ async function main() {
     }, { timeoutMs: 30_000, intervalMs: 200, label: 'sidebar debug chatHistoryUI ready' });
 
     await sidebarFrame.evaluate(async () => {
-      await window.cerebr.debug.chatHistoryUI.showChatHistoryPanel('micro-skills');
+      await window.cerebr.debug.chatHistoryUI.showChatHistoryPanel('skills');
     });
     const historyPanel = sidebarFrame.locator('#chat-history-panel');
     await historyPanel.waitFor({ state: 'visible', timeout: 30_000 });
-    await sidebarFrame.locator('.history-tab[data-tab="micro-skills"]').waitFor({ state: 'visible', timeout: 30_000 });
+    await sidebarFrame.locator('.history-tab[data-tab="skills"]').waitFor({ state: 'visible', timeout: 30_000 });
     result.steps.push('history_panel_opened');
 
-    const skillListItem = sidebarFrame.locator('.micro-skill-list-item', {
-      has: sidebarFrame.locator('.micro-skill-list-item-title', { hasText: 'Example DOM Skill' })
+    const skillListItem = sidebarFrame.locator('.skill-list-item', {
+      has: sidebarFrame.locator('.skill-list-item-title', { hasText: 'Example DOM Skill' })
     }).first();
     await skillListItem.waitFor({ state: 'visible', timeout: 30_000 });
     await skillListItem.click();
     result.steps.push('skill_selected');
 
-    const detailTitle = sidebarFrame.locator('.micro-skill-detail-title');
+    const detailTitle = sidebarFrame.locator('.skill-detail-title');
     await waitFor(async () => {
       const text = await detailTitle.textContent().catch(() => '');
       return String(text || '').includes('Example DOM Skill') ? text : null;
     }, { timeoutMs: 30_000, intervalMs: 200, label: 'skill detail title' });
     result.detailTitle = await detailTitle.textContent();
 
-    const skillInstruction = sidebarFrame.locator('.micro-skill-text-block').first();
+    const skillInstruction = sidebarFrame.locator('.skill-text-block').first();
     await skillInstruction.waitFor({ state: 'visible', timeout: 30_000 });
     result.skillInstructionExcerpt = await skillInstruction.textContent();
     result.steps.push('skill_detail_loaded');
 
     await sidebarFrame.getByRole('button', { name: '加载文件包' }).click();
-    await sidebarFrame.locator('.micro-skill-source-file').first().waitFor({ state: 'visible', timeout: 30_000 });
+    await sidebarFrame.locator('.skill-source-file').first().waitFor({ state: 'visible', timeout: 30_000 });
     result.steps.push('skill_source_loaded');
 
     await sidebarFrame.locator('body').screenshot({ path: path.join(outputDir, 'skill-viewer.png') });
@@ -302,7 +302,7 @@ async function main() {
     const runtimeFilePatched = await sidebarFrame.evaluate(async (skillNameValue) => {
       const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
       return await chrome.runtime.sendMessage({
-        type: 'MICRO_SKILL_REGISTRY_ACTION',
+        type: 'SKILL_REGISTRY_ACTION',
         tabId: typeof tab?.id === 'number' ? tab.id : null,
         payload: {
           action: 'apply_patch',
@@ -329,7 +329,7 @@ async function main() {
       const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
       const url = new URL(urlString);
       return await chrome.runtime.sendMessage({
-        type: 'MICRO_SKILL_REGISTRY_ACTION',
+        type: 'SKILL_REGISTRY_ACTION',
         tabId: typeof tab?.id === 'number' ? tab.id : null,
         payload: {
           action: 'apply_patch',
@@ -358,7 +358,7 @@ async function main() {
     const enabledState = await sidebarFrame.evaluate(async (skillNameValue) => {
       const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
       return await chrome.runtime.sendMessage({
-        type: 'MICRO_SKILL_REGISTRY_ACTION',
+        type: 'SKILL_REGISTRY_ACTION',
         tabId: typeof tab?.id === 'number' ? tab.id : null,
         payload: {
           action: 'enable_skill',
@@ -374,7 +374,7 @@ async function main() {
     const refreshState = await sidebarFrame.evaluate(async (skillName) => {
       const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
       return await chrome.runtime.sendMessage({
-        type: 'MICRO_SKILL_REGISTRY_ACTION',
+        type: 'SKILL_REGISTRY_ACTION',
         tabId: typeof tab?.id === 'number' ? tab.id : null,
         payload: {
           action: 'mount_on_current_page',

@@ -62,7 +62,7 @@ export function titleCaseSkillName(skillName) {
  * 但后续当某个 skill 真正加入 JS runtime 时，
  * 仍然需要一份稳定、统一、可复用的调用约定。
  */
-export function buildDefaultMicroSkillMountContract() {
+export function buildDefaultSkillMountContract() {
   return [
     'These helpers are only available inside `js_runtime_execute`; that tool runs your `code` as an async function body, so you can write `await` and `return` directly.',
     'Recommended helpers: `globalThis.$skill(name)`, `globalThis.$invoke(skillName, methodName, ...args)`, `globalThis.$methods(name)`.',
@@ -70,7 +70,7 @@ export function buildDefaultMicroSkillMountContract() {
     '`$methods(name)` returns the callable top-level method names exposed by the mounted exports.',
     '`$invoke(skillName, methodName, ...args)` calls a mounted top-level method with clearer parameter boundaries.',
     'Typical call shape inside `js_runtime_execute`: `return await $invoke("skill-name", "methodName", args);`',
-    'Compatibility runtime registry: `globalThis.__cerebrMicroSkills`.',
+    'Compatibility runtime registry: `globalThis.__cerebrSkills`.',
     'Runtime source files run as async CommonJS-like bodies with `ctx`, `module`, `exports`, `require` available.',
     '`require()` is async in this runtime, so helper imports should use `await require("./helper.js")`.',
     'Entry file can `return { methods... }`, or assign `module.exports = { ... }`; advanced style: call `ctx.mount(exports)` manually.',

@@ -252,7 +252,7 @@ function buildApplyPatchPreview(rawArguments, options = {}) {
   };
 }
 
-export function buildMicroSkillApplyPatchPreview(rawArguments, options = {}) {
+export function buildSkillApplyPatchPreview(rawArguments, options = {}) {
   return buildApplyPatchPreview(rawArguments, {
     ...options,
     requireAction: true

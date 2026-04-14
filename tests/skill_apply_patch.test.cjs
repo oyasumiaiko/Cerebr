@@ -3,13 +3,13 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-async function loadMicroSkillApplyPatchModule() {
-  const filePath = path.resolve(__dirname, '../src/agent_tools/micro_skill/skill_apply_patch.js');
+async function loadSkillApplyPatchModule() {
+  const filePath = path.resolve(__dirname, '../src/agent_tools/skill/skill_apply_patch.js');
   return import(`${pathToFileURL(filePath).href}?test=${Date.now()}`);
 }
 
-async function loadMicroSkillRegistryToolModule() {
-  const filePath = path.resolve(__dirname, '../src/agent_tools/micro_skill/registry_tool.js');
+async function loadSkillRegistryToolModule() {
+  const filePath = path.resolve(__dirname, '../src/agent_tools/skill/registry_tool.js');
   return import(`${pathToFileURL(filePath).href}?test=${Date.now()}`);
 }
 
@@ -51,7 +51,7 @@ function wrapPatch(body) {
 }
 
 test('seekSequence 与 Codex 一样按 exact/rstrip/trim/宽松 Unicode 逐级匹配', async () => {
-  const { seekSequence } = await loadMicroSkillApplyPatchModule();
+  const { seekSequence } = await loadSkillApplyPatchModule();
 
   assert.equal(seekSequence(['foo', 'bar', 'baz'], ['bar', 'baz'], 0, false), 1);
   assert.equal(seekSequence(['foo   ', 'bar\t\t'], ['foo', 'bar'], 0, false), 0);
@@ -68,19 +68,19 @@ test('seekSequence 与 Codex 一样按 exact/rstrip/trim/宽松 Unicode 逐级�
   );
 });
 
-test('parseMicroSkillApplyPatch 会解析标准 hunk 与 lenient heredoc', async () => {
-  const { parseMicroSkillApplyPatch } = await loadMicroSkillApplyPatchModule();
+test('parseSkillApplyPatch 会解析标准 hunk 与 lenient heredoc', async () => {
+  const { parseSkillApplyPatch } = await loadSkillApplyPatchModule();
 
   assert.throws(
-    () => parseMicroSkillApplyPatch('bad'),
+    () => parseSkillApplyPatch('bad'),
     /The first line of the patch must be '\*\*\* Begin Patch'/
   );
   assert.throws(
-    () => parseMicroSkillApplyPatch('*** Begin Patch\nbad'),
+    () => parseSkillApplyPatch('*** Begin Patch\nbad'),
     /The last line of the patch must be '\*\*\* End Patch'/
   );
 
-  const parsed = parseMicroSkillApplyPatch(wrapPatch(
+  const parsed = parseSkillApplyPatch(wrapPatch(
     [
       '*** Add File: src/helpers/url.js',
       '+module.exports = { readUrl() { return location.href; } };',
@@ -101,18 +101,18 @@ test('parseMicroSkillApplyPatch 会解析标准 hunk 与 lenient heredoc', async
   });
   assert.equal(parsed.hunks[2].move_path, 'src/runtime/main.js');
 
-  const lenient = parseMicroSkillApplyPatch(`<<'EOF'\n${wrapPatch('*** Add File: foo.js\n+hi')}\nEOF\n`, {
+  const lenient = parseSkillApplyPatch(`<<'EOF'\n${wrapPatch('*** Add File: foo.js\n+hi')}\nEOF\n`, {
     mode: 'lenient'
   });
   assert.equal(lenient.hunks.length, 1);
 });
 
-test('applyMicroSkillPackagePatch 可以新增虚拟文件且用途由路径自动推断', async () => {
-  const { buildStoredMicroSkillRecord, buildMicroSkillFilePayload } = await loadMicroSkillRegistryToolModule();
-  const { applyMicroSkillPackagePatch } = await loadMicroSkillApplyPatchModule();
+test('applySkillPackagePatch 可以新增虚拟文件且用途由路径自动推断', async () => {
+  const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
+  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
 
-  const record = buildStoredMicroSkillRecord(buildSkillInput());
-  const result = applyMicroSkillPackagePatch(record, wrapPatch(
+  const record = buildStoredSkillRecord(buildSkillInput());
+  const result = applySkillPackagePatch(record, wrapPatch(
     [
       '*** Add File: src/runtime/new-main.js',
       '+module.exports = { read() { return location.href; } };'
@@ -125,18 +125,18 @@ test('applyMicroSkillPackagePatch 可以新增虚拟文件且用途由路径自�
     deleted: []
   });
   assert.equal(
-    buildMicroSkillFilePayload(result.record, 'src/runtime/new-main.js').file.kind,
+    buildSkillFilePayload(result.record, 'src/runtime/new-main.js').file.kind,
     'runtime_source'
   );
   assert.equal(result.record.runtime.entry_path, 'src/main.js');
 });
 
-test('applyMicroSkillPackagePatch 可以删除、修改、移动文件并保持指针自洽', async () => {
-  const { buildStoredMicroSkillRecord, buildMicroSkillFilePayload } = await loadMicroSkillRegistryToolModule();
-  const { applyMicroSkillPackagePatch } = await loadMicroSkillApplyPatchModule();
+test('applySkillPackagePatch 可以删除、修改、移动文件并保持指针自洽', async () => {
+  const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
+  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
 
-  const record = buildStoredMicroSkillRecord(buildSkillInput());
-  const result = applyMicroSkillPackagePatch(record, wrapPatch(
+  const record = buildStoredSkillRecord(buildSkillInput());
+  const result = applySkillPackagePatch(record, wrapPatch(
     [
       '*** Update File: src/main.js',
       '*** Move to: src/runtime/main.js',
@@ -153,11 +153,11 @@ test('applyMicroSkillPackagePatch 可以删除、修改、移动文件并保持�
 
   assert.equal(result.record.runtime.entry_path, 'src/runtime/main.js');
   assert.equal(
-    buildMicroSkillFilePayload(result.record, 'src/runtime/main.js').file.is_runtime_entry,
+    buildSkillFilePayload(result.record, 'src/runtime/main.js').file.is_runtime_entry,
     true
   );
   assert.match(
-    buildMicroSkillFilePayload(result.record, 'src/helpers/dom.js').file.content,
+    buildSkillFilePayload(result.record, 'src/helpers/dom.js').file.content,
     /trim/
   );
   assert.deepEqual(result.affected_files, {
@@ -167,12 +167,12 @@ test('applyMicroSkillPackagePatch 可以删除、修改、移动文件并保持�
   });
 });
 
-test('applyMicroSkillPackagePatch 支持直接 patch manifest.json', async () => {
-  const { buildStoredMicroSkillRecord, buildMicroSkillFilePayload } = await loadMicroSkillRegistryToolModule();
-  const { applyMicroSkillPackagePatch } = await loadMicroSkillApplyPatchModule();
+test('applySkillPackagePatch 支持直接 patch manifest.json', async () => {
+  const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
+  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
 
-  const record = buildStoredMicroSkillRecord(buildSkillInput());
-  const result = applyMicroSkillPackagePatch(record, wrapPatch(
+  const record = buildStoredSkillRecord(buildSkillInput());
+  const result = applySkillPackagePatch(record, wrapPatch(
     [
       '*** Update File: manifest.json',
       '@@',
@@ -187,7 +187,7 @@ test('applyMicroSkillPackagePatch 支持直接 patch manifest.json', async () =>
   assert.equal(result.record.enabled, false);
   assert.equal(result.record.description, '读取页面标题、链接与路径信息');
   assert.equal(
-    buildMicroSkillFilePayload(result.record, 'manifest.json').file.is_manifest,
+    buildSkillFilePayload(result.record, 'manifest.json').file.is_manifest,
     true
   );
   assert.deepEqual(result.affected_files, {
@@ -197,11 +197,11 @@ test('applyMicroSkillPackagePatch 支持直接 patch manifest.json', async () =>
   });
 });
 
-test('applyMicroSkillPackagePatch 会复现 Codex 的多 chunk、交错修改与 EOF 追加行为', async () => {
-  const { buildStoredMicroSkillRecord, buildMicroSkillFilePayload } = await loadMicroSkillRegistryToolModule();
-  const { applyMicroSkillPackagePatch } = await loadMicroSkillApplyPatchModule();
+test('applySkillPackagePatch 会复现 Codex 的多 chunk、交错修改与 EOF 追加行为', async () => {
+  const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
+  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
 
-  const record = buildStoredMicroSkillRecord({
+  const record = buildStoredSkillRecord({
     ...buildSkillInput('multi-edit'),
     runtime: { entry_path: 'src/runtime/demo.js' },
     files: [
@@ -218,7 +218,7 @@ test('applyMicroSkillPackagePatch 会复现 Codex 的多 chunk、交错修改与
     ]
   });
 
-  const result = applyMicroSkillPackagePatch(record, wrapPatch(
+  const result = applySkillPackagePatch(record, wrapPatch(
     [
       '*** Update File: src/runtime/demo.js',
       '@@',
@@ -238,16 +238,16 @@ test('applyMicroSkillPackagePatch 会复现 Codex 的多 chunk、交错修改与
   ));
 
   assert.equal(
-    buildMicroSkillFilePayload(result.record, 'src/runtime/demo.js').file.content,
+    buildSkillFilePayload(result.record, 'src/runtime/demo.js').file.content,
     'a\nB\nc\nd\nE\nf\ng\n'
   );
 });
 
-test('applyMicroSkillPackagePatch 会保留 Codex 的纯追加 chunk 与 Unicode 宽松匹配', async () => {
-  const { buildStoredMicroSkillRecord, buildMicroSkillFilePayload } = await loadMicroSkillRegistryToolModule();
-  const { applyMicroSkillPackagePatch } = await loadMicroSkillApplyPatchModule();
+test('applySkillPackagePatch 会保留 Codex 的纯追加 chunk 与 Unicode 宽松匹配', async () => {
+  const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
+  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
 
-  const additionRecord = buildStoredMicroSkillRecord({
+  const additionRecord = buildStoredSkillRecord({
     ...buildSkillInput('pure-add'),
     files: [
       {
@@ -262,7 +262,7 @@ test('applyMicroSkillPackagePatch 会保留 Codex 的纯追加 chunk 与 Unicode
       }
     ]
   });
-  const additionResult = applyMicroSkillPackagePatch(additionRecord, wrapPatch(
+  const additionResult = applySkillPackagePatch(additionRecord, wrapPatch(
     [
       '*** Update File: src/main.js',
       '@@',
@@ -276,11 +276,11 @@ test('applyMicroSkillPackagePatch 会保留 Codex 的纯追加 chunk 与 Unicode
     ].join('\n')
   ));
   assert.equal(
-    buildMicroSkillFilePayload(additionResult.record, 'src/main.js').file.content,
+    buildSkillFilePayload(additionResult.record, 'src/main.js').file.content,
     'line1\nline2-replacement\nafter-context\nsecond-line\n'
   );
 
-  const unicodeRecord = buildStoredMicroSkillRecord({
+  const unicodeRecord = buildStoredSkillRecord({
     ...buildSkillInput('unicode-edit'),
     files: [
       {
@@ -295,7 +295,7 @@ test('applyMicroSkillPackagePatch 会保留 Codex 的纯追加 chunk 与 Unicode
       }
     ]
   });
-  const unicodeResult = applyMicroSkillPackagePatch(unicodeRecord, wrapPatch(
+  const unicodeResult = applySkillPackagePatch(unicodeRecord, wrapPatch(
     [
       '*** Update File: src/main.js',
       '@@',
@@ -304,30 +304,30 @@ test('applyMicroSkillPackagePatch 会保留 Codex 的纯追加 chunk 与 Unicode
     ].join('\n')
   ));
   assert.equal(
-    buildMicroSkillFilePayload(unicodeResult.record, 'src/main.js').file.content,
+    buildSkillFilePayload(unicodeResult.record, 'src/main.js').file.content,
     'import asyncio  # HELLO\n'
   );
 });
 
-test('applyMicroSkillPackagePatch 会对虚拟文件特有的错误场景给出明确失败', async () => {
-  const { buildStoredMicroSkillRecord, buildMicroSkillFilePayload } = await loadMicroSkillRegistryToolModule();
-  const { applyMicroSkillPackagePatch } = await loadMicroSkillApplyPatchModule();
+test('applySkillPackagePatch 会对虚拟文件特有的错误场景给出明确失败', async () => {
+  const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
+  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
 
-  const record = buildStoredMicroSkillRecord(buildSkillInput());
+  const record = buildStoredSkillRecord(buildSkillInput());
 
-  const addedReference = applyMicroSkillPackagePatch(record, wrapPatch(
+  const addedReference = applySkillPackagePatch(record, wrapPatch(
     [
       '*** Add File: references/notes.md',
       '+# Notes'
     ].join('\n')
   ));
   assert.equal(
-    buildMicroSkillFilePayload(addedReference.record, 'references/notes.md').file.kind,
+    buildSkillFilePayload(addedReference.record, 'references/notes.md').file.kind,
     'reference'
   );
 
   assert.throws(
-    () => applyMicroSkillPackagePatch(record, wrapPatch(
+    () => applySkillPackagePatch(record, wrapPatch(
       [
         '*** Add File: manifest.json',
         '+{}'
@@ -337,7 +337,7 @@ test('applyMicroSkillPackagePatch 会对虚拟文件特有的错误场景给出�
   );
 
   assert.throws(
-    () => applyMicroSkillPackagePatch(record, wrapPatch(
+    () => applySkillPackagePatch(record, wrapPatch(
       [
         '*** Delete File: manifest.json'
       ].join('\n')
@@ -346,7 +346,7 @@ test('applyMicroSkillPackagePatch 会对虚拟文件特有的错误场景给出�
   );
 
   assert.throws(
-    () => applyMicroSkillPackagePatch(record, wrapPatch(
+    () => applySkillPackagePatch(record, wrapPatch(
       [
         '*** Update File: manifest.json',
         '*** Move to: other.json',
@@ -359,7 +359,7 @@ test('applyMicroSkillPackagePatch 会对虚拟文件特有的错误场景给出�
   );
 
   assert.throws(
-    () => applyMicroSkillPackagePatch(record, wrapPatch(
+    () => applySkillPackagePatch(record, wrapPatch(
       [
         '*** Add File: ../escape.js',
         '+oops'
@@ -369,7 +369,7 @@ test('applyMicroSkillPackagePatch 会对虚拟文件特有的错误场景给出�
   );
 
   assert.throws(
-    () => applyMicroSkillPackagePatch(record, wrapPatch(
+    () => applySkillPackagePatch(record, wrapPatch(
       [
         '*** Delete File: missing.js'
       ].join('\n')

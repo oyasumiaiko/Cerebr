@@ -8,14 +8,14 @@ async function loadJsRuntimeManagerModule() {
   return import(pathToFileURL(filePath).href);
 }
 
-async function loadMicroSkillRuntimeModule() {
-  const filePath = path.resolve(__dirname, '../src/extension/micro_skill_runtime.js');
+async function loadSkillRuntimeModule() {
+  const filePath = path.resolve(__dirname, '../src/extension/skill_runtime.js');
   return import(pathToFileURL(filePath).href);
 }
 
-test('createJsRuntimeManager.execute 会在共享 micro skill worldId 下运行 userScripts.execute', async () => {
+test('createJsRuntimeManager.execute 会在共享 skill worldId 下运行 userScripts.execute', async () => {
   const { createJsRuntimeManager } = await loadJsRuntimeManagerModule();
-  const { CEREBR_MICRO_SKILL_WORLD_ID } = await loadMicroSkillRuntimeModule();
+  const { CEREBR_SKILL_WORLD_ID } = await loadSkillRuntimeModule();
 
   let capturedExecuteOptions = null;
   global.chrome = {
@@ -57,7 +57,7 @@ test('createJsRuntimeManager.execute 会在共享 micro skill worldId 下运行 
 
   assert.equal(result.ok, true);
   assert.equal(capturedExecuteOptions.world, 'USER_SCRIPT');
-  assert.equal(capturedExecuteOptions.worldId, CEREBR_MICRO_SKILL_WORLD_ID);
+  assert.equal(capturedExecuteOptions.worldId, CEREBR_SKILL_WORLD_ID);
   assert.equal(capturedExecuteOptions.target.tabId, 9);
   assert.match(capturedExecuteOptions.js[0].code, /const __cerebrTimeoutMs = 45000;/);
 
@@ -66,7 +66,7 @@ test('createJsRuntimeManager.execute 会在共享 micro skill worldId 下运行 
 
 test('createJsRuntimeManager.abort 会在同一 worldId 下发送 executionId 中止脚本', async () => {
   const { createJsRuntimeManager } = await loadJsRuntimeManagerModule();
-  const { CEREBR_MICRO_SKILL_WORLD_ID } = await loadMicroSkillRuntimeModule();
+  const { CEREBR_SKILL_WORLD_ID } = await loadSkillRuntimeModule();
 
   let capturedAbortOptions = null;
   global.chrome = {
@@ -98,7 +98,7 @@ test('createJsRuntimeManager.abort 会在同一 worldId 下发送 executionId �
 
   assert.equal(result.ok, true);
   assert.equal(capturedAbortOptions.world, 'USER_SCRIPT');
-  assert.equal(capturedAbortOptions.worldId, CEREBR_MICRO_SKILL_WORLD_ID);
+  assert.equal(capturedAbortOptions.worldId, CEREBR_SKILL_WORLD_ID);
   assert.deepEqual(capturedAbortOptions.target.frameIds, [3]);
   assert.match(capturedAbortOptions.js[0].code, /jsrt_abort_demo/);
   assert.match(capturedAbortOptions.js[0].code, /__cerebrJsRuntimeAbortRegistry/);

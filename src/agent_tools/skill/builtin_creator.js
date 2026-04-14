@@ -1,6 +1,6 @@
 import { buildSkillScaffoldFiles } from './skill_scaffold.js';
 
-export const BUILTIN_MICRO_SKILL_CREATOR_NAME = 'skill-creator';
+export const BUILTIN_SKILL_CREATOR_NAME = 'skill-creator';
 
 function buildSkillCreatorInstruction() {
   return [
@@ -113,7 +113,7 @@ export function buildBuiltinSkillCreatorRecord() {
     builtin: true,
     read_only: true,
     kind: 'builtin_guidance',
-    name: BUILTIN_MICRO_SKILL_CREATOR_NAME,
+    name: BUILTIN_SKILL_CREATOR_NAME,
     description: 'Guide for creating or updating Cerebr skills with concise metadata, progressive disclosure, and file-oriented package editing.',
     interface: {
       display_name: 'Skill Creator',
@@ -142,20 +142,20 @@ export function buildBuiltinSkillCreatorRecord() {
   };
 }
 
-export function getBuiltinMicroSkillRecords() {
+export function getBuiltinSkillRecords() {
   return [buildBuiltinSkillCreatorRecord()];
 }
 
-export function getBuiltinMicroSkillRecordByName(skillName) {
+export function getBuiltinSkillRecordByName(skillName) {
   const normalized = String(skillName || '').trim();
   if (!normalized) return null;
-  return getBuiltinMicroSkillRecords().find((record) => record.name === normalized) || null;
+  return getBuiltinSkillRecords().find((record) => record.name === normalized) || null;
 }
 
 export function buildBuiltinSkillCreatorContextSummary() {
   return {
     priority: 0,
-    name: BUILTIN_MICRO_SKILL_CREATOR_NAME,
+    name: BUILTIN_SKILL_CREATOR_NAME,
     short_description: '创建或更新 skill 时，先读这条内置指导，再决定 `SKILL.md`、资源文件和后续 runtime 是否真的需要。',
     instruction_path: 'SKILL.md'
   };

@@ -3,8 +3,8 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-async function loadMicroSkillManagerModule() {
-  const filePath = path.resolve(__dirname, '../src/extension/micro_skill_manager.js');
+async function loadSkillManagerModule() {
+  const filePath = path.resolve(__dirname, '../src/extension/skill_manager.js');
   return import(pathToFileURL(filePath).href);
 }
 
@@ -123,7 +123,7 @@ function buildLongSkillInput(name = 'long-dom-probe') {
 }
 
 test('create/update/delete/enable/disable 会驱动 register/update/unregister 与当前文档 refresh', async () => {
-  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+  const { createSkillManager } = await loadSkillManagerModule();
 
   const calls = {
     register: [],
@@ -131,7 +131,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     unregister: [],
     execute: []
   };
-  const manager = createMicroSkillManager({
+  const manager = createSkillManager({
     store: createMockStore(),
     userScriptsApi: {
       async getScripts() { return []; },
@@ -348,13 +348,13 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
 });
 
 test('模板式 create_skill 默认禁用且不会自动 refresh 当前文档', async () => {
-  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+  const { createSkillManager } = await loadSkillManagerModule();
 
   const calls = {
     register: [],
     execute: []
   };
-  const manager = createMicroSkillManager({
+  const manager = createSkillManager({
     store: createMockStore(),
     userScriptsApi: {
       async getScripts() { return []; },
@@ -432,9 +432,9 @@ test('模板式 create_skill 默认禁用且不会自动 refresh 当前文档', 
 });
 
 test('listMatchingSkillSummariesForTab 会同时注入 builtin、启用的 guidance skill 和命中的 page runtime skill 摘要', async () => {
-  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+  const { createSkillManager } = await loadSkillManagerModule();
 
-  const manager = createMicroSkillManager({
+  const manager = createSkillManager({
     store: createMockStore([
       {
         name: 'ops-guide',
@@ -502,7 +502,7 @@ test('listMatchingSkillSummariesForTab 会同时注入 builtin、启用的 guida
 });
 
 test('skill 可以在后续 patch 后从 guidance 演进成 page runtime，再退回 guidance', async () => {
-  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+  const { createSkillManager } = await loadSkillManagerModule();
   const calls = {
     register: [],
     update: [],
@@ -510,7 +510,7 @@ test('skill 可以在后续 patch 后从 guidance 演进成 page runtime，再�
     execute: []
   };
 
-  const manager = createMicroSkillManager({
+  const manager = createSkillManager({
     store: createMockStore(),
     userScriptsApi: {
       async getScripts() { return []; },
@@ -643,10 +643,10 @@ test('skill 可以在后续 patch 后从 guidance 演进成 page runtime，再�
 });
 
 test('mount_on_current_page 只挂载指定技能并返回当前页 active skills', async () => {
-  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+  const { createSkillManager } = await loadSkillManagerModule();
   const executeCalls = [];
 
-  const manager = createMicroSkillManager({
+  const manager = createSkillManager({
     store: createMockStore([
       {
         ...buildSkillInput('worldquant-brain-knowledge-cache'),
@@ -707,9 +707,9 @@ test('mount_on_current_page 只挂载指定技能并返回当前页 active skill
 });
 
 test('mount_on_current_page 失败时返回 ok=false 并透传首个 frame 错误', async () => {
-  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+  const { createSkillManager } = await loadSkillManagerModule();
 
-  const manager = createMicroSkillManager({
+  const manager = createSkillManager({
     store: createMockStore([
       {
         ...buildSkillInput('worldquant-brain-knowledge-cache'),
@@ -741,7 +741,7 @@ test('mount_on_current_page 失败时返回 ok=false 并透传首个 frame 错�
             {
               frameId: 0,
               error: {
-                message: 'Micro skill not mounted: worldquant-brain-knowledge-cache'
+                message: 'Skill not mounted: worldquant-brain-knowledge-cache'
               }
             }
           ]
@@ -757,15 +757,15 @@ test('mount_on_current_page 失败时返回 ok=false 并透传首个 frame 错�
 
   assert.equal(result.ok, false);
   assert.equal(result.requested_skill_status, 'runtime_failed');
-  assert.equal(result.error.message, 'Micro skill not mounted: worldquant-brain-knowledge-cache');
+  assert.equal(result.error.message, 'Skill not mounted: worldquant-brain-knowledge-cache');
   assert.deepEqual(result.active_skills, []);
 });
 
 test('mount_on_current_page 遇到 URL 不匹配时会显式返回 url_not_matched', async () => {
-  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+  const { createSkillManager } = await loadSkillManagerModule();
   const executeCalls = [];
 
-  const manager = createMicroSkillManager({
+  const manager = createSkillManager({
     store: createMockStore([
       {
         ...buildSkillInput('worldquant-brain-knowledge-cache'),
@@ -816,9 +816,9 @@ test('mount_on_current_page 遇到 URL 不匹配时会显式返回 url_not_match
 });
 
 test('内置 skill-creator 会自动出现在列表中且保持只读', async () => {
-  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+  const { createSkillManager } = await loadSkillManagerModule();
 
-  const manager = createMicroSkillManager({
+  const manager = createSkillManager({
     store: createMockStore(),
     userScriptsApi: {
       async getScripts() { return []; },
@@ -873,9 +873,9 @@ test('内置 skill-creator 会自动出现在列表中且保持只读', async ()
 });
 
 test('read_detail/read_file 支持截断预览、字符偏移与按行续读', async () => {
-  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+  const { createSkillManager } = await loadSkillManagerModule();
 
-  const manager = createMicroSkillManager({
+  const manager = createSkillManager({
     store: createMockStore([
       {
         ...buildLongSkillInput(),
@@ -945,9 +945,9 @@ test('read_detail/read_file 支持截断预览、字符偏移与按行续读', a
 });
 
 test('list_files/search_files 支持单 skill 与全局搜索闭环', async () => {
-  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+  const { createSkillManager } = await loadSkillManagerModule();
 
-  const manager = createMicroSkillManager({
+  const manager = createSkillManager({
     store: createMockStore([
       {
         ...buildSkillInput('dom-probe'),
@@ -1015,7 +1015,7 @@ test('list_files/search_files 支持单 skill 与全局搜索闭环', async () =
 });
 
 test('reconcileRegisteredSkills 会对现有动态脚本做 register/update/unregister 分流', async () => {
-  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+  const { createSkillManager } = await loadSkillManagerModule();
 
   const calls = {
     register: [],
@@ -1037,13 +1037,13 @@ test('reconcileRegisteredSkills 会对现有动态脚本做 register/update/unre
     }
   ]);
 
-  const manager = createMicroSkillManager({
+  const manager = createSkillManager({
     store,
     userScriptsApi: {
       async getScripts() {
         return [
-          { id: 'cerebr-micro-skill--dom-probe' },
-          { id: 'cerebr-micro-skill--stale-old-skill' }
+          { id: 'cerebr-skill--dom-probe' },
+          { id: 'cerebr-skill--stale-old-skill' }
         ];
       },
       async register(definitions) { calls.register.push(clone(definitions)); },
@@ -1068,19 +1068,19 @@ test('reconcileRegisteredSkills 会对现有动态脚本做 register/update/unre
   assert.equal(calls.update.length, 1);
   assert.equal(calls.unregister.length, 1);
   assert.deepEqual(calls.unregister[0], {
-    ids: ['cerebr-micro-skill--stale-old-skill']
+    ids: ['cerebr-skill--stale-old-skill']
   });
 });
 
 test('reconcileRegisteredSkills 遇到 Duplicate script ID 时会回退到 update 而不是整体失败', async () => {
-  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+  const { createSkillManager } = await loadSkillManagerModule();
 
   const calls = {
     register: [],
     update: []
   };
 
-  const manager = createMicroSkillManager({
+  const manager = createSkillManager({
     store: createMockStore([
       {
         ...buildSkillInput('worldquant-brain-sim-state'),
@@ -1094,7 +1094,7 @@ test('reconcileRegisteredSkills 遇到 Duplicate script ID 时会回退到 updat
       async getScripts() { return []; },
       async register(definitions) {
         calls.register.push(clone(definitions));
-        throw new Error("Duplicate script ID 'cerebr-micro-skill--worldquant-brain-sim-state'");
+        throw new Error("Duplicate script ID 'cerebr-skill--worldquant-brain-sim-state'");
       },
       async update(definitions) { calls.update.push(clone(definitions)); },
       async unregister() {}
@@ -1120,7 +1120,7 @@ test('reconcileRegisteredSkills 遇到 Duplicate script ID 时会回退到 updat
 });
 
 test('listMatchingSkillSummariesForTab 只返回当前 URL 命中的轻量摘要', async () => {
-  const { createMicroSkillManager } = await loadMicroSkillManagerModule();
+  const { createSkillManager } = await loadSkillManagerModule();
 
   const store = createMockStore([
     {
@@ -1138,7 +1138,7 @@ test('listMatchingSkillSummariesForTab 只返回当前 URL 命中的轻量摘要
     }
   ]);
 
-  const manager = createMicroSkillManager({
+  const manager = createSkillManager({
     store,
     userScriptsApi: {
       async getScripts() { return []; },

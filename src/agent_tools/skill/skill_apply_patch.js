@@ -1,5 +1,5 @@
 /**
- * 将 Codex `apply_patch` 的核心解析与文本替换逻辑移植到微型 skill 的虚拟文件模型中。
+ * 将 Codex `apply_patch` 的核心解析与文本替换逻辑移植到skill 的虚拟文件模型中。
  *
  * 这里刻意保留 Codex 原始补丁格式：
  * - `*** Begin Patch` / `*** End Patch`
@@ -16,14 +16,14 @@
  */
 
 import {
-  buildStoredMicroSkillRecord,
-  MICRO_SKILL_VIRTUAL_MANIFEST_PATH,
-  normalizeMicroSkillFilePath,
-  parseMicroSkillVirtualManifestContent,
-  normalizeStoredMicroSkillRecord,
-  pickDefaultMicroSkillInstructionPath,
-  pickDefaultMicroSkillRuntimeEntryPath,
-  serializeMicroSkillVirtualManifest
+  buildStoredSkillRecord,
+  SKILL_VIRTUAL_MANIFEST_PATH,
+  normalizeSkillFilePath,
+  parseSkillVirtualManifestContent,
+  normalizeStoredSkillRecord,
+  pickDefaultSkillInstructionPath,
+  pickDefaultSkillRuntimeEntryPath,
+  serializeSkillVirtualManifest
 } from './registry_tool.js';
 import {
   derivePatchedFileContent,
@@ -31,7 +31,7 @@ import {
   seekSequence
 } from '../shared/apply_patch_core.js';
 
-export function parseMicroSkillApplyPatch(patch, options = {}) {
+export function parseSkillApplyPatch(patch, options = {}) {
   return parseApplyPatch(patch, options);
 }
 
@@ -54,13 +54,13 @@ function upsertFilePreservingOrder(files, file, existingIndex = null) {
   }
 }
 
-export function applyMicroSkillPackagePatch(record, patch) {
-  const skill = normalizeStoredMicroSkillRecord(record);
+export function applySkillPackagePatch(record, patch) {
+  const skill = normalizeStoredSkillRecord(record);
   if (!skill) {
-    throw new Error('Cannot apply patch to an invalid micro skill record.');
+    throw new Error('Cannot apply patch to an invalid skill record.');
   }
 
-  const { hunks } = parseMicroSkillApplyPatch(patch, { mode: 'strict' });
+  const { hunks } = parseSkillApplyPatch(patch, { mode: 'strict' });
   if (hunks.length <= 0) {
     throw new Error('No files were modified.');
   }
@@ -69,7 +69,7 @@ export function applyMicroSkillPackagePatch(record, patch) {
   let instructionPath = skill.instruction.path;
   let runtimeEntryPath = skill.runtime.entry_path;
   let manifestInput = null;
-  let manifestContent = serializeMicroSkillVirtualManifest(skill);
+  let manifestContent = serializeSkillVirtualManifest(skill);
   const affectedFiles = {
     added: [],
     modified: [],
@@ -77,8 +77,8 @@ export function applyMicroSkillPackagePatch(record, patch) {
   };
 
   for (const hunk of hunks) {
-    const normalizedHunkPath = normalizeMicroSkillFilePath(hunk.path);
-    const isManifestHunk = normalizedHunkPath === MICRO_SKILL_VIRTUAL_MANIFEST_PATH;
+    const normalizedHunkPath = normalizeSkillFilePath(hunk.path);
+    const isManifestHunk = normalizedHunkPath === SKILL_VIRTUAL_MANIFEST_PATH;
 
     if (isManifestHunk && hunk.type === 'add_file') {
       throw new Error('manifest.json 是保留虚拟文件，不支持 Add File。');
@@ -119,12 +119,12 @@ export function applyMicroSkillPackagePatch(record, patch) {
 
     if (hunk.type === 'update_file') {
       const sourcePath = normalizedHunkPath;
-      if (sourcePath === MICRO_SKILL_VIRTUAL_MANIFEST_PATH) {
+      if (sourcePath === SKILL_VIRTUAL_MANIFEST_PATH) {
         if (hunk.move_path) {
           throw new Error('manifest.json 是保留虚拟文件，不支持 Move to。');
         }
         manifestContent = derivePatchedFileContent(manifestContent, sourcePath, hunk.chunks);
-        manifestInput = parseMicroSkillVirtualManifestContent(manifestContent, skill);
+        manifestInput = parseSkillVirtualManifestContent(manifestContent, skill);
         if (manifestInput?.instruction?.path) {
           instructionPath = manifestInput.instruction.path;
         }
@@ -141,7 +141,7 @@ export function applyMicroSkillPackagePatch(record, patch) {
 
       const sourceFile = nextFiles[sourceIndex];
       const nextContent = derivePatchedFileContent(sourceFile.content, sourcePath, hunk.chunks);
-      const targetPath = hunk.move_path ? normalizeMicroSkillFilePath(hunk.move_path) : sourcePath;
+      const targetPath = hunk.move_path ? normalizeSkillFilePath(hunk.move_path) : sourcePath;
 
       if (targetPath === sourcePath) {
         nextFiles[sourceIndex] = {
@@ -174,13 +174,13 @@ export function applyMicroSkillPackagePatch(record, patch) {
   }
 
   if (instructionPath && findFileIndex(nextFiles, instructionPath) < 0) {
-    instructionPath = pickDefaultMicroSkillInstructionPath(nextFiles);
+    instructionPath = pickDefaultSkillInstructionPath(nextFiles);
   }
   if (runtimeEntryPath && findFileIndex(nextFiles, runtimeEntryPath) < 0) {
-    runtimeEntryPath = pickDefaultMicroSkillRuntimeEntryPath(nextFiles);
+    runtimeEntryPath = pickDefaultSkillRuntimeEntryPath(nextFiles);
   }
 
-  const nextRecord = buildStoredMicroSkillRecord({
+  const nextRecord = buildStoredSkillRecord({
     ...skill,
     ...(manifestInput || {}),
     instruction: {

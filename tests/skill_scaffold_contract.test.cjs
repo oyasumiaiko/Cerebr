@@ -4,18 +4,18 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 async function loadSkillScaffoldModule() {
-  const filePath = path.resolve(__dirname, '../src/agent_tools/micro_skill/skill_scaffold.js');
+  const filePath = path.resolve(__dirname, '../src/agent_tools/skill/skill_scaffold.js');
   return import(`${pathToFileURL(filePath).href}?test=${Date.now()}`);
 }
 
 async function loadBuiltinSkillCreatorModule() {
-  const filePath = path.resolve(__dirname, '../src/agent_tools/micro_skill/builtin_creator.js');
+  const filePath = path.resolve(__dirname, '../src/agent_tools/skill/builtin_creator.js');
   return import(`${pathToFileURL(filePath).href}?test=${Date.now()}`);
 }
 
 test('通用 skill scaffold 的 scripts 示例已适配为 js_runtime_execute 代码片段', async () => {
   const {
-    buildDefaultMicroSkillMountContract,
+    buildDefaultSkillMountContract,
     buildSkillScaffoldFiles
   } = await loadSkillScaffoldModule();
 
@@ -40,7 +40,7 @@ test('通用 skill scaffold 的 scripts 示例已适配为 js_runtime_execute �
   assert.doesNotMatch(instruction.content, /Python, Bash/);
   assert.doesNotMatch(instruction.content, /run directly/);
 
-  const mountContract = buildDefaultMicroSkillMountContract();
+  const mountContract = buildDefaultSkillMountContract();
   assert.match(mountContract, /only available inside `js_runtime_execute`/);
   assert.match(mountContract, /return await \$invoke\("skill-name", "methodName", args\)/);
 });

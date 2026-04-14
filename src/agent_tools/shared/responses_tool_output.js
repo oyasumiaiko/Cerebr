@@ -1090,7 +1090,7 @@ export function buildResponsesRequestUserInputToolOutputContentItems(result, opt
   return buildResponsesToolOutputContentItems(payload, options);
 }
 
-function extractMicroSkillActiveSkillNames(refreshResult) {
+function extractSkillActiveSkillNames(refreshResult) {
   if (Array.isArray(refreshResult?.active_skills)) {
     return refreshResult.active_skills
       .map((item) => (typeof item === 'string' ? item.trim() : ''))
@@ -1107,14 +1107,14 @@ function extractMicroSkillActiveSkillNames(refreshResult) {
   return Array.from(names);
 }
 
-function extractMicroSkillRefreshErrorMessage(refreshResult) {
+function extractSkillRefreshErrorMessage(refreshResult) {
   const message = typeof refreshResult?.error?.message === 'string'
     ? refreshResult.error.message.trim()
     : '';
   return message || '技能当前文档 refresh 失败。';
 }
 
-function buildMicroSkillApplyPatchSummaryText(result) {
+function buildSkillApplyPatchSummaryText(result) {
   const affected = (result?.affected_files && typeof result.affected_files === 'object') ? result.affected_files : {};
   const lines = [];
   const pushFiles = (prefix, values) => {
@@ -1132,7 +1132,7 @@ function buildMicroSkillApplyPatchSummaryText(result) {
   return `Success. Updated the following files:\n${lines.join('\n')}`;
 }
 
-function buildMicroSkillCreateTemplateSummaryText(result) {
+function buildSkillCreateTemplateSummaryText(result) {
   const skillName = typeof result?.normalized_name === 'string' && result.normalized_name.trim()
     ? result.normalized_name.trim()
     : (typeof result?.skill?.name === 'string' ? result.skill.name.trim() : '(unknown)');
@@ -1169,7 +1169,7 @@ function buildMicroSkillCreateTemplateSummaryText(result) {
   return lines.join('\n');
 }
 
-function buildMicroSkillMutationSummaryText(result) {
+function buildSkillMutationSummaryText(result) {
   const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
   const action = typeof normalized.action === 'string' ? normalized.action.trim() : '';
   const skillName = typeof normalized?.skill?.name === 'string'
@@ -1180,12 +1180,12 @@ function buildMicroSkillMutationSummaryText(result) {
     ? normalized.file.path.trim()
     : (typeof normalized.deleted_file_path === 'string' ? normalized.deleted_file_path.trim() : '');
   const totalFiles = Number.isFinite(Number(normalized?.files?.total_count)) ? Number(normalized.files.total_count) : null;
-  const activeSkillNames = extractMicroSkillActiveSkillNames(normalized.refresh_result);
+  const activeSkillNames = extractSkillActiveSkillNames(normalized.refresh_result);
 
   let summary = '';
   switch (action) {
     case 'apply_patch':
-      summary = buildMicroSkillApplyPatchSummaryText(normalized);
+      summary = buildSkillApplyPatchSummaryText(normalized);
       break;
     case 'delete_file':
       summary = filePath
@@ -1195,7 +1195,7 @@ function buildMicroSkillMutationSummaryText(result) {
     case 'create':
     case 'create_skill':
       summary = normalized.create_mode === 'template'
-        ? buildMicroSkillCreateTemplateSummaryText(normalized)
+        ? buildSkillCreateTemplateSummaryText(normalized)
         : `Created skill ${skillName || '(unknown)'}${revision ? ` (revision ${revision})` : ''}${totalFiles ? ` with ${totalFiles} files` : ''}.`;
       break;
     case 'update':
@@ -1226,7 +1226,7 @@ function buildMicroSkillMutationSummaryText(result) {
   }
 
   if (normalized.refreshed_current_document === true && normalized.refresh_result?.ok !== true) {
-    return `${summary}\n\nCurrent document refresh failed: ${extractMicroSkillRefreshErrorMessage(normalized.refresh_result)}`;
+    return `${summary}\n\nCurrent document refresh failed: ${extractSkillRefreshErrorMessage(normalized.refresh_result)}`;
   }
   if (action !== 'refresh_current_document' && normalized.refreshed_current_document === true && activeSkillNames.length > 0) {
     return `${summary}\n\nMounted on current document: ${activeSkillNames.join(', ')}`;
@@ -1234,10 +1234,10 @@ function buildMicroSkillMutationSummaryText(result) {
   return summary;
 }
 
-export function buildResponsesMicroSkillRegistryToolOutputContentItems(result, options = {}) {
+export function buildResponsesSkillRegistryToolOutputContentItems(result, options = {}) {
   const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
   if (normalized.ok === true) {
-    const summaryText = buildMicroSkillMutationSummaryText(normalized);
+    const summaryText = buildSkillMutationSummaryText(normalized);
     if (summaryText) {
       return buildResponsesGenericXmlToolOutputContentItems('skill_registry_result', {
         ok: true,

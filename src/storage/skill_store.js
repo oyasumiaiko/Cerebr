@@ -1,5 +1,5 @@
 /**
- * 微型 skill 的 IndexedDB 持久化层。
+ * skill 的 IndexedDB 持久化层。
  *
  * 设计目标：
  * - manifest 与文件内容分离存储，避免“只想列 skill 摘要”时把整包源码/说明都结构化克隆出来；
@@ -7,16 +7,16 @@
  * - 不模拟完整文件系统，只提供 skill package 所需的按名称、按路径读写能力。
  */
 
-export const MICRO_SKILL_DB_NAME = 'CerebrMicroSkillDB';
-export const MICRO_SKILL_DB_VERSION = 1;
-export const MICRO_SKILL_MANIFEST_STORE = 'skill_manifests';
-export const MICRO_SKILL_FILE_STORE = 'skill_files';
+export const SKILL_DB_NAME = 'CerebrSkillDB';
+export const SKILL_DB_VERSION = 1;
+export const SKILL_MANIFEST_STORE = 'skill_manifests';
+export const SKILL_FILE_STORE = 'skill_files';
 
-let cachedMicroSkillDbPromise = null;
+let cachedSkillDbPromise = null;
 
 function ensureIndexedDbAvailable() {
   if (!globalThis?.indexedDB || typeof globalThis.indexedDB.open !== 'function') {
-    throw new Error('当前环境没有可用的 IndexedDB，无法访问微型 skill 存储。');
+    throw new Error('当前环境没有可用的 IndexedDB，无法访问skill 存储。');
   }
   return globalThis.indexedDB;
 }
@@ -40,23 +40,23 @@ function cloneStructured(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
-export function openMicroSkillDb() {
-  if (cachedMicroSkillDbPromise) return cachedMicroSkillDbPromise;
+export function openSkillDb() {
+  if (cachedSkillDbPromise) return cachedSkillDbPromise;
 
-  cachedMicroSkillDbPromise = new Promise((resolve, reject) => {
+  cachedSkillDbPromise = new Promise((resolve, reject) => {
     const indexedDb = ensureIndexedDbAvailable();
-    const request = indexedDb.open(MICRO_SKILL_DB_NAME, MICRO_SKILL_DB_VERSION);
+    const request = indexedDb.open(SKILL_DB_NAME, SKILL_DB_VERSION);
 
     request.onerror = () => {
-      cachedMicroSkillDbPromise = null;
-      reject(request.error || new Error('打开微型 skill 数据库失败。'));
+      cachedSkillDbPromise = null;
+      reject(request.error || new Error('打开skill 数据库失败。'));
     };
 
     request.onsuccess = () => {
       const db = request.result;
       db.onversionchange = () => {
         try { db.close(); } catch (_) {}
-        cachedMicroSkillDbPromise = null;
+        cachedSkillDbPromise = null;
       };
       resolve(db);
     };
@@ -64,13 +64,13 @@ export function openMicroSkillDb() {
     request.onupgradeneeded = (event) => {
       const db = event.target.result;
 
-      if (!db.objectStoreNames.contains(MICRO_SKILL_MANIFEST_STORE)) {
-        const manifestStore = db.createObjectStore(MICRO_SKILL_MANIFEST_STORE, { keyPath: 'name' });
+      if (!db.objectStoreNames.contains(SKILL_MANIFEST_STORE)) {
+        const manifestStore = db.createObjectStore(SKILL_MANIFEST_STORE, { keyPath: 'name' });
         manifestStore.createIndex('updated_at', 'updated_at', { unique: false });
       }
 
-      if (!db.objectStoreNames.contains(MICRO_SKILL_FILE_STORE)) {
-        const fileStore = db.createObjectStore(MICRO_SKILL_FILE_STORE, {
+      if (!db.objectStoreNames.contains(SKILL_FILE_STORE)) {
+        const fileStore = db.createObjectStore(SKILL_FILE_STORE, {
           keyPath: ['skill_name', 'path']
         });
         fileStore.createIndex('skill_name', 'skill_name', { unique: false });
@@ -79,7 +79,7 @@ export function openMicroSkillDb() {
     };
   });
 
-  return cachedMicroSkillDbPromise;
+  return cachedSkillDbPromise;
 }
 
 async function collectFilesBySkillName(fileStore, skillName) {
@@ -94,7 +94,7 @@ async function deleteFilesBySkillName(fileStore, skillName) {
 
   await new Promise((resolve, reject) => {
     const request = index.openKeyCursor(range);
-    request.onerror = () => reject(request.error || new Error('删除微型 skill 文件失败。'));
+    request.onerror = () => reject(request.error || new Error('删除skill 文件失败。'));
     request.onsuccess = () => {
       const cursor = request.result;
       if (!cursor) {
@@ -108,40 +108,40 @@ async function deleteFilesBySkillName(fileStore, skillName) {
 }
 
 /**
- * 创建微型 skill 的持久化 store 适配器。
+ * 创建skill 的持久化 store 适配器。
  *
  * 返回的接口故意很小：
  * - listManifests / getManifest 用于摘要、匹配、列表；
  * - getPackage / savePackage / deletePackage 用于详情、源码与更新；
  * - 底层固定走 IndexedDB，避免再把大文本塞回 chrome.storage.local。
  */
-export function createIndexedDbMicroSkillStore() {
+export function createIndexedDbSkillStore() {
   return {
     kind: 'indexeddb',
 
     async listManifests() {
-      const db = await openMicroSkillDb();
-      const transaction = db.transaction(MICRO_SKILL_MANIFEST_STORE, 'readonly');
-      const store = transaction.objectStore(MICRO_SKILL_MANIFEST_STORE);
+      const db = await openSkillDb();
+      const transaction = db.transaction(SKILL_MANIFEST_STORE, 'readonly');
+      const store = transaction.objectStore(SKILL_MANIFEST_STORE);
       const manifests = await requestToPromise(store.getAll());
       await transactionDone(transaction);
       return Array.isArray(manifests) ? manifests.map(cloneStructured) : [];
     },
 
     async getManifest(skillName) {
-      const db = await openMicroSkillDb();
-      const transaction = db.transaction(MICRO_SKILL_MANIFEST_STORE, 'readonly');
-      const store = transaction.objectStore(MICRO_SKILL_MANIFEST_STORE);
+      const db = await openSkillDb();
+      const transaction = db.transaction(SKILL_MANIFEST_STORE, 'readonly');
+      const store = transaction.objectStore(SKILL_MANIFEST_STORE);
       const manifest = await requestToPromise(store.get(String(skillName || '')));
       await transactionDone(transaction);
       return manifest ? cloneStructured(manifest) : null;
     },
 
     async getPackage(skillName) {
-      const db = await openMicroSkillDb();
-      const transaction = db.transaction([MICRO_SKILL_MANIFEST_STORE, MICRO_SKILL_FILE_STORE], 'readonly');
-      const manifestStore = transaction.objectStore(MICRO_SKILL_MANIFEST_STORE);
-      const fileStore = transaction.objectStore(MICRO_SKILL_FILE_STORE);
+      const db = await openSkillDb();
+      const transaction = db.transaction([SKILL_MANIFEST_STORE, SKILL_FILE_STORE], 'readonly');
+      const manifestStore = transaction.objectStore(SKILL_MANIFEST_STORE);
+      const fileStore = transaction.objectStore(SKILL_FILE_STORE);
 
       const [manifest, files] = await Promise.all([
         requestToPromise(manifestStore.get(String(skillName || ''))),
@@ -162,10 +162,10 @@ export function createIndexedDbMicroSkillStore() {
 
     async savePackage(skillPackage) {
       const pkg = cloneStructured(skillPackage);
-      const db = await openMicroSkillDb();
-      const transaction = db.transaction([MICRO_SKILL_MANIFEST_STORE, MICRO_SKILL_FILE_STORE], 'readwrite');
-      const manifestStore = transaction.objectStore(MICRO_SKILL_MANIFEST_STORE);
-      const fileStore = transaction.objectStore(MICRO_SKILL_FILE_STORE);
+      const db = await openSkillDb();
+      const transaction = db.transaction([SKILL_MANIFEST_STORE, SKILL_FILE_STORE], 'readwrite');
+      const manifestStore = transaction.objectStore(SKILL_MANIFEST_STORE);
+      const fileStore = transaction.objectStore(SKILL_FILE_STORE);
 
       const {
         files = [],
@@ -196,10 +196,10 @@ export function createIndexedDbMicroSkillStore() {
 
     async deletePackage(skillName) {
       const normalizedName = String(skillName || '');
-      const db = await openMicroSkillDb();
-      const transaction = db.transaction([MICRO_SKILL_MANIFEST_STORE, MICRO_SKILL_FILE_STORE], 'readwrite');
-      const manifestStore = transaction.objectStore(MICRO_SKILL_MANIFEST_STORE);
-      const fileStore = transaction.objectStore(MICRO_SKILL_FILE_STORE);
+      const db = await openSkillDb();
+      const transaction = db.transaction([SKILL_MANIFEST_STORE, SKILL_FILE_STORE], 'readwrite');
+      const manifestStore = transaction.objectStore(SKILL_MANIFEST_STORE);
+      const fileStore = transaction.objectStore(SKILL_FILE_STORE);
 
       manifestStore.delete(normalizedName);
       await deleteFilesBySkillName(fileStore, normalizedName);

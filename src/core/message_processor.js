@@ -23,13 +23,13 @@ import { resolveResponseActivityToolExpansionState } from '../utils/response_act
 import { normalizeAssistantPreResponseStatus } from '../utils/assistant_pre_response_status.js';
 import {
   buildVirtualFileApplyPatchPreview,
-  buildMicroSkillApplyPatchPreview
-} from '../utils/micro_skill_patch_preview.js';
+  buildSkillApplyPatchPreview
+} from '../utils/skill_patch_preview.js';
 import {
-  buildMicroSkillRegistryPrimaryText,
-  buildMicroSkillRegistrySummaryParts,
-  getMicroSkillRegistryToolTypeLabel,
-  isMicroSkillRegistryToolCall
+  buildSkillRegistryPrimaryText,
+  buildSkillRegistrySummaryParts,
+  getSkillRegistryToolTypeLabel,
+  isSkillRegistryToolCall
 } from '../utils/response_activity_tool_summary.js';
 import {
   buildVirtualFilePrimaryText,
@@ -1847,8 +1847,8 @@ export function createMessageProcessor(appContext) {
       && String(record?.name || '').trim().toLowerCase() === RESPONSE_ACTIVITY_JS_RUNTIME_TOOL_NAME;
   }
 
-  function isResponseActivityMicroSkillRegistryEntry(record) {
-    return isMicroSkillRegistryToolCall(record);
+  function isResponseActivitySkillRegistryEntry(record) {
+    return isSkillRegistryToolCall(record);
   }
 
   function isResponseActivityConversationDocumentEntry(record) {
@@ -1992,7 +1992,7 @@ export function createMessageProcessor(appContext) {
     appendResponseActivityToolOutput(toolBodyInner, formattedOutput, outputImages);
   }
 
-  function getMicroSkillDiffOperationLabel(operation) {
+  function getSkillDiffOperationLabel(operation) {
     switch (String(operation || '').trim().toLowerCase()) {
       case 'add':
         return '新增';
@@ -2005,10 +2005,10 @@ export function createMessageProcessor(appContext) {
     }
   }
 
-  function renderResponseActivityMicroSkillApplyPatchPreview(toolBodyInner, entry) {
+  function renderResponseActivitySkillApplyPatchPreview(toolBodyInner, entry) {
     if (!toolBodyInner) return false;
-    const preview = isResponseActivityMicroSkillRegistryEntry(entry)
-      ? buildMicroSkillApplyPatchPreview(entry.arguments)
+    const preview = isResponseActivitySkillRegistryEntry(entry)
+      ? buildSkillApplyPatchPreview(entry.arguments)
       : (isResponseActivityConversationDocumentEntry(entry)
           ? buildVirtualFileApplyPatchPreview(entry.arguments)
           : null);
@@ -2047,7 +2047,7 @@ export function createMessageProcessor(appContext) {
 
       const badge = document.createElement('span');
       badge.className = `response-activity-tool-diff-badge is-${file.operation || 'update'}`;
-      badge.textContent = getMicroSkillDiffOperationLabel(file.operation);
+      badge.textContent = getSkillDiffOperationLabel(file.operation);
       fileHeader.appendChild(badge);
 
       const pathWrap = document.createElement('div');
@@ -2140,7 +2140,7 @@ export function createMessageProcessor(appContext) {
    */
   function renderResponseActivityGenericToolBody(toolBodyInner, entry, snapshot = null) {
     if (!toolBodyInner || !entry) return;
-    const renderedPatchPreview = renderResponseActivityMicroSkillApplyPatchPreview(toolBodyInner, entry);
+    const renderedPatchPreview = renderResponseActivitySkillApplyPatchPreview(toolBodyInner, entry);
 
     getResponseActivityToolSecondaryLines(entry).forEach((line) => {
       const secondary = document.createElement('div');
@@ -2203,7 +2203,7 @@ export function createMessageProcessor(appContext) {
     if (type === 'code_interpreter_call') return '代码';
     if (isResponseActivityJsRuntimeEntry(record)) return 'JS';
     if (isResponseActivityConversationDocumentEntry(record)) return getVirtualFileToolTypeLabel(record);
-    if (isResponseActivityMicroSkillRegistryEntry(record)) return getMicroSkillRegistryToolTypeLabel(record);
+    if (isResponseActivitySkillRegistryEntry(record)) return getSkillRegistryToolTypeLabel(record);
     if (type === 'function_call') return '函数';
     return type || 'tool';
   }
@@ -2251,8 +2251,8 @@ export function createMessageProcessor(appContext) {
     if (isResponseActivityConversationDocumentEntry(record)) {
       return buildVirtualFilePrimaryText(record, options);
     }
-    if (isResponseActivityMicroSkillRegistryEntry(record)) {
-      return buildMicroSkillRegistryPrimaryText(record, options);
+    if (isResponseActivitySkillRegistryEntry(record)) {
+      return buildSkillRegistryPrimaryText(record, options);
     }
     if (type === 'function_call') {
       const name = (typeof record.name === 'string' && record.name.trim()) ? record.name.trim() : '匿名函数';
@@ -2317,8 +2317,8 @@ export function createMessageProcessor(appContext) {
         locationUrl: ''
       };
     }
-    if (isResponseActivityMicroSkillRegistryEntry(record)) {
-      return buildMicroSkillRegistrySummaryParts(record, options) || {
+    if (isResponseActivitySkillRegistryEntry(record)) {
+      return buildSkillRegistrySummaryParts(record, options) || {
         action: '',
         value: '技能',
         valueUrl: '',

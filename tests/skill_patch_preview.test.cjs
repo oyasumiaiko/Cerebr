@@ -4,13 +4,13 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 async function loadModule() {
-  const modulePath = path.resolve(__dirname, '../src/utils/micro_skill_patch_preview.js');
+  const modulePath = path.resolve(__dirname, '../src/utils/skill_patch_preview.js');
   return import(pathToFileURL(modulePath).href);
 }
 
-test('buildMicroSkillApplyPatchPreview 会把 apply_patch 参数解析成可视化 diff 预览', async () => {
-  const { buildMicroSkillApplyPatchPreview } = await loadModule();
-  const preview = buildMicroSkillApplyPatchPreview({
+test('buildSkillApplyPatchPreview 会把 apply_patch 参数解析成可视化 diff 预览', async () => {
+  const { buildSkillApplyPatchPreview } = await loadModule();
+  const preview = buildSkillApplyPatchPreview({
     action: 'apply_patch',
     skill_name: 'worldquant-brain-sim-state',
     patch: [
@@ -41,8 +41,8 @@ test('buildMicroSkillApplyPatchPreview 会把 apply_patch 参数解析成可视�
   assert.equal(preview.files[1].lines[0].kind, 'add');
 });
 
-test('buildMicroSkillApplyPatchPreview 对非 apply_patch 参数返回 null', async () => {
-  const { buildMicroSkillApplyPatchPreview } = await loadModule();
-  assert.equal(buildMicroSkillApplyPatchPreview({ action: 'read_file' }), null);
-  assert.equal(buildMicroSkillApplyPatchPreview('{"action":"read_file"}'), null);
+test('buildSkillApplyPatchPreview 对非 apply_patch 参数返回 null', async () => {
+  const { buildSkillApplyPatchPreview } = await loadModule();
+  assert.equal(buildSkillApplyPatchPreview({ action: 'read_file' }), null);
+  assert.equal(buildSkillApplyPatchPreview('{"action":"read_file"}'), null);
 });

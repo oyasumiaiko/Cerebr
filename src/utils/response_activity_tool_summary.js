@@ -1,7 +1,6 @@
-import { buildMicroSkillApplyPatchPreview } from './micro_skill_patch_preview.js';
+import { buildSkillApplyPatchPreview } from './skill_patch_preview.js';
 
 export const RESPONSE_ACTIVITY_SKILL_REGISTRY_TOOL_NAME = 'skill_registry';
-export const RESPONSE_ACTIVITY_LEGACY_MICRO_SKILL_REGISTRY_TOOL_NAME = 'micro_skill_registry';
 
 function normalizeSummaryText(value) {
   return (typeof value === 'string') ? value.trim() : '';
@@ -28,21 +27,21 @@ function joinSummaryMeta(parts) {
     .join(' · ');
 }
 
-function resolveMicroSkillSummarySkillName(args) {
+function resolveSkillSummarySkillName(args) {
   return normalizeSummaryText(args?.skill_name || args?.skill?.name);
 }
 
-function resolveMicroSkillSummaryFilePath(args) {
+function resolveSkillSummaryFilePath(args) {
   return normalizeSummaryText(args?.file_path || args?.file?.path);
 }
 
 function buildApplyPatchSummaryParts(args, options = {}) {
-  const preview = buildMicroSkillApplyPatchPreview(args);
+  const preview = buildSkillApplyPatchPreview(args);
   const isInProgress = options?.isInProgress === true;
   if (!preview || !Array.isArray(preview.files) || preview.files.length <= 0) {
     return {
       action: isInProgress ? '正在修改技能' : '修改技能',
-      value: resolveMicroSkillSummarySkillName(args) || '技能文件',
+      value: resolveSkillSummarySkillName(args) || '技能文件',
       meta: ''
     };
   }
@@ -55,12 +54,12 @@ function buildApplyPatchSummaryParts(args, options = {}) {
 
   return {
     action: isInProgress ? '正在修改' : '修改了',
-    value: normalizeSummaryText(firstFile?.path) || resolveMicroSkillSummarySkillName(args) || '技能文件',
+    value: normalizeSummaryText(firstFile?.path) || resolveSkillSummarySkillName(args) || '技能文件',
     meta: joinSummaryMeta(metaParts)
   };
 }
 
-function resolveMicroSkillActionLabel(action, options = {}) {
+function resolveSkillActionLabel(action, options = {}) {
   const normalizedAction = normalizeSummaryText(action).toLowerCase();
   const isInProgress = options?.isInProgress === true;
   switch (normalizedAction) {
@@ -99,17 +98,17 @@ function resolveMicroSkillActionLabel(action, options = {}) {
   }
 }
 
-function buildMicroSkillRegistryTargetParts(args, options = {}) {
+function buildSkillRegistryTargetParts(args, options = {}) {
   const normalizedAction = normalizeSummaryText(args?.action).toLowerCase();
-  const skillName = resolveMicroSkillSummarySkillName(args);
-  const filePath = resolveMicroSkillSummaryFilePath(args);
+  const skillName = resolveSkillSummarySkillName(args);
+  const filePath = resolveSkillSummaryFilePath(args);
   const pattern = normalizeSummaryText(args?.pattern);
   const pathGlob = normalizeSummaryText(args?.path_glob);
   if (normalizedAction === 'apply_patch') {
     return buildApplyPatchSummaryParts(args, options);
   }
 
-  const action = resolveMicroSkillActionLabel(normalizedAction, options);
+  const action = resolveSkillActionLabel(normalizedAction, options);
   switch (normalizedAction) {
     case 'list':
       return { action, value: '全部技能', meta: '' };
@@ -157,20 +156,17 @@ function buildMicroSkillRegistryTargetParts(args, options = {}) {
   }
 }
 
-export function isMicroSkillRegistryToolCall(record) {
+export function isSkillRegistryToolCall(record) {
   return String(record?.type || '').toLowerCase() === 'function_call'
-    && new Set([
-      RESPONSE_ACTIVITY_SKILL_REGISTRY_TOOL_NAME,
-      RESPONSE_ACTIVITY_LEGACY_MICRO_SKILL_REGISTRY_TOOL_NAME
-    ]).has(normalizeSummaryText(record?.name).toLowerCase());
+    && normalizeSummaryText(record?.name).toLowerCase() === RESPONSE_ACTIVITY_SKILL_REGISTRY_TOOL_NAME;
 }
 
-export function getMicroSkillRegistryToolTypeLabel(record) {
-  return isMicroSkillRegistryToolCall(record) ? '技能' : '';
+export function getSkillRegistryToolTypeLabel(record) {
+  return isSkillRegistryToolCall(record) ? '技能' : '';
 }
 
-export function buildMicroSkillRegistrySummaryParts(record, options = {}) {
-  if (!isMicroSkillRegistryToolCall(record)) return null;
+export function buildSkillRegistrySummaryParts(record, options = {}) {
+  if (!isSkillRegistryToolCall(record)) return null;
   const args = parseArgumentsObject(record?.arguments);
   if (!args) {
     const action = options?.isInProgress === true ? '正在执行技能操作' : '执行技能操作';
@@ -185,7 +181,7 @@ export function buildMicroSkillRegistrySummaryParts(record, options = {}) {
     };
   }
 
-  const summary = buildMicroSkillRegistryTargetParts(args, options);
+  const summary = buildSkillRegistryTargetParts(args, options);
   return {
     action: summary.action || '',
     value: summary.value || '',
@@ -197,8 +193,8 @@ export function buildMicroSkillRegistrySummaryParts(record, options = {}) {
   };
 }
 
-export function buildMicroSkillRegistryPrimaryText(record, options = {}) {
-  const parts = buildMicroSkillRegistrySummaryParts(record, options);
+export function buildSkillRegistryPrimaryText(record, options = {}) {
+  const parts = buildSkillRegistrySummaryParts(record, options);
   if (!parts) return '';
   return [parts.action, parts.value, parts.meta]
     .map((part) => normalizeSummaryText(part))

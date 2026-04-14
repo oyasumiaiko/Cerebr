@@ -6,7 +6,7 @@ import {
   VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
   VIRTUAL_FILE_TARGET_KIND_SKILL
 } from '../agent_tools/virtual_file_io/index.js';
-import { buildVirtualFileApplyPatchPreview } from './micro_skill_patch_preview.js';
+import { buildVirtualFileApplyPatchPreview } from './skill_patch_preview.js';
 
 function normalizeSummaryText(value) {
   return (typeof value === 'string') ? value.trim() : '';

@@ -3,8 +3,8 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-async function loadMicroSkillRegistryToolModule() {
-  const filePath = path.resolve(__dirname, '../src/agent_tools/micro_skill/registry_tool.js');
+async function loadSkillRegistryToolModule() {
+  const filePath = path.resolve(__dirname, '../src/agent_tools/skill/registry_tool.js');
   return import(`${pathToFileURL(filePath).href}?test=${Date.now()}`);
 }
 
@@ -127,59 +127,59 @@ function buildLongSkillInput(name = 'long-dom-probe') {
   };
 }
 
-test('normalizeMicroSkillMatchPatterns 与 URL 匹配遵循第一阶段 Chrome/TM 风格约束', async () => {
+test('normalizeSkillMatchPatterns 与 URL 匹配遵循第一阶段 Chrome/TM 风格约束', async () => {
   const {
-    normalizeMicroSkillMatchPatterns,
-    microSkillMatchPatternMatchesUrl
-  } = await loadMicroSkillRegistryToolModule();
+    normalizeSkillMatchPatterns,
+    skillMatchPatternMatchesUrl
+  } = await loadSkillRegistryToolModule();
 
   assert.deepEqual(
-    normalizeMicroSkillMatchPatterns(['https://*.example.com/*', 'file:///*']),
+    normalizeSkillMatchPatterns(['https://*.example.com/*', 'file:///*']),
     ['https://*.example.com/*', 'file:///*']
   );
 
   assert.equal(
-    microSkillMatchPatternMatchesUrl('https://*.example.com/*', 'https://a.example.com/path?q=1'),
+    skillMatchPatternMatchesUrl('https://*.example.com/*', 'https://a.example.com/path?q=1'),
     true
   );
   assert.equal(
-    microSkillMatchPatternMatchesUrl('https://*.example.com/*', 'https://example.com/root'),
+    skillMatchPatternMatchesUrl('https://*.example.com/*', 'https://example.com/root'),
     true
   );
   assert.equal(
-    microSkillMatchPatternMatchesUrl('*://*.example.com/*', 'http://b.example.com/path'),
+    skillMatchPatternMatchesUrl('*://*.example.com/*', 'http://b.example.com/path'),
     true
   );
   assert.equal(
-    microSkillMatchPatternMatchesUrl('*://*.example.com/*', 'https://b.example.com/path'),
+    skillMatchPatternMatchesUrl('*://*.example.com/*', 'https://b.example.com/path'),
     true
   );
   assert.equal(
-    microSkillMatchPatternMatchesUrl('*://*.example.com/*', 'file:///tmp/a.txt'),
+    skillMatchPatternMatchesUrl('*://*.example.com/*', 'file:///tmp/a.txt'),
     false
   );
 
   assert.throws(
-    () => normalizeMicroSkillMatchPatterns(['https://exa*mple.com/*']),
+    () => normalizeSkillMatchPatterns(['https://exa*mple.com/*']),
     /不支持的 match 规则/
   );
 });
 
-test('buildStoredMicroSkillRecord / saveStoredMicroSkillPackage / getStoredMicroSkillPackage 保持 package 结构与渐进式披露边界', async () => {
+test('buildStoredSkillRecord / saveStoredSkillPackage / getStoredSkillPackage 保持 package 结构与渐进式披露边界', async () => {
   const {
-    buildMicroSkillDetail,
-    buildMicroSkillFileIndexPayload,
-    buildMicroSkillFilePayload,
-    buildMicroSkillPackagePayload,
-    buildMicroSkillSummary,
-    buildStoredMicroSkillRecord,
-    getStoredMicroSkillPackage,
-    searchMicroSkillFiles,
-    saveStoredMicroSkillPackage
-  } = await loadMicroSkillRegistryToolModule();
+    buildSkillDetail,
+    buildSkillFileIndexPayload,
+    buildSkillFilePayload,
+    buildSkillPackagePayload,
+    buildSkillSummary,
+    buildStoredSkillRecord,
+    getStoredSkillPackage,
+    searchSkillFiles,
+    saveStoredSkillPackage
+  } = await loadSkillRegistryToolModule();
 
   const store = createMockStore();
-  const created = buildStoredMicroSkillRecord(buildSkillInput());
+  const created = buildStoredSkillRecord(buildSkillInput());
 
   assert.equal(created.revision, 1);
   assert.equal(created.interface.display_name, 'DOM Probe');
@@ -187,15 +187,15 @@ test('buildStoredMicroSkillRecord / saveStoredMicroSkillPackage / getStoredMicro
   assert.equal(created.runtime.entry_path, 'src/main.js');
   assert.equal(created.files.length, 3);
 
-  await saveStoredMicroSkillPackage(created, store);
-  const loaded = await getStoredMicroSkillPackage('dom-probe', store);
+  await saveStoredSkillPackage(created, store);
+  const loaded = await getStoredSkillPackage('dom-probe', store);
   assert.equal(loaded.name, 'dom-probe');
 
-  const summary = buildMicroSkillSummary(loaded);
+  const summary = buildSkillSummary(loaded);
   assert.equal(summary.interface.short_description, '读取当前页面标题和 URL');
   assert.equal(summary.files.total_count, 4);
 
-  const detail = buildMicroSkillDetail(loaded);
+  const detail = buildSkillDetail(loaded);
   assert.equal(detail.instruction.path, 'SKILL.md');
   assert.match(detail.instruction.content, /DOM Probe/);
   assert.equal(detail.instruction.content_read.mode, 'preview');
@@ -203,14 +203,14 @@ test('buildStoredMicroSkillRecord / saveStoredMicroSkillPackage / getStoredMicro
   assert.equal(detail.files.files[0].path, 'manifest.json');
   assert.equal(detail.files.files[0].content, undefined);
 
-  const source = buildMicroSkillPackagePayload(loaded);
+  const source = buildSkillPackagePayload(loaded);
   assert.equal(source.manifest_path, 'manifest.json');
   assert.equal(source.runtime.entry_path, 'src/main.js');
   assert.equal(source.files.files.length, 4);
   assert.match(source.files.files[0].content, /"instruction"/);
   assert.match(source.files.files[3].content, /document\.title/);
 
-  const manifestFile = buildMicroSkillFilePayload(loaded, 'manifest.json');
+  const manifestFile = buildSkillFilePayload(loaded, 'manifest.json');
   assert.equal(manifestFile.file.path, 'manifest.json');
   assert.equal(manifestFile.file.is_manifest, true);
   assert.equal(manifestFile.file.content_read.mode, 'preview');
@@ -218,7 +218,7 @@ test('buildStoredMicroSkillRecord / saveStoredMicroSkillPackage / getStoredMicro
   assert.doesNotMatch(manifestFile.file.content, /"kind":/);
   assert.match(manifestFile.file.content, /"description": "读取页面标题和链接"/);
 
-  const fileIndex = buildMicroSkillFileIndexPayload(loaded, {
+  const fileIndex = buildSkillFileIndexPayload(loaded, {
     requestedSkillName: 'dom-probe'
   });
   assert.equal(fileIndex.total_files, 4);
@@ -226,14 +226,14 @@ test('buildStoredMicroSkillRecord / saveStoredMicroSkillPackage / getStoredMicro
   assert.equal(fileIndex.files[0].path, 'manifest.json');
   assert.equal(fileIndex.files[0].is_manifest, true);
 
-  const instructionFile = buildMicroSkillFilePayload(loaded, 'SKILL.md');
+  const instructionFile = buildSkillFilePayload(loaded, 'SKILL.md');
   assert.equal(instructionFile.has_runtime, true);
   assert.equal(instructionFile.runtime_entry_path, 'src/main.js');
   assert.equal(instructionFile.runtime_file_count, 2);
   assert.match(instructionFile.runtime_hint, /Read SKILL\.md first/);
   assert.match(instructionFile.runtime_hint, /js_runtime_execute/);
 
-  const searchResult = searchMicroSkillFiles(loaded, {
+  const searchResult = searchSkillFiles(loaded, {
     requestedSkillName: 'dom-probe',
     pattern: 'readTitle'
   });
@@ -248,15 +248,15 @@ test('buildStoredMicroSkillRecord / saveStoredMicroSkillPackage / getStoredMicro
   assert.equal(store.dump().length, 1);
 });
 
-test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file action 集', async () => {
+test('normalizeSkillRegistryToolArguments 会收敛为新的 package/file action 集', async () => {
   const {
-    MICRO_SKILL_REGISTRY_TOOL_NAME,
-    buildMicroSkillRegistryFunctionToolDefinition,
-    normalizeMicroSkillRegistryToolArguments
-  } = await loadMicroSkillRegistryToolModule();
+    SKILL_REGISTRY_TOOL_NAME,
+    buildSkillRegistryFunctionToolDefinition,
+    normalizeSkillRegistryToolArguments
+  } = await loadSkillRegistryToolModule();
 
-  const definition = buildMicroSkillRegistryFunctionToolDefinition();
-  assert.equal(definition.name, MICRO_SKILL_REGISTRY_TOOL_NAME);
+  const definition = buildSkillRegistryFunctionToolDefinition();
+  assert.equal(definition.name, SKILL_REGISTRY_TOOL_NAME);
   assert.match(definition.parameters.properties.action.description, /create_skill/);
   assert.match(definition.parameters.properties.action.description, /mount_on_current_page/);
   assert.doesNotMatch(definition.parameters.properties.action.description, /read_file/);
@@ -265,7 +265,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
   assert.equal(definition.parameters.properties.skill.required.includes('match'), false);
   assert.equal(definition.parameters.properties.skill.properties.resources.items.enum.includes('references'), true);
 
-  const normalizedCreate = normalizeMicroSkillRegistryToolArguments({
+  const normalizedCreate = normalizeSkillRegistryToolArguments({
     action: 'create',
     skill: buildCreateTemplateInput()
   });
@@ -281,7 +281,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
   assert.deepEqual(normalizedCreate.skill.resources, ['references']);
   assert.equal(normalizedCreate.skill.examples, true);
 
-  const normalizedCompatCreate = normalizeMicroSkillRegistryToolArguments({
+  const normalizedCompatCreate = normalizeSkillRegistryToolArguments({
     action: 'create_skill',
     skill: buildSkillInput()
   });
@@ -290,7 +290,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
   assert.equal(normalizedCompatCreate.skill.instruction.path, 'SKILL.md');
   assert.equal(normalizedCompatCreate.skill.files.length, 3);
 
-  const normalizedListFiles = normalizeMicroSkillRegistryToolArguments({
+  const normalizedListFiles = normalizeSkillRegistryToolArguments({
     action: 'list_files',
     skill_name: 'dom-probe'
   });
@@ -299,7 +299,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
   assert.equal(normalizedListFiles.skill_name, 'dom-probe');
   assert.equal(normalizedListFiles.deprecated_compat_action, true);
 
-  const normalizedSearchFiles = normalizeMicroSkillRegistryToolArguments({
+  const normalizedSearchFiles = normalizeSkillRegistryToolArguments({
     action: 'search_files',
     pattern: 'document.title',
     context_before: 1,
@@ -329,7 +329,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     next_runtime_entry_path: null
   });
 
-  const normalizedReadFile = normalizeMicroSkillRegistryToolArguments({
+  const normalizedReadFile = normalizeSkillRegistryToolArguments({
     action: 'read_file',
     skill_name: 'dom-probe',
     file_path: './src/helpers/dom.js',
@@ -364,7 +364,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
   });
 
   assert.throws(
-    () => normalizeMicroSkillRegistryToolArguments({
+    () => normalizeSkillRegistryToolArguments({
       action: 'write_file',
       skill_name: 'dom-probe',
       file: {
@@ -376,7 +376,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
   );
 
   assert.throws(
-    () => normalizeMicroSkillRegistryToolArguments({
+    () => normalizeSkillRegistryToolArguments({
       action: 'read_source_file',
       skill_name: 'dom-probe',
       file_path: 'src/helpers/dom.js'
@@ -385,7 +385,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
   );
 
   assert.throws(
-    () => normalizeMicroSkillRegistryToolArguments({
+    () => normalizeSkillRegistryToolArguments({
       action: 'create_skill',
       skill: {
         ...buildCreateTemplateInput('Need Examples'),
@@ -396,7 +396,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     /examples=true 时必须同时提供/
   );
 
-  const normalizedApplyPatch = normalizeMicroSkillRegistryToolArguments({
+  const normalizedApplyPatch = normalizeSkillRegistryToolArguments({
     action: 'apply_patch',
     skill_name: 'dom-probe',
     patch: '*** Begin Patch\n*** Update File: src/main.js\n@@\n-old\n+new\n*** End Patch'
@@ -423,7 +423,7 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
     next_runtime_entry_path: null
   });
 
-  const normalizedMount = normalizeMicroSkillRegistryToolArguments({
+  const normalizedMount = normalizeSkillRegistryToolArguments({
     action: 'mount_on_current_page',
     skill_name: 'dom-probe'
   });
@@ -450,17 +450,17 @@ test('normalizeMicroSkillRegistryToolArguments 会收敛为新的 package/file a
   });
 });
 
-test('micro skill 读取参数支持字符偏移与按行续读', async () => {
+test('skill 读取参数支持字符偏移与按行续读', async () => {
   const {
-    buildMicroSkillDetail,
-    buildMicroSkillFilePayload,
-    buildStoredMicroSkillRecord,
-    normalizeMicroSkillRegistryToolArguments
-  } = await loadMicroSkillRegistryToolModule();
+    buildSkillDetail,
+    buildSkillFilePayload,
+    buildStoredSkillRecord,
+    normalizeSkillRegistryToolArguments
+  } = await loadSkillRegistryToolModule();
 
-  const record = buildStoredMicroSkillRecord(buildLongSkillInput());
+  const record = buildStoredSkillRecord(buildLongSkillInput());
 
-  const normalizedReadDetail = normalizeMicroSkillRegistryToolArguments({
+  const normalizedReadDetail = normalizeSkillRegistryToolArguments({
     action: 'read_detail',
     skill_name: 'long-dom-probe',
     start_line: 3,
@@ -474,7 +474,7 @@ test('micro skill 读取参数支持字符偏移与按行续读', async () => {
     end_line: 5
   });
 
-  const normalizedReadFile = normalizeMicroSkillRegistryToolArguments({
+  const normalizedReadFile = normalizeSkillRegistryToolArguments({
     action: 'read_file',
     skill_name: 'long-dom-probe',
     file_path: 'src/main.js',
@@ -489,7 +489,7 @@ test('micro skill 读取参数支持字符偏移与按行续读', async () => {
     end_line: null
   });
 
-  const detailByLine = buildMicroSkillDetail(record, {
+  const detailByLine = buildSkillDetail(record, {
     contentReadArgs: normalizedReadDetail.read_options
   });
   assert.equal(detailByLine.instruction.content_read.mode, 'line_range');
@@ -499,7 +499,7 @@ test('micro skill 读取参数支持字符偏移与按行续读', async () => {
   assert.doesNotMatch(detailByLine.instruction.content, /^Line 4:/m);
   assert.equal(detailByLine.instruction.content_read.has_more_after_range, true);
 
-  const fileByChars = buildMicroSkillFilePayload(record, 'src/main.js', {
+  const fileByChars = buildSkillFilePayload(record, 'src/main.js', {
     contentReadArgs: normalizedReadFile.read_options
   });
   assert.equal(fileByChars.file.content_read.mode, 'char_range');
@@ -508,20 +508,20 @@ test('micro skill 读取参数支持字符偏移与按行续读', async () => {
   assert.equal(fileByChars.file.content.length, 200);
   assert.equal(fileByChars.file.content_read.has_more_after_range, true);
 
-  const numberedDetail = buildMicroSkillDetail(record, {
+  const numberedDetail = buildSkillDetail(record, {
     contentReadArgs: normalizedReadDetail.read_options,
     includeLineNumbers: true
   });
   assert.match(numberedDetail.instruction.numbered_content, /^3 \| Line 1:/m);
 
-  const numberedFile = buildMicroSkillFilePayload(record, 'src/main.js', {
+  const numberedFile = buildSkillFilePayload(record, 'src/main.js', {
     contentReadArgs: normalizedReadFile.read_options,
     includeLineNumbers: true
   });
   assert.match(numberedFile.file.numbered_content, /^\d+ \| /m);
 
   assert.throws(
-    () => normalizeMicroSkillRegistryToolArguments({
+    () => normalizeSkillRegistryToolArguments({
       action: 'read_file',
       skill_name: 'long-dom-probe',
       file_path: 'src/main.js',
@@ -532,9 +532,9 @@ test('micro skill 读取参数支持字符偏移与按行续读', async () => {
     /不能同时使用字符区间和行区间/
   );
 
-  const globalSearch = (await loadMicroSkillRegistryToolModule()).searchMicroSkillFiles([
+  const globalSearch = (await loadSkillRegistryToolModule()).searchSkillFiles([
     record,
-    buildStoredMicroSkillRecord(buildSkillInput('dom-probe-2'))
+    buildStoredSkillRecord(buildSkillInput('dom-probe-2'))
   ], {
     pattern: 'readTitle',
     path_glob: 'src/**/*.js',
@@ -544,16 +544,16 @@ test('micro skill 读取参数支持字符偏移与按行续读', async () => {
   assert.equal(globalSearch.matches.every((item) => item.file_path.startsWith('src/')), true);
 });
 
-test('buildMicroSkillContextSummary 会返回官方风格的最小 skill 摘要', async () => {
+test('buildSkillContextSummary 会返回官方风格的最小 skill 摘要', async () => {
   const {
-    buildDefaultMicroSkillMountContract,
-    buildMicroSkillContextSummary,
-    buildStoredMicroSkillRecord
-  } = await loadMicroSkillRegistryToolModule();
+    buildDefaultSkillMountContract,
+    buildSkillContextSummary,
+    buildStoredSkillRecord
+  } = await loadSkillRegistryToolModule();
 
-  const record = buildStoredMicroSkillRecord(buildSkillInput());
-  const summary = buildMicroSkillContextSummary(record);
-  const contract = buildDefaultMicroSkillMountContract();
+  const record = buildStoredSkillRecord(buildSkillInput());
+  const summary = buildSkillContextSummary(record);
+  const contract = buildDefaultSkillMountContract();
 
   assert.equal(summary.name, 'dom-probe');
   assert.equal(summary.short_description, '读取当前页面标题和 URL');
@@ -561,16 +561,16 @@ test('buildMicroSkillContextSummary 会返回官方风格的最小 skill 摘要'
   assert.equal(Object.prototype.hasOwnProperty.call(summary, 'display_name'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(summary, 'mount_surface'), false);
   assert.match(contract, /Recommended helpers: `globalThis\.\$skill\(name\)`, `globalThis\.\$invoke\(skillName, methodName, \.\.\.args\)`, `globalThis\.\$methods\(name\)`\./);
-  assert.match(contract, /Compatibility runtime registry: `globalThis\.__cerebrMicroSkills`\./);
+  assert.match(contract, /Compatibility runtime registry: `globalThis\.__cerebrSkills`\./);
 });
 
-test('searchMicroSkillFiles 支持 regex、smart case、路径过滤与上下文行', async () => {
+test('searchSkillFiles 支持 regex、smart case、路径过滤与上下文行', async () => {
   const {
-    buildStoredMicroSkillRecord,
-    searchMicroSkillFiles
-  } = await loadMicroSkillRegistryToolModule();
+    buildStoredSkillRecord,
+    searchSkillFiles
+  } = await loadSkillRegistryToolModule();
 
-  const record = buildStoredMicroSkillRecord({
+  const record = buildStoredSkillRecord({
     ...buildSkillInput('search-probe'),
     files: [
       {
@@ -593,7 +593,7 @@ test('searchMicroSkillFiles 支持 regex、smart case、路径过滤与上下文
     ]
   });
 
-  const smartCaseSearch = searchMicroSkillFiles(record, {
+  const smartCaseSearch = searchSkillFiles(record, {
     pattern: 'SearchFiles',
     path_glob: 'src/**/*.js',
     context_before: 1,
@@ -606,7 +606,7 @@ test('searchMicroSkillFiles 支持 regex、smart case、路径过滤与上下文
   assert.equal(smartCaseSearch.matches[0].before[0].line_number, 1);
   assert.equal(smartCaseSearch.matches[0].after[0].line_number, 3);
 
-  const regexSearch = searchMicroSkillFiles(record, {
+  const regexSearch = searchSkillFiles(record, {
     pattern: 'document\\.title',
     regex: true,
     path_glob: 'src/**/*.js'

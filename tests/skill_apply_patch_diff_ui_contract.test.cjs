@@ -13,7 +13,7 @@ test('response activity 会为顶层 apply_patch 渲染虚拟文件 diff 预览'
   const sidebarCssSource = await readWorkspaceFile('src/ui/styles/sidebar.css');
 
   assert.match(messageProcessorSource, /buildVirtualFileApplyPatchPreview/);
-  assert.match(messageProcessorSource, /renderResponseActivityMicroSkillApplyPatchPreview/);
+  assert.match(messageProcessorSource, /renderResponseActivitySkillApplyPatchPreview/);
   assert.match(messageProcessorSource, /response-activity-tool-diff-preview/);
   assert.match(messageProcessorSource, /response-activity-tool-diff-line is-/);
 

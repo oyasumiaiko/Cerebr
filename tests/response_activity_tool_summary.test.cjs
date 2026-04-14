@@ -10,9 +10,9 @@ async function loadModule() {
 
 test('skill_registry read_file 摘要会显示技能 action、文件路径和技能名', async () => {
   const {
-    buildMicroSkillRegistrySummaryParts,
-    buildMicroSkillRegistryPrimaryText,
-    getMicroSkillRegistryToolTypeLabel
+    buildSkillRegistrySummaryParts,
+    buildSkillRegistryPrimaryText,
+    getSkillRegistryToolTypeLabel
   } = await loadModule();
 
   const record = {
@@ -25,7 +25,7 @@ test('skill_registry read_file 摘要会显示技能 action、文件路径和技
     })
   };
 
-  const parts = buildMicroSkillRegistrySummaryParts(record);
+  const parts = buildSkillRegistrySummaryParts(record);
   assert.deepEqual(parts, {
     action: '读取文件',
     value: 'src/helpers/dom.js',
@@ -35,14 +35,14 @@ test('skill_registry read_file 摘要会显示技能 action、文件路径和技
     locationValue: '',
     locationUrl: ''
   });
-  assert.equal(buildMicroSkillRegistryPrimaryText(record), '读取文件 src/helpers/dom.js dom-probe');
-  assert.equal(getMicroSkillRegistryToolTypeLabel(record), '技能');
+  assert.equal(buildSkillRegistryPrimaryText(record), '读取文件 src/helpers/dom.js dom-probe');
+  assert.equal(getSkillRegistryToolTypeLabel(record), '技能');
 });
 
 test('skill_registry apply_patch 摘要会显示首个文件和汇总增删行数', async () => {
   const {
-    buildMicroSkillRegistrySummaryParts,
-    buildMicroSkillRegistryPrimaryText
+    buildSkillRegistrySummaryParts,
+    buildSkillRegistryPrimaryText
   } = await loadModule();
 
   const record = {
@@ -65,7 +65,7 @@ test('skill_registry apply_patch 摘要会显示首个文件和汇总增删行�
     })
   };
 
-  const parts = buildMicroSkillRegistrySummaryParts(record);
+  const parts = buildSkillRegistrySummaryParts(record);
   assert.deepEqual(parts, {
     action: '修改了',
     value: 'src/main.js',
@@ -75,11 +75,11 @@ test('skill_registry apply_patch 摘要会显示首个文件和汇总增删行�
     locationValue: '',
     locationUrl: ''
   });
-  assert.equal(buildMicroSkillRegistryPrimaryText(record), '修改了 src/main.js +2 · -1 · 另 1 个文件');
+  assert.equal(buildSkillRegistryPrimaryText(record), '修改了 src/main.js +2 · -1 · 另 1 个文件');
 });
 
 test('skill_registry search_files 摘要会优先显示 action、pattern 和技能名', async () => {
-  const { buildMicroSkillRegistrySummaryParts } = await loadModule();
+  const { buildSkillRegistrySummaryParts } = await loadModule();
 
   const record = {
     type: 'function_call',
@@ -92,7 +92,7 @@ test('skill_registry search_files 摘要会优先显示 action、pattern 和技�
     })
   };
 
-  const parts = buildMicroSkillRegistrySummaryParts(record);
+  const parts = buildSkillRegistrySummaryParts(record);
   assert.deepEqual(parts, {
     action: '搜索文件',
     value: 'document.title',
@@ -105,7 +105,7 @@ test('skill_registry search_files 摘要会优先显示 action、pattern 和技�
 });
 
 test('skill_registry create_skill 摘要会显示创建模板动作与技能名', async () => {
-  const { buildMicroSkillRegistrySummaryParts, buildMicroSkillRegistryPrimaryText } = await loadModule();
+  const { buildSkillRegistrySummaryParts, buildSkillRegistryPrimaryText } = await loadModule();
 
   const record = {
     type: 'function_call',
@@ -119,7 +119,7 @@ test('skill_registry create_skill 摘要会显示创建模板动作与技能名'
     })
   };
 
-  const parts = buildMicroSkillRegistrySummaryParts(record);
+  const parts = buildSkillRegistrySummaryParts(record);
   assert.deepEqual(parts, {
     action: '创建技能模板',
     value: 'DOM Probe Template',
@@ -129,11 +129,11 @@ test('skill_registry create_skill 摘要会显示创建模板动作与技能名'
     locationValue: '',
     locationUrl: ''
   });
-  assert.equal(buildMicroSkillRegistryPrimaryText(record), '创建技能模板 DOM Probe Template');
+  assert.equal(buildSkillRegistryPrimaryText(record), '创建技能模板 DOM Probe Template');
 });
 
 test('skill_registry mount_on_current_page 摘要会显示当前页挂载动作与技能名', async () => {
-  const { buildMicroSkillRegistrySummaryParts, buildMicroSkillRegistryPrimaryText } = await loadModule();
+  const { buildSkillRegistrySummaryParts, buildSkillRegistryPrimaryText } = await loadModule();
 
   const record = {
     type: 'function_call',
@@ -144,7 +144,7 @@ test('skill_registry mount_on_current_page 摘要会显示当前页挂载动作�
     })
   };
 
-  const parts = buildMicroSkillRegistrySummaryParts(record);
+  const parts = buildSkillRegistrySummaryParts(record);
   assert.deepEqual(parts, {
     action: '挂载到当前页',
     value: 'dom-probe',
@@ -154,5 +154,5 @@ test('skill_registry mount_on_current_page 摘要会显示当前页挂载动作�
     locationValue: '',
     locationUrl: ''
   });
-  assert.equal(buildMicroSkillRegistryPrimaryText(record), '挂载到当前页 dom-probe');
+  assert.equal(buildSkillRegistryPrimaryText(record), '挂载到当前页 dom-probe');
 });

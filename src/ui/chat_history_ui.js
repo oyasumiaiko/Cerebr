@@ -151,8 +151,8 @@ export function createChatHistoryUI(appContext) {
   // --- 数据趋势缓存（图表） ---
   const TREND_STATS_TTL = 5 * 60 * 1000; // 5分钟缓存趋势统计（会在清理/更新后失效）
   let trendStatsCache = { data: null, time: 0, promise: null };
-  // 微型 skill 查看器：缓存列表 / 详情 / 文件包，并把 UI 控制引用放在一处，避免在多个事件处理器之间散落状态。
-  const microSkillViewerState = {
+  // skill 查看器：缓存列表 / 详情 / 文件包，并把 UI 控制引用放在一处，避免在多个事件处理器之间散落状态。
+  const skillViewerState = {
     initialized: false,
     filterText: '',
     selectedName: '',
@@ -9061,24 +9061,24 @@ export function createChatHistoryUI(appContext) {
     backupSettingsContent.dataset.lazyReady = '1';
   }
 
-  function getMicroSkillViewerRefs() {
-    return microSkillViewerState.refs;
+  function getSkillViewerRefs() {
+    return skillViewerState.refs;
   }
 
-  function renderMicroSkillViewerEmptyState(container, title, description) {
+  function renderSkillViewerEmptyState(container, title, description) {
     if (!container) return;
     container.innerHTML = '';
     const empty = document.createElement('div');
-    empty.className = 'micro-skill-detail-empty';
+    empty.className = 'skill-detail-empty';
 
     const emptyTitle = document.createElement('div');
-    emptyTitle.className = 'micro-skill-detail-empty-title';
+    emptyTitle.className = 'skill-detail-empty-title';
     emptyTitle.textContent = title;
     empty.appendChild(emptyTitle);
 
     if (description) {
       const emptyDesc = document.createElement('div');
-      emptyDesc.className = 'micro-skill-detail-empty-desc';
+      emptyDesc.className = 'skill-detail-empty-desc';
       emptyDesc.textContent = description;
       empty.appendChild(emptyDesc);
     }
@@ -9086,11 +9086,11 @@ export function createChatHistoryUI(appContext) {
     container.appendChild(empty);
   }
 
-  async function executeMicroSkillViewerAction(payload) {
-    if (typeof utils?.executeMicroSkillRegistryAction !== 'function') {
+  async function executeSkillViewerAction(payload) {
+    if (typeof utils?.executeSkillRegistryAction !== 'function') {
       throw new Error('当前界面没有可用的 skill 注册表入口。');
     }
-    const result = await utils.executeMicroSkillRegistryAction(payload);
+    const result = await utils.executeSkillRegistryAction(payload);
     if (result?.success === true) {
       const output = { ...result };
       delete output.success;
@@ -9101,7 +9101,7 @@ export function createChatHistoryUI(appContext) {
       : 'skill 操作失败。');
   }
 
-  async function executeMicroSkillViewerFileAction(action, payload) {
+  async function executeSkillViewerFileAction(action, payload) {
     if (typeof utils?.executeVirtualFileAction !== 'function') {
       throw new Error('当前界面没有可用的虚拟文件入口。');
     }
@@ -9114,7 +9114,7 @@ export function createChatHistoryUI(appContext) {
       : 'skill 文件操作失败。');
   }
 
-  function buildMicroSkillDetailFromViewerParts(summary, instructionFile, fileIndex) {
+  function buildSkillDetailFromViewerParts(summary, instructionFile, fileIndex) {
     if (!summary) return null;
     const instructionPath = String(summary?.instruction?.path || 'SKILL.md').trim() || 'SKILL.md';
     const files = Array.isArray(fileIndex?.files) ? fileIndex.files : [];
@@ -9137,10 +9137,10 @@ export function createChatHistoryUI(appContext) {
     };
   }
 
-  function getFilteredMicroSkillSummaries() {
-    const keyword = String(microSkillViewerState.filterText || '').trim().toLowerCase();
-    if (!keyword) return [...microSkillViewerState.summaries];
-    return microSkillViewerState.summaries.filter((skill) => {
+  function getFilteredSkillSummaries() {
+    const keyword = String(skillViewerState.filterText || '').trim().toLowerCase();
+    if (!keyword) return [...skillViewerState.summaries];
+    return skillViewerState.summaries.filter((skill) => {
       const displayName = String(skill?.interface?.display_name || '').toLowerCase();
       const shortDescription = String(skill?.interface?.short_description || '').toLowerCase();
       const description = String(skill?.description || '').toLowerCase();
@@ -9154,20 +9154,20 @@ export function createChatHistoryUI(appContext) {
     });
   }
 
-  function renderMicroSkillSummaryList() {
-    const { listContainer, countText } = getMicroSkillViewerRefs();
+  function renderSkillSummaryList() {
+    const { listContainer, countText } = getSkillViewerRefs();
     if (!listContainer) return;
 
-    const filteredSummaries = getFilteredMicroSkillSummaries();
+    const filteredSummaries = getFilteredSkillSummaries();
     if (countText) {
-      countText.textContent = `${filteredSummaries.length} / ${microSkillViewerState.summaries.length}`;
+      countText.textContent = `${filteredSummaries.length} / ${skillViewerState.summaries.length}`;
     }
 
     listContainer.innerHTML = '';
     if (filteredSummaries.length <= 0) {
       const empty = document.createElement('div');
-      empty.className = 'micro-skill-list-empty';
-      empty.textContent = microSkillViewerState.summaries.length > 0
+      empty.className = 'skill-list-empty';
+      empty.textContent = skillViewerState.summaries.length > 0
         ? '当前筛选条件下没有匹配的技能'
         : '当前还没有已注册的技能';
       listContainer.appendChild(empty);
@@ -9177,81 +9177,81 @@ export function createChatHistoryUI(appContext) {
     filteredSummaries.forEach((skill) => {
       const item = document.createElement('button');
       item.type = 'button';
-      item.className = 'micro-skill-list-item';
-      if (skill.name === microSkillViewerState.selectedName) {
+      item.className = 'skill-list-item';
+      if (skill.name === skillViewerState.selectedName) {
         item.classList.add('active');
       }
       item.dataset.skillName = skill.name;
 
       const titleRow = document.createElement('div');
-      titleRow.className = 'micro-skill-list-item-title-row';
+      titleRow.className = 'skill-list-item-title-row';
 
       const title = document.createElement('div');
-      title.className = 'micro-skill-list-item-title';
+      title.className = 'skill-list-item-title';
       title.textContent = skill.interface?.display_name || skill.name;
       titleRow.appendChild(title);
 
       const status = document.createElement('span');
       if (skill.builtin === true) {
-        status.className = 'micro-skill-status-pill is-builtin';
+        status.className = 'skill-status-pill is-builtin';
         status.textContent = '内置';
       } else {
-        status.className = `micro-skill-status-pill${skill.enabled === true ? ' is-enabled' : ' is-disabled'}`;
+        status.className = `skill-status-pill${skill.enabled === true ? ' is-enabled' : ' is-disabled'}`;
         status.textContent = skill.enabled === true ? '启用' : '停用';
       }
       titleRow.appendChild(status);
 
       const meta = document.createElement('div');
-      meta.className = 'micro-skill-list-item-meta';
+      meta.className = 'skill-list-item-meta';
       meta.textContent = `${skill.name} · r${skill.revision || 1}`;
 
       const desc = document.createElement('div');
-      desc.className = 'micro-skill-list-item-desc';
+      desc.className = 'skill-list-item-desc';
       desc.textContent = skill.interface?.short_description || skill.description || '';
 
       item.appendChild(titleRow);
       item.appendChild(meta);
       item.appendChild(desc);
       item.addEventListener('click', async () => {
-        microSkillViewerState.selectedName = skill.name;
-        renderMicroSkillSummaryList();
-        await loadMicroSkillDetailIntoViewer(skill.name, { forceReload: false, resetSourceView: false });
+        skillViewerState.selectedName = skill.name;
+        renderSkillSummaryList();
+        await loadSkillDetailIntoViewer(skill.name, { forceReload: false, resetSourceView: false });
       });
       listContainer.appendChild(item);
     });
   }
 
-  function createMicroSkillMetaRow(label, value) {
+  function createSkillMetaRow(label, value) {
     const row = document.createElement('div');
-    row.className = 'micro-skill-meta-row';
+    row.className = 'skill-meta-row';
 
     const key = document.createElement('div');
-    key.className = 'micro-skill-meta-key';
+    key.className = 'skill-meta-key';
     key.textContent = label;
     row.appendChild(key);
 
     const val = document.createElement('div');
-    val.className = 'micro-skill-meta-value';
+    val.className = 'skill-meta-value';
     val.textContent = value || '—';
     row.appendChild(val);
     return row;
   }
 
-  function createMicroSkillChipList(title, values) {
+  function createSkillChipList(title, values) {
     const section = document.createElement('div');
-    section.className = 'micro-skill-section';
+    section.className = 'skill-section';
 
     const heading = document.createElement('div');
-    heading.className = 'micro-skill-section-title';
+    heading.className = 'skill-section-title';
     heading.textContent = title;
     section.appendChild(heading);
 
     const list = document.createElement('div');
-    list.className = 'micro-skill-chip-list';
+    list.className = 'skill-chip-list';
 
     (Array.isArray(values) ? values : []).forEach((value) => {
       const chip = document.createElement('code');
-      chip.className = 'micro-skill-chip';
+      chip.className = 'skill-chip';
       chip.textContent = String(value || '');
       list.appendChild(chip);
     });
@@ -9260,35 +9260,35 @@ export function createChatHistoryUI(appContext) {
     return section;
   }
 
-  function createMicroSkillTextSection(title, text) {
+  function createSkillTextSection(title, text) {
     const section = document.createElement('div');
-    section.className = 'micro-skill-section';
+    section.className = 'skill-section';
 
     const heading = document.createElement('div');
-    heading.className = 'micro-skill-section-title';
+    heading.className = 'skill-section-title';
     heading.textContent = title;
     section.appendChild(heading);
 
     const content = document.createElement('pre');
-    content.className = 'micro-skill-text-block';
+    content.className = 'skill-text-block';
     content.textContent = text || '—';
     section.appendChild(content);
     return section;
   }
 
-  async function loadMicroSkillSourceIntoViewer(skillName) {
-    const { detailContainer } = getMicroSkillViewerRefs();
+  async function loadSkillSourceIntoViewer(skillName) {
+    const { detailContainer } = getSkillViewerRefs();
     if (!detailContainer) return;
     try {
-      let sourcePayload = microSkillViewerState.sourceByName.get(skillName) || null;
+      let sourcePayload = skillViewerState.sourceByName.get(skillName) || null;
       if (!sourcePayload) {
-        const fileIndex = await executeMicroSkillViewerFileAction('list_files', {
+        const fileIndex = await executeSkillViewerFileAction('list_files', {
           target: { kind: 'skill', name: skillName }
         });
         const indexFiles = Array.isArray(fileIndex?.files) ? fileIndex.files : [];
         const files = [];
         for (const file of indexFiles) {
-          const fileResult = await executeMicroSkillViewerFileAction('read_file', {
+          const fileResult = await executeSkillViewerFileAction('read_file', {
             target: { kind: 'skill', name: skillName },
             file_path: file.path
           });
@@ -9304,57 +9304,57 @@ export function createChatHistoryUI(appContext) {
           files
         };
         if (sourcePayload) {
-          microSkillViewerState.sourceByName.set(skillName, sourcePayload);
+          skillViewerState.sourceByName.set(skillName, sourcePayload);
         }
       }
 
-      const existing = detailContainer.querySelector('.micro-skill-source-section');
+      const existing = detailContainer.querySelector('.skill-source-section');
       if (existing) {
         existing.remove();
       }
 
       const sourceSection = document.createElement('div');
-      sourceSection.className = 'micro-skill-section micro-skill-source-section';
+      sourceSection.className = 'skill-section skill-source-section';
 
       const heading = document.createElement('div');
-      heading.className = 'micro-skill-section-title';
+      heading.className = 'skill-section-title';
       heading.textContent = '文件包';
       sourceSection.appendChild(heading);
 
       const sourceFiles = Array.isArray(sourcePayload?.files) ? sourcePayload.files : [];
       if (sourceFiles.length <= 0) {
         const empty = document.createElement('div');
-        empty.className = 'micro-skill-detail-empty-desc';
+        empty.className = 'skill-detail-empty-desc';
         empty.textContent = '这个技能当前没有可显示的文件。';
         sourceSection.appendChild(empty);
       } else {
         sourceFiles.forEach((file) => {
           const fileSection = document.createElement('div');
-          fileSection.className = 'micro-skill-source-file';
+          fileSection.className = 'skill-source-file';
 
           const fileHeader = document.createElement('div');
-          fileHeader.className = 'micro-skill-source-file-header';
+          fileHeader.className = 'skill-source-file-header';
 
           const filePath = document.createElement('code');
-          filePath.className = 'micro-skill-source-file-path';
+          filePath.className = 'skill-source-file-path';
           filePath.textContent = file.path || '';
           fileHeader.appendChild(filePath);
 
           const kindTag = document.createElement('span');
-          kindTag.className = 'micro-skill-source-file-entry';
+          kindTag.className = 'skill-source-file-entry';
           kindTag.textContent = file.kind || 'file';
           fileHeader.appendChild(kindTag);
 
           if (file.is_instruction === true) {
             const instructionTag = document.createElement('span');
-            instructionTag.className = 'micro-skill-source-file-entry';
+            instructionTag.className = 'skill-source-file-entry';
             instructionTag.textContent = 'SKILL';
             fileHeader.appendChild(instructionTag);
           }
 
           if (file.is_runtime_entry === true) {
             const entryTag = document.createElement('span');
-            entryTag.className = 'micro-skill-source-file-entry';
+            entryTag.className = 'skill-source-file-entry';
             entryTag.textContent = 'runtime-entry';
             fileHeader.appendChild(entryTag);
           }
@@ -9362,7 +9362,7 @@ export function createChatHistoryUI(appContext) {
           fileSection.appendChild(fileHeader);
 
           const sourceBlock = document.createElement('pre');
-          sourceBlock.className = 'micro-skill-code-block';
+          sourceBlock.className = 'skill-code-block';
           const code = document.createElement('code');
           code.textContent = file.content || '';
           sourceBlock.appendChild(code);
@@ -9389,50 +9389,50 @@ export function createChatHistoryUI(appContext) {
     }
   }
 
-  function renderMicroSkillDetail(skillDetail) {
-    const { detailContainer } = getMicroSkillViewerRefs();
+  function renderSkillDetail(skillDetail) {
+    const { detailContainer } = getSkillViewerRefs();
     if (!detailContainer) return;
 
     if (!skillDetail) {
-      renderMicroSkillViewerEmptyState(detailContainer, '没有可显示的详情', '请选择左侧列表中的一个技能。');
+      renderSkillViewerEmptyState(detailContainer, '没有可显示的详情', '请选择左侧列表中的一个技能。');
       return;
     }
 
     detailContainer.innerHTML = '';
 
     const hero = document.createElement('div');
-    hero.className = 'micro-skill-detail-hero';
+    hero.className = 'skill-detail-hero';
 
     const heroText = document.createElement('div');
-    heroText.className = 'micro-skill-detail-hero-text';
+    heroText.className = 'skill-detail-hero-text';
 
     const title = document.createElement('h3');
-    title.className = 'micro-skill-detail-title';
+    title.className = 'skill-detail-title';
     title.textContent = skillDetail.interface?.display_name || skillDetail.name;
     heroText.appendChild(title);
 
     const subtitle = document.createElement('div');
-    subtitle.className = 'micro-skill-detail-subtitle';
+    subtitle.className = 'skill-detail-subtitle';
     subtitle.textContent = skillDetail.interface?.short_description || skillDetail.description || '';
     heroText.appendChild(subtitle);
 
     hero.appendChild(heroText);
 
     const heroActions = document.createElement('div');
-    heroActions.className = 'micro-skill-detail-actions';
+    heroActions.className = 'skill-detail-actions';
 
     const sourceBtn = document.createElement('button');
     sourceBtn.type = 'button';
-    sourceBtn.className = 'micro-skill-action-button';
-    sourceBtn.textContent = microSkillViewerState.sourceByName.has(skillDetail.name) ? '重新查看文件包' : '加载文件包';
+    sourceBtn.className = 'skill-action-button';
+    sourceBtn.textContent = skillViewerState.sourceByName.has(skillDetail.name) ? '重新查看文件包' : '加载文件包';
     sourceBtn.addEventListener('click', () => {
-      void loadMicroSkillSourceIntoViewer(skillDetail.name);
+      void loadSkillSourceIntoViewer(skillDetail.name);
     });
     heroActions.appendChild(sourceBtn);
 
     const remountBtn = document.createElement('button');
     remountBtn.type = 'button';
-    remountBtn.className = 'micro-skill-action-button';
+    remountBtn.className = 'skill-action-button';
     remountBtn.textContent = '在当前页重挂载';
     remountBtn.disabled = state.isStandalone === true || skillDetail.builtin === true;
     remountBtn.title = skillDetail.builtin === true
@@ -9443,7 +9443,7 @@ export function createChatHistoryUI(appContext) {
     remountBtn.addEventListener('click', async () => {
       try {
         remountBtn.disabled = true;
-        const result = await executeMicroSkillViewerAction({
+        const result = await executeSkillViewerAction({
           action: 'mount_on_current_page',
           skill_name: skillDetail.name
         });
@@ -9483,21 +9483,21 @@ export function createChatHistoryUI(appContext) {
     detailContainer.appendChild(hero);
 
     const metaGrid = document.createElement('div');
-    metaGrid.className = 'micro-skill-meta-grid';
-    metaGrid.appendChild(createMicroSkillMetaRow('类型', skillDetail.builtin === true ? '内置指导 skill' : '页面 runtime skill'));
-    metaGrid.appendChild(createMicroSkillMetaRow('稳定 Key', skillDetail.name));
-    metaGrid.appendChild(createMicroSkillMetaRow('状态', skillDetail.builtin === true ? '只读 / 始终可用' : (skillDetail.enabled === true ? '启用' : '停用')));
-    metaGrid.appendChild(createMicroSkillMetaRow('Revision', `r${skillDetail.revision || 1}`));
-    metaGrid.appendChild(createMicroSkillMetaRow('创建时间', skillDetail.created_at || ''));
-    metaGrid.appendChild(createMicroSkillMetaRow('更新时间', skillDetail.updated_at || ''));
-    metaGrid.appendChild(createMicroSkillMetaRow('默认提示', skillDetail.interface?.default_prompt || ''));
-    metaGrid.appendChild(createMicroSkillMetaRow('SKILL.md', skillDetail.instruction?.path || ''));
-    metaGrid.appendChild(createMicroSkillMetaRow('Runtime 入口', skillDetail.runtime?.entry_path || ''));
-    metaGrid.appendChild(createMicroSkillMetaRow('文件总数', String(skillDetail.files?.total_count || 0)));
+    metaGrid.className = 'skill-meta-grid';
+    metaGrid.appendChild(createSkillMetaRow('类型', skillDetail.builtin === true ? '内置指导 skill' : '页面 runtime skill'));
+    metaGrid.appendChild(createSkillMetaRow('稳定 Key', skillDetail.name));
+    metaGrid.appendChild(createSkillMetaRow('状态', skillDetail.builtin === true ? '只读 / 始终可用' : (skillDetail.enabled === true ? '启用' : '停用')));
+    metaGrid.appendChild(createSkillMetaRow('Revision', `r${skillDetail.revision || 1}`));
+    metaGrid.appendChild(createSkillMetaRow('创建时间', skillDetail.created_at || ''));
+    metaGrid.appendChild(createSkillMetaRow('更新时间', skillDetail.updated_at || ''));
+    metaGrid.appendChild(createSkillMetaRow('默认提示', skillDetail.interface?.default_prompt || ''));
+    metaGrid.appendChild(createSkillMetaRow('SKILL.md', skillDetail.instruction?.path || ''));
+    metaGrid.appendChild(createSkillMetaRow('Runtime 入口', skillDetail.runtime?.entry_path || ''));
+    metaGrid.appendChild(createSkillMetaRow('文件总数', String(skillDetail.files?.total_count || 0)));
     detailContainer.appendChild(metaGrid);
 
-    detailContainer.appendChild(createMicroSkillChipList('@match', skillDetail.match));
-    detailContainer.appendChild(createMicroSkillChipList(
+    detailContainer.appendChild(createSkillChipList('@match', skillDetail.match));
+    detailContainer.appendChild(createSkillChipList(
       '文件树',
       Array.isArray(skillDetail.files?.files)
         ? skillDetail.files.files.map((file) => {
@@ -9509,55 +9509,55 @@ export function createChatHistoryUI(appContext) {
           })
         : []
     ));
-    detailContainer.appendChild(createMicroSkillTextSection('SKILL.md', skillDetail.instruction?.content || ''));
+    detailContainer.appendChild(createSkillTextSection('SKILL.md', skillDetail.instruction?.content || ''));
   }
 
-  async function loadMicroSkillDetailIntoViewer(skillName, options = {}) {
+  async function loadSkillDetailIntoViewer(skillName, options = {}) {
     if (!skillName) return;
-    const seq = ++microSkillViewerState.requestSeq;
+    const seq = ++skillViewerState.requestSeq;
     try {
-      let detail = microSkillViewerState.detailByName.get(skillName) || null;
+      let detail = skillViewerState.detailByName.get(skillName) || null;
       if (!detail || options?.forceReload === true) {
-        const summary = microSkillViewerState.summaries.find((item) => item?.name === skillName) || null;
+        const summary = skillViewerState.summaries.find((item) => item?.name === skillName) || null;
         if (!summary) {
           throw new Error(`skill ${skillName} 不存在。`);
         }
-        const fileIndex = await executeMicroSkillViewerFileAction('list_files', {
+        const fileIndex = await executeSkillViewerFileAction('list_files', {
           target: { kind: 'skill', name: skillName }
         });
-        const instructionFile = await executeMicroSkillViewerFileAction('read_file', {
+        const instructionFile = await executeSkillViewerFileAction('read_file', {
           target: { kind: 'skill', name: skillName },
           file_path: summary?.instruction?.path || 'SKILL.md'
         });
-        detail = buildMicroSkillDetailFromViewerParts(summary, instructionFile, fileIndex);
+        detail = buildSkillDetailFromViewerParts(summary, instructionFile, fileIndex);
         if (detail) {
-          microSkillViewerState.detailByName.set(skillName, detail);
+          skillViewerState.detailByName.set(skillName, detail);
         }
       }
-      if (seq !== microSkillViewerState.requestSeq) return;
+      if (seq !== skillViewerState.requestSeq) return;
       if (options?.resetSourceView === true) {
-        microSkillViewerState.sourceByName.delete(skillName);
+        skillViewerState.sourceByName.delete(skillName);
       }
-      renderMicroSkillDetail(detail);
+      renderSkillDetail(detail);
     } catch (error) {
-      if (seq !== microSkillViewerState.requestSeq) return;
+      if (seq !== skillViewerState.requestSeq) return;
       console.error('读取技能详情失败:', error);
-      renderMicroSkillViewerEmptyState(
-        getMicroSkillViewerRefs().detailContainer,
+      renderSkillViewerEmptyState(
+        getSkillViewerRefs().detailContainer,
         '读取技能详情失败',
         String(error?.message || error)
       );
     }
   }
 
-  async function refreshMicroSkillViewerPanel(panel, options = {}) {
-    if (microSkillViewerState.refreshPromise) {
-      await microSkillViewerState.refreshPromise;
+  async function refreshSkillViewerPanel(panel, options = {}) {
+    if (skillViewerState.refreshPromise) {
+      await skillViewerState.refreshPromise;
       return;
     }
 
-    microSkillViewerState.refreshPromise = (async () => {
-      const { refreshButton, detailContainer } = getMicroSkillViewerRefs();
+    skillViewerState.refreshPromise = (async () => {
+      const { refreshButton, detailContainer } = getSkillViewerRefs();
       const originalText = refreshButton?.textContent || '刷新';
       if (refreshButton) {
         refreshButton.disabled = true;
@@ -9565,23 +9565,23 @@ export function createChatHistoryUI(appContext) {
       }
 
       try {
-        const result = await executeMicroSkillViewerAction({ action: 'list' });
-        microSkillViewerState.summaries = Array.isArray(result?.skills) ? result.skills : [];
+        const result = await executeSkillViewerAction({ action: 'list' });
+        skillViewerState.summaries = Array.isArray(result?.skills) ? result.skills : [];
 
-        const filtered = getFilteredMicroSkillSummaries();
-        if (!filtered.some((item) => item.name === microSkillViewerState.selectedName)) {
-          microSkillViewerState.selectedName = filtered[0]?.name || '';
+        const filtered = getFilteredSkillSummaries();
+        if (!filtered.some((item) => item.name === skillViewerState.selectedName)) {
+          skillViewerState.selectedName = filtered[0]?.name || '';
         }
 
-        renderMicroSkillSummaryList();
+        renderSkillSummaryList();
 
-        if (microSkillViewerState.selectedName) {
-          await loadMicroSkillDetailIntoViewer(microSkillViewerState.selectedName, {
+        if (skillViewerState.selectedName) {
+          await loadSkillDetailIntoViewer(skillViewerState.selectedName, {
             forceReload: options?.forceReloadDetail === true,
             resetSourceView: options?.forceReloadDetail === true
           });
         } else {
-          renderMicroSkillViewerEmptyState(
+          renderSkillViewerEmptyState(
             detailContainer,
             '还没有技能',
             '当前注册表里还没有任何已创建的技能。'
@@ -9589,8 +9589,8 @@ export function createChatHistoryUI(appContext) {
         }
       } catch (error) {
         console.error('刷新技能查看器失败:', error);
-        renderMicroSkillSummaryList();
-        renderMicroSkillViewerEmptyState(
+        renderSkillSummaryList();
+        renderSkillViewerEmptyState(
           detailContainer,
           '读取技能列表失败',
           String(error?.message || error)
@@ -9604,45 +9604,45 @@ export function createChatHistoryUI(appContext) {
     })();
 
     try {
-      await microSkillViewerState.refreshPromise;
+      await skillViewerState.refreshPromise;
     } finally {
-      microSkillViewerState.refreshPromise = null;
+      skillViewerState.refreshPromise = null;
     }
   }
 
-  function renderMicroSkillViewerPanel() {
+  function renderSkillViewerPanel() {
     const container = document.createElement('div');
-    container.className = 'micro-skill-viewer';
+    container.className = 'skill-viewer';
 
     const toolbar = document.createElement('div');
-    toolbar.className = 'micro-skill-viewer-toolbar';
+    toolbar.className = 'skill-viewer-toolbar';
 
     const titleWrap = document.createElement('div');
-    titleWrap.className = 'micro-skill-viewer-title-wrap';
+    titleWrap.className = 'skill-viewer-title-wrap';
     const title = document.createElement('div');
-    title.className = 'micro-skill-viewer-title';
+    title.className = 'skill-viewer-title';
     title.textContent = 'Skill 管理';
     titleWrap.appendChild(title);
     const subtitle = document.createElement('div');
-    subtitle.className = 'micro-skill-viewer-subtitle';
+    subtitle.className = 'skill-viewer-subtitle';
     subtitle.textContent = '查看当前扩展里已注册的浏览器 Skill，点列表查看详情；源码按需加载。';
     titleWrap.appendChild(subtitle);
     toolbar.appendChild(titleWrap);
 
     const toolbarActions = document.createElement('div');
-    toolbarActions.className = 'micro-skill-viewer-toolbar-actions';
+    toolbarActions.className = 'skill-viewer-toolbar-actions';
 
     const count = document.createElement('span');
-    count.className = 'micro-skill-viewer-count';
+    count.className = 'skill-viewer-count';
     count.textContent = '0 / 0';
     toolbarActions.appendChild(count);
 
     const refreshButton = document.createElement('button');
     refreshButton.type = 'button';
-    refreshButton.className = 'micro-skill-action-button';
+    refreshButton.className = 'skill-action-button';
     refreshButton.textContent = '刷新';
     refreshButton.addEventListener('click', () => {
-      void refreshMicroSkillViewerPanel(null, { forceReloadDetail: true });
+      void refreshSkillViewerPanel(null, { forceReloadDetail: true });
     });
     toolbarActions.appendChild(refreshButton);
 
@@ -9650,28 +9650,28 @@ export function createChatHistoryUI(appContext) {
     container.appendChild(toolbar);
 
     const body = document.createElement('div');
-    body.className = 'micro-skill-viewer-body';
+    body.className = 'skill-viewer-body';
 
     const listPane = document.createElement('div');
-    listPane.className = 'micro-skill-viewer-pane micro-skill-viewer-pane-list';
+    listPane.className = 'skill-viewer-pane skill-viewer-pane-list';
 
     const searchWrap = document.createElement('div');
-    searchWrap.className = 'micro-skill-search-wrap';
+    searchWrap.className = 'skill-search-wrap';
     const searchInput = document.createElement('input');
     searchInput.type = 'search';
-    searchInput.className = 'micro-skill-search-input';
+    searchInput.className = 'skill-search-input';
     searchInput.placeholder = '筛选技能名称或说明';
     searchInput.addEventListener('input', () => {
-      microSkillViewerState.filterText = searchInput.value || '';
-      renderMicroSkillSummaryList();
-      const filtered = getFilteredMicroSkillSummaries();
-      if (filtered.length > 0 && !filtered.some((item) => item.name === microSkillViewerState.selectedName)) {
-        microSkillViewerState.selectedName = filtered[0].name;
-        renderMicroSkillSummaryList();
-        void loadMicroSkillDetailIntoViewer(filtered[0].name, { forceReload: false, resetSourceView: false });
+      skillViewerState.filterText = searchInput.value || '';
+      renderSkillSummaryList();
+      const filtered = getFilteredSkillSummaries();
+      if (filtered.length > 0 && !filtered.some((item) => item.name === skillViewerState.selectedName)) {
+        skillViewerState.selectedName = filtered[0].name;
+        renderSkillSummaryList();
+        void loadSkillDetailIntoViewer(filtered[0].name, { forceReload: false, resetSourceView: false });
       } else if (filtered.length <= 0) {
-        renderMicroSkillViewerEmptyState(
-          getMicroSkillViewerRefs().detailContainer,
+        renderSkillViewerEmptyState(
+          getSkillViewerRefs().detailContainer,
           '没有匹配的技能',
           '调整左侧筛选条件，或刷新列表后重试。'
         );
@@ -9681,17 +9681,17 @@ export function createChatHistoryUI(appContext) {
     listPane.appendChild(searchWrap);
 
     const listContainer = document.createElement('div');
-    listContainer.className = 'micro-skill-list';
+    listContainer.className = 'skill-list';
     listPane.appendChild(listContainer);
     body.appendChild(listPane);
 
     const detailPane = document.createElement('div');
-    detailPane.className = 'micro-skill-viewer-pane micro-skill-viewer-pane-detail';
+    detailPane.className = 'skill-viewer-pane skill-viewer-pane-detail';
     body.appendChild(detailPane);
 
     container.appendChild(body);
 
-    microSkillViewerState.refs = {
+    skillViewerState.refs = {
       searchInput,
       countText: count,
       listContainer,
@@ -9699,30 +9699,30 @@ export function createChatHistoryUI(appContext) {
       refreshButton
     };
 
-    renderMicroSkillSummaryList();
-    renderMicroSkillViewerEmptyState(detailPane, '选择一个技能', '左侧列表展示当前已注册的技能。点击某条记录即可查看详细说明。');
+    renderSkillSummaryList();
+    renderSkillViewerEmptyState(detailPane, '选择一个技能', '左侧列表展示当前已注册的技能。点击某条记录即可查看详细说明。');
     return container;
   }
 
-  async function ensureMicroSkillsTabInitialized(panel) {
-    const microSkillContent = panel?.querySelector('.history-tab-content[data-tab="micro-skills"]');
-    if (!microSkillContent) return;
+  async function ensureSkillsTabInitialized(panel) {
+    const skillContent = panel?.querySelector('.history-tab-content[data-tab="skills"]');
+    if (!skillContent) return;
 
-    if (microSkillContent.dataset.lazyReady !== '1') {
-      microSkillContent.innerHTML = '';
-      microSkillContent.appendChild(renderMicroSkillViewerPanel());
-      microSkillContent.dataset.lazyReady = '1';
-      microSkillViewerState.initialized = true;
+    if (skillContent.dataset.lazyReady !== '1') {
+      skillContent.innerHTML = '';
+      skillContent.appendChild(renderSkillViewerPanel());
+      skillContent.dataset.lazyReady = '1';
+      skillViewerState.initialized = true;
     }
 
-    await refreshMicroSkillViewerPanel(panel, { forceReloadDetail: true });
+    await refreshSkillViewerPanel(panel, { forceReloadDetail: true });
   }
 
   /**
    * 确保 Esc 聊天历史面板中存在“Skill 管理”标签与内容容器。
    * 这样即便当前面板是在旧代码路径下创建的，也能在后续打开时补齐新 tab。
    */
-  function ensureMicroSkillsTabDom(panel) {
+  function ensureSkillsTabDom(panel) {
     const tabBar = panel?.querySelector('.history-tab-bar');
     const tabContents = panel?.querySelector('.history-tab-contents');
     if (!tabBar || !tabContents) return;
@@ -9744,31 +9744,31 @@ export function createChatHistoryUI(appContext) {
       parent.insertBefore(node, nextSibling);
     };
 
-    let microSkillsTab = tabBar.querySelector('.history-tab[data-tab="micro-skills"]');
-    if (!microSkillsTab) {
-      microSkillsTab = document.createElement('div');
-      microSkillsTab.className = 'history-tab';
-      microSkillsTab.textContent = 'Skill 管理';
-      microSkillsTab.dataset.tab = 'micro-skills';
+    let skillsTab = tabBar.querySelector('.history-tab[data-tab="skills"]');
+    if (!skillsTab) {
+      skillsTab = document.createElement('div');
+      skillsTab.className = 'history-tab';
+      skillsTab.textContent = 'Skill 管理';
+      skillsTab.dataset.tab = 'skills';
     }
-    microSkillsTab.textContent = 'Skill 管理';
+    skillsTab.textContent = 'Skill 管理';
     moveNodeAfter(
       tabBar,
-      microSkillsTab,
+      skillsTab,
       tabBar.querySelector('.history-tab[data-tab="prompt-settings"]')
         || tabBar.querySelector('.history-tab[data-tab="history"]')
     );
 
-    let microSkillContent = tabContents.querySelector('.history-tab-content[data-tab="micro-skills"]');
-    if (!microSkillContent) {
-      microSkillContent = document.createElement('div');
-      microSkillContent.className = 'history-tab-content';
-      microSkillContent.dataset.tab = 'micro-skills';
-      microSkillContent.dataset.lazyReady = '0';
+    let skillContent = tabContents.querySelector('.history-tab-content[data-tab="skills"]');
+    if (!skillContent) {
+      skillContent = document.createElement('div');
+      skillContent.className = 'history-tab-content';
+      skillContent.dataset.tab = 'skills';
+      skillContent.dataset.lazyReady = '0';
     }
     moveNodeAfter(
       tabContents,
-      microSkillContent,
+      skillContent,
       tabContents.querySelector('.history-tab-content[data-tab="prompt-settings"]')
         || tabContents.querySelector('.history-tab-content[data-tab="history"]')
     );
@@ -9828,8 +9828,8 @@ export function createChatHistoryUI(appContext) {
       return;
     }
 
-    if (resolvedTabName === 'micro-skills') {
-      await ensureMicroSkillsTabInitialized(panel);
+    if (resolvedTabName === 'skills') {
+      await ensureSkillsTabInitialized(panel);
       return;
     }
 
@@ -10410,10 +10410,10 @@ export function createChatHistoryUI(appContext) {
       promptTab.textContent = '提示词设置';
       promptTab.dataset.tab = 'prompt-settings';
 
-      const microSkillsTab = document.createElement('div');
-      microSkillsTab.className = 'history-tab';
-      microSkillsTab.textContent = 'Skill 管理';
-      microSkillsTab.dataset.tab = 'micro-skills';
+      const skillsTab = document.createElement('div');
+      skillsTab.className = 'history-tab';
+      skillsTab.textContent = 'Skill 管理';
+      skillsTab.dataset.tab = 'skills';
 
       const apiTab = document.createElement('div');
       apiTab.className = 'history-tab';
@@ -10442,7 +10442,7 @@ export function createChatHistoryUI(appContext) {
       
       tabBar.appendChild(historyTab);
       tabBar.appendChild(promptTab);
-      tabBar.appendChild(microSkillsTab);
+      tabBar.appendChild(skillsTab);
       tabBar.appendChild(apiTab);
       tabBar.appendChild(settingsTab);
       tabBar.appendChild(galleryTab);
@@ -10608,10 +10608,10 @@ export function createChatHistoryUI(appContext) {
         promptSettingsContent.classList.remove('visible');
       }
 
-      const microSkillContent = document.createElement('div');
-      microSkillContent.className = 'history-tab-content';
-      microSkillContent.dataset.tab = 'micro-skills';
-      microSkillContent.dataset.lazyReady = '0';
+      const skillContent = document.createElement('div');
+      skillContent.className = 'history-tab-content';
+      skillContent.dataset.tab = 'skills';
+      skillContent.dataset.lazyReady = '0';
 
       // API 设置标签内容（复用 sidebar.html 中的 DOM）
       const apiSettingsContent = dom.apiSettingsPanel;
@@ -10641,14 +10641,14 @@ export function createChatHistoryUI(appContext) {
       // 添加标签内容到容器
       tabContents.appendChild(historyContent);
       if (promptSettingsContent) tabContents.appendChild(promptSettingsContent);
-      tabContents.appendChild(microSkillContent);
+      tabContents.appendChild(skillContent);
       if (apiSettingsContent) tabContents.appendChild(apiSettingsContent);
       tabContents.appendChild(settingsContent);
       tabContents.appendChild(galleryContent);
       tabContents.appendChild(statsContent);
       tabContents.appendChild(backupSettingsContent);
       panel.appendChild(tabContents);
-      ensureMicroSkillsTabDom(panel);
+      ensureSkillsTabDom(panel);
       
       // 设置标签切换事件（异步以支持 await 刷新）
       tabBar.addEventListener('click', async (e) => {
@@ -10682,7 +10682,7 @@ export function createChatHistoryUI(appContext) {
       setupChatHistoryPanelResize(panel);
       const filterContainer = panel.querySelector('.filter-container');
       ensureSearchSyntaxHelp(filterContainer);
-      ensureMicroSkillsTabDom(panel);
+      ensureSkillsTabDom(panel);
       // 迁移兼容：历史版本曾在搜索框下渲染关键词图例，这里统一移除，改为搜索摘要行内展示。
       panel.querySelector('.search-keyword-legend')?.remove();
       const urlFilterButton = panel.querySelector('.filter-container .url-filter-btn.url-filter-toggle');

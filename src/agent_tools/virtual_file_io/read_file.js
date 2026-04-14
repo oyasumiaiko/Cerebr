@@ -1,4 +1,4 @@
-import { normalizeMicroSkillFilePath } from '../micro_skill/registry_tool.js';
+import { normalizeSkillFilePath } from '../skill/registry_tool.js';
 import { normalizeConversationDocumentPath } from './document_path.js';
 import {
   CONVERSATION_DOCUMENT_READ_DEFAULT_RANGE_CHARS,
@@ -23,7 +23,7 @@ export function normalizeVirtualFileReadFileArguments(args, target) {
     action: VIRTUAL_FILE_READ_FILE_TOOL_NAME,
     target,
     file_path: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL
-      ? normalizeMicroSkillFilePath(args.file_path)
+      ? normalizeSkillFilePath(args.file_path)
       : normalizeConversationDocumentPath(args.file_path),
     include_line_numbers: args.include_line_numbers === true,
     read_options: normalizeVirtualFileReadArgs(VIRTUAL_FILE_READ_FILE_TOOL_NAME, args)

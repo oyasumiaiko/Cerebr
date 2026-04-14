@@ -26,7 +26,7 @@ import {
 const JS_RUNTIME_STATUS_TIMEOUT_MS = 5000;
 const JS_RUNTIME_FRAME_SNAPSHOT_TIMEOUT_MS = 5000;
 const JS_RUNTIME_EXECUTION_TIMEOUT_MS = 30000;
-const MICRO_SKILL_REGISTRY_TIMEOUT_MS = 10000;
+const SKILL_REGISTRY_TIMEOUT_MS = 10000;
 
 function raceWithTimeout(promise, timeoutMs, timeoutMessage) {
   const normalizedTimeout = Number.isFinite(Number(timeoutMs)) ? Math.max(1, Math.trunc(Number(timeoutMs))) : 0;
@@ -1274,12 +1274,12 @@ export function registerSidebarUtilities(appContext) {
    * 获取当前会话可见的技能摘要。
    *
    * 设计目标：
-   * - 给隐藏 `micro_skill_context` 提供轻量摘要来源；
+   * - 给隐藏 `skill_context` 提供轻量摘要来源；
    * - 不返回源码或详细 usage，保持渐进式披露；
    * - 宿主页模式下返回“内置指导 skill + 当前 URL 命中的页面 skill”；
    * - 独立页/无稳定宿主页时至少返回内置指导 skill，而不是整组清空。
    */
-  appContext.utils.getMatchingMicroSkillSummaries = async () => {
+  appContext.utils.getMatchingSkillSummaries = async () => {
     if (!chrome?.runtime?.sendMessage) {
       return {
         success: false,
@@ -1293,10 +1293,10 @@ export function registerSidebarUtilities(appContext) {
         : null;
       return await raceWithTimeout(
         chrome.runtime.sendMessage({
-          type: 'GET_MATCHING_MICRO_SKILL_SUMMARIES',
+          type: 'GET_MATCHING_SKILL_SUMMARIES',
           tabId: targetTabId
         }),
-        MICRO_SKILL_REGISTRY_TIMEOUT_MS,
+        SKILL_REGISTRY_TIMEOUT_MS,
         '读取当前页面匹配的技能摘要超时'
       );
     } catch (error) {
@@ -1314,7 +1314,7 @@ export function registerSidebarUtilities(appContext) {
    * - 所有真正会改 registry / 动态 userScripts 的动作都交给 background；
    * - sidebar 只负责把当前绑定 tabId 一并传过去，供 refresh 当前文档使用。
    */
-  appContext.utils.executeMicroSkillRegistryAction = async (payload = {}) => {
+  appContext.utils.executeSkillRegistryAction = async (payload = {}) => {
     if (!chrome?.runtime?.sendMessage) {
       return {
         success: false,
@@ -1325,11 +1325,11 @@ export function registerSidebarUtilities(appContext) {
       const targetTabId = await resolveBoundSidebarTargetTabId();
       return await raceWithTimeout(
         chrome.runtime.sendMessage({
-          type: 'MICRO_SKILL_REGISTRY_ACTION',
+          type: 'SKILL_REGISTRY_ACTION',
           tabId: Number.isFinite(targetTabId) ? targetTabId : null,
           payload: (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {}
         }),
-        MICRO_SKILL_REGISTRY_TIMEOUT_MS,
+        SKILL_REGISTRY_TIMEOUT_MS,
         '执行 skill_registry 操作超时'
       );
     } catch (error) {
@@ -1365,7 +1365,7 @@ export function registerSidebarUtilities(appContext) {
         );
       }
 
-      const skillResult = await appContext.utils.executeMicroSkillRegistryAction(
+      const skillResult = await appContext.utils.executeSkillRegistryAction(
         buildSkillRegistryFileActionPayloadFromVirtualFileAction(action, normalizedArgs)
       );
       if (skillResult?.success === true) {

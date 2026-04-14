@@ -63,7 +63,7 @@ import {
   buildResponsesAskOtherAiToolOutputContentItems,
   buildResponsesRequestUserInputToolOutputContentItems,
   buildResponsesConversationDocumentToolOutputContentItems,
-  buildResponsesMicroSkillRegistryToolOutputContentItems,
+  buildResponsesSkillRegistryToolOutputContentItems,
   buildResponsesGenericXmlToolOutputContentItems
 } from '../agent_tools/shared/responses_tool_output.js';
 import {
@@ -115,11 +115,10 @@ import {
   normalizeRequestUserInputArguments
 } from '../agent_tools/request_user_input/tool.js';
 import {
-  MICRO_SKILL_READ_MAX_CHARS,
-  LEGACY_MICRO_SKILL_REGISTRY_TOOL_NAME,
-  MICRO_SKILL_REGISTRY_TOOL_NAME,
-  buildMicroSkillRegistryFunctionToolDefinition
-} from '../agent_tools/micro_skill/registry_tool.js';
+  SKILL_READ_MAX_CHARS,
+  SKILL_REGISTRY_TOOL_NAME,
+  buildSkillRegistryFunctionToolDefinition
+} from '../agent_tools/skill/registry_tool.js';
 import {
   CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
   CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME,
@@ -156,9 +155,9 @@ import {
   resolvePageRuntimeContextAttachment
 } from '../utils/page_runtime_context.js';
 import {
-  buildMicroSkillContextPayload,
-  resolveMicroSkillContextAttachment
-} from '../utils/micro_skill_context.js';
+  buildSkillContextPayload,
+  resolveSkillContextAttachment
+} from '../utils/skill_context.js';
 import {
   buildEnvironmentContextPayload,
   resolveEnvironmentContextAttachment
@@ -188,8 +187,7 @@ const RESPONSES_HISTORY_READ_TOOL_NAME = HISTORY_READ_TOOL_NAME;
 const RESPONSES_REQUEST_USER_INPUT_TOOL_NAME = REQUEST_USER_INPUT_TOOL_NAME;
 const RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME = LIST_ASKABLE_MODELS_TOOL_NAME;
 const RESPONSES_ASK_OTHER_AI_TOOL_NAME = ASK_OTHER_AI_TOOL_NAME;
-const RESPONSES_SKILL_REGISTRY_TOOL_NAME = MICRO_SKILL_REGISTRY_TOOL_NAME;
-const RESPONSES_LEGACY_MICRO_SKILL_REGISTRY_TOOL_NAME = LEGACY_MICRO_SKILL_REGISTRY_TOOL_NAME;
+const RESPONSES_SKILL_REGISTRY_TOOL_NAME = SKILL_REGISTRY_TOOL_NAME;
 const RESPONSES_VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME = CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME;
 const RESPONSES_VIRTUAL_FILE_LIST_FILES_TOOL_NAME = CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME;
 const RESPONSES_VIRTUAL_FILE_READ_FILE_TOOL_NAME = CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME;
@@ -7500,7 +7498,7 @@ export function createMessageSender(appContext) {
    *   conversationChain?: Array<any>,
    *   targetUserNode?: any,
    *   pageRuntimeContextPayload?: Object|null,
-   *   microSkillContextPayload?: Object|null,
+   *   skillContextPayload?: Object|null,
    *   environmentContextPayload?: Object|null
    * }} options
    * @returns {boolean}
@@ -7518,8 +7516,8 @@ export function createMessageSender(appContext) {
     const environmentContextPayload = (options?.environmentContextPayload && typeof options.environmentContextPayload === 'object')
       ? options.environmentContextPayload
       : null;
-    const microSkillContextPayload = (options?.microSkillContextPayload && typeof options.microSkillContextPayload === 'object')
-      ? options.microSkillContextPayload
+    const skillContextPayload = (options?.skillContextPayload && typeof options.skillContextPayload === 'object')
+      ? options.skillContextPayload
       : null;
 
     const targetIndex = chain.findIndex((node) => node && node.id === targetUserNode.id);
@@ -7539,12 +7537,12 @@ export function createMessageSender(appContext) {
         'environmentContextSignature'
       )
     });
-    const microSkillAttachment = resolveMicroSkillContextAttachment({
-      payload: microSkillContextPayload,
+    const skillAttachment = resolveSkillContextAttachment({
+      payload: skillContextPayload,
       previousEffectiveSignature: findPreviousEffectiveUserContextSignature(
         chain,
         targetIndex,
-        'microSkillContextSignature'
+        'skillContextSignature'
       )
     });
 
@@ -7555,8 +7553,8 @@ export function createMessageSender(appContext) {
     if (Array.isArray(pageAttachment.inputItems) && pageAttachment.inputItems.length > 0) {
       contextualItems.push(...pageAttachment.inputItems);
     }
-    if (Array.isArray(microSkillAttachment.inputItems) && microSkillAttachment.inputItems.length > 0) {
-      contextualItems.push(...microSkillAttachment.inputItems);
+    if (Array.isArray(skillAttachment.inputItems) && skillAttachment.inputItems.length > 0) {
+      contextualItems.push(...skillAttachment.inputItems);
     }
 
     targetUserNode.contextual_input_items_before = contextualItems.length > 0
@@ -7564,7 +7562,7 @@ export function createMessageSender(appContext) {
       : null;
     targetUserNode.pageRuntimeContextSignature = pageAttachment.signature || null;
     targetUserNode.environmentContextSignature = environmentAttachment.signature || null;
-    targetUserNode.microSkillContextSignature = microSkillAttachment.signature || null;
+    targetUserNode.skillContextSignature = skillAttachment.signature || null;
     return true;
   }
 
@@ -7783,7 +7781,7 @@ export function createMessageSender(appContext) {
       buildVirtualFileListFilesFunctionToolDefinition(),
       buildVirtualFileReadFileFunctionToolDefinition(),
       buildVirtualFileSearchFilesFunctionToolDefinition(),
-      buildMicroSkillRegistryFunctionToolDefinition(),
+      buildSkillRegistryFunctionToolDefinition(),
       buildRequestUserInputFunctionToolDefinition(),
       buildViewImageFunctionToolDefinition(),
       buildListAskableModelsFunctionToolDefinition(),
@@ -7935,21 +7933,21 @@ export function createMessageSender(appContext) {
     }
   }
 
-  function serializeResponsesMicroSkillRegistryFunctionToolOutput(value) {
+  function serializeResponsesSkillRegistryFunctionToolOutput(value) {
     try {
-      return buildResponsesMicroSkillRegistryToolOutputContentItems(value, {
+      return buildResponsesSkillRegistryToolOutputContentItems(value, {
         blockTruncation: {
-          maxChars: MICRO_SKILL_READ_MAX_CHARS,
+          maxChars: SKILL_READ_MAX_CHARS,
           mode: 'tail'
         }
       });
     } catch (error) {
-      return buildResponsesMicroSkillRegistryToolOutputContentItems({
+      return buildResponsesSkillRegistryToolOutputContentItems({
         ok: false,
         error: normalizeResponsesCustomToolError(error)
       }, {
         blockTruncation: {
-          maxChars: MICRO_SKILL_READ_MAX_CHARS,
+          maxChars: SKILL_READ_MAX_CHARS,
           mode: 'tail'
         }
       });
@@ -8825,10 +8823,10 @@ export function createMessageSender(appContext) {
 
   async function executeResponsesSkillRegistryInternalAction(rawArgs, options = {}) {
     try {
-      if (typeof utils?.executeMicroSkillRegistryAction !== 'function') {
+      if (typeof utils?.executeSkillRegistryAction !== 'function') {
         throw new Error('当前客户端没有可用的 skill_registry 执行入口。');
       }
-      const result = await utils.executeMicroSkillRegistryAction(rawArgs);
+      const result = await utils.executeSkillRegistryAction(rawArgs);
       if (result?.success === true) {
         const payload = { ...result };
         delete payload.success;
@@ -8944,7 +8942,6 @@ export function createMessageSender(appContext) {
       outputPayload = await executeResponsesVirtualFileFunction(functionName, parsedArgs, options);
     } else if (
       functionName === RESPONSES_SKILL_REGISTRY_TOOL_NAME
-      || functionName === RESPONSES_LEGACY_MICRO_SKILL_REGISTRY_TOOL_NAME
     ) {
       outputPayload = await executeResponsesSkillRegistryFunction(parsedArgs, options);
     } else if (functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME) {
@@ -8986,11 +8983,8 @@ export function createMessageSender(appContext) {
             ? serializeResponsesJsRuntimeFunctionToolOutput(outputPayload)
           : isVirtualFileToolAction(functionName)
             ? serializeResponsesConversationDocumentFunctionToolOutput(functionName, outputPayload)
-          : (
-            functionName === RESPONSES_SKILL_REGISTRY_TOOL_NAME
-            || functionName === RESPONSES_LEGACY_MICRO_SKILL_REGISTRY_TOOL_NAME
-          )
-            ? serializeResponsesMicroSkillRegistryFunctionToolOutput(outputPayload)
+          : functionName === RESPONSES_SKILL_REGISTRY_TOOL_NAME
+            ? serializeResponsesSkillRegistryFunctionToolOutput(outputPayload)
           : functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME
             ? serializeResponsesRequestUserInputFunctionToolOutput(outputPayload)
           : functionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME
@@ -10320,12 +10314,12 @@ export function createMessageSender(appContext) {
         isOpenAIResponsesApiConfig(effectiveApiConfig)
         && typeof utils?.executeJsRuntime === 'function'
       );
-      const shouldPrepareMicroSkillContext = (
+      const shouldPrepareSkillContext = (
         isOpenAIResponsesApiConfig(effectiveApiConfig)
-        && typeof utils?.getMatchingMicroSkillSummaries === 'function'
+        && typeof utils?.getMatchingSkillSummaries === 'function'
       );
       let pageRuntimeContextPayload = null;
-      let microSkillContextPayload = null;
+      let skillContextPayload = null;
       if (shouldPreparePageRuntimeContext) {
         let jsRuntimeFrames = null;
         if (
@@ -10343,14 +10337,14 @@ export function createMessageSender(appContext) {
           frames: jsRuntimeFrames
         });
       }
-      if (shouldPrepareMicroSkillContext) {
-        const microSkillSummaryResult = await utils.getMatchingMicroSkillSummaries();
-        microSkillContextPayload = buildMicroSkillContextPayload({
+      if (shouldPrepareSkillContext) {
+        const skillSummaryResult = await utils.getMatchingSkillSummaries();
+        skillContextPayload = buildSkillContextPayload({
           mode: responsesPageToolEnvironment?.jsRuntimeEnvironment === JS_RUNTIME_ENV_BOUND_HOST_PAGE
             ? 'host_page'
             : 'isolated_sandbox',
-          url: microSkillSummaryResult?.success === true ? microSkillSummaryResult.url : '',
-          skills: microSkillSummaryResult?.success === true ? microSkillSummaryResult.skills : []
+          url: skillSummaryResult?.success === true ? skillSummaryResult.url : '',
+          skills: skillSummaryResult?.success === true ? skillSummaryResult.skills : []
         });
       }
       if (shouldPrepareEnvironmentContext) {
@@ -10358,7 +10352,7 @@ export function createMessageSender(appContext) {
           conversationChain: filteredConversationChain,
           targetUserNode: findLatestUserNodeInConversationChain(filteredConversationChain),
           pageRuntimeContextPayload,
-          microSkillContextPayload,
+          skillContextPayload,
           environmentContextPayload: buildEnvironmentContextPayload()
         });
       }

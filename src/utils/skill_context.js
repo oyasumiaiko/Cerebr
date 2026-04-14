@@ -1,5 +1,5 @@
 /**
- * 隐藏的 micro_skill_context。
+ * 隐藏的 skill_context。
  *
  * 设计目标：
  * - 尽量贴近官方 Codex skills section，只注入轻量 skill 摘要；
@@ -16,7 +16,7 @@ function escapeXmlText(value) {
     .replace(/'/g, '&apos;');
 }
 
-function buildMicroSkillContextHowToUseText() {
+function buildSkillContextHowToUseText() {
   return [
     'Skills are local instructions stored in `SKILL.md`.',
     'When a listed skill looks relevant, read that skill\'s `SKILL.md` before using it.',
@@ -24,7 +24,7 @@ function buildMicroSkillContextHowToUseText() {
   ].join('\n');
 }
 
-function normalizeMicroSkillContextSkills(skills) {
+function normalizeSkillContextSkills(skills) {
   return (Array.isArray(skills) ? skills : [])
     .map((skill, index) => {
       if (!skill || typeof skill !== 'object' || Array.isArray(skill)) return null;
@@ -53,19 +53,19 @@ function normalizeMicroSkillContextSkills(skills) {
     });
 }
 
-export function buildMicroSkillContextPayload(options = {}) {
+export function buildSkillContextPayload(options = {}) {
   const mode = options?.mode === 'host_page' ? 'host_page' : 'isolated_sandbox';
   const url = (typeof options?.url === 'string') ? options.url.trim() : '';
   return {
-    type: 'micro_skill_context',
+    type: 'skill_context',
     mode,
     url,
-    how_to_use: buildMicroSkillContextHowToUseText(),
-    skills: normalizeMicroSkillContextSkills(options?.skills)
+    how_to_use: buildSkillContextHowToUseText(),
+    skills: normalizeSkillContextSkills(options?.skills)
   };
 }
 
-export function buildMicroSkillContextSignature(payload) {
+export function buildSkillContextSignature(payload) {
   if (!payload || typeof payload !== 'object') return '';
   try {
     return JSON.stringify(payload);
@@ -74,11 +74,11 @@ export function buildMicroSkillContextSignature(payload) {
   }
 }
 
-export function buildMicroSkillContextInputItems(payload) {
+export function buildSkillContextInputItems(payload) {
   if (!payload || typeof payload !== 'object') return [];
-  const skills = normalizeMicroSkillContextSkills(payload.skills);
+  const skills = normalizeSkillContextSkills(payload.skills);
   const howToUse = typeof payload.how_to_use === 'string' ? payload.how_to_use.trim() : '';
-  const lines = ['<micro_skill_context>'];
+  const lines = ['<skill_context>'];
   if (payload.url) {
     lines.push(`  <url>${escapeXmlText(payload.url)}</url>`);
   }
@@ -97,7 +97,7 @@ export function buildMicroSkillContextInputItems(payload) {
     lines.push('    </skill>');
   });
   lines.push('  </skills>');
-  lines.push('</micro_skill_context>');
+  lines.push('</skill_context>');
 
   return [{
     type: 'message',
@@ -109,13 +109,13 @@ export function buildMicroSkillContextInputItems(payload) {
   }];
 }
 
-export function resolveMicroSkillContextAttachment(options = {}) {
+export function resolveSkillContextAttachment(options = {}) {
   const payload = (options?.payload && typeof options.payload === 'object') ? options.payload : null;
   const previousEffectiveSignature = (typeof options?.previousEffectiveSignature === 'string')
     ? options.previousEffectiveSignature
     : '';
-  const signature = buildMicroSkillContextSignature(payload);
-  const inputItems = buildMicroSkillContextInputItems(payload);
+  const signature = buildSkillContextSignature(payload);
+  const inputItems = buildSkillContextInputItems(payload);
 
   if (!signature || inputItems.length <= 0) {
     return {

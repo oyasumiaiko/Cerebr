@@ -1,4 +1,4 @@
-import { normalizeMicroSkillName } from '../micro_skill/registry_tool.js';
+import { normalizeSkillName } from '../skill/registry_tool.js';
 import {
   ensurePlainObject,
   normalizeOptionalString,
@@ -32,7 +32,7 @@ export function normalizeVirtualFileTarget(rawTarget, options = {}) {
     }
     return {
       kind,
-      name: name ? normalizeMicroSkillName(name) : null
+      name: name ? normalizeSkillName(name) : null
     };
   }
   if (name) {

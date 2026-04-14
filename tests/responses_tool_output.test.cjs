@@ -266,9 +266,9 @@ test('buildResponsesGenericXmlToolOutputContentItems 支持按调用方放宽正
   assert.match(text, /returned range \[0, \d+\)/);
 });
 
-test('buildResponsesMicroSkillRegistryToolOutputContentItems 会把 apply_patch 压成简洁变更摘要', async () => {
-  const { buildResponsesMicroSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
-  const items = buildResponsesMicroSkillRegistryToolOutputContentItems({
+test('buildResponsesSkillRegistryToolOutputContentItems 会把 apply_patch 压成简洁变更摘要', async () => {
+  const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesSkillRegistryToolOutputContentItems({
     ok: true,
     action: 'apply_patch',
     skill: {
@@ -298,9 +298,9 @@ test('buildResponsesMicroSkillRegistryToolOutputContentItems 会把 apply_patch 
   assert.doesNotMatch(text, /"match": \[/);
 });
 
-test('buildResponsesMicroSkillRegistryToolOutputContentItems 会把模板式 create_skill 渲染成脚手架摘要与 next steps', async () => {
-  const { buildResponsesMicroSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
-  const items = buildResponsesMicroSkillRegistryToolOutputContentItems({
+test('buildResponsesSkillRegistryToolOutputContentItems 会把模板式 create_skill 渲染成脚手架摘要与 next steps', async () => {
+  const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesSkillRegistryToolOutputContentItems({
     ok: true,
     action: 'create_skill',
     create_mode: 'template',
@@ -333,9 +333,9 @@ test('buildResponsesMicroSkillRegistryToolOutputContentItems 会把模板式 cre
   assert.doesNotMatch(text, /Mounted on current document:/);
 });
 
-test('buildResponsesMicroSkillRegistryToolOutputContentItems 只把真实 active skills 渲染为 mounted', async () => {
-  const { buildResponsesMicroSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
-  const items = buildResponsesMicroSkillRegistryToolOutputContentItems({
+test('buildResponsesSkillRegistryToolOutputContentItems 只把真实 active skills 渲染为 mounted', async () => {
+  const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesSkillRegistryToolOutputContentItems({
     ok: true,
     action: 'create_skill',
     skill: {
@@ -361,9 +361,9 @@ test('buildResponsesMicroSkillRegistryToolOutputContentItems 只把真实 active
   assert.doesNotMatch(text, /Mounted on current document: .*worldquant-brain-knowledge-cache/);
 });
 
-test('buildResponsesMicroSkillRegistryToolOutputContentItems 会显式提示 refresh 失败而不是伪造 mounted', async () => {
-  const { buildResponsesMicroSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
-  const items = buildResponsesMicroSkillRegistryToolOutputContentItems({
+test('buildResponsesSkillRegistryToolOutputContentItems 会显式提示 refresh 失败而不是伪造 mounted', async () => {
+  const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesSkillRegistryToolOutputContentItems({
     ok: true,
     action: 'create_skill',
     skill: {
@@ -377,18 +377,18 @@ test('buildResponsesMicroSkillRegistryToolOutputContentItems 会显式提示 ref
         { name: 'worldquant-brain-knowledge-cache' }
       ],
       error: {
-        message: 'Micro skill not mounted: worldquant-brain-knowledge-cache'
+        message: 'Skill not mounted: worldquant-brain-knowledge-cache'
       }
     }
   });
   const text = formatResponsesToolOutputForDisplay(items);
-  assert.match(text, /Current document refresh failed: Micro skill not mounted: worldquant-brain-knowledge-cache/);
+  assert.match(text, /Current document refresh failed: Skill not mounted: worldquant-brain-knowledge-cache/);
   assert.doesNotMatch(text, /Mounted on current document:/);
 });
 
-test('buildResponsesMicroSkillRegistryToolOutputContentItems 对 read_file 仍保留结构化详情', async () => {
-  const { buildResponsesMicroSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
-  const items = buildResponsesMicroSkillRegistryToolOutputContentItems({
+test('buildResponsesSkillRegistryToolOutputContentItems 对 read_file 仍保留结构化详情', async () => {
+  const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesSkillRegistryToolOutputContentItems({
     ok: true,
     action: 'read_file',
     skill: {
@@ -405,9 +405,9 @@ test('buildResponsesMicroSkillRegistryToolOutputContentItems 对 read_file 仍�
   assert.match(text, /"content": "Alpha"/);
 });
 
-test('buildResponsesMicroSkillRegistryToolOutputContentItems 会把 mount_on_current_page 压成简洁挂载摘要', async () => {
-  const { buildResponsesMicroSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
-  const items = buildResponsesMicroSkillRegistryToolOutputContentItems({
+test('buildResponsesSkillRegistryToolOutputContentItems 会把 mount_on_current_page 压成简洁挂载摘要', async () => {
+  const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesSkillRegistryToolOutputContentItems({
     ok: true,
     action: 'mount_on_current_page',
     skill: {

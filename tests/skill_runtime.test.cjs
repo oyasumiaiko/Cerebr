@@ -3,8 +3,8 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-async function loadMicroSkillRuntimeModule() {
-  const filePath = path.resolve(__dirname, '../src/extension/micro_skill_runtime.js');
+async function loadSkillRuntimeModule() {
+  const filePath = path.resolve(__dirname, '../src/extension/skill_runtime.js');
   return import(pathToFileURL(filePath).href);
 }
 
@@ -48,26 +48,26 @@ function buildSkill(name) {
   };
 }
 
-test('buildMicroSkillDocumentRefreshSource 与 buildRegisteredMicroSkillUserScript 生成可编译源码', async () => {
+test('buildSkillDocumentRefreshSource 与 buildRegisteredSkillUserScript 生成可编译源码', async () => {
   const {
-    buildMicroSkillDocumentRefreshSource,
-    buildMicroSkillMountOnCurrentPageSource,
-    buildMicroSkillUnmountFromCurrentPageSource,
-    buildRegisteredMicroSkillUserScript
-  } = await loadMicroSkillRuntimeModule();
+    buildSkillDocumentRefreshSource,
+    buildSkillMountOnCurrentPageSource,
+    buildSkillUnmountFromCurrentPageSource,
+    buildRegisteredSkillUserScript
+  } = await loadSkillRuntimeModule();
 
-  const refreshSource = buildMicroSkillDocumentRefreshSource([
+  const refreshSource = buildSkillDocumentRefreshSource([
     buildSkill('dom-probe'),
     buildSkill('api-reader')
   ]);
-  const mountSource = buildMicroSkillMountOnCurrentPageSource(buildSkill('dom-probe'));
-  const unmountSource = buildMicroSkillUnmountFromCurrentPageSource('dom-probe');
+  const mountSource = buildSkillMountOnCurrentPageSource(buildSkill('dom-probe'));
+  const unmountSource = buildSkillUnmountFromCurrentPageSource('dom-probe');
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
   assert.doesNotThrow(() => new AsyncFunction(refreshSource));
   assert.doesNotThrow(() => new AsyncFunction(mountSource));
   assert.doesNotThrow(() => new AsyncFunction(unmountSource));
 
-  const registered = buildRegisteredMicroSkillUserScript(buildSkill('dom-probe'));
+  const registered = buildRegisteredSkillUserScript(buildSkill('dom-probe'));
   assert.equal(registered.world, 'USER_SCRIPT');
   assert.equal(registered.js.length, 1);
   assert.doesNotThrow(() => new Function(registered.js[0].code));
@@ -75,23 +75,23 @@ test('buildMicroSkillDocumentRefreshSource 与 buildRegisteredMicroSkillUserScri
 
 test('runtime bootstrap 会暴露 $skill/$invoke/$methods facade 且与内部注册表共用状态', async () => {
   const {
-    buildMicroSkillMountOnCurrentPageSource,
-    buildMicroSkillUnmountFromCurrentPageSource
-  } = await loadMicroSkillRuntimeModule();
+    buildSkillMountOnCurrentPageSource,
+    buildSkillUnmountFromCurrentPageSource
+  } = await loadSkillRuntimeModule();
 
   const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-  const previousRuntime = globalThis.__cerebrMicroSkills;
+  const previousRuntime = globalThis.__cerebrSkills;
   const previousSkill = globalThis.$skill;
   const previousInvoke = globalThis.$invoke;
   const previousMethods = globalThis.$methods;
 
   try {
-    delete globalThis.__cerebrMicroSkills;
+    delete globalThis.__cerebrSkills;
     delete globalThis.$skill;
     delete globalThis.$invoke;
     delete globalThis.$methods;
 
-    await new AsyncFunction(buildMicroSkillMountOnCurrentPageSource(buildSkill('dom-probe')))();
+    await new AsyncFunction(buildSkillMountOnCurrentPageSource(buildSkill('dom-probe')))();
 
     assert.equal(typeof globalThis.$skill, 'function');
     assert.equal(typeof globalThis.$invoke, 'function');
@@ -111,15 +111,15 @@ test('runtime bootstrap 会暴露 $skill/$invoke/$methods facade 且与内部注
     );
     await assert.rejects(
       () => globalThis.$invoke('dom-probe', 'missingMethod'),
-      /Mounted micro skill method not found: dom-probe\.missingMethod/
+      /Mounted skill method not found: dom-probe\.missingMethod/
     );
 
-    await new AsyncFunction(buildMicroSkillUnmountFromCurrentPageSource('dom-probe'))();
+    await new AsyncFunction(buildSkillUnmountFromCurrentPageSource('dom-probe'))();
     assert.equal(globalThis.$skill('dom-probe'), null);
     assert.deepEqual(globalThis.$methods('dom-probe'), []);
   } finally {
-    if (previousRuntime === undefined) delete globalThis.__cerebrMicroSkills;
-    else globalThis.__cerebrMicroSkills = previousRuntime;
+    if (previousRuntime === undefined) delete globalThis.__cerebrSkills;
+    else globalThis.__cerebrSkills = previousRuntime;
     if (previousSkill === undefined) delete globalThis.$skill;
     else globalThis.$skill = previousSkill;
     if (previousInvoke === undefined) delete globalThis.$invoke;

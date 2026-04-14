@@ -1,5 +1,5 @@
 import { createJsRuntimeManager } from './js_runtime_manager.js';
-import { createMicroSkillManager } from './micro_skill_manager.js';
+import { createSkillManager } from './skill_manager.js';
 import {
   buildPromptImageResultFromImageBlob,
   buildPromptImageResultFromScreenshotDataUrl
@@ -16,7 +16,7 @@ self.addEventListener('install', (event) => {
   console.log('Service Worker 安装中...', new Date().toISOString());
   event.waitUntil(Promise.all([
     self.skipWaiting(),
-    ensureMicroSkillManagerReady({ force: true })
+    ensureSkillManagerReady({ force: true })
   ]));
 });
 
@@ -24,7 +24,7 @@ self.addEventListener('activate', (event) => {
   console.log('Service Worker 已激活', new Date().toISOString());
   event.waitUntil(Promise.all([
     self.clients.claim(),
-    ensureMicroSkillManagerReady({ force: true })
+    ensureSkillManagerReady({ force: true })
   ]));
 });
 
@@ -482,14 +482,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message?.type === 'MICRO_SKILL_REGISTRY_ACTION') {
+  if (message?.type === 'SKILL_REGISTRY_ACTION') {
     (async () => {
       try {
-        await ensureMicroSkillManagerReady();
+        await ensureSkillManagerReady();
         const targetTabId = Number.isFinite(Number(message?.tabId))
           ? Number(message.tabId)
           : null;
-        const result = await microSkillManager.executeRegistryAction(message?.payload || {}, {
+        const result = await skillManager.executeRegistryAction(message?.payload || {}, {
           tabId: targetTabId
         });
         sendResponse({ success: true, ...result });
@@ -503,10 +503,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message?.type === 'GET_MATCHING_MICRO_SKILL_SUMMARIES') {
+  if (message?.type === 'GET_MATCHING_SKILL_SUMMARIES') {
     (async () => {
       try {
-        await ensureMicroSkillManagerReady();
+        await ensureSkillManagerReady();
         const standaloneSidebar = typeof sender?.url === 'string' && sender.url.includes('#standalone');
         const targetTabId = standaloneSidebar
           ? null
@@ -515,7 +515,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               senderTabId: sender?.tab?.id
             });
 
-        const result = await microSkillManager.listMatchingSkillSummariesForTab(targetTabId);
+        const result = await skillManager.listMatchingSkillSummariesForTab(targetTabId);
         sendResponse({
           success: true,
           ...result
@@ -942,35 +942,35 @@ async function buildViewImageResultForPrompt(rawArgs = null) {
  * - 不向页面执行环境注入任何扩展桥或宿主对象。
  */
 const jsRuntimeManager = createJsRuntimeManager();
-const microSkillManager = createMicroSkillManager({ jsRuntimeManager });
-let microSkillManagerReadyPromise = null;
-let microSkillManagerReadyPending = false;
+const skillManager = createSkillManager({ jsRuntimeManager });
+let skillManagerReadyPromise = null;
+let skillManagerReadyPending = false;
 
-function ensureMicroSkillManagerReady(options = {}) {
-  if (microSkillManagerReadyPromise && microSkillManagerReadyPending) {
-    return microSkillManagerReadyPromise;
+function ensureSkillManagerReady(options = {}) {
+  if (skillManagerReadyPromise && skillManagerReadyPending) {
+    return skillManagerReadyPromise;
   }
-  if (!microSkillManagerReadyPromise || options?.force === true) {
-    microSkillManagerReadyPending = true;
-    microSkillManagerReadyPromise = microSkillManager
+  if (!skillManagerReadyPromise || options?.force === true) {
+    skillManagerReadyPending = true;
+    skillManagerReadyPromise = skillManager
       .initialize()
       .then((result) => {
-        microSkillManagerReadyPending = false;
+        skillManagerReadyPending = false;
         return result;
       })
       .catch((error) => {
-        microSkillManagerReadyPending = false;
-        microSkillManagerReadyPromise = null;
-        console.error('初始化微型 skill manager 失败:', error);
+        skillManagerReadyPending = false;
+        skillManagerReadyPromise = null;
+        console.error('初始化skill manager 失败:', error);
         throw error;
       });
   }
-  return microSkillManagerReadyPromise;
+  return skillManagerReadyPromise;
 }
 
 if (chrome?.runtime?.onStartup?.addListener) {
   chrome.runtime.onStartup.addListener(() => {
-    void ensureMicroSkillManagerReady({ force: true });
+    void ensureSkillManagerReady({ force: true });
   });
 }
 
@@ -978,15 +978,15 @@ if (chrome?.webNavigation?.onHistoryStateUpdated?.addListener) {
   chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
     if (Number(details?.frameId) !== 0) return;
     if (!Number.isFinite(Number(details?.tabId))) return;
-    void ensureMicroSkillManagerReady()
-      .then(() => microSkillManager.syncCurrentDocumentSkills(Number(details.tabId), details.url || ''))
+    void ensureSkillManagerReady()
+      .then(() => skillManager.syncCurrentDocumentSkills(Number(details.tabId), details.url || ''))
       .catch((error) => {
-        console.warn('同页导航后同步微型 skill 失败:', error);
+        console.warn('同页导航后同步skill 失败:', error);
       });
   });
 }
 
-void ensureMicroSkillManagerReady().catch(() => {});
+void ensureSkillManagerReady().catch(() => {});
 
 
 

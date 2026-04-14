@@ -3,21 +3,21 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 
-async function loadMicroSkillContextModule() {
-  const filePath = path.resolve(__dirname, '../src/utils/micro_skill_context.js');
+async function loadSkillContextModule() {
+  const filePath = path.resolve(__dirname, '../src/utils/skill_context.js');
   const source = await fs.readFile(filePath, 'utf8');
   const dataUrl = `data:text/javascript;base64,${Buffer.from(source, 'utf8').toString('base64')}`;
   return import(dataUrl);
 }
 
-test('resolveMicroSkillContextAttachment 只注入官方风格的全局说明与最小 skill 摘要，并在签名不变时跳过重复注入', async () => {
+test('resolveSkillContextAttachment 只注入官方风格的全局说明与最小 skill 摘要，并在签名不变时跳过重复注入', async () => {
   const {
-    buildMicroSkillContextPayload,
-    buildMicroSkillContextInputItems,
-    resolveMicroSkillContextAttachment
-  } = await loadMicroSkillContextModule();
+    buildSkillContextPayload,
+    buildSkillContextInputItems,
+    resolveSkillContextAttachment
+  } = await loadSkillContextModule();
 
-  const payload = buildMicroSkillContextPayload({
+  const payload = buildSkillContextPayload({
     mode: 'host_page',
     url: 'https://example.com/app',
     skills: [
@@ -35,10 +35,10 @@ test('resolveMicroSkillContextAttachment 只注入官方风格的全局说明与
     ]
   });
 
-  const items = buildMicroSkillContextInputItems(payload);
+  const items = buildSkillContextInputItems(payload);
   assert.equal(items.length, 1);
   const text = items[0].content[0].text;
-  assert.match(text, /<micro_skill_context/);
+  assert.match(text, /<skill_context/);
   assert.match(text, /<how_to_use>/);
   assert.match(text, /Skills are local instructions stored in `SKILL\.md`\./);
   assert.match(text, /read that skill&apos;s `SKILL\.md` before using it\./i);
@@ -49,11 +49,11 @@ test('resolveMicroSkillContextAttachment 只注入官方风格的全局说明与
   assert.doesNotMatch(text, /<mount_surface>/);
   assert.ok(text.indexOf('skill-creator') < text.indexOf('dom-probe'));
 
-  const first = resolveMicroSkillContextAttachment({ payload, previousEffectiveSignature: '' });
+  const first = resolveSkillContextAttachment({ payload, previousEffectiveSignature: '' });
   assert.ok(first.signature);
   assert.equal(first.inputItems.length, 1);
 
-  const second = resolveMicroSkillContextAttachment({
+  const second = resolveSkillContextAttachment({
     payload,
     previousEffectiveSignature: first.signature
   });
@@ -63,24 +63,24 @@ test('resolveMicroSkillContextAttachment 只注入官方风格的全局说明与
 
 test('空 skill 集只在需要覆盖旧签名时注入', async () => {
   const {
-    buildMicroSkillContextPayload,
-    resolveMicroSkillContextAttachment
-  } = await loadMicroSkillContextModule();
+    buildSkillContextPayload,
+    resolveSkillContextAttachment
+  } = await loadSkillContextModule();
 
-  const emptyPayload = buildMicroSkillContextPayload({
+  const emptyPayload = buildSkillContextPayload({
     mode: 'host_page',
     url: 'https://example.com/app',
     skills: []
   });
 
-  const first = resolveMicroSkillContextAttachment({
+  const first = resolveSkillContextAttachment({
     payload: emptyPayload,
     previousEffectiveSignature: ''
   });
   assert.equal(first.signature, null);
   assert.equal(first.inputItems, null);
 
-  const second = resolveMicroSkillContextAttachment({
+  const second = resolveSkillContextAttachment({
     payload: emptyPayload,
     previousEffectiveSignature: 'old-signature'
   });
