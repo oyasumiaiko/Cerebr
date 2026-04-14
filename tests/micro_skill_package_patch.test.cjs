@@ -4,7 +4,7 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 async function loadMicroSkillApplyPatchModule() {
-  const filePath = path.resolve(__dirname, '../src/agent_tools/micro_skill/apply_patch.js');
+  const filePath = path.resolve(__dirname, '../src/agent_tools/micro_skill/skill_apply_patch.js');
   return import(`${pathToFileURL(filePath).href}?test=${Date.now()}`);
 }
 

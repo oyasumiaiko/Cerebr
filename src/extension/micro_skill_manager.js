@@ -21,7 +21,7 @@ import {
   normalizeStoredMicroSkillRecord,
   saveStoredMicroSkillPackage
 } from '../agent_tools/micro_skill/registry_tool.js';
-import { applyMicroSkillPackagePatch } from '../agent_tools/micro_skill/apply_patch.js';
+import { applyMicroSkillPackagePatch } from '../agent_tools/micro_skill/skill_apply_patch.js';
 import {
   buildMicroSkillDocumentRefreshSource,
   buildMicroSkillMountOnCurrentPageSource,
