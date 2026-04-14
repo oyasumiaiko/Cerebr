@@ -21,7 +21,7 @@ import {
   executeConversationDocumentAction,
   normalizeVirtualFileResultFromSkillRegistryAction,
   normalizeVirtualFileToolArguments
-} from '../../agent_tools/conversation_document/tools.js';
+} from '../../agent_tools/virtual_file_io/index.js';
 
 const JS_RUNTIME_STATUS_TIMEOUT_MS = 5000;
 const JS_RUNTIME_FRAME_SNAPSHOT_TIMEOUT_MS = 5000;

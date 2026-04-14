@@ -138,7 +138,7 @@ import {
   isVirtualFileToolAction,
   normalizeVirtualFileResultFromSkillRegistryAction,
   normalizeVirtualFileToolArguments
-} from '../agent_tools/conversation_document/tools.js';
+} from '../agent_tools/virtual_file_io/index.js';
 import {
   JS_RUNTIME_ENV_BOUND_HOST_PAGE,
   JS_RUNTIME_ENV_ISOLATED_SANDBOX,

@@ -5,7 +5,7 @@ import {
   VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME,
   VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
   VIRTUAL_FILE_TARGET_KIND_SKILL
-} from '../agent_tools/conversation_document/tools.js';
+} from '../agent_tools/virtual_file_io/index.js';
 import { buildVirtualFileApplyPatchPreview } from './micro_skill_patch_preview.js';
 
 function normalizeSummaryText(value) {

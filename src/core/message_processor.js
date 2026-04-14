@@ -48,7 +48,7 @@ import {
   CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION,
   executeConversationDocumentAction,
   normalizeConversationDocumentPath
-} from '../agent_tools/conversation_document/tools.js';
+} from '../agent_tools/virtual_file_io/index.js';
 import {
   computeContiguousDiffWindow,
   resolveRenderedSurfaceDiffBaseSignatures,
