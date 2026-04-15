@@ -104,6 +104,15 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
   );
 });
 
+test('apply_patch 工具定义本身不重复承载对话文档展示提醒', async () => {
+  const {
+    buildVirtualFileApplyPatchFunctionToolDefinition
+  } = await loadConversationDocumentToolsModule();
+
+  const applyPatchDefinition = buildVirtualFileApplyPatchFunctionToolDefinition();
+  assert.doesNotMatch(applyPatchDefinition.description, /最终回复中插入 Markdown 相对路径链接/);
+});
+
 test('apply_patch 遇到同名 Add File 时会按 Windows 语义追加 (2)', async () => {
   const {
     executeConversationDocumentAction,

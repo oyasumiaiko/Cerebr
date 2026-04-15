@@ -298,6 +298,44 @@ test('buildResponsesSkillRegistryToolOutputContentItems 会把 apply_patch 压�
   assert.doesNotMatch(text, /"match": \[/);
 });
 
+test('buildResponsesConversationDocumentToolOutputContentItems 会在 apply_patch 成功后附文档展示提醒，但不影响 skill 输出', async () => {
+  const {
+    buildResponsesConversationDocumentToolOutputContentItems,
+    buildResponsesSkillRegistryToolOutputContentItems,
+    formatResponsesToolOutputForDisplay
+  } = await loadResponsesToolOutputModule();
+
+  const conversationItems = buildResponsesConversationDocumentToolOutputContentItems('apply_patch', {
+    ok: true,
+    action: 'apply_patch',
+    affected_files: {
+      added: ['docs/plan.md'],
+      modified: [],
+      deleted: []
+    }
+  });
+  const conversationText = formatResponsesToolOutputForDisplay(conversationItems);
+  assert.match(conversationText, /Success\. Updated the following files:/);
+  assert.match(conversationText, /A docs\/plan\.md/);
+  assert.match(conversationText, /include a Markdown relative-path link such as \[Plan\]\(docs\/plan\.md\) in the final answer/);
+
+  const skillItems = buildResponsesSkillRegistryToolOutputContentItems({
+    ok: true,
+    action: 'apply_patch',
+    skill: {
+      name: 'worldquant-brain-sim-state',
+      revision: 8
+    },
+    affected_files: {
+      added: ['references/experiment-loop.md'],
+      modified: ['SKILL.md'],
+      deleted: []
+    }
+  });
+  const skillText = formatResponsesToolOutputForDisplay(skillItems);
+  assert.doesNotMatch(skillText, /Markdown relative-path link/);
+});
+
 test('buildResponsesSkillRegistryToolOutputContentItems 会把模板式 create_skill 渲染成脚手架摘要与 next steps', async () => {
   const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesSkillRegistryToolOutputContentItems({

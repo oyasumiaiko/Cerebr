@@ -1667,7 +1667,7 @@ export function buildResponsesConversationDocumentToolOutputContentItems(toolNam
       : 'Patch applied successfully.';
     return buildResponsesGenericXmlToolOutputContentItems(rootTag, {
       ok: true,
-      value: summaryText
+      value: `${summaryText}\n\nReminder: if you want the user to see a conversation document in chat, include a Markdown relative-path link such as [Plan](docs/plan.md) in the final answer. Creating or editing the file alone does not display it to the user.`
     }, options);
   }
   return buildResponsesGenericXmlToolOutputContentItems(rootTag, normalized, options);
