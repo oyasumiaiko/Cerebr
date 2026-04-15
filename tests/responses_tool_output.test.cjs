@@ -298,7 +298,7 @@ test('buildResponsesSkillRegistryToolOutputContentItems 会把 apply_patch 压�
   assert.doesNotMatch(text, /"match": \[/);
 });
 
-test('buildResponsesConversationDocumentToolOutputContentItems 会在 apply_patch 成功后附文档展示提醒，但不影响 skill 输出', async () => {
+test('buildResponsesConversationDocumentToolOutputContentItems 会在 apply_patch 成功后附文件展示提醒，但不影响 skill 输出', async () => {
   const {
     buildResponsesConversationDocumentToolOutputContentItems,
     buildResponsesSkillRegistryToolOutputContentItems,
@@ -318,6 +318,7 @@ test('buildResponsesConversationDocumentToolOutputContentItems 会在 apply_patc
   assert.match(conversationText, /Success\. Updated the following files:/);
   assert.match(conversationText, /A docs\/plan\.md/);
   assert.match(conversationText, /include a Markdown relative-path link such as \[Plan\]\(docs\/plan\.md\) in the final answer/);
+  assert.match(conversationText, /any pure-text format, not only \.md/);
 
   const skillItems = buildResponsesSkillRegistryToolOutputContentItems({
     ok: true,

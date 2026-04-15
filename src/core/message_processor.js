@@ -238,7 +238,7 @@ export function createMessageProcessor(appContext) {
       return {
         ok: false,
         error: {
-          message: '当前对话尚未持久化，暂时无法读取或编辑文档。',
+          message: '当前对话尚未持久化，暂时无法读取或编辑文件。',
           name: 'ConversationDocumentUnavailableError',
           stack: ''
         }

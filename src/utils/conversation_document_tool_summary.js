@@ -87,7 +87,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
       if (preview.totalFiles > 1) metaParts.push(`另 ${preview.totalFiles - 1} 个文件`);
       return {
         action: isInProgress ? '正在修改' : '修改',
-        value: normalizeSummaryText(firstFile?.path) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文档文件'),
+        value: normalizeSummaryText(firstFile?.path) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文件'),
         valueUrl: '',
         meta: joinSummaryMeta(metaParts),
         locationAction: '',
@@ -97,7 +97,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
     }
     return {
       action: isInProgress ? '正在修改' : '修改',
-      value: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? (targetMeta || '技能文件') : '当前对话文档',
+      value: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? (targetMeta || '技能文件') : '当前对话文件',
       valueUrl: '',
       meta: '',
       locationAction: '',
@@ -109,7 +109,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
   if (toolName === VIRTUAL_FILE_LIST_FILES_TOOL_NAME) {
     return {
       action: isInProgress ? '正在查看列表' : '查看列表',
-      value: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? (targetMeta || '全部技能') : (normalizeSummaryText(args?.path_glob) || '当前对话文档'),
+      value: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? (targetMeta || '全部技能') : (normalizeSummaryText(args?.path_glob) || '当前对话文件'),
       valueUrl: '',
       meta: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? normalizeSummaryText(args?.path_glob) : '',
       locationAction: '',
@@ -122,7 +122,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
     return {
       action: isInProgress ? '正在读取' : '读取',
       value: [
-        normalizeSummaryText(args?.file_path) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文档文件'),
+        normalizeSummaryText(args?.file_path) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文件'),
         lineRangeSuffix
       ]
         .filter(Boolean)
@@ -138,7 +138,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
   if (toolName === VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME) {
     return {
       action: isInProgress ? '正在搜索' : '搜索',
-      value: normalizeSummaryText(args?.pattern) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文档文件'),
+      value: normalizeSummaryText(args?.pattern) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文件'),
       valueUrl: '',
       meta: joinSummaryMeta([targetMeta, normalizeSummaryText(args?.path_glob)]),
       locationAction: '',

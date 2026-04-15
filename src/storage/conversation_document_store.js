@@ -65,7 +65,7 @@ async function deleteDocumentsByConversationIdInTransaction(store, conversationI
   const range = IDBKeyRange.only(String(conversationId || ''));
   await new Promise((resolve, reject) => {
     const request = index.openKeyCursor(range);
-    request.onerror = () => reject(request.error || new Error('删除对话文档失败。'));
+    request.onerror = () => reject(request.error || new Error('删除对话文件失败。'));
     request.onsuccess = () => {
       const cursor = request.result;
       if (!cursor) {
@@ -104,7 +104,7 @@ export async function putConversationDocument(conversationId, documentRecord) {
     ...cloneStructured(documentRecord)
   });
   if (!normalized) {
-    throw new Error('无法保存无效的对话文档。');
+    throw new Error('无法保存无效的对话文件。');
   }
 
   const db = await openChatHistoryDB();

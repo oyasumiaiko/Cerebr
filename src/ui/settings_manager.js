@@ -1289,7 +1289,7 @@ export function createSettingsManager(appContext) {
       type: 'range',
       menu: 'quick',
       group: 'display',
-      label: '文档字体大小',
+      label: '文件预览字体大小',
       min: 85,
       max: 150,
       step: 5,

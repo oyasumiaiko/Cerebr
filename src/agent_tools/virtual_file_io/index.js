@@ -677,7 +677,7 @@ function ensureStore(store = null) {
   const requiredMethods = ['listDocuments', 'getDocument', 'putDocument', 'replaceDocuments'];
   const missing = requiredMethods.filter((name) => typeof resolved?.[name] !== 'function');
   if (missing.length > 0) {
-    throw new Error(`当前环境没有可用的 conversation document store，缺少方法：${missing.join(', ')}`);
+    throw new Error(`当前环境没有可用的 conversation file store，缺少方法：${missing.join(', ')}`);
   }
   return resolved;
 }

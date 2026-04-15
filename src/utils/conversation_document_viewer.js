@@ -295,7 +295,7 @@ export function createConversationDocumentViewer(options = {}) {
     if (!file) {
       const empty = document.createElement('div');
       empty.className = 'conversation-document-card__status';
-      empty.textContent = '文档不存在';
+      empty.textContent = '文件不存在';
       state.refs.body.appendChild(empty);
       card.classList.add('is-missing');
       state.missing = true;
@@ -537,8 +537,8 @@ export function createConversationDocumentViewer(options = {}) {
     const state = getConversationDocumentCardState(card);
     const modeButton = createDocumentActionIconButton({
       iconClass: 'fa-brands fa-markdown',
-      title: '切换文档显示模式',
-      ariaLabel: '切换文档显示模式',
+      title: '切换文件显示模式',
+      ariaLabel: '切换文件显示模式',
       className: 'conversation-document-card__tool-button--mode',
       onClick: () => cycleConversationDocumentViewMode(card)
     });
@@ -546,34 +546,34 @@ export function createConversationDocumentViewer(options = {}) {
     actions.appendChild(modeButton);
     actions.appendChild(createDocumentActionIconButton({
       iconClass: 'fa-regular fa-pen-to-square',
-      title: '编辑文档',
-      ariaLabel: '编辑文档',
+      title: '编辑文件',
+      ariaLabel: '编辑文件',
       onClick: () => enterConversationDocumentEditMode(card)
     }));
     actions.appendChild(createDocumentActionIconButton({
       iconClass: 'fa-regular fa-copy',
-      title: '复制文档内容',
-      ariaLabel: '复制文档内容',
+      title: '复制文件内容',
+      ariaLabel: '复制文件内容',
       onClick: () => copyConversationDocumentCard(card)
     }));
     actions.appendChild(createDocumentActionIconButton({
       iconClass: 'fa-solid fa-download',
-      title: '下载文档',
-      ariaLabel: '下载文档',
+      title: '下载文件',
+      ariaLabel: '下载文件',
       onClick: () => downloadConversationDocumentCard(card)
     }));
     summary.appendChild(actions);
 
     const meta = document.createElement('div');
     meta.className = 'conversation-document-card__meta';
-    meta.textContent = '展开后加载文档内容';
+    meta.textContent = '展开后加载文件内容';
     const body = document.createElement('div');
     body.className = 'conversation-document-card__body';
     const status = document.createElement('div');
     status.className = 'conversation-document-card__status';
     status.textContent = conversationId
-      ? '展开后加载文档内容'
-      : '当前对话尚未持久化，暂时无法读取文档';
+      ? '展开后加载文件内容'
+      : '当前对话尚未持久化，暂时无法读取文件';
     body.appendChild(status);
 
     state.refs.meta = meta;
@@ -612,7 +612,7 @@ export function createConversationDocumentViewer(options = {}) {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'conversation-document-attachments__tile';
-    button.setAttribute('aria-label', `打开文档 ${title || path}`);
+    button.setAttribute('aria-label', `打开文件 ${title || path}`);
     button.title = path;
 
     const icon = document.createElement('i');

@@ -38,7 +38,7 @@ function buildCommonFileReadParametersDescription() {
       target: buildVirtualFileTargetSchemaDescription({ requireSkillName: true }),
       file_path: {
         type: 'string',
-        description: '要读取的虚拟文件路径；对话文档示例 `docs/plan.md`，skill 文件示例 `SKILL.md` 或 `src/main.js`。'
+        description: '要读取的虚拟文件路径；当前对话文件示例 `docs/plan.md`、`notes/todo.txt`、`snippets/example.html`，skill 文件示例 `SKILL.md` 或 `src/main.js`。'
       },
       mode: {
         type: ['string', 'null'],

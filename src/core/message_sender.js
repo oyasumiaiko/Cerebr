@@ -8823,7 +8823,7 @@ export function createMessageSender(appContext) {
     }
     if (conversationId) return conversationId;
 
-    throw new Error('当前对话尚未持久化，无法访问对话文档。');
+    throw new Error('当前对话尚未持久化，无法访问对话文件。');
   }
 
   async function executeResponsesSkillRegistryInternalAction(rawArgs, options = {}) {
@@ -11063,9 +11063,9 @@ export function createMessageSender(appContext) {
             rawText = baseText;
           }
         } catch (error) {
-          console.error('长文本转文档失败:', error);
+          console.error('长文本转文件失败:', error);
           showNotification?.({
-            message: `转为文档失败：${error?.message || '未知错误'}`,
+            message: `转为文件失败：${error?.message || '未知错误'}`,
             type: 'error',
             duration: 2600
           });

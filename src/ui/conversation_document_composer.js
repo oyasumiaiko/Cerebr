@@ -53,7 +53,7 @@ function buildSuggestedConversationDocumentPath(content) {
   const firstLine = lines[0] || '';
   const heading = firstLine.replace(/^#+\s*/, '').trim();
   const candidate = sanitizeDocumentFileSegment(heading || firstLine);
-  const filename = candidate || `document-${buildTimestampSuffix()}`;
+  const filename = candidate || `file-${buildTimestampSuffix()}`;
   return `docs/${filename}.md`;
 }
 
@@ -111,11 +111,11 @@ export function createConversationDocumentComposer(appContext) {
     const existingId = normalizeComposerString(services.chatHistoryUI?.getCurrentConversationId?.());
     if (existingId) return existingId;
     const nextId = await services.chatHistoryUI?.ensureCurrentConversationId?.({
-      summary: '文档草稿'
+      summary: '文件草稿'
     });
     const normalized = normalizeComposerString(nextId);
     if (!normalized) {
-      throw new Error('当前无法为文档创建可用会话。');
+      throw new Error('当前无法为文件创建可用会话。');
     }
     services.messageSender?.setCurrentConversationId?.(normalized);
     return normalized;
@@ -156,7 +156,7 @@ export function createConversationDocumentComposer(appContext) {
       }
     );
     if (result?.ok !== true || !result?.file?.path) {
-      throw new Error(result?.error?.message || '文档创建失败。');
+      throw new Error(result?.error?.message || '文件创建失败。');
     }
 
     dispatchDocumentChangeEvent(result.change_event);
@@ -170,7 +170,7 @@ export function createConversationDocumentComposer(appContext) {
     }
     services.inputController?.focusToEnd?.();
     services.uiManager?.updateSendButtonState?.();
-    utils.showNotification?.({ message: `已创建文档：${result.file.path}`, type: 'success', duration: 1800 });
+    utils.showNotification?.({ message: `已创建文件：${result.file.path}`, type: 'success', duration: 1800 });
     return {
       conversationId,
       filePath: result.file.path,
@@ -212,10 +212,10 @@ export function createConversationDocumentComposer(appContext) {
     header.className = 'composer-document-panel__header';
     const title = document.createElement('div');
     title.className = 'composer-document-panel__title';
-    title.textContent = '新建文档';
+    title.textContent = '新建文件';
     const hint = document.createElement('div');
     hint.className = 'composer-document-panel__hint';
-    hint.textContent = '创建完成后会把 Markdown 链接插入当前输入框，不会自动发送。';
+    hint.textContent = '创建完成后会把 Markdown 相对路径链接插入当前输入框，不会自动发送。支持 .md、.txt、.html、.js 等纯文本文件。';
     header.appendChild(title);
     header.appendChild(hint);
 
@@ -227,7 +227,7 @@ export function createConversationDocumentComposer(appContext) {
     pathInput = document.createElement('input');
     pathInput.type = 'text';
     pathInput.className = 'composer-document-panel__input';
-    pathInput.placeholder = '留空时自动生成 docs/<标题>.md';
+    pathInput.placeholder = '留空时默认生成 docs/<标题>.md；也可以自定义 .txt / .html / .js 等纯文本路径';
     pathField.appendChild(pathLabel);
     pathField.appendChild(pathInput);
 
@@ -235,10 +235,10 @@ export function createConversationDocumentComposer(appContext) {
     contentField.className = 'composer-document-panel__field';
     const contentLabel = document.createElement('label');
     contentLabel.className = 'composer-document-panel__label';
-    contentLabel.textContent = '文档内容';
+    contentLabel.textContent = '文件内容';
     contentTextarea = document.createElement('textarea');
     contentTextarea.className = 'composer-document-panel__textarea';
-    contentTextarea.placeholder = '输入文档内容；若首行是 # 标题，会优先用它生成默认文件名。';
+    contentTextarea.placeholder = '输入纯文本文件内容；可以是笔记、Markdown、代码、HTML 等。若首行是 # 标题，会优先用它生成默认文件名。';
     contentField.appendChild(contentLabel);
     contentField.appendChild(contentTextarea);
 
@@ -262,9 +262,9 @@ export function createConversationDocumentComposer(appContext) {
         });
         closeCreatePanel();
       } catch (error) {
-        console.error('创建对话文档失败:', error);
+        console.error('创建对话文件失败:', error);
         utils.showNotification?.({
-          message: `创建文档失败：${error?.message || '未知错误'}`,
+          message: `创建文件失败：${error?.message || '未知错误'}`,
           type: 'error',
           duration: 2600
         });
@@ -329,13 +329,13 @@ export function createConversationDocumentComposer(appContext) {
 
     const title = document.createElement('div');
     title.className = 'composer-document-prompt__title';
-    title.textContent = '长文本可转为文档';
+    title.textContent = '长文本可转为文件';
 
     const desc = document.createElement('div');
     desc.className = 'composer-document-prompt__desc';
     const charCount = Array.from(String(text || '')).length;
     const lineCount = countLogicalLines(text);
-    desc.textContent = `当前输入约 ${charCount} 字符，${lineCount} 行。你可以直接发送，也可以先转成文档再发送链接。`;
+    desc.textContent = `当前输入约 ${charCount} 字符，${lineCount} 行。你可以直接发送，也可以先转成文件再发送链接。文件不限于 .md，只要是纯文本格式即可。`;
 
     const actions = document.createElement('div');
     actions.className = 'composer-document-prompt__actions';
@@ -355,7 +355,7 @@ export function createConversationDocumentComposer(appContext) {
     const convertButton = document.createElement('button');
     convertButton.type = 'button';
     convertButton.className = 'composer-document-prompt__button is-primary';
-    convertButton.textContent = '转为文档并发送链接';
+    convertButton.textContent = '转为文件并发送链接';
     convertButton.addEventListener('click', () => {
       removeLongTextPromptPanel({
         action: 'convert_to_document'

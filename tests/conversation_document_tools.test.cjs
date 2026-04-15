@@ -110,6 +110,8 @@ test('apply_patch 工具定义本身不重复承载对话文档展示提醒', as
   } = await loadConversationDocumentToolsModule();
 
   const applyPatchDefinition = buildVirtualFileApplyPatchFunctionToolDefinition();
+  assert.match(applyPatchDefinition.description, /纯文本文件/);
+  assert.match(applyPatchDefinition.description, /HTML/);
   assert.doesNotMatch(applyPatchDefinition.description, /最终回复中插入 Markdown 相对路径链接/);
 });
 

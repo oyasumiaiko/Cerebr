@@ -20,7 +20,7 @@ export function buildVirtualFileApplyPatchFunctionToolDefinition() {
   return {
     type: 'function',
     name: VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
-    description: '对虚拟文件应用 Codex apply_patch。支持当前对话文档和 skill 文件；不会修改真实工作区文件。',
+    description: '对虚拟文件应用 Codex apply_patch。支持当前对话纯文本文件和 skill 文件；可用于笔记、Markdown、代码、HTML、配置等任意纯文本格式，不会修改真实工作区文件。',
     strict: false,
     parameters: {
       type: 'object',
