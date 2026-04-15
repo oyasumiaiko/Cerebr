@@ -1650,13 +1650,20 @@ export function buildResponsesConversationDocumentToolOutputContentItems(toolNam
   if (normalized.ok === true && String(toolName || '').trim() === 'apply_patch') {
     const affected = (normalized?.affected_files && typeof normalized.affected_files === 'object') ? normalized.affected_files : {};
     const lines = [];
+    let hasCreatedOrModifiedConversationFile = false;
     for (const value of Array.isArray(affected.added) ? affected.added : []) {
       const path = typeof value === 'string' ? value.trim() : '';
-      if (path) lines.push(`A ${path}`);
+      if (path) {
+        lines.push(`A ${path}`);
+        hasCreatedOrModifiedConversationFile = true;
+      }
     }
     for (const value of Array.isArray(affected.modified) ? affected.modified : []) {
       const path = typeof value === 'string' ? value.trim() : '';
-      if (path) lines.push(`M ${path}`);
+      if (path) {
+        lines.push(`M ${path}`);
+        hasCreatedOrModifiedConversationFile = true;
+      }
     }
     for (const value of Array.isArray(affected.deleted) ? affected.deleted : []) {
       const path = typeof value === 'string' ? value.trim() : '';
@@ -1665,10 +1672,24 @@ export function buildResponsesConversationDocumentToolOutputContentItems(toolNam
     const summaryText = lines.length > 0
       ? `Success. Updated the following files:\n${lines.join('\n')}`
       : 'Patch applied successfully.';
-    return buildResponsesGenericXmlToolOutputContentItems(rootTag, {
-      ok: true,
-      value: `${summaryText}\n\nReminder: if you want the user to see a conversation file in chat, include a Markdown relative-path link such as [Plan](docs/plan.md) in the final answer. The file can be any pure-text format, not only .md, for example .txt, .html, .js, or .css. Creating or editing the file alone does not display it to the user.`
-    }, options);
+    const blocks = [
+      {
+        tag: 'result',
+        text: summaryText
+      }
+    ];
+    if (hasCreatedOrModifiedConversationFile) {
+      blocks.push({
+        tag: 'reminder',
+        text: '你这次创建或修改了一个会话文件。如果需要被用户看到，请在 final channel 里输出该文件的 Markdown 相对路径链接，例如 [计划](docs/plan.md)。仅创建或修改文件本身不会自动展示给用户。'
+      });
+    }
+    return buildResponsesXmlToolOutputContentItems(
+      buildXmlToolResultText(rootTag, {
+        ok: true
+      }, blocks, options),
+      options
+    );
   }
   return buildResponsesGenericXmlToolOutputContentItems(rootTag, normalized, options);
 }

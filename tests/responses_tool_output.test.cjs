@@ -298,7 +298,7 @@ test('buildResponsesSkillRegistryToolOutputContentItems 会把 apply_patch 压�
   assert.doesNotMatch(text, /"match": \[/);
 });
 
-test('buildResponsesConversationDocumentToolOutputContentItems 会在 apply_patch 成功后附文件展示提醒，但不影响 skill 输出', async () => {
+test('buildResponsesConversationDocumentToolOutputContentItems 只在会话文件新增或修改时附单独 reminder 块，但不影响 skill 输出', async () => {
   const {
     buildResponsesConversationDocumentToolOutputContentItems,
     buildResponsesSkillRegistryToolOutputContentItems,
@@ -317,8 +317,22 @@ test('buildResponsesConversationDocumentToolOutputContentItems 会在 apply_patc
   const conversationText = formatResponsesToolOutputForDisplay(conversationItems);
   assert.match(conversationText, /Success\. Updated the following files:/);
   assert.match(conversationText, /A docs\/plan\.md/);
-  assert.match(conversationText, /include a Markdown relative-path link such as \[Plan\]\(docs\/plan\.md\) in the final answer/);
-  assert.match(conversationText, /any pure-text format, not only \.md/);
+  assert.match(conversationText, /<reminder>/);
+  assert.match(conversationText, /你这次创建或修改了一个会话文件/);
+  assert.match(conversationText, /在 final channel 里输出该文件的 Markdown 相对路径链接/);
+  assert.match(conversationText, /<result>[\s\S]*<\/result>\s*<reminder>/);
+
+  const deleteOnlyItems = buildResponsesConversationDocumentToolOutputContentItems('apply_patch', {
+    ok: true,
+    action: 'apply_patch',
+    affected_files: {
+      added: [],
+      modified: [],
+      deleted: ['docs/plan.md']
+    }
+  });
+  const deleteOnlyText = formatResponsesToolOutputForDisplay(deleteOnlyItems);
+  assert.doesNotMatch(deleteOnlyText, /<reminder>/);
 
   const skillItems = buildResponsesSkillRegistryToolOutputContentItems({
     ok: true,
@@ -334,7 +348,8 @@ test('buildResponsesConversationDocumentToolOutputContentItems 会在 apply_patc
     }
   });
   const skillText = formatResponsesToolOutputForDisplay(skillItems);
-  assert.doesNotMatch(skillText, /Markdown relative-path link/);
+  assert.doesNotMatch(skillText, /会话文件/);
+  assert.doesNotMatch(skillText, /<reminder>/);
 });
 
 test('buildResponsesSkillRegistryToolOutputContentItems 会把模板式 create_skill 渲染成脚手架摘要与 next steps', async () => {
