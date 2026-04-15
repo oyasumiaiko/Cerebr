@@ -16,9 +16,16 @@ test('response activity 会为顶层 apply_patch 渲染虚拟文件 diff 预览'
   assert.match(messageProcessorSource, /renderResponseActivitySkillApplyPatchPreview/);
   assert.match(messageProcessorSource, /response-activity-tool-diff-preview/);
   assert.match(messageProcessorSource, /response-activity-tool-diff-line is-/);
+  assert.match(messageProcessorSource, /appendResponseActivityDiffStatTokens/);
+  assert.match(messageProcessorSource, /response-activity-tool-diff-stat-token/);
+  assert.doesNotMatch(messageProcessorSource, /summaryMeta\.textContent = metaParts\.join\(' · '\)/);
 
   assert.match(sidebarCssSource, /\.message \.response-activity-tool-diff-preview/);
   assert.match(sidebarCssSource, /\.message \.response-activity-tool-diff-file-header/);
   assert.match(sidebarCssSource, /\.message \.response-activity-tool-diff-line\.is-add/);
   assert.match(sidebarCssSource, /\.message \.response-activity-tool-diff-line\.is-delete/);
+  assert.match(sidebarCssSource, /\.message \.response-activity-tool-diff-stat-token\.is-add/);
+  assert.match(sidebarCssSource, /#81b88b/);
+  assert.match(sidebarCssSource, /\.message \.response-activity-tool-diff-stat-token\.is-delete/);
+  assert.match(sidebarCssSource, /#c74e39/);
 });

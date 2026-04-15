@@ -1747,13 +1747,26 @@ export function createMessageProcessor(appContext) {
 
     const summaryMeta = document.createElement('div');
     summaryMeta.className = 'response-activity-tool-diff-summary-meta';
-    const metaParts = [];
-    if (preview.totalAdditions > 0) metaParts.push(`+${preview.totalAdditions}`);
-    if (preview.totalDeletions > 0) metaParts.push(`-${preview.totalDeletions}`);
-    if (preview.skillName) metaParts.push(`skill ${preview.skillName}`);
-    if (preview.truncatedFiles > 0) metaParts.push(`另有 ${preview.truncatedFiles} 个文件未展开`);
-    if (metaParts.length > 0) {
-      summaryMeta.textContent = metaParts.join(' · ');
+    appendResponseActivityDiffStatTokens(summaryMeta, {
+      additions: preview.totalAdditions,
+      deletions: preview.totalDeletions
+    });
+    const summaryNotes = [];
+    if (preview.skillName) summaryNotes.push(`skill ${preview.skillName}`);
+    if (preview.truncatedFiles > 0) summaryNotes.push(`另有 ${preview.truncatedFiles} 个文件未展开`);
+    if (summaryNotes.length > 0) {
+      if (summaryMeta.childNodes.length > 0) {
+        const spacer = document.createElement('span');
+        spacer.className = 'response-activity-tool-diff-meta-spacer';
+        spacer.textContent = ' ';
+        summaryMeta.appendChild(spacer);
+      }
+      const notes = document.createElement('span');
+      notes.className = 'response-activity-tool-diff-meta-note';
+      notes.textContent = summaryNotes.join(' · ');
+      summaryMeta.appendChild(notes);
+    }
+    if (summaryMeta.childNodes.length > 0) {
       summary.appendChild(summaryMeta);
     }
     toolBodyInner.appendChild(summary);
@@ -1792,13 +1805,16 @@ export function createMessageProcessor(appContext) {
 
       const statText = document.createElement('div');
       statText.className = 'response-activity-tool-diff-file-stats';
-      const fileMetaParts = [];
-      if (file.additions > 0) fileMetaParts.push(`+${file.additions}`);
-      if (file.deletions > 0) fileMetaParts.push(`-${file.deletions}`);
-      if (fileMetaParts.length <= 0) {
-        fileMetaParts.push(file.operation === 'delete' ? '文件已删除' : '结构变更');
+      appendResponseActivityDiffStatTokens(statText, {
+        additions: file.additions,
+        deletions: file.deletions
+      });
+      if (statText.childNodes.length <= 0) {
+        const fallback = document.createElement('span');
+        fallback.className = 'response-activity-tool-diff-meta-note';
+        fallback.textContent = file.operation === 'delete' ? '文件已删除' : '结构变更';
+        statText.appendChild(fallback);
       }
-      statText.textContent = fileMetaParts.join(' ');
       fileHeader.appendChild(statText);
 
       fileCard.appendChild(fileHeader);
@@ -1848,6 +1864,40 @@ export function createMessageProcessor(appContext) {
 
     toolBodyInner.appendChild(previewRoot);
     return true;
+  }
+
+  /**
+   * 以结构化 token 渲染 diff 统计，便于让 `+N` / `-N` 独立着色。
+   *
+   * 设计约束：
+   * - `+N` 与 `-N` 之间不使用圆点分隔；
+   * - 颜色对齐 VSCode/Codex 常见的 added / removed git decoration 视觉语义；
+   * - 其它说明文本由调用方另外追加，避免混成一段不可样式化的纯文本。
+   */
+  function appendResponseActivityDiffStatTokens(container, options = {}) {
+    if (!(container instanceof HTMLElement)) return;
+    const additions = Number.isFinite(Number(options.additions)) ? Number(options.additions) : 0;
+    const deletions = Number.isFinite(Number(options.deletions)) ? Number(options.deletions) : 0;
+
+    const appendToken = (text, className) => {
+      const token = document.createElement('span');
+      token.className = `response-activity-tool-diff-stat-token ${className}`.trim();
+      token.textContent = text;
+      container.appendChild(token);
+    };
+
+    if (additions > 0) {
+      appendToken(`+${additions}`, 'is-add');
+    }
+    if (deletions > 0) {
+      if (container.childNodes.length > 0) {
+        const spacer = document.createElement('span');
+        spacer.className = 'response-activity-tool-diff-meta-spacer';
+        spacer.textContent = ' ';
+        container.appendChild(spacer);
+      }
+      appendToken(`-${deletions}`, 'is-delete');
+    }
   }
 
   /**

@@ -10448,6 +10448,27 @@ body.chat-empty .empty-state-content {
     color: color-mix(in srgb, var(--cerebr-text-color) 54%, transparent);
 }
 
+.message .response-activity-tool-diff-stat-token {
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.message .response-activity-tool-diff-stat-token.is-add {
+    color: #81b88b;
+}
+
+.message .response-activity-tool-diff-stat-token.is-delete {
+    color: #c74e39;
+}
+
+.message .response-activity-tool-diff-meta-spacer {
+    white-space: pre;
+}
+
+.message .response-activity-tool-diff-meta-note {
+    color: color-mix(in srgb, var(--cerebr-text-color) 54%, transparent);
+}
+
 .message .response-activity-tool-diff-preview {
     display: flex;
     flex-direction: column;
@@ -10530,7 +10551,6 @@ body.chat-empty .empty-state-content {
 .message .response-activity-tool-diff-file-stats {
     font-size: 12px;
     line-height: 1.35;
-    color: color-mix(in srgb, var(--cerebr-text-color) 54%, transparent);
     white-space: nowrap;
 }
 
