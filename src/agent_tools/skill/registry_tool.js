@@ -1613,7 +1613,8 @@ export function buildSkillRegistryFunctionToolDefinition() {
     name: SKILL_REGISTRY_TOOL_NAME,
     description: [
       '管理浏览器里的 skill 生命周期与当前页挂载。',
-      '只负责列出、创建、删除、启用、停用 skill，以及在需要时把指定 skill 挂载到当前页。'
+      '只负责列出、创建、删除、启用、停用 skill，以及在需要时把指定 skill 挂载到当前页。',
+      '其中 `action="list"` 默认只返回当前页可见的 skill；如果要忽略网站过滤列出全部 skill，请传 `include_all_sites=true`。'
     ].join(' '),
     strict: false,
     parameters: {
@@ -1623,6 +1624,10 @@ export function buildSkillRegistryFunctionToolDefinition() {
         action: {
           type: 'string',
           description: '必填。支持 list、create_skill、delete_skill、enable_skill、disable_skill、mount_on_current_page。'
+        },
+        include_all_sites: {
+          type: ['boolean', 'null'],
+          description: '仅 action=list 时使用。true 表示忽略当前页面 URL，返回所有已注册 skill；默认 false，只返回当前页可见的 skill。'
         },
         skill_name: {
           type: ['string', 'null'],
@@ -1664,6 +1669,7 @@ export function normalizeSkillRegistryToolArguments(rawArgs) {
     return {
       original_action: originalAction || action,
       action,
+      include_all_sites: normalizeBoolean(args.include_all_sites, false),
       skill_name: null,
       skill: null,
       file_path: null,

@@ -1164,3 +1164,60 @@ test('listMatchingSkillSummariesForTab 只返回当前 URL 命中的轻量摘要
   assert.equal(result.skills.some((skill) => skill.name === 'file-only'), false);
   assert.equal(result.skills[0].name, 'skill-creator');
 });
+
+test('skill_registry list 默认只返回当前页面可见的技能，include_all_sites=true 时返回全量', async () => {
+  const { createSkillManager } = await loadSkillManagerModule();
+
+  const store = createMockStore([
+    {
+      ...buildSkillInput('dom-probe'),
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-02T00:00:00.000Z',
+      revision: 1
+    },
+    {
+      ...buildSkillInput('file-only'),
+      match: ['file:///*'],
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-02T00:00:00.000Z',
+      revision: 1
+    }
+  ]);
+
+  const manager = createSkillManager({
+    store,
+    userScriptsApi: {
+      async getScripts() { return []; },
+      async register() {},
+      async update() {},
+      async unregister() {}
+    },
+    tabsApi: {
+      async get() {
+        return { url: 'https://a.example.com/path', title: 'Example' };
+      }
+    },
+    jsRuntimeManager: {
+      async execute() {
+        return { ok: true, tabId: 9, value: null, logs: [], items: [] };
+      }
+    }
+  });
+
+  const visibleOnly = await manager.executeRegistryAction({ action: 'list' }, { tabId: 9 });
+  assert.equal(visibleOnly.ok, true);
+  assert.equal(visibleOnly.scope, 'current_page');
+  assert.equal(visibleOnly.include_all_sites, false);
+  assert.equal(visibleOnly.skills.some((skill) => skill.name === 'dom-probe'), true);
+  assert.equal(visibleOnly.skills.some((skill) => skill.name === 'file-only'), false);
+
+  const allSkills = await manager.executeRegistryAction({
+    action: 'list',
+    include_all_sites: true
+  }, { tabId: 9 });
+  assert.equal(allSkills.ok, true);
+  assert.equal(allSkills.scope, 'all_sites');
+  assert.equal(allSkills.include_all_sites, true);
+  assert.equal(allSkills.skills.some((skill) => skill.name === 'dom-probe'), true);
+  assert.equal(allSkills.skills.some((skill) => skill.name === 'file-only'), true);
+});

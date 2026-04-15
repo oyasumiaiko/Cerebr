@@ -192,6 +192,46 @@ test('skill_registry mount_on_current_page 摘要会显示当前页挂载动作�
   assert.equal(buildSkillRegistryPrimaryText(record), '挂载到当前页 dom-probe');
 });
 
+test('skill_registry list 摘要会区分当前页面技能与全量技能', async () => {
+  const { buildSkillRegistrySummaryParts, buildSkillRegistryPrimaryText } = await loadModule();
+
+  const currentPageRecord = {
+    type: 'function_call',
+    name: 'skill_registry',
+    arguments: JSON.stringify({
+      action: 'list'
+    })
+  };
+  assert.deepEqual(buildSkillRegistrySummaryParts(currentPageRecord), {
+    action: '查看技能列表',
+    value: '当前页面技能',
+    valueUrl: '',
+    meta: '',
+    locationAction: '',
+    locationValue: '',
+    locationUrl: ''
+  });
+
+  const allSitesRecord = {
+    type: 'function_call',
+    name: 'skill_registry',
+    arguments: JSON.stringify({
+      action: 'list',
+      include_all_sites: true
+    })
+  };
+  assert.deepEqual(buildSkillRegistrySummaryParts(allSitesRecord), {
+    action: '查看技能列表',
+    value: '全部技能',
+    valueUrl: '',
+    meta: '',
+    locationAction: '',
+    locationValue: '',
+    locationUrl: ''
+  });
+  assert.equal(buildSkillRegistryPrimaryText(allSitesRecord), '查看技能列表 全部技能');
+});
+
 test('page_content_read 摘要会显示页面预览或字符范围', async () => {
   const {
     buildResponseActivityCustomToolSummaryParts,

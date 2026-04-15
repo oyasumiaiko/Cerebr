@@ -9660,7 +9660,10 @@ export function createChatHistoryUI(appContext) {
       }
 
       try {
-        const result = await executeSkillViewerAction({ action: 'list' });
+        const result = await executeSkillViewerAction({
+          action: 'list',
+          include_all_sites: true
+        });
         skillViewerState.summaries = Array.isArray(result?.skills) ? result.skills : [];
 
         const filtered = getFilteredSkillSummaries();

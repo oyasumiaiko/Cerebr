@@ -141,7 +141,11 @@ function buildSkillRegistryTargetParts(args, options = {}) {
   const action = resolveSkillActionLabel(normalizedAction, options);
   switch (normalizedAction) {
     case 'list':
-      return { action, value: '全部技能', meta: '' };
+      return {
+        action,
+        value: args?.include_all_sites === true ? '全部技能' : '当前页面技能',
+        meta: ''
+      };
     case 'list_files':
       return { action, value: skillName || '全部技能', meta: '' };
     case 'search_files':

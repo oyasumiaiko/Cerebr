@@ -420,6 +420,33 @@ export function createSkillManager(options = {}) {
     return await normalizeRefreshExecutionResult(rawResult, matchingRecords);
   }
 
+  async function listCurrentPageVisibleSkillRecordsForTab(tabId) {
+    const normalizedTabId = normalizeTabId(tabId);
+    const builtinRecords = listBuiltinSkillRecords();
+    const storedRecords = await listStoredRecords();
+    const guidanceRecords = storedRecords.filter((record) => record.enabled === true && record.kind === 'guidance');
+    if (normalizedTabId === null) {
+      return {
+        tab_id: null,
+        url: '',
+        title: '',
+        builtinRecords,
+        guidanceRecords,
+        pageRuntimeRecords: []
+      };
+    }
+
+    const { url, title, tab_id } = await getTabUrl(normalizedTabId);
+    return {
+      tab_id,
+      url,
+      title,
+      builtinRecords,
+      guidanceRecords,
+      pageRuntimeRecords: storedRecords.filter((record) => skillMatchesUrl(record, url))
+    };
+  }
+
   async function mountSkillOnCurrentPage(skillName, options = {}) {
     if (!jsRuntimeManager || typeof jsRuntimeManager.execute !== 'function') {
       throw new Error('当前扩展没有可用的 JS Runtime 执行入口，无法将技能挂载到当前页。');
@@ -466,16 +493,21 @@ export function createSkillManager(options = {}) {
   }
 
   async function listMatchingSkillSummariesForTab(tabId) {
-    const normalizedTabId = normalizeTabId(tabId);
-    const builtinSummaries = listBuiltinSkillRecords()
+    const {
+      tab_id,
+      url,
+      title,
+      builtinRecords,
+      guidanceRecords,
+      pageRuntimeRecords
+    } = await listCurrentPageVisibleSkillRecordsForTab(tabId);
+    const builtinSummaries = builtinRecords
       .map((record) => buildSkillContextSummary(record))
       .filter(Boolean);
-    const storedRecords = await listStoredRecords();
-    const guidanceSummaries = storedRecords
-      .filter((record) => record.enabled === true && record.kind === 'guidance')
+    const guidanceSummaries = guidanceRecords
       .map((record) => buildSkillContextSummary(record))
       .filter(Boolean);
-    if (normalizedTabId === null) {
+    if (tab_id === null) {
       return {
         ok: true,
         tab_id: null,
@@ -489,9 +521,7 @@ export function createSkillManager(options = {}) {
       };
     }
 
-    const { url, title, tab_id } = await getTabUrl(normalizedTabId);
-    const matchingRecords = storedRecords.filter((record) => skillMatchesUrl(record, url));
-    const pageSkillSummaries = matchingRecords
+    const pageSkillSummaries = pageRuntimeRecords
       .map((record) => buildSkillContextSummary(record))
       .filter(Boolean);
     return {
@@ -713,12 +743,43 @@ export function createSkillManager(options = {}) {
     const normalizedArgs = normalizeSkillRegistryToolArguments(rawArgs);
     switch (normalizedArgs.action) {
       case 'list': {
-        const skills = (await listSkillRecords())
+        if (normalizedArgs.include_all_sites === true) {
+          const skills = (await listSkillRecords())
+            .map((record) => buildSkillSummary(record))
+            .filter(Boolean);
+          return {
+            ok: true,
+            action: 'list',
+            scope: 'all_sites',
+            include_all_sites: true,
+            total_skills: skills.length,
+            skills
+          };
+        }
+
+        const {
+          tab_id,
+          url,
+          title,
+          builtinRecords,
+          guidanceRecords,
+          pageRuntimeRecords
+        } = await listCurrentPageVisibleSkillRecordsForTab(options?.tabId);
+        const skills = [
+          ...builtinRecords,
+          ...guidanceRecords,
+          ...pageRuntimeRecords
+        ]
           .map((record) => buildSkillSummary(record))
           .filter(Boolean);
         return {
           ok: true,
           action: 'list',
+          scope: 'current_page',
+          include_all_sites: false,
+          tab_id,
+          url,
+          title,
           total_skills: skills.length,
           skills
         };
