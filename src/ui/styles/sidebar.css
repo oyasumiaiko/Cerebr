@@ -10108,6 +10108,27 @@ body.chat-empty .empty-state-content {
     border-top: 1px solid color-mix(in srgb, var(--cerebr-border-color) 20%, transparent);
     color: color-mix(in srgb, var(--cerebr-text-color) 66%, transparent);
     background: color-mix(in srgb, var(--cerebr-message-ai-bg) 90%, transparent);
+    transition: background 160ms ease, color 160ms ease;
+}
+
+.message .response-activity-panel-status[data-stage="completed_duration"] {
+    display: none;
+}
+
+.message .response-activity-timeline.is-expanded .response-activity-panel-status[data-stage="completed_duration"] {
+    display: flex;
+}
+
+.message .response-activity-panel-status.is-collapsible {
+    cursor: pointer;
+    user-select: none;
+}
+
+.message .response-activity-panel-status.is-collapsible:hover,
+.message .response-activity-panel-status.is-collapsible:focus-visible {
+    background: color-mix(in srgb, var(--cerebr-ui-hover-bg) 82%, var(--cerebr-message-ai-bg) 18%);
+    color: color-mix(in srgb, var(--cerebr-text-color) 82%, transparent);
+    outline: none;
 }
 
 .message .response-activity-panel-status__spinner {

@@ -19,6 +19,7 @@ import { buildApiFooterRenderData } from '../utils/api_footer_template.js';
 import { resolveThoughtsPanelLifecycleState } from '../utils/thoughts_panel_lifecycle.js';
 import { getAssistantActivityTimeline } from '../utils/assistant_activity_timeline.js';
 import { resolveResponseActivityPanelModeState } from '../utils/response_activity_panel_mode.js';
+import { resolveResponseActivityPanelStatusState } from '../utils/response_activity_panel_status.js';
 import { resolveResponseActivityToolExpansionState } from '../utils/response_activity_tool_auto_collapse.js';
 import { normalizeAssistantPreResponseStatus } from '../utils/assistant_pre_response_status.js';
 import {
@@ -2208,7 +2209,8 @@ export function createMessageProcessor(appContext) {
       toolCount,
       reasoningCount: narrativeCount,
       title: isInProgress ? '思考中' : '思考记录',
-      metaText: metaParts.join(' · ')
+      metaText: metaParts.join(' · '),
+      durationLabel
     };
   }
 
@@ -2824,6 +2826,20 @@ export function createMessageProcessor(appContext) {
     };
   }
 
+  function setResponseActivityPanelExpandedState(timelineRoot, expanded) {
+    if (!(timelineRoot instanceof HTMLElement)) return;
+    const nextExpanded = expanded === true;
+    const isInProgress = timelineRoot.classList.contains('is-streaming');
+    const panelToggle = timelineRoot.querySelector(':scope > .response-activity-panel-toggle');
+    timelineRoot.dataset.panelManualState = nextExpanded ? 'expanded' : 'collapsed';
+    timelineRoot.dataset.panelExpanded = nextExpanded ? 'true' : 'false';
+    timelineRoot.classList.toggle('is-expanded', nextExpanded);
+    const nextPeek = isInProgress && !nextExpanded;
+    timelineRoot.dataset.panelPeek = nextPeek ? 'true' : 'false';
+    timelineRoot.classList.toggle('is-peek', nextPeek);
+    panelToggle?.setAttribute('aria-expanded', nextExpanded ? 'true' : 'false');
+  }
+
   function ensureResponseActivityPanelShell(messageWrapperDiv) {
     let timelineRoot = messageWrapperDiv.querySelector('.response-activity-timeline');
     if (!timelineRoot) {
@@ -2875,14 +2891,8 @@ export function createMessageProcessor(appContext) {
     if (!panelToggle.dataset.listenerAdded) {
       panelToggle.addEventListener('click', () => {
         runWithStableToggleScroll(timelineRoot, () => {
-          const isInProgress = timelineRoot.classList.contains('is-streaming');
           const nextExpanded = timelineRoot.dataset.panelExpanded !== 'true';
-          timelineRoot.dataset.panelManualState = nextExpanded ? 'expanded' : 'collapsed';
-          timelineRoot.dataset.panelExpanded = nextExpanded ? 'true' : 'false';
-          timelineRoot.classList.toggle('is-expanded', nextExpanded);
-          timelineRoot.dataset.panelPeek = (isInProgress && !nextExpanded) ? 'true' : 'false';
-          timelineRoot.classList.toggle('is-peek', isInProgress && !nextExpanded);
-          panelToggle.setAttribute('aria-expanded', nextExpanded ? 'true' : 'false');
+          setResponseActivityPanelExpandedState(timelineRoot, nextExpanded);
         });
       });
       panelToggle.dataset.listenerAdded = 'true';
@@ -2934,16 +2944,39 @@ export function createMessageProcessor(appContext) {
     text.className = 'response-activity-panel-status__text';
     surface.appendChild(text);
 
+    if (!surface.dataset.listenerAdded) {
+      const collapsePanelFromStatusSurface = (event) => {
+        if (surface.dataset.collapsible !== 'true') return;
+        const timelineRoot = surface.closest('.response-activity-timeline');
+        if (!(timelineRoot instanceof HTMLElement) || timelineRoot.dataset.panelExpanded !== 'true') return;
+        event.preventDefault();
+        event.stopPropagation();
+        runWithStableToggleScroll(timelineRoot, () => {
+          setResponseActivityPanelExpandedState(timelineRoot, false);
+        });
+      };
+      surface.addEventListener('click', collapsePanelFromStatusSurface);
+      surface.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        collapsePanelFromStatusSurface(event);
+      });
+      surface.dataset.listenerAdded = 'true';
+    }
+
     timelineRoot.appendChild(surface);
     return surface;
   }
 
-  function syncResponseActivityPanelStatus(shell, messageId, messageWrapperDiv, runtimeSnapshot, isThinkingRuntimeActive) {
+  function syncResponseActivityPanelStatus(shell, messageId, messageWrapperDiv, runtimeSnapshot, isThinkingRuntimeActive, panelSummary = null) {
     if (!shell?.timelineRoot || !messageWrapperDiv) return false;
     const runtimeStatus = String(runtimeSnapshot?.activeTurn?.status || '').trim().toLowerCase();
-    const status = (isThinkingRuntimeActive && runtimeStatus && !['idle', 'completed', 'aborted', 'error'].includes(runtimeStatus))
+    const activeStatus = (isThinkingRuntimeActive && runtimeStatus && !['idle', 'completed', 'aborted', 'error'].includes(runtimeStatus))
       ? normalizeAssistantPreResponseStatus(runtimeSnapshot?.activeTurn?.preResponseStatus || null)
       : null;
+    const status = resolveResponseActivityPanelStatusState({
+      activeStatus,
+      completedDurationLabel: panelSummary?.durationLabel || ''
+    });
     const existingSurface = shell.panelStatus
       || shell.timelineRoot.querySelector(':scope > .response-activity-panel-status');
 
@@ -2963,8 +2996,21 @@ export function createMessageProcessor(appContext) {
       surface.textContent = status.text;
     }
     surface.classList.toggle('response-activity-panel-status--spinnerless', status.showSpinner === false);
+    surface.classList.toggle('is-collapsible', status.collapsible === true);
     surface.setAttribute('data-stage', status.stage || '');
     surface.setAttribute('data-note', status.note || '');
+    surface.dataset.collapsible = status.collapsible === true ? 'true' : 'false';
+    if (status.collapsible === true) {
+      surface.setAttribute('role', 'button');
+      surface.tabIndex = 0;
+      surface.setAttribute('aria-label', '收起思考记录');
+      surface.title = '点击收起思考记录';
+    } else {
+      surface.removeAttribute('role');
+      surface.removeAttribute('tabindex');
+      surface.removeAttribute('aria-label');
+      surface.removeAttribute('title');
+    }
     return true;
   }
 
@@ -3453,7 +3499,8 @@ export function createMessageProcessor(appContext) {
       resolvedMessageId,
       messageWrapperDiv,
       normalizedOptions.runtimeSnapshot || null,
-      isThinkingRuntimeActive
+      isThinkingRuntimeActive,
+      nextSnapshot.panelSummary
     );
 
     writeAutoCollapsedResponseActivityToolKeys(timelineRoot, autoCollapsedToolKeys);

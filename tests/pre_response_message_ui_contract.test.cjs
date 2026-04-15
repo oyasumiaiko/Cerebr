@@ -12,6 +12,8 @@ test('预正文消息使用独立状态层渲染，并在删除时先中止对�
   const messageProcessorSource = await readWorkspaceFile('src/core/message_processor.js');
   const messageSenderSource = await readWorkspaceFile('src/core/message_sender.js');
   const sidebarAppContextSource = await readWorkspaceFile('src/ui/sidebar/sidebar_app_context.js');
+  const uiManagerSource = await readWorkspaceFile('src/ui/ui_manager.js');
+  const sidebarCssSource = await readWorkspaceFile('src/ui/styles/sidebar.css');
   const previewResponsesActivityTimelineOnLoadingMessageBody = (
     messageSenderSource.match(/function previewResponsesActivityTimelineOnLoadingMessage[\s\S]*?\n  }\n\n  function ensureAttemptOpenSteerWindowId/)
     || ['']
@@ -28,9 +30,17 @@ test('预正文消息使用独立状态层渲染，并在删除时先中止对�
   assert.match(messageProcessorSource, /assistant-pre-response-status/);
   assert.match(messageProcessorSource, /response-activity-panel-status/);
   assert.match(messageProcessorSource, /syncResponseActivityPanelStatus/);
+  assert.match(messageProcessorSource, /resolveResponseActivityPanelStatusState/);
+  assert.match(messageProcessorSource, /setResponseActivityPanelExpandedState/);
+  assert.match(messageProcessorSource, /surface\.dataset\.collapsible = status\.collapsible === true \? 'true' : 'false'/);
+  assert.match(messageProcessorSource, /surface\.setAttribute\('aria-label', '收起思考记录'\)/);
   assert.match(messageProcessorSource, /removeAssistantPreResponseStatusSurface/);
   assert.match(messageProcessorSource, /messageWrapperDiv\.classList\.add\('assistant-pre-response'\)/);
   assert.match(messageProcessorSource, /messageWrapperDiv\.classList\.remove\('assistant-pre-response'\)/);
+  assert.match(uiManagerSource, /deriveAutoScrollFollowState/);
+  assert.match(uiManagerSource, /container\.addEventListener\('scroll', handleContainerScrollAutoFollowState, \{ passive: true \}\)/);
+  assert.match(sidebarCssSource, /\.response-activity-panel-status\[data-stage=\"completed_duration\"\]/);
+  assert.match(sidebarCssSource, /\.response-activity-panel-status\.is-collapsible:hover/);
   assert.match(messageSenderSource, /function renderAttemptPreResponseStatus[\s\S]*?response_activity_timeline/);
   assert.equal(hasVisibleAssistantOutputBody.includes('responseActivityTimeline.length > 0'), false);
   assert.equal(hasVisibleAssistantOutputBody.includes('input?.thoughts'), false);

@@ -1,3 +1,5 @@
+import { deriveAutoScrollFollowState } from '../utils/auto_scroll_follow_state.js';
+
 /**
  * UI管理模块
  * 负责管理用户界面元素的交互，如设置菜单、面板切换、输入处理等
@@ -602,6 +604,7 @@ export function createUIManager(appContext) {
     // 抽象同一套 Alt 滚动引擎，主聊天与浮层仅传入不同 target。
     const mainAltScrollState = createAltScrollState(container);
     const nestedAltScrollState = createAltScrollState(null);
+    let lastObservedScrollTop = Math.max(0, Number(container?.scrollTop) || 0);
 
     const stopAltScrollState = (state, options = {}) => {
       if (!state) return;
@@ -751,7 +754,10 @@ export function createUIManager(appContext) {
       if (effectiveDeltaY > 0) {
         const effectiveScrollTop = Math.max(0, container.scrollTop || 0);
         const distanceFromBottom = container.scrollHeight - effectiveScrollTop - container.clientHeight;
-        if (distanceFromBottom < AUTO_SCROLL_THRESHOLD) {
+        if (
+          settingsManager?.getSetting?.('autoScroll') !== false
+          && distanceFromBottom < AUTO_SCROLL_THRESHOLD
+        ) {
           messageSender.setShouldAutoScroll(true);
         }
       }
@@ -840,8 +846,36 @@ export function createUIManager(appContext) {
       syncAltWheelCaptureState();
     };
 
+    /**
+     * 统一根据真实滚动位置回写 shouldAutoScroll。
+     *
+     * 说明：
+     * - wheel/mousedown 只能覆盖一部分用户交互；
+     * - 真正决定“用户是否打断自动跟随”的，还是容器 scrollTop 的方向变化；
+     * - 因此这里把“上滚即停、回到底部即恢复”落在 scroll 事件上，
+     *   让滚轮、拖动滚动条、触控板惯性滚动都走同一条规则。
+     */
+    const handleContainerScrollAutoFollowState = () => {
+      const currentTop = Math.max(0, Number(container.scrollTop) || 0);
+      const distanceFromBottom = Math.max(
+        0,
+        (Number(container.scrollHeight) || 0) - currentTop - (Number(container.clientHeight) || 0)
+      );
+      const nextShouldAutoScroll = deriveAutoScrollFollowState({
+        previousTop: lastObservedScrollTop,
+        currentTop,
+        distanceFromBottom,
+        threshold: AUTO_SCROLL_THRESHOLD,
+        autoScrollEnabled: settingsManager?.getSetting?.('autoScroll') !== false,
+        currentShouldAutoScroll: messageSender?.getShouldAutoScroll?.() === true
+      });
+      messageSender.setShouldAutoScroll(nextShouldAutoScroll);
+      lastObservedScrollTop = currentTop;
+    };
+
     // 默认滚动路径始终 passive，仅在 Alt 按下时临时启用非被动监听。
     container.addEventListener('wheel', handleRegularWheel, { passive: true });
+    container.addEventListener('scroll', handleContainerScrollAutoFollowState, { passive: true });
     window.addEventListener('keydown', handleWindowKeyDownForAltWheel, { passive: true });
     window.addEventListener('keyup', handleWindowKeyUpForAltWheel, { passive: true });
     window.addEventListener('blur', handleWindowBlurForAltWheel, { passive: true });
