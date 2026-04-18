@@ -29,6 +29,7 @@ function normalizeOptionalTimestampMs(value) {
  * @param {{
  *   manualState?: string|null,
  *   shouldAutoRemainExpanded?: boolean,
+ *   preferCollapsedPreview?: boolean,
  *   autoCollapsed?: boolean,
  *   pendingAutoCollapseDeadlineAtMs?: number|null,
  *   nowMs?: number|null,
@@ -43,6 +44,7 @@ function normalizeOptionalTimestampMs(value) {
 export function resolveResponseActivityToolExpansionState(options = {}) {
   const manualState = normalizeManualState(options.manualState);
   const shouldAutoRemainExpanded = options.shouldAutoRemainExpanded === true;
+  const preferCollapsedPreview = options.preferCollapsedPreview === true;
   const autoCollapsed = options.autoCollapsed === true;
   const pendingAutoCollapseDeadlineAtMs = normalizeOptionalTimestampMs(options.pendingAutoCollapseDeadlineAtMs);
   const nowMs = normalizeOptionalTimestampMs(options.nowMs) ?? Date.now();
@@ -68,6 +70,14 @@ export function resolveResponseActivityToolExpansionState(options = {}) {
   if (shouldAutoRemainExpanded) {
     return {
       expanded: true,
+      autoCollapsed: false,
+      pendingAutoCollapseDeadlineAtMs: null
+    };
+  }
+
+  if (preferCollapsedPreview) {
+    return {
+      expanded: false,
       autoCollapsed: false,
       pendingAutoCollapseDeadlineAtMs: null
     };

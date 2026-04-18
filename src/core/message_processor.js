@@ -32,6 +32,7 @@ import {
   buildResponseActivityCustomToolSummaryParts,
   buildSkillRegistrySummaryParts,
   getResponseActivityCustomToolTypeLabel,
+  isResponseActivityImagePreviewToolCall,
   getSkillRegistryToolTypeLabel,
   isResponseActivityCustomToolCall,
   isSkillRegistryToolCall
@@ -1614,19 +1615,63 @@ export function createMessageProcessor(appContext) {
     return extractResponsesToolOutputInputImages(rawOutput);
   }
 
-  function appendResponseActivityToolOutput(toolBodyInner, outputText, outputImages) {
-    const normalizedText = (typeof outputText === 'string') ? outputText.trim() : '';
-    const normalizedImages = Array.isArray(outputImages)
+  function normalizeResponseActivityToolOutputImages(outputImages) {
+    return Array.isArray(outputImages)
       ? outputImages.filter(image => image && typeof image.imageUrl === 'string' && image.imageUrl.trim())
       : [];
+  }
+
+  function buildResponseActivityToolImageList(outputImages) {
+    const normalizedImages = normalizeResponseActivityToolOutputImages(outputImages);
+    if (normalizedImages.length <= 0) return null;
+
+    const imageList = document.createElement('div');
+    imageList.className = 'response-activity-tool-image-list';
+
+    normalizedImages.forEach((image, imageIndex) => {
+      const figure = document.createElement('figure');
+      figure.className = 'response-activity-tool-image-card';
+
+      const img = document.createElement('img');
+      img.className = 'response-activity-tool-image';
+      img.loading = 'lazy';
+      img.decoding = 'async';
+      img.src = image.imageUrl;
+      img.alt = `工具返回图片 ${image.index + 1}`;
+      img.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        imageHandler.showImagePreview(image.imageUrl);
+      });
+      figure.appendChild(img);
+
+      if (normalizedImages.length > 1) {
+        const caption = document.createElement('figcaption');
+        caption.className = 'response-activity-tool-image-caption';
+        caption.textContent = `图片 ${imageIndex + 1}`;
+        figure.appendChild(caption);
+      }
+
+      imageList.appendChild(figure);
+    });
+
+    return imageList;
+  }
+
+  function appendResponseActivityToolOutput(toolBodyInner, outputText, outputImages, options = {}) {
+    const normalizedText = (typeof outputText === 'string') ? outputText.trim() : '';
+    const normalizedImages = normalizeResponseActivityToolOutputImages(outputImages);
+    const suppressImages = options?.suppressImages === true;
     if (!normalizedText && normalizedImages.length <= 0) {
       return;
     }
 
-    const outputTitle = document.createElement('div');
-    outputTitle.className = 'response-activity-tool-block-title';
-    outputTitle.textContent = '返回值';
-    toolBodyInner.appendChild(outputTitle);
+    if (normalizedText || (normalizedImages.length > 0 && !suppressImages)) {
+      const outputTitle = document.createElement('div');
+      outputTitle.className = 'response-activity-tool-block-title';
+      outputTitle.textContent = '返回值';
+      toolBodyInner.appendChild(outputTitle);
+    }
 
     if (normalizedText) {
       const outputBlock = document.createElement('pre');
@@ -1636,38 +1681,11 @@ export function createMessageProcessor(appContext) {
       toolBodyInner.appendChild(outputBlock);
     }
 
-    if (normalizedImages.length > 0) {
-      const imageList = document.createElement('div');
-      imageList.className = 'response-activity-tool-image-list';
-
-      normalizedImages.forEach((image, imageIndex) => {
-        const figure = document.createElement('figure');
-        figure.className = 'response-activity-tool-image-card';
-
-        const img = document.createElement('img');
-        img.className = 'response-activity-tool-image';
-        img.loading = 'lazy';
-        img.decoding = 'async';
-        img.src = image.imageUrl;
-        img.alt = `工具返回图片 ${image.index + 1}`;
-        img.addEventListener('click', (event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          imageHandler.showImagePreview(image.imageUrl);
-        });
-        figure.appendChild(img);
-
-        if (normalizedImages.length > 1) {
-          const caption = document.createElement('figcaption');
-          caption.className = 'response-activity-tool-image-caption';
-          caption.textContent = `图片 ${imageIndex + 1}`;
-          figure.appendChild(caption);
-        }
-
-        imageList.appendChild(figure);
-      });
-
-      toolBodyInner.appendChild(imageList);
+    if (normalizedImages.length > 0 && !suppressImages) {
+      const imageList = buildResponseActivityToolImageList(normalizedImages);
+      if (imageList) {
+        toolBodyInner.appendChild(imageList);
+      }
     }
   }
 
@@ -1690,7 +1708,7 @@ export function createMessageProcessor(appContext) {
     };
   }
 
-  function renderResponseActivityJsRuntimeBody(toolBodyInner, entry, snapshot = null) {
+  function renderResponseActivityJsRuntimeBody(toolBodyInner, entry, snapshot = null, options = {}) {
     if (!toolBodyInner || !entry) return;
     const meta = getResponseActivityJsRuntimeMeta(entry);
     const formattedOutput = snapshot?.outputText || formatResponseToolCallOutput(entry.output);
@@ -1712,7 +1730,14 @@ export function createMessageProcessor(appContext) {
     codeBlock.appendChild(codeInner);
     toolBodyInner.appendChild(codeBlock);
 
-    appendResponseActivityToolOutput(toolBodyInner, formattedOutput, outputImages);
+    appendResponseActivityToolOutput(toolBodyInner, formattedOutput, outputImages, {
+      suppressImages: options?.suppressOutputImages === true
+    });
+  }
+
+  function shouldPreferResponseActivityToolInlineImagePreview(entry, outputImages) {
+    return isResponseActivityImagePreviewToolCall(entry)
+      && normalizeResponseActivityToolOutputImages(outputImages).length > 0;
   }
 
   function getSkillDiffOperationLabel(operation) {
@@ -1911,7 +1936,7 @@ export function createMessageProcessor(appContext) {
    * @param {HTMLElement} toolBodyInner
    * @param {Object} entry
    */
-  function renderResponseActivityGenericToolBody(toolBodyInner, entry, snapshot = null) {
+  function renderResponseActivityGenericToolBody(toolBodyInner, entry, snapshot = null, options = {}) {
     if (!toolBodyInner || !entry) return;
     const renderedPatchPreview = renderResponseActivitySkillApplyPatchPreview(toolBodyInner, entry);
 
@@ -1934,7 +1959,9 @@ export function createMessageProcessor(appContext) {
     const outputImages = Array.isArray(snapshot?.outputImages)
       ? snapshot.outputImages
       : extractResponseToolCallOutputImages(entry.output);
-    appendResponseActivityToolOutput(toolBodyInner, formattedOutput, outputImages);
+    appendResponseActivityToolOutput(toolBodyInner, formattedOutput, outputImages, {
+      suppressImages: options?.suppressOutputImages === true
+    });
 
     if (Array.isArray(entry.sources) && entry.sources.length > 0) {
       const sources = document.createElement('details');
@@ -2771,6 +2798,7 @@ export function createMessageProcessor(appContext) {
       : '';
     const outputText = formatResponseToolCallOutput(entry.output) || '';
     const outputImages = extractResponseToolCallOutputImages(entry.output);
+    const prefersInlineImagePreview = shouldPreferResponseActivityToolInlineImagePreview(entry, outputImages);
     const statusLabel = getResponseActivityStatusLabel(entry.status);
     const jsMeta = isResponseActivityJsRuntimeEntry(entry) ? getResponseActivityJsRuntimeMeta(entry) : null;
     const normalizedSources = Array.isArray(entry.sources)
@@ -2789,6 +2817,8 @@ export function createMessageProcessor(appContext) {
       isInProgress,
       hasOutput,
       shouldAutoRemainExpanded,
+      prefersInlineImagePreview,
+      preferCollapsedPreview: prefersInlineImagePreview && !isInProgress,
       renderSearchQueriesInline,
       searchQueryLines,
       primaryParts,
@@ -2804,15 +2834,21 @@ export function createMessageProcessor(appContext) {
         searchQueryLines,
         primaryParts,
         statusLabel,
-        hasDetails
+        hasDetails,
+        prefersInlineImagePreview
       }),
       bodySignature: JSON.stringify({
+        prefersInlineImagePreview,
         secondaryLines,
         argumentsText,
         outputText,
         outputImageSignatures: outputImages.map((image) => image.signature),
         sources: normalizedSources,
         jsMeta
+      }),
+      inlinePreviewSignature: JSON.stringify({
+        prefersInlineImagePreview,
+        outputImageSignatures: outputImages.map((image) => image.signature)
       })
     };
   }
@@ -3217,9 +3253,18 @@ export function createMessageProcessor(appContext) {
     }
 
     if (snapshot.hasDetails) {
+      const toggleIndicator = document.createElement('span');
+      toggleIndicator.className = 'response-activity-tool-toggle-indicator';
+      if (snapshot.prefersInlineImagePreview) {
+        const toggleLabel = document.createElement('span');
+        toggleLabel.className = 'response-activity-tool-toggle-label';
+        toggleLabel.textContent = snapshot.expanded ? '收起详情' : '详情';
+        toggleIndicator.appendChild(toggleLabel);
+      }
       const chevron = document.createElement('i');
       chevron.className = 'fa-solid fa-chevron-right response-activity-tool-chevron';
-      children.push(chevron);
+      toggleIndicator.appendChild(chevron);
+      children.push(toggleIndicator);
     }
 
     summary.replaceChildren(...children);
@@ -3273,11 +3318,44 @@ export function createMessageProcessor(appContext) {
   }
 
   function renderResponseActivityToolBodyContent(toolBodyInner, snapshot) {
+    const renderOptions = {
+      suppressOutputImages: snapshot.prefersInlineImagePreview === true
+    };
     if (isResponseActivityJsRuntimeEntry(snapshot.entry)) {
-      renderResponseActivityJsRuntimeBody(toolBodyInner, snapshot.entry, snapshot);
+      renderResponseActivityJsRuntimeBody(toolBodyInner, snapshot.entry, snapshot, renderOptions);
       return;
     }
-    renderResponseActivityGenericToolBody(toolBodyInner, snapshot.entry, snapshot);
+    renderResponseActivityGenericToolBody(toolBodyInner, snapshot.entry, snapshot, renderOptions);
+  }
+
+  function reconcileResponseActivityToolInlinePreview(item, snapshot, previousSnapshot, toolBody = null) {
+    const shouldRenderPreview = snapshot.prefersInlineImagePreview === true
+      && normalizeResponseActivityToolOutputImages(snapshot.outputImages).length > 0;
+    let previewRoot = item.querySelector(':scope > .response-activity-tool-inline-preview');
+    if (!shouldRenderPreview) {
+      if (previewRoot) previewRoot.remove();
+      return;
+    }
+
+    if (!previewRoot) {
+      previewRoot = document.createElement('div');
+      previewRoot.className = 'response-activity-tool-inline-preview';
+    }
+
+    const anchor = (toolBody && toolBody.parentNode === item) ? toolBody : null;
+    if (previewRoot.parentNode !== item) {
+      item.insertBefore(previewRoot, anchor);
+    } else if (anchor && previewRoot.nextSibling !== anchor) {
+      item.insertBefore(previewRoot, anchor);
+    }
+
+    if (!previousSnapshot || previousSnapshot.inlinePreviewSignature !== snapshot.inlinePreviewSignature) {
+      previewRoot.replaceChildren();
+      const imageList = buildResponseActivityToolImageList(snapshot.outputImages);
+      if (imageList) {
+        previewRoot.appendChild(imageList);
+      }
+    }
   }
 
   function reconcileResponseActivityNarrativeEntry(item, snapshot, previousSnapshot) {
@@ -3354,6 +3432,7 @@ export function createMessageProcessor(appContext) {
     summary.setAttribute('aria-expanded', snapshot.expanded ? 'true' : 'false');
 
     let toolBody = item.querySelector(':scope > .response-activity-tool-body');
+    reconcileResponseActivityToolInlinePreview(item, snapshot, previousSnapshot, toolBody);
     let toolBodyInner = toolBody?.querySelector(':scope > .response-activity-tool-body-inner') || null;
     if (!snapshot.hasDetails) {
       if (toolBody) toolBody.remove();
@@ -3372,6 +3451,7 @@ export function createMessageProcessor(appContext) {
       toolBodyInner.className = 'response-activity-tool-body-inner';
       toolBody.appendChild(toolBodyInner);
     }
+    reconcileResponseActivityToolInlinePreview(item, snapshot, previousSnapshot, toolBody);
 
     if (!previousSnapshot || previousSnapshot.bodySignature !== snapshot.bodySignature || previousSnapshot.hasDetails !== snapshot.hasDetails) {
       const currentToolState = captureResponseActivityToolTransientUiState(item) || preservedToolState || null;
@@ -3480,6 +3560,7 @@ export function createMessageProcessor(appContext) {
         const expansionState = resolveResponseActivityToolExpansionState({
           manualState,
           shouldAutoRemainExpanded: entrySnapshot.shouldAutoRemainExpanded,
+          preferCollapsedPreview: entrySnapshot.preferCollapsedPreview,
           autoCollapsed: autoCollapsedToolKeys.has(entrySnapshot.key),
           pendingAutoCollapseDeadlineAtMs:
             readResponseActivityToolAutoCollapseDeadline(messageWrapperDiv, entrySnapshot.key)

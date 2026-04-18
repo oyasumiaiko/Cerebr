@@ -507,14 +507,28 @@ async function main() {
 
     result.toolPreview = await waitFor(async () => {
       const previewState = await sidebarFrame.evaluate(() => {
-        const previews = Array.from(document.querySelectorAll('.response-activity-tool-image'));
-        if (previews.length <= 0) return null;
-        const first = previews[0];
+        const aiMessages = Array.from(document.querySelectorAll('.message.ai-message'));
+        const latest = aiMessages[aiMessages.length - 1] || null;
+        const timeline = latest?.querySelector('.response-activity-timeline') || null;
+        if (!timeline) return null;
+        if (!timeline.classList.contains('is-expanded')) {
+          timeline.querySelector('.response-activity-panel-toggle')?.click?.();
+          return null;
+        }
+        const toolItem = timeline.querySelector('.response-activity-entry--tool');
+        if (!toolItem) return null;
+        const previewRoot = toolItem.querySelector('.response-activity-tool-inline-preview');
+        const first = previewRoot?.querySelector('.response-activity-tool-image') || null;
+        const toolBody = toolItem.querySelector('.response-activity-tool-body');
         return {
-          count: previews.length,
-          firstSrcPrefix: String(first.getAttribute('src') || '').slice(0, 32),
-          firstNaturalWidth: Number(first.naturalWidth || 0),
-          firstNaturalHeight: Number(first.naturalHeight || 0)
+          hasInlinePreview: !!previewRoot,
+          itemExpanded: toolItem.classList.contains('is-expanded'),
+          summaryAriaExpanded: toolItem.querySelector('.response-activity-tool-summary')?.getAttribute('aria-expanded') || '',
+          detailLabel: toolItem.querySelector('.response-activity-tool-toggle-label')?.textContent || '',
+          bodyClientHeight: Number(toolBody?.clientHeight || 0),
+          firstSrcPrefix: String(first?.getAttribute('src') || '').slice(0, 32),
+          firstNaturalWidth: Number(first?.naturalWidth || 0),
+          firstNaturalHeight: Number(first?.naturalHeight || 0)
         };
       });
       return (previewState && previewState.firstNaturalWidth > 0 && previewState.firstNaturalHeight > 0)
@@ -538,6 +552,15 @@ async function main() {
     }
     if (!result.toolPreview || !String(result.toolPreview.firstSrcPrefix || '').startsWith('data:image/jpeg;base64,')) {
       throw new Error(`tool output preview image missing or unexpected: ${JSON.stringify(result.toolPreview)}`);
+    }
+    if (result.toolPreview.hasInlinePreview !== true || result.toolPreview.itemExpanded !== false) {
+      throw new Error(`view_image tool preview presentation unexpected: ${JSON.stringify(result.toolPreview)}`);
+    }
+    if (result.toolPreview.summaryAriaExpanded !== 'false' || result.toolPreview.detailLabel !== '详情') {
+      throw new Error(`view_image detail toggle state unexpected: ${JSON.stringify(result.toolPreview)}`);
+    }
+    if (Number(result.toolPreview.bodyClientHeight || 0) > 4) {
+      throw new Error(`view_image detail body should stay collapsed by default: ${JSON.stringify(result.toolPreview)}`);
     }
 
     await sidebarFrame.locator('body').screenshot({

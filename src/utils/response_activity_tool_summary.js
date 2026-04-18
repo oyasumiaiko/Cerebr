@@ -528,6 +528,12 @@ export function isResponseActivityCustomToolCall(record) {
   return !!resolveResponseActivityCustomToolDefinition(record);
 }
 
+export function isResponseActivityImagePreviewToolCall(record) {
+  if (String(record?.type || '').toLowerCase() !== 'function_call') return false;
+  const toolName = normalizeSummaryText(record?.name);
+  return toolName === VIEW_IMAGE_TOOL_NAME || toolName === WEBPAGE_SCREENSHOT_TOOL_NAME;
+}
+
 export function getResponseActivityCustomToolTypeLabel(record) {
   return resolveResponseActivityCustomToolDefinition(record)?.typeLabel || '';
 }

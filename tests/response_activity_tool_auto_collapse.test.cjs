@@ -75,6 +75,23 @@ test('超过截止时间后自动收起且只标记为 autoCollapsed', async () 
   });
 });
 
+test('图片预览优先的工具在完成后默认保持收起，只显示预览', async () => {
+  const { resolveResponseActivityToolExpansionState } = await loadModule();
+  const state = resolveResponseActivityToolExpansionState({
+    shouldAutoRemainExpanded: false,
+    preferCollapsedPreview: true,
+    autoCollapsed: false,
+    pendingAutoCollapseDeadlineAtMs: null,
+    nowMs: 1000
+  });
+
+  assert.deepEqual(state, {
+    expanded: false,
+    autoCollapsed: false,
+    pendingAutoCollapseDeadlineAtMs: null
+  });
+});
+
 test('用户手动展开时取消待收起计时并保持展开', async () => {
   const { resolveResponseActivityToolExpansionState } = await loadModule();
   const state = resolveResponseActivityToolExpansionState({

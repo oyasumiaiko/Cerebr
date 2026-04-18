@@ -406,7 +406,8 @@ test('模型与用户类工具会显示请求目标与数量', async () => {
 test('图片类工具会显示来源与原始分辨率提示', async () => {
   const {
     buildResponseActivityCustomToolPrimaryText,
-    getResponseActivityCustomToolTypeLabel
+    getResponseActivityCustomToolTypeLabel,
+    isResponseActivityImagePreviewToolCall
   } = await loadModule();
 
   const screenshotRecord = {
@@ -417,6 +418,7 @@ test('图片类工具会显示来源与原始分辨率提示', async () => {
     })
   };
   assert.equal(getResponseActivityCustomToolTypeLabel(screenshotRecord), '页面');
+  assert.equal(isResponseActivityImagePreviewToolCall(screenshotRecord), true);
   assert.equal(buildResponseActivityCustomToolPrimaryText(screenshotRecord), '截图 当前页面 原始分辨率');
 
   const viewImageRecord = {
@@ -428,6 +430,7 @@ test('图片类工具会显示来源与原始分辨率提示', async () => {
     })
   };
   assert.equal(getResponseActivityCustomToolTypeLabel(viewImageRecord), '图片');
+  assert.equal(isResponseActivityImagePreviewToolCall(viewImageRecord), true);
   assert.equal(buildResponseActivityCustomToolPrimaryText(viewImageRecord), '查看 diagram.png 原始分辨率');
 });
 
@@ -435,7 +438,8 @@ test('未知 function_call 不会被误判为专有工具摘要', async () => {
   const {
     buildResponseActivityCustomToolSummaryParts,
     getResponseActivityCustomToolTypeLabel,
-    isResponseActivityCustomToolCall
+    isResponseActivityCustomToolCall,
+    isResponseActivityImagePreviewToolCall
   } = await loadModule();
 
   const record = {
@@ -445,6 +449,7 @@ test('未知 function_call 不会被误判为专有工具摘要', async () => {
   };
 
   assert.equal(isResponseActivityCustomToolCall(record), false);
+  assert.equal(isResponseActivityImagePreviewToolCall(record), false);
   assert.equal(getResponseActivityCustomToolTypeLabel(record), '');
   assert.equal(buildResponseActivityCustomToolSummaryParts(record), null);
 });

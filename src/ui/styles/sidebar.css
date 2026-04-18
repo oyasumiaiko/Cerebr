@@ -10347,9 +10347,32 @@ body.chat-empty .empty-state-content {
     opacity: 1;
 }
 
+.message .response-activity-tool-toggle-indicator {
+    display: inline-flex;
+    align-items: center;
+    justify-self: end;
+    gap: 6px;
+    min-width: 0;
+}
+
+.message .response-activity-tool-toggle-label {
+    font-size: 12px;
+    line-height: 1.35;
+    color: color-mix(in srgb, var(--cerebr-text-color) 50%, transparent);
+    white-space: nowrap;
+}
+
 .message .response-activity-entry--tool.is-expanded .response-activity-tool-chevron {
     opacity: 1;
     transform: rotate(90deg);
+}
+
+.message .response-activity-entry--tool.is-expanded .response-activity-tool-toggle-label {
+    color: color-mix(in srgb, var(--cerebr-text-color) 68%, transparent);
+}
+
+.message .response-activity-tool-inline-preview {
+    padding: 0 0 0 calc(var(--response-activity-kind-column-width) + var(--response-activity-tool-gap));
 }
 
 .message .response-activity-tool-body {
