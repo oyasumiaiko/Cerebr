@@ -22,32 +22,92 @@
  * @property {() => void} focusToEnd 聚焦输入框并将光标移动到末尾
  * @property {(text: string) => void} insertTextAtCursor 在当前光标处插入文本
  */
+const TEXT_NODE = (typeof Node !== 'undefined' && Number.isFinite(Node.TEXT_NODE)) ? Node.TEXT_NODE : 3;
+const ELEMENT_NODE = (typeof Node !== 'undefined' && Number.isFinite(Node.ELEMENT_NODE)) ? Node.ELEMENT_NODE : 1;
+
+function isContenteditableLineContainer(node) {
+  if (!node || node.nodeType !== ELEMENT_NODE) return false;
+  const tagName = typeof node.tagName === 'string' ? node.tagName.toUpperCase() : '';
+  return tagName === 'DIV' || tagName === 'P' || tagName === 'LI';
+}
+
+function extractContenteditableNodeText(node) {
+  if (!node) return '';
+  if (node.nodeType === TEXT_NODE) {
+    return node.nodeValue || '';
+  }
+  if (node.nodeType !== ELEMENT_NODE) {
+    return '';
+  }
+  if ((node.tagName || '').toUpperCase() === 'BR') {
+    return '\n';
+  }
+  return Array.from(node.childNodes || [])
+    .map((child) => extractContenteditableNodeText(child))
+    .join('');
+}
+
+/**
+ * 按照顶层节点的“语义边界”恢复 contenteditable 的逻辑文本。
+ *
+ * 这里不能简单地对所有顶层节点 `join('\n')`：
+ * - Chrome 的 `plaintext-only` 输入框在 Shift+Enter 后，可能直接生成
+ *   `["line1", "\n", "line2"]` 这样的顶层文本节点序列；
+ * - 如果再人为在节点之间补一个 `\n`，同一处换行会被重复计算成多行空白。
+ *
+ * 因此这里改为“增量拼接”：
+ * - 普通文本 / `<br>` 节点按原样直接追加；
+ * - 只有块级容器（DIV/P/LI）才视为一条独立逻辑行；
+ * - 对块级容器继续保留空行语义，避免 `<div><br></div>` 这种结构被压扁。
+ *
+ * @param {ArrayLike<Node>|Node[]} topLevelNodes
+ * @returns {string}
+ */
+function extractContenteditableTopLevelText(topLevelNodes) {
+  const nodes = Array.from(topLevelNodes || []);
+  if (nodes.length === 0) return '';
+  let result = '';
+  nodes.forEach((node, index) => {
+    if (isContenteditableLineContainer(node)) {
+      const lineText = extractContenteditableNodeText(node).replace(/\n+$/g, '');
+      if (result && !result.endsWith('\n')) {
+        result += '\n';
+      }
+      result += lineText;
+      if (index < nodes.length - 1) {
+        result += '\n';
+      }
+      return;
+    }
+    result += extractContenteditableNodeText(node);
+  });
+  return result;
+}
+
+/**
+ * 提取并规整 contenteditable 输入框里的逻辑纯文本。
+ *
+ * @param {HTMLElement|Object|null} targetInput
+ * @returns {string}
+ */
+function extractPlainTextFromContenteditable(targetInput) {
+  if (!targetInput) return '';
+  const topLevelNodes = Array.from(targetInput.childNodes || []);
+  const rawFromStructure = extractContenteditableTopLevelText(topLevelNodes);
+  const raw = rawFromStructure
+    || ((typeof targetInput.innerText === 'string' && targetInput.innerText.length > 0)
+      ? targetInput.innerText
+      : (targetInput.textContent || ''));
+  return raw
+    .replace(/\u00a0/g, ' ')
+    .replace(/\r\n?/g, '\n')
+    .trim();
+}
+
 export function createInputController(appContext) {
   const { dom, services } = appContext;
   const messageInput = dom.messageInput;
   const imageContainer = dom.imageContainer;
-
-  function isContenteditableLineContainer(node) {
-    if (!(node instanceof HTMLElement)) return false;
-    const tagName = (node.tagName || '').toUpperCase();
-    return tagName === 'DIV' || tagName === 'P' || tagName === 'LI';
-  }
-
-  function extractContenteditableNodeText(node) {
-    if (!node) return '';
-    if (node.nodeType === Node.TEXT_NODE) {
-      return node.nodeValue || '';
-    }
-    if (node.nodeType !== Node.ELEMENT_NODE) {
-      return '';
-    }
-    if ((node.tagName || '').toUpperCase() === 'BR') {
-      return '\n';
-    }
-    return Array.from(node.childNodes || [])
-      .map((child) => extractContenteditableNodeText(child))
-      .join('');
-  }
 
   /**
    * 从 contenteditable 输入框中提取“逻辑纯文本”。
@@ -60,23 +120,7 @@ export function createInputController(appContext) {
   function readMessageInputPlainText() {
     if (!messageInput) return '';
     try {
-      const topLevelNodes = Array.from(messageInput.childNodes || []);
-      const rawFromStructure = topLevelNodes.length > 0
-        ? topLevelNodes.map((node) => {
-          if (node.nodeType === Node.ELEMENT_NODE && isContenteditableLineContainer(node)) {
-            return extractContenteditableNodeText(node).replace(/\n+$/g, '');
-          }
-          return extractContenteditableNodeText(node);
-        }).join('\n')
-        : '';
-      const raw = rawFromStructure
-        || ((typeof messageInput.innerText === 'string' && messageInput.innerText.length > 0)
-          ? messageInput.innerText
-          : (messageInput.textContent || ''));
-      return raw
-        .replace(/\u00a0/g, ' ')
-        .replace(/\r\n?/g, '\n')
-        .trim();
+      return extractPlainTextFromContenteditable(messageInput);
     } catch (_) {
       return '';
     }
@@ -217,5 +261,9 @@ export function createInputController(appContext) {
     focusToEnd
   };
 }
+
+export {
+  extractPlainTextFromContenteditable
+};
 
 
