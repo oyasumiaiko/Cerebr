@@ -10376,16 +10376,11 @@ body.chat-empty .empty-state-content {
 }
 
 .message .response-activity-tool-body {
-    display: grid;
-    grid-template-rows: 0fr;
-    opacity: 0;
-    transform-origin: top;
-    transition: grid-template-rows 160ms cubic-bezier(0.2, 0, 0, 1), opacity 140ms ease;
+    display: block;
 }
 
-.message .response-activity-entry--tool.is-expanded .response-activity-tool-body {
-    grid-template-rows: 1fr;
-    opacity: 1;
+.message .response-activity-tool-body[hidden] {
+    display: none !important;
 }
 
 .message .response-activity-tool-body-inner {
@@ -10395,17 +10390,6 @@ body.chat-empty .empty-state-content {
     flex-direction: column;
     gap: var(--response-activity-stack-gap);
     padding: 0 0 0 calc(var(--response-activity-kind-column-width) + var(--response-activity-tool-gap));
-    transform-origin: top;
-    transform: translateY(-4px) scaleY(0.96);
-    opacity: 0.01;
-    transition:
-        transform 160ms cubic-bezier(0.2, 0, 0, 1),
-        opacity 140ms ease;
-}
-
-.message .response-activity-entry--tool.is-expanded .response-activity-tool-body-inner {
-    transform: translateY(0) scaleY(1);
-    opacity: 1;
 }
 
 .message .response-activity-tool-secondary {

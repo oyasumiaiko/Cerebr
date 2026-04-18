@@ -2376,6 +2376,35 @@ export function createMessageProcessor(appContext) {
   }
 
   /**
+   * 统一同步工具条目的“展开状态”和详情体 DOM 可见性。
+   *
+   * 这里刻意不用“仅靠 CSS 把高度压成 0 + opacity 置 0”的方式：
+   * - 折叠后的工具详情若仍留在渲染树里，浏览器依然要为内部大段文本、代码块、
+   *   图片来源列表等内容保留布局/样式参与，长对话下成本会持续累积；
+   * - 因此这里在折叠时直接把详情体标记为 `hidden`，并同步 `inert`/`aria-hidden`，
+   *   让其退出可见渲染与交互路径，只在真正展开时再恢复。
+   *
+   * @param {HTMLElement|null} toolItem
+   * @param {boolean} expanded
+   * @returns {void}
+   */
+  function setResponseActivityToolExpandedState(toolItem, expanded) {
+    if (!(toolItem instanceof HTMLElement)) return;
+    const nextExpanded = expanded === true;
+    toolItem.classList.toggle('is-expanded', nextExpanded);
+    const summary = toolItem.querySelector(':scope > .response-activity-tool-summary');
+    summary?.setAttribute?.('aria-expanded', nextExpanded ? 'true' : 'false');
+
+    const toolBody = toolItem.querySelector(':scope > .response-activity-tool-body');
+    if (!(toolBody instanceof HTMLElement)) return;
+    toolBody.hidden = !nextExpanded;
+    toolBody.setAttribute('aria-hidden', nextExpanded ? 'false' : 'true');
+    try {
+      toolBody.inert = !nextExpanded;
+    } catch (_) {}
+  }
+
+  /**
    * 当自动收起定时器到点时，先直接把 live DOM 上的工具条目标记为已自动收起。
    *
    * 这样做的目的不是绕开 renderer，而是给它一个“当前已收起”的稳定前态：
@@ -2403,10 +2432,8 @@ export function createMessageProcessor(appContext) {
 
     const toolItem = findResponseActivityToolItemByKey(timelineRoot, normalizedToolKey);
     if (toolItem) {
-      toolItem.classList.remove('is-expanded');
+      setResponseActivityToolExpandedState(toolItem, false);
       writeResponseActivityToolAutoCollapseDeadlineToItem(toolItem, null);
-      const summary = toolItem.querySelector(':scope > .response-activity-tool-summary');
-      summary?.setAttribute?.('aria-expanded', 'false');
     }
     captureResponseActivityTransientUiState(messageWrapperDiv, timelineRoot);
     return true;
@@ -3300,8 +3327,7 @@ export function createMessageProcessor(appContext) {
             }
             writeManuallyExpandedResponseActivityToolKeys(timelineRoot, nextManualExpandedKeys);
             writeManuallyCollapsedResponseActivityToolKeys(timelineRoot, nextManualCollapsedKeys);
-            item.classList.toggle('is-expanded', expanded);
-            summary.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            setResponseActivityToolExpandedState(item, expanded);
           });
         });
       }
@@ -3417,19 +3443,14 @@ export function createMessageProcessor(appContext) {
   function reconcileResponseActivityToolEntry(item, snapshot, previousSnapshot, timelineRoot, preservedToolState) {
     item.className = 'response-activity-entry response-activity-entry--tool';
     item.dataset.responseActivityToolKey = snapshot.key;
-    const applyExpandedState = () => {
-      item.classList.toggle('is-expanded', snapshot.expanded);
-    };
     // 工具详情的自动展开/自动收起只改工具项自身状态。
     // 外层聊天滚动应只由“新 assistant 消息进入视口”驱动，
     // 不能被工具详情块的内部生命周期牵着走。
-    applyExpandedState();
 
     const summary = ensureResponseActivityToolSummary(item, snapshot, timelineRoot);
     if (!previousSnapshot || previousSnapshot.summarySignature !== snapshot.summarySignature || previousSnapshot.hasDetails !== snapshot.hasDetails || previousSnapshot.expanded !== snapshot.expanded) {
       renderResponseActivityToolSummaryChildren(summary, snapshot);
     }
-    summary.setAttribute('aria-expanded', snapshot.expanded ? 'true' : 'false');
 
     let toolBody = item.querySelector(':scope > .response-activity-tool-body');
     reconcileResponseActivityToolInlinePreview(item, snapshot, previousSnapshot, toolBody);
@@ -3452,6 +3473,7 @@ export function createMessageProcessor(appContext) {
       toolBody.appendChild(toolBodyInner);
     }
     reconcileResponseActivityToolInlinePreview(item, snapshot, previousSnapshot, toolBody);
+    setResponseActivityToolExpandedState(item, snapshot.expanded);
 
     if (!previousSnapshot || previousSnapshot.bodySignature !== snapshot.bodySignature || previousSnapshot.hasDetails !== snapshot.hasDetails) {
       const currentToolState = captureResponseActivityToolTransientUiState(item) || preservedToolState || null;

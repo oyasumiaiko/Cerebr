@@ -525,6 +525,9 @@ async function main() {
           itemExpanded: toolItem.classList.contains('is-expanded'),
           summaryAriaExpanded: toolItem.querySelector('.response-activity-tool-summary')?.getAttribute('aria-expanded') || '',
           detailLabel: toolItem.querySelector('.response-activity-tool-toggle-label')?.textContent || '',
+          bodyHidden: !!toolBody?.hidden,
+          bodyInert: !!toolBody?.inert,
+          bodyAriaHidden: toolBody?.getAttribute('aria-hidden') || '',
           bodyClientHeight: Number(toolBody?.clientHeight || 0),
           firstSrcPrefix: String(first?.getAttribute('src') || '').slice(0, 32),
           firstNaturalWidth: Number(first?.naturalWidth || 0),
@@ -558,6 +561,9 @@ async function main() {
     }
     if (result.toolPreview.summaryAriaExpanded !== 'false' || result.toolPreview.detailLabel !== '详情') {
       throw new Error(`view_image detail toggle state unexpected: ${JSON.stringify(result.toolPreview)}`);
+    }
+    if (result.toolPreview.bodyHidden !== true || result.toolPreview.bodyAriaHidden !== 'true') {
+      throw new Error(`view_image detail body should be truly hidden when collapsed: ${JSON.stringify(result.toolPreview)}`);
     }
     if (Number(result.toolPreview.bodyClientHeight || 0) > 4) {
       throw new Error(`view_image detail body should stay collapsed by default: ${JSON.stringify(result.toolPreview)}`);
