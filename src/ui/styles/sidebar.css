@@ -10636,14 +10636,32 @@ body.chat-empty .empty-state-content {
 
 .message .response-activity-tool-code code {
     display: block;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit;
     white-space: pre;
     word-break: normal;
     overflow-wrap: normal;
+    overflow: visible;
 }
 
 .message .response-activity-tool-code code.hljs {
+    margin: 0;
     padding: 0;
+    border: 0;
+    border-radius: 0;
     background: transparent;
+    color: inherit;
+    font-family: inherit;
+    font-size: inherit;
+    line-height: inherit;
+    overflow: visible;
 }
 
 .message .response-activity-tool-sources {
