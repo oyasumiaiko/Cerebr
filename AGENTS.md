@@ -22,6 +22,7 @@
 - camelCase for variables/functions; PascalCase for factory types if introduced.
 - Filenames: snake_case.js (e.g., `message_processor.js`).
 - Keep zero-build: avoid adding bundlers/deps without discussion.
+- UI 图标统一使用 Font Awesome；图标按钮默认采用无边框样式，除非该交互明确需要额外边框来表达状态或层级。
 
 ## Testing Guidelines
 - No automated tests yet; validate manually:
