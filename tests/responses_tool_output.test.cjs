@@ -42,7 +42,7 @@ test('truncateResponsesToolOutputText 默认使用统一的结尾截断提示', 
   const source = `${'A'.repeat(6000)}${'B'.repeat(6000)}`;
   const truncated = truncateResponsesToolOutputText(source, 5000);
   assert.notEqual(truncated, source);
-  assert.match(truncated, /truncated \d+ chars out of 12000 total chars/);
+  assert.match(truncated, /output too long; truncated \d+ chars out of 12000 total chars/);
   assert.match(truncated, /returned range \[0, \d+\)/);
   assert.match(truncated, /^A+/);
   assert.doesNotMatch(truncated, /B+$/);
@@ -53,7 +53,7 @@ test('truncateResponsesToolOutputText 支持显式中间截断模式，供 js_ru
   const source = `${'A'.repeat(6000)}${'B'.repeat(6000)}`;
   const truncated = truncateResponsesToolOutputText(source, { maxChars: 5000, mode: 'middle' });
   assert.notEqual(truncated, source);
-  assert.match(truncated, /truncated \d+ chars out of 12000 total chars/);
+  assert.match(truncated, /output too long; truncated \d+ chars out of 12000 total chars/);
   assert.match(truncated, /omitted range \[\d+, \d+\)/);
   assert.match(truncated, /^A+/);
   assert.match(truncated, /B+$/);
@@ -222,7 +222,7 @@ test('buildResponsesPageContentToolOutputContentItems 复用页面工具自身�
   });
   const text = formatResponsesToolOutputForDisplay(items);
   assert.match(text, /<content>/);
-  assert.match(text, /\[\.\.\. truncated 2000 chars out of 12000 total chars \(16\.67%\); returned range \[0, 10000\) \.\.\.\]/);
+  assert.match(text, /\[\.\.\. output too long; truncated 2000 chars out of 12000 total chars \(16\.67%\); returned range \[0, 10000\) \.\.\.\]/);
 });
 
 test('buildResponsesGenericXmlToolOutputContentItems 在没有 value 字段时仍会显示其余 payload', async () => {
@@ -262,7 +262,7 @@ test('buildResponsesGenericXmlToolOutputContentItems 支持按调用方放宽正
   });
   const text = formatResponsesToolOutputForDisplay(items);
   assert.match(text, /<skill_registry_result>/);
-  assert.match(text, /truncated \d+ chars out of \d+ total chars/);
+  assert.match(text, /output too long; truncated \d+ chars out of \d+ total chars/);
   assert.match(text, /returned range \[0, \d+\)/);
 });
 
@@ -602,7 +602,7 @@ test('buildResponsesPdfContentToolOutputContentItems 使用 overview / selection
   assert.match(text, /<selection>/);
   assert.match(text, /"chapter_id": "1"/);
   assert.match(text, /<content>\s*Alpha/);
-  assert.match(text, /\[\.\.\. truncated 2500 chars out of 4500 total chars \(55\.56%\); returned range \[2000, 4000\) \.\.\.\]/);
+  assert.match(text, /\[\.\.\. output too long; truncated 2500 chars out of 4500 total chars \(55\.56%\); returned range \[2000, 4000\) \.\.\.\]/);
 });
 
 test('buildResponsesHistorySearchToolOutputContentItems 使用 conversation XML 分块', async () => {
@@ -683,7 +683,7 @@ test('buildResponsesHistorySearchToolOutputContentItems 对过长正文结果块
   });
   const text = formatResponsesToolOutputForDisplay(items);
   assert.match(text, /<results>/);
-  assert.match(text, /truncated \d+ chars out of \d+ total chars \([\d.]+%\); returned range \[0, \d+\)/);
+  assert.match(text, /output too long; truncated \d+ chars out of \d+ total chars \([\d.]+%\); returned range \[0, \d+\)/);
 });
 
 test('buildResponsesHistoryReadToolOutputContentItems 使用 messages XML 分块', async () => {
@@ -758,7 +758,7 @@ test('buildResponsesHistoryReadToolOutputContentItems 在单条消息末尾附�
   });
   const text = formatResponsesToolOutputForDisplay(items);
   assert.match(text, /<messages>/);
-  assert.match(text, /truncated 1200 chars out of 6200 total chars \(19\.35%\); returned range \[0, 5000\)/);
+  assert.match(text, /output too long; truncated 1200 chars out of 6200 total chars \(19\.35%\); returned range \[0, 5000\)/);
 });
 
 test('buildResponsesAskableModelsToolOutputContentItems 使用 guidance 与 models XML 分块', async () => {

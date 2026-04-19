@@ -124,7 +124,7 @@ function buildResponsesToolOutputNoticeText({
   returnedEnd = null,
   mode = RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL
 }) {
-  const base = `truncated ${omittedChars} chars out of ${totalChars} total chars (${omittedPct}%)`;
+  const base = `output too long; truncated ${omittedChars} chars out of ${totalChars} total chars (${omittedPct}%)`;
   if (
     mode !== RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
     && Number.isFinite(returnedStart)
