@@ -171,3 +171,94 @@ export function mergeResponsesInputItems(existingItems, incomingItems) {
 export function cloneResponsesInputItems(items) {
   return mergeResponsesInputItems([], items);
 }
+
+function getNormalizedResponsesReplayCallId(item) {
+  return (typeof item?.call_id === 'string' && item.call_id.trim())
+    ? item.call_id.trim()
+    : '';
+}
+
+function getNormalizedResponsesReplayItemType(item) {
+  return (typeof item?.type === 'string' && item.type.trim())
+    ? item.type.trim().toLowerCase()
+    : '';
+}
+
+/**
+ * 过滤“跨 turn 历史重放”里未闭环的本地工具调用 item。
+ *
+ * 背景：
+ * - Responses 本地工具链路会先收到 `function_call`，再由客户端执行并回传
+ *   `function_call_output`；
+ * - 如果会话在这两步之间被中止，历史节点里可能残留“只有 call、没有 output”的
+ *   半成品 replay items；
+ * - 下一轮把这类半成品重新塞回 `/responses.input` 时，服务端会把它视为一个尚未完成的
+ *   工具调用，从而报 `No tool output found for function call ...`。
+ *
+ * 设计约束：
+ * - 这个过滤器只用于“把历史消息重新转成下一轮 `/responses.input`”的场景；
+ * - 不用于当前 turn 的运行时累积，否则会把本轮尚未执行完的 tool call 过早裁掉。
+ *
+ * @param {any} items
+ * @returns {Array<Object>}
+ */
+export function filterIncompleteResponsesToolCallReplayItems(items) {
+  const normalizedItems = cloneResponsesInputItems(items);
+  if (normalizedItems.length <= 0) {
+    return [];
+  }
+
+  const callPairStateById = new Map();
+  normalizedItems.forEach((item) => {
+    const type = getNormalizedResponsesReplayItemType(item);
+    const callId = getNormalizedResponsesReplayCallId(item);
+    if (!callId) return;
+
+    if (
+      type !== 'function_call'
+      && type !== 'function_call_output'
+      && type !== 'custom_tool_call'
+      && type !== 'custom_tool_call_output'
+    ) {
+      return;
+    }
+
+    const pairState = callPairStateById.get(callId) || {
+      hasFunctionCall: false,
+      hasFunctionCallOutput: false,
+      hasCustomToolCall: false,
+      hasCustomToolCallOutput: false
+    };
+
+    if (type === 'function_call') {
+      pairState.hasFunctionCall = true;
+    } else if (type === 'function_call_output') {
+      pairState.hasFunctionCallOutput = true;
+    } else if (type === 'custom_tool_call') {
+      pairState.hasCustomToolCall = true;
+    } else if (type === 'custom_tool_call_output') {
+      pairState.hasCustomToolCallOutput = true;
+    }
+
+    callPairStateById.set(callId, pairState);
+  });
+
+  return normalizedItems.filter((item) => {
+    const type = getNormalizedResponsesReplayItemType(item);
+    const callId = getNormalizedResponsesReplayCallId(item);
+    if (!callId) return true;
+
+    const pairState = callPairStateById.get(callId);
+    if (!pairState) return true;
+
+    if (type === 'function_call' || type === 'function_call_output') {
+      return pairState.hasFunctionCall && pairState.hasFunctionCallOutput;
+    }
+
+    if (type === 'custom_tool_call' || type === 'custom_tool_call_output') {
+      return pairState.hasCustomToolCall && pairState.hasCustomToolCallOutput;
+    }
+
+    return true;
+  });
+}

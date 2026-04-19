@@ -17,7 +17,10 @@ import {
   setChunksToSync,
   getChunksFromSync
 } from '../utils/sync_chunk.js';
-import { cloneResponsesInputItems } from '../utils/responses_input_items.js';
+import {
+  cloneResponsesInputItems,
+  filterIncompleteResponsesToolCallReplayItems
+} from '../utils/responses_input_items.js';
 import {
   RESPONSES_WEB_SEARCH_SOURCE_INCLUDE,
   RESPONSES_BUILTIN_TOOL_SPECS,
@@ -5257,7 +5260,10 @@ export function createApiManager(appContext) {
       }
 
       if (Array.isArray(msg.response_input_items) && msg.response_input_items.length > 0) {
-        const replayItems = cloneResponsesInputItems(msg.response_input_items);
+        // 历史 assistant turn 若曾在本地工具回传前被中断，可能残留只有
+        // `function_call`、没有 `function_call_output` 的半成品 replay items。
+        // 这些 item 继续带入下一轮 `/responses.input` 会触发上游 400。
+        const replayItems = filterIncompleteResponsesToolCallReplayItems(msg.response_input_items);
         if (replayItems.length > 0) {
           result.push(...replayItems);
           continue;
