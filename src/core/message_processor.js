@@ -347,6 +347,8 @@ export function createMessageProcessor(appContext) {
     if (!isOverflowing) {
       setUserMessageExpandedState(messageDiv, false);
       textContentDiv.classList.remove('is-expanded');
+      toggleButton.hidden = true;
+      updateUserMessageToggleButton(toggleButton, false);
       footer.hidden = true;
       conversationDocumentViewer.syncConversationDocumentAttachmentStrip(messageDiv);
       return;
@@ -354,6 +356,7 @@ export function createMessageProcessor(appContext) {
 
     const expanded = isUserMessageExpanded(messageDiv);
     textContentDiv.classList.toggle('is-expanded', expanded);
+    toggleButton.hidden = false;
     footer.hidden = false;
     updateUserMessageToggleButton(toggleButton, expanded);
     conversationDocumentViewer.syncConversationDocumentAttachmentStrip(messageDiv);
@@ -377,6 +380,7 @@ export function createMessageProcessor(appContext) {
     const toggleButton = document.createElement('button');
     toggleButton.type = 'button';
     toggleButton.className = 'user-message-text-content__toggle';
+    toggleButton.hidden = true;
 
     const icon = document.createElement('i');
     icon.className = 'fa-solid fa-chevron-down user-message-text-content__toggle-icon';
