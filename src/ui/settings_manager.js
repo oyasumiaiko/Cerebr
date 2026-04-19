@@ -114,6 +114,7 @@ export function createSettingsManager(appContext) {
     documentRenderMarkdownForTxt: false,
     documentHighlightCodeByExtension: true,
     documentViewModeOverrides: {},
+    renderMarkdownForUserMessages: false,
     lineHeight: 1.5, // Added for better text readability control
     chatWidth: 100, // Percentage of sidebar width
     autoScroll: true,
@@ -1085,6 +1086,13 @@ export function createSettingsManager(appContext) {
       writeToUI: (el, value) => {
         if (el) el.value = (typeof value === 'string') ? value : '';
       }
+    },
+    {
+      key: 'renderMarkdownForUserMessages',
+      type: 'toggle',
+      group: 'display',
+      label: '用户消息启用 Markdown 渲染',
+      defaultValue: DEFAULT_SETTINGS.renderMarkdownForUserMessages
     },
     {
       key: 'copyImageWidth',
