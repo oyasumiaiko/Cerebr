@@ -262,7 +262,10 @@ export function createMessageProcessor(appContext) {
   const conversationDocumentViewer = createConversationDocumentViewer({
     executeAction: executeConversationDocumentUiAction,
     resolveConversationId: resolveCurrentConversationDocumentId,
-    settingsManager
+    settingsManager,
+    enhanceMarkdownContent(rootElement) {
+      enhanceMarkdownContent(rootElement);
+    }
   });
 
   function createConversationDocumentCard(link) {
@@ -4804,6 +4807,223 @@ export function createMessageProcessor(appContext) {
     });
   }
 
+  function shouldCollapseLongCodeBlocks() {
+    return settingsManager?.getSetting?.('collapseLongCodeBlocks') === true;
+  }
+
+  function resolveMarkdownCodeBlockLanguage(wrapper, block) {
+    const wrapperLanguage = String(wrapper?.dataset?.codeLanguage || '').trim().toLowerCase();
+    if (wrapperLanguage) return wrapperLanguage;
+    return resolveDeclaredHighlightLanguage(block) || 'text';
+  }
+
+  function updateMarkdownCodeBlockToggleButton(button, expanded) {
+    if (!(button instanceof HTMLElement)) return;
+    const icon = button.querySelector('.cerebr-markdown-code-block__action-icon');
+    const label = button.querySelector('.cerebr-markdown-code-block__action-label');
+    if (icon) {
+      icon.className = expanded
+        ? 'fa-solid fa-chevron-up cerebr-markdown-code-block__action-icon'
+        : 'fa-solid fa-chevron-down cerebr-markdown-code-block__action-icon';
+      icon.setAttribute('aria-hidden', 'true');
+    }
+    if (label) {
+      label.textContent = expanded ? '收起' : '展开';
+    } else {
+      button.textContent = expanded ? '收起' : '展开';
+    }
+    button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+    button.setAttribute('title', `${expanded ? '收起' : '展开'}代码块`);
+    button.setAttribute('aria-label', `${expanded ? '收起' : '展开'}代码块`);
+  }
+
+  function measureMarkdownCodeBlockOverflow(wrapper, body) {
+    if (!(wrapper instanceof HTMLElement) || !(body instanceof HTMLElement)) return false;
+    const wasExpanded = wrapper.classList.contains('is-expanded');
+    const hadCollapsibleClass = wrapper.classList.contains('is-collapsible');
+    if (wasExpanded) {
+      wrapper.classList.remove('is-expanded');
+    }
+    if (!hadCollapsibleClass) {
+      wrapper.classList.add('is-collapsible');
+    }
+    const isOverflowing = (body.scrollHeight - body.clientHeight) > 1;
+    if (!hadCollapsibleClass) {
+      wrapper.classList.remove('is-collapsible');
+    }
+    if (wasExpanded) {
+      wrapper.classList.add('is-expanded');
+    }
+    return isOverflowing;
+  }
+
+  function syncMarkdownCodeBlockChrome(wrapper) {
+    if (!(wrapper instanceof HTMLElement)) return;
+    const body = wrapper.querySelector(':scope > .cerebr-markdown-code-block__body');
+    const toggleButton = wrapper.querySelector('.cerebr-markdown-code-block__toggle');
+    if (!(body instanceof HTMLElement) || !(toggleButton instanceof HTMLElement)) return;
+
+    const collapseEnabled = shouldCollapseLongCodeBlocks();
+    const isOverflowing = collapseEnabled ? measureMarkdownCodeBlockOverflow(wrapper, body) : false;
+    const canCollapse = collapseEnabled && isOverflowing;
+    wrapper.classList.toggle('is-collapsible', canCollapse);
+
+    if (!canCollapse) {
+      wrapper.dataset.expanded = 'false';
+      wrapper.classList.remove('is-expanded');
+      toggleButton.hidden = true;
+      updateMarkdownCodeBlockToggleButton(toggleButton, false);
+      return;
+    }
+
+    const expanded = wrapper.dataset.expanded === 'true';
+    wrapper.classList.toggle('is-expanded', expanded);
+    toggleButton.hidden = false;
+    updateMarkdownCodeBlockToggleButton(toggleButton, expanded);
+  }
+
+  function scheduleMarkdownCodeBlockSync(wrapper, attempt = 0) {
+    scheduleAfterLayout(() => {
+      if (!(wrapper instanceof HTMLElement)) return;
+      if (!wrapper.isConnected) {
+        if (attempt < 4) {
+          scheduleMarkdownCodeBlockSync(wrapper, attempt + 1);
+        }
+        return;
+      }
+      syncMarkdownCodeBlockChrome(wrapper);
+    });
+  }
+
+  function createMarkdownCodeBlockActionButton({
+    className = '',
+    iconClass = '',
+    label = '',
+    title = ''
+  } = {}) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `cerebr-markdown-code-block__action ${className}`.trim();
+    button.setAttribute('title', title || label || '');
+    button.setAttribute('aria-label', title || label || '');
+
+    const icon = document.createElement('i');
+    icon.className = `${iconClass} cerebr-markdown-code-block__action-icon`.trim();
+    icon.setAttribute('aria-hidden', 'true');
+    button.appendChild(icon);
+
+    const text = document.createElement('span');
+    text.className = 'cerebr-markdown-code-block__action-label';
+    text.textContent = label;
+    button.appendChild(text);
+    return button;
+  }
+
+  function ensureMarkdownCodeBlockChrome(wrapper) {
+    if (!(wrapper instanceof HTMLElement)) return;
+    let pre = wrapper.querySelector(':scope > pre');
+    if (!(pre instanceof HTMLElement)) {
+      pre = wrapper.querySelector('pre');
+    }
+    const codeBlock = wrapper.querySelector('pre code');
+    if (!(pre instanceof HTMLElement) || !(codeBlock instanceof HTMLElement)) return;
+
+    let languageLabel = wrapper.querySelector(':scope > .cerebr-markdown-code-block__header .cerebr-markdown-code-block__language');
+    let body = wrapper.querySelector(':scope > .cerebr-markdown-code-block__body');
+    let copyButton = wrapper.querySelector('.cerebr-markdown-code-block__copy');
+    let toggleButton = wrapper.querySelector('.cerebr-markdown-code-block__toggle');
+
+    if (wrapper.dataset.codeChromeBound !== 'true') {
+      const header = document.createElement('div');
+      header.className = 'cerebr-markdown-code-block__header';
+
+      languageLabel = document.createElement('span');
+      languageLabel.className = 'cerebr-markdown-code-block__language';
+      header.appendChild(languageLabel);
+
+      const actions = document.createElement('div');
+      actions.className = 'cerebr-markdown-code-block__actions';
+
+      copyButton = createMarkdownCodeBlockActionButton({
+        className: 'cerebr-markdown-code-block__copy',
+        iconClass: 'fa-regular fa-copy',
+        label: '复制',
+        title: '复制代码'
+      });
+      copyButton.addEventListener('click', async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const sourceText = typeof codeBlock.textContent === 'string' ? codeBlock.textContent : '';
+        if (!sourceText || !navigator.clipboard?.writeText) return;
+        try {
+          await navigator.clipboard.writeText(sourceText);
+          const icon = copyButton.querySelector('.cerebr-markdown-code-block__action-icon');
+          const label = copyButton.querySelector('.cerebr-markdown-code-block__action-label');
+          if (icon) {
+            icon.className = 'fa-solid fa-check cerebr-markdown-code-block__action-icon';
+          }
+          if (label) {
+            label.textContent = '已复制';
+          }
+          window.setTimeout(() => {
+            if (!(copyButton instanceof HTMLElement) || !copyButton.isConnected) return;
+            const resetIcon = copyButton.querySelector('.cerebr-markdown-code-block__action-icon');
+            const resetLabel = copyButton.querySelector('.cerebr-markdown-code-block__action-label');
+            if (resetIcon) {
+              resetIcon.className = 'fa-regular fa-copy cerebr-markdown-code-block__action-icon';
+            }
+            if (resetLabel) {
+              resetLabel.textContent = '复制';
+            }
+          }, 1200);
+        } catch (_) {}
+      });
+      actions.appendChild(copyButton);
+
+      toggleButton = createMarkdownCodeBlockActionButton({
+        className: 'cerebr-markdown-code-block__toggle',
+        iconClass: 'fa-solid fa-chevron-down',
+        label: '展开',
+        title: '展开代码块'
+      });
+      toggleButton.hidden = true;
+      toggleButton.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        const nextExpanded = wrapper.dataset.expanded !== 'true';
+        runWithStableToggleScroll(toggleButton, () => {
+          wrapper.dataset.expanded = nextExpanded ? 'true' : 'false';
+          wrapper.classList.toggle('is-expanded', nextExpanded);
+          updateMarkdownCodeBlockToggleButton(toggleButton, nextExpanded);
+        });
+      });
+      actions.appendChild(toggleButton);
+
+      header.appendChild(actions);
+      wrapper.insertBefore(header, pre);
+
+      body = document.createElement('div');
+      body.className = 'cerebr-markdown-code-block__body';
+      wrapper.appendChild(body);
+      body.appendChild(pre);
+
+      wrapper.dataset.codeChromeBound = 'true';
+    }
+
+    const language = resolveMarkdownCodeBlockLanguage(wrapper, codeBlock);
+    if (languageLabel instanceof HTMLElement) {
+      languageLabel.textContent = language;
+    }
+    scheduleMarkdownCodeBlockSync(wrapper);
+  }
+
+  function enhanceRenderedMarkdownCodeBlocks(rootElement) {
+    if (!rootElement || typeof rootElement.querySelectorAll !== 'function') return;
+    rootElement.querySelectorAll('.cerebr-markdown-code-block').forEach((wrapper) => {
+      ensureMarkdownCodeBlockChrome(wrapper);
+    });
+  }
+
   /**
    * 对已经写入 DOM 的 Markdown 内容做统一增强。
    * 这里集中处理所有“必须依赖真实 DOM 才能完成”的步骤：
@@ -4826,6 +5046,7 @@ export function createMessageProcessor(appContext) {
     });
 
     enhanceCodeHighlightBlocks(rootElement);
+    enhanceRenderedMarkdownCodeBlocks(rootElement);
 
     bindInlineImagePreviews(rootElement);
 
@@ -4985,6 +5206,16 @@ export function createMessageProcessor(appContext) {
     });
   } catch (error) {
     console.warn('订阅 renderMarkdownForUserMessages 设置变化失败:', error);
+  }
+
+  try {
+    services.settingsManager?.subscribe?.('collapseLongCodeBlocks', () => {
+      document.querySelectorAll('.cerebr-markdown-code-block').forEach((wrapper) => {
+        scheduleMarkdownCodeBlockSync(wrapper);
+      });
+    });
+  } catch (error) {
+    console.warn('订阅 collapseLongCodeBlocks 设置变化失败:', error);
   }
 
   try {

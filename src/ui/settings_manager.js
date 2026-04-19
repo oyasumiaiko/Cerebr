@@ -115,6 +115,7 @@ export function createSettingsManager(appContext) {
     documentHighlightCodeByExtension: true,
     documentViewModeOverrides: {},
     renderMarkdownForUserMessages: false,
+    collapseLongCodeBlocks: false,
     lineHeight: 1.5, // Added for better text readability control
     chatWidth: 100, // Percentage of sidebar width
     autoScroll: true,
@@ -1093,6 +1094,13 @@ export function createSettingsManager(appContext) {
       group: 'display',
       label: '用户消息启用 Markdown 渲染',
       defaultValue: DEFAULT_SETTINGS.renderMarkdownForUserMessages
+    },
+    {
+      key: 'collapseLongCodeBlocks',
+      type: 'toggle',
+      group: 'display',
+      label: '折叠过长代码块',
+      defaultValue: DEFAULT_SETTINGS.collapseLongCodeBlocks
     },
     {
       key: 'copyImageWidth',

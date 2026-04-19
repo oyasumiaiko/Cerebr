@@ -84,7 +84,8 @@ function applyToolButtonVisualState(button, { iconClass = '', active = false, ti
  *   settingsManager?: {
  *     getSetting?: (key: string) => any,
  *     setSettingValue?: (key: string, value: any) => void
- *   }
+ *   },
+ *   enhanceMarkdownContent?: (rootElement: HTMLElement) => void
  * }} options
  */
 export function createConversationDocumentViewer(options = {}) {
@@ -95,6 +96,9 @@ export function createConversationDocumentViewer(options = {}) {
     ? options.resolveConversationId
     : (() => '');
   const settingsManager = options.settingsManager || null;
+  const enhanceMarkdownContent = typeof options.enhanceMarkdownContent === 'function'
+    ? options.enhanceMarkdownContent
+    : null;
 
   const conversationDocumentCardState = new WeakMap();
   let changeListenerInstalled = false;
@@ -325,6 +329,11 @@ export function createConversationDocumentViewer(options = {}) {
     }
 
     state.refs.body.appendChild(contentNode);
+    if (renderState.mode === CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN && contentNode instanceof HTMLElement) {
+      try {
+        enhanceMarkdownContent?.(contentNode);
+      } catch (_) {}
+    }
     card.classList.remove('is-missing');
     state.missing = false;
     syncConversationDocumentModeButton(card);

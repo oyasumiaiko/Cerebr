@@ -4737,6 +4737,97 @@ input:checked + .slider::before {
     margin: 0.5em 0;
 }
 
+.message .cerebr-markdown-code-block {
+    margin: 0.5em 0;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 72%, transparent);
+    background: color-mix(in srgb, var(--cerebr-code-bg) 82%, transparent);
+    overflow: hidden;
+}
+
+.message .cerebr-markdown-code-block__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+    border-bottom: 1px solid color-mix(in srgb, var(--cerebr-border-color) 36%, transparent);
+    background: color-mix(in srgb, var(--cerebr-bg-color) 24%, transparent);
+}
+
+.message .cerebr-markdown-code-block__language {
+    min-width: 0;
+    font-size: 11px;
+    line-height: 1.4;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: color-mix(in srgb, var(--cerebr-text-color) 74%, transparent);
+}
+
+.message .cerebr-markdown-code-block__actions {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.message .cerebr-markdown-code-block__action {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: color-mix(in srgb, var(--cerebr-text-color) 70%, transparent);
+    font: inherit;
+    font-size: 12px;
+    line-height: 1.4;
+    cursor: pointer;
+}
+
+.message .cerebr-markdown-code-block__action:hover,
+.message .cerebr-markdown-code-block__action:focus-visible {
+    color: var(--cerebr-text-color);
+    outline: none;
+}
+
+.message .cerebr-markdown-code-block__action-icon {
+    font-size: 11px;
+}
+
+.message .cerebr-markdown-code-block__body {
+    min-width: 0;
+}
+
+.message .cerebr-markdown-code-block.is-collapsible:not(.is-expanded) .cerebr-markdown-code-block__body {
+    max-height: 50vh;
+    overflow: auto;
+    overscroll-behavior: contain;
+}
+
+.message .cerebr-markdown-code-block.is-collapsible.is-expanded .cerebr-markdown-code-block__body {
+    max-height: none;
+    overflow: visible;
+}
+
+.message .cerebr-markdown-code-block pre {
+    margin: 0;
+}
+
+.message .cerebr-markdown-code-block pre code {
+    display: block;
+    margin: 0;
+    padding: 12px 14px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: inherit;
+    white-space: pre;
+    word-break: normal;
+    overflow-wrap: normal;
+    overflow: visible;
+}
+
 .mermaid-diagram {
     margin: 0.75em 0;
     padding: 10px 12px;

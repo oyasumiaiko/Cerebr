@@ -37,6 +37,13 @@ function escapeHtml(input) {
     .replace(/'/g, '&#39;');
 }
 
+function normalizeCodeFenceLanguage(infostring) {
+  const source = (typeof infostring === 'string') ? infostring.trim() : '';
+  if (!source) return '';
+  const [languageToken] = source.split(/\s+/, 1);
+  return (languageToken || '').trim().toLowerCase();
+}
+
 /**
  * 预处理：修正粗体解析（与现有逻辑一致），但避免在代码块内添加零宽空格。
  * @param {string} text - 原始文本
@@ -334,7 +341,9 @@ function createSafeMarkedRenderer() {
     if (isMermaidLanguage(infostring)) {
       return createMermaidBlockHtml(code);
     }
-    return defaultCodeRenderer(code, infostring, escaped);
+    const rendered = defaultCodeRenderer(code, infostring, escaped);
+    const language = normalizeCodeFenceLanguage(infostring);
+    return `<div class="cerebr-markdown-code-block" data-code-language="${escapeHtml(language)}">${rendered}</div>`;
   };
   renderer.html = function(html) {
     // 直接透传，后续交由 DOMPurify 严格清洗
