@@ -57,6 +57,16 @@ function buildSuggestedConversationDocumentPath(content) {
   return `docs/${filename}.md`;
 }
 
+function buildSuggestedConversationDocumentPathFromUploadName(fileName) {
+  const normalizedName = sanitizeDocumentFileSegment(fileName);
+  const filename = normalizedName || 'untitled';
+  return `docs/${filename}`;
+}
+
+function buildUploadedFileEventId() {
+  return `${buildTimestampSuffix()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
 function getComposerAccessoryMount(dom) {
   const host = dom?.composerAccessoryRegion || dom?.inputContainer || null;
   if (!host) return { host: null, anchor: null };
@@ -95,8 +105,11 @@ export function createConversationDocumentComposer(appContext) {
   let panel = null;
   let pathInput = null;
   let contentTextarea = null;
+  let uploadInput = null;
   let longTextPromptPanel = null;
   let longTextPromptResolver = null;
+  let importedLocalFileDraft = null;
+  let pendingUploadedFileEnvironmentEntries = [];
 
   function dispatchDocumentChangeEvent(changeEvent) {
     if (!changeEvent) return;
@@ -159,6 +172,18 @@ export function createConversationDocumentComposer(appContext) {
       throw new Error(result?.error?.message || '文件创建失败。');
     }
 
+    // 仅把“用户刚导入的本地文件”转成下一条消息前的隐藏环境提示；
+    // 普通手动新建文件、长文本转文件都不附带这段额外说明。
+    if (importedLocalFileDraft) {
+      pendingUploadedFileEnvironmentEntries.push({
+        path: result.file.path,
+        source_name: importedLocalFileDraft.source_name,
+        file_name_was_missing: importedLocalFileDraft.file_name_was_missing === true,
+        upload_event_id: importedLocalFileDraft.upload_event_id
+      });
+      importedLocalFileDraft = null;
+    }
+
     dispatchDocumentChangeEvent(result.change_event);
 
     const label = explicitLinkLabel || deriveDocumentLinkLabel(result.file.path);
@@ -178,11 +203,51 @@ export function createConversationDocumentComposer(appContext) {
     };
   }
 
+  async function importLocalDocumentFile(file) {
+    if (!file || typeof file.text !== 'function') return;
+    const text = await file.text();
+    const sourceName = normalizeComposerString(file.name);
+    const normalizedUploadName = sanitizeDocumentFileSegment(sourceName);
+    importedLocalFileDraft = {
+      source_name: sourceName,
+      file_name_was_missing: !normalizedUploadName,
+      upload_event_id: buildUploadedFileEventId()
+    };
+    if (contentTextarea) {
+      contentTextarea.value = text;
+    }
+    if (pathInput && !normalizeComposerString(pathInput.value)) {
+      pathInput.value = buildSuggestedConversationDocumentPathFromUploadName(sourceName);
+    }
+  }
+
+  function consumePendingUploadedFileEnvironmentEntries(messageText) {
+    const normalizedMessageText = typeof messageText === 'string' ? messageText : '';
+    if (!normalizedMessageText.trim()) return [];
+    if (!Array.isArray(pendingUploadedFileEnvironmentEntries) || pendingUploadedFileEnvironmentEntries.length <= 0) {
+      return [];
+    }
+    const matched = [];
+    const remaining = [];
+    pendingUploadedFileEnvironmentEntries.forEach((entry) => {
+      const filePath = normalizeComposerString(entry?.path);
+      if (filePath && normalizedMessageText.includes(filePath)) {
+        matched.push({ ...entry });
+      } else {
+        remaining.push(entry);
+      }
+    });
+    pendingUploadedFileEnvironmentEntries = remaining;
+    return matched;
+  }
+
   function removePanel() {
     panel?.remove();
     panel = null;
     pathInput = null;
     contentTextarea = null;
+    uploadInput = null;
+    importedLocalFileDraft = null;
   }
 
   function removeLongTextPromptPanel(resolution = null) {
@@ -242,8 +307,35 @@ export function createConversationDocumentComposer(appContext) {
     contentField.appendChild(contentLabel);
     contentField.appendChild(contentTextarea);
 
+    uploadInput = document.createElement('input');
+    uploadInput.type = 'file';
+    uploadInput.className = 'composer-document-panel__upload-input';
+    uploadInput.hidden = true;
+    uploadInput.addEventListener('change', async () => {
+      const file = uploadInput?.files?.[0] || null;
+      if (!file) return;
+      try {
+        await importLocalDocumentFile(file);
+      } catch (error) {
+        console.error('导入本地文件失败:', error);
+        utils.showNotification?.({
+          message: `导入文件失败：${error?.message || '未知错误'}`,
+          type: 'error',
+          duration: 2600
+        });
+      } finally {
+        uploadInput.value = '';
+      }
+    });
+
     const actions = document.createElement('div');
     actions.className = 'composer-document-panel__actions';
+    const importButton = document.createElement('button');
+    importButton.type = 'button';
+    importButton.className = 'composer-document-panel__button';
+    importButton.textContent = '导入本地文件';
+    importButton.addEventListener('click', () => uploadInput?.click?.());
+
     const cancelButton = document.createElement('button');
     cancelButton.type = 'button';
     cancelButton.className = 'composer-document-panel__button';
@@ -277,11 +369,13 @@ export function createConversationDocumentComposer(appContext) {
       createButton.click();
     });
 
+    actions.appendChild(importButton);
     actions.appendChild(cancelButton);
     actions.appendChild(createButton);
     surface.appendChild(header);
     surface.appendChild(pathField);
     surface.appendChild(contentField);
+    surface.appendChild(uploadInput);
     surface.appendChild(actions);
     panel.appendChild(surface);
 
@@ -300,6 +394,10 @@ export function createConversationDocumentComposer(appContext) {
     const nextPanel = ensureCreatePanel();
     pathInput.value = '';
     contentTextarea.value = '';
+    if (uploadInput) {
+      uploadInput.value = '';
+    }
+    importedLocalFileDraft = null;
     window.setTimeout(() => {
       try {
         contentTextarea?.focus?.();
@@ -402,6 +500,7 @@ export function createConversationDocumentComposer(appContext) {
     toggleCreatePanel,
     maybeHandleLongTextBeforeSend,
     createDocumentAndInsertLink,
+    consumePendingUploadedFileEnvironmentEntries,
     buildSuggestedDocumentPath: buildSuggestedConversationDocumentPath
   };
 }

@@ -10353,12 +10353,19 @@ export function createMessageSender(appContext) {
         });
       }
       if (shouldPrepareEnvironmentContext) {
+        const consumedUploadedFileEnvironmentEntries = conversationDocumentComposer
+          ?.consumePendingUploadedFileEnvironmentEntries?.(messageText);
+        const uploadedFileEnvironmentEntries = Array.isArray(consumedUploadedFileEnvironmentEntries)
+          ? consumedUploadedFileEnvironmentEntries
+          : [];
         syncUserContextualInputsForConversationTurn({
           conversationChain: filteredConversationChain,
           targetUserNode: findLatestUserNodeInConversationChain(filteredConversationChain),
           pageRuntimeContextPayload,
           skillContextPayload,
-          environmentContextPayload: buildEnvironmentContextPayload()
+          environmentContextPayload: buildEnvironmentContextPayload({
+            uploadedFiles: uploadedFileEnvironmentEntries
+          })
         });
       }
 

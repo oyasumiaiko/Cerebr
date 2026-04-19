@@ -17,6 +17,8 @@ test('message_sender 已注册对话文档顶层工具并接入专用执行分�
   assert.match(source, /buildVirtualFileSearchFilesFunctionToolDefinition\(\)/);
   assert.match(source, /executeResponsesVirtualFileFunction\(functionName, parsedArgs, options\)/);
   assert.match(source, /serializeResponsesConversationDocumentFunctionToolOutput\(functionName, outputPayload\)/);
+  assert.match(source, /consumePendingUploadedFileEnvironmentEntries/);
+  assert.match(source, /uploadedFiles: uploadedFileEnvironmentEntries/);
 });
 
 test('message_processor 已把裸相对路径链接替换为文档卡片，并监听文档变更事件', async () => {

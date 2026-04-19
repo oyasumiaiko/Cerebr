@@ -94,3 +94,33 @@ test('resolveEnvironmentContextAttachment 在签名未变化时不重复追加',
   assert.equal(typeof changed.signature, 'string');
   assert.ok(Array.isArray(changed.inputItems));
 });
+
+test('buildEnvironmentContextInputItems 会在用户上传文件时附带文件处理与命名规范', async () => {
+  const {
+    buildEnvironmentContextPayload,
+    buildEnvironmentContextInputItems
+  } = await loadEnvironmentContextModule();
+
+  const payload = buildEnvironmentContextPayload({
+    timezone: 'Asia/Shanghai',
+    currentDate: '2026-04-20',
+    uploadedFiles: [
+      {
+        path: 'docs/untitled',
+        source_name: '',
+        file_name_was_missing: true,
+        upload_event_id: 'upload-1'
+      }
+    ]
+  });
+
+  assert.equal(Array.isArray(payload.uploaded_files), true);
+  assert.equal(payload.uploaded_files.length, 1);
+  const text = buildEnvironmentContextInputItems(payload)[0].content[0].text;
+  assert.match(text, /<user_uploaded_files>/);
+  assert.match(text, /<path>docs\/untitled<\/path>/);
+  assert.match(text, /<file_name_was_missing>true<\/file_name_was_missing>/);
+  assert.match(text, /untitled/);
+  assert.match(text, /Markdown 相对路径链接/);
+  assert.match(text, /apply_patch 的 \*\*\* Move to:/);
+});
