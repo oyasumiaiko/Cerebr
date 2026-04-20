@@ -19,13 +19,23 @@ async function loadMessagePreprocessorModule() {
 }
 
 async function loadMessageComposerModule() {
+  const inlineModuleSource = (source) => source
+    .replace(/export function /g, 'function ')
+    .replace(/export const /g, 'const ')
+    .replace(/export \{[\s\S]*?\};?/g, '');
   const thoughtsParserPath = path.resolve(__dirname, '../src/utils/thoughts_parser.js');
   const thoughtsParserSource = await fs.readFile(thoughtsParserPath, 'utf8');
   const thoughtsParserUrl = toDataUrl(thoughtsParserSource);
+  const compactionSourcePath = path.resolve(__dirname, '../src/utils/responses_local_compaction.js');
+  const compactionSource = inlineModuleSource(await fs.readFile(compactionSourcePath, 'utf8'));
 
   const composerPath = path.resolve(__dirname, '../src/core/message_composer.js');
   let composerSource = await fs.readFile(composerPath, 'utf8');
   composerSource = composerSource.replace("'../utils/thoughts_parser.js'", `'${thoughtsParserUrl}'`);
+  composerSource = composerSource.replace(
+    /import\s*\{\s*isUsableResponsesLocalCompactionMarker,\s*sliceConversationChainAfterLatestCompactionMarker\s*\}\s*from '\.\.\/utils\/responses_local_compaction\.js';/,
+    `${compactionSource}\n`
+  );
   return import(toDataUrl(composerSource));
 }
 
@@ -95,7 +105,6 @@ test('composeMessages omits default system prompt when requested', async () => {
     regenerateMode: false,
     messageId: null,
     conversationChain: [{ id: 'u1', role: 'user', content: 'hello' }],
-    sendChatHistory: true,
     maxHistory: 16,
     maxUserHistory: null,
     maxAssistantHistory: null
@@ -118,7 +127,6 @@ test('composeMessages drops system message when only default system prompt exist
     regenerateMode: false,
     messageId: null,
     conversationChain: [{ id: 'u1', role: 'user', content: 'hello' }],
-    sendChatHistory: true,
     maxHistory: 16,
     maxUserHistory: null,
     maxAssistantHistory: null

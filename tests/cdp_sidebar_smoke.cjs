@@ -95,7 +95,6 @@ function buildStorageSeed() {
       }
     }],
     selectedConfigIndex: 0,
-    sendChatHistory: true,
     showThoughtProcess: true,
     queueCurrentConversationMessages: true
   };

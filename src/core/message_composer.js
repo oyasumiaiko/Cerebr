@@ -42,7 +42,6 @@
  * @property {boolean} regenerateMode 是否为重新生成模式
  * @property {string|null} messageId 重新生成目标消息ID
  * @property {ConversationNode[]} conversationChain 当前会话链（按时间顺序）
- * @property {boolean} sendChatHistory 是否发送历史（已根据业务规则计算好）
  * @property {number} maxHistory 最大发送的历史条目数（旧字段：按总条目计数）
  * @property {number|null|undefined} [maxUserHistory] 新字段：最大发送的历史 user 消息条数（0 表示仅发送当前用户消息）
  * @property {number|null|undefined} [maxAssistantHistory] 新字段：最大发送的历史 assistant 消息条数
@@ -63,7 +62,6 @@
  *   regenerateMode: false,
  *   messageId: null,
  *   conversationChain,
- *   sendChatHistory: true,
  *   maxHistory: 16,
  *   maxUserHistory: 16,
  *   maxAssistantHistory: 16
@@ -86,7 +84,6 @@ export function composeMessages(args) {
     regenerateMode,
     messageId,
     conversationChain,
-    sendChatHistory,
     maxHistory,
     maxUserHistory,
     maxAssistantHistory
@@ -194,49 +191,35 @@ export function composeMessages(args) {
   // 仍然参与模型可见上下文构造；marker 自身通过 response_input_items 承载 compact 后历史。
   effectiveChain = sliceConversationChainAfterLatestCompactionMarker(effectiveChain);
 
-  if (sendChatHistory) {
-    const normalizedMaxUserHistory = normalizeOptionalNonNegativeInt(maxUserHistory);
-    const normalizedMaxAssistantHistory = normalizeOptionalNonNegativeInt(maxAssistantHistory);
-    const useRoleBasedLimits = (normalizedMaxUserHistory !== null) || (normalizedMaxAssistantHistory !== null);
+  const normalizedMaxUserHistory = normalizeOptionalNonNegativeInt(maxUserHistory);
+  const normalizedMaxAssistantHistory = normalizeOptionalNonNegativeInt(maxAssistantHistory);
+  const useRoleBasedLimits = (normalizedMaxUserHistory !== null) || (normalizedMaxAssistantHistory !== null);
 
-    if (useRoleBasedLimits) {
-        const limited = ensureLeadingCompactionMarkerSelected(
-          effectiveChain,
-          selectConversationNodesByRole(effectiveChain, {
-            maxUserMessages: normalizedMaxUserHistory,
-            maxAssistantMessages: normalizedMaxAssistantHistory
-          })
-        );
+  if (useRoleBasedLimits) {
+      const limited = ensureLeadingCompactionMarkerSelected(
+        effectiveChain,
+        selectConversationNodesByRole(effectiveChain, {
+          maxUserMessages: normalizedMaxUserHistory,
+          maxAssistantMessages: normalizedMaxAssistantHistory
+        })
+      );
+    messages.push(...limited.map(nodeToMessage).filter(Boolean));
+  } else {
+    // 旧逻辑：单一 maxHistory，按总条目数裁剪
+    // 当 maxHistory 为 0 时，不发送任何历史消息
+    if (maxHistory === 0) {
+      // 不添加任何历史消息
+    } else if (maxHistory && maxHistory > 0) {
+      // 限制历史消息数量；若链首是 compact marker，则即使窗口较小也强制保留，
+      // 否则 compact 后 replacement history 会在下一轮再次丢失。
+      const limited = ensureLeadingCompactionMarkerSelected(
+        effectiveChain,
+        effectiveChain.slice(-maxHistory)
+      );
       messages.push(...limited.map(nodeToMessage).filter(Boolean));
     } else {
-      // 旧逻辑：单一 maxHistory，按总条目数裁剪
-      // 当 maxHistory 为 0 时，不发送任何历史消息
-      if (maxHistory === 0) {
-        // 不添加任何历史消息
-      } else if (maxHistory && maxHistory > 0) {
-        // 限制历史消息数量；若链首是 compact marker，则即使窗口较小也强制保留，
-        // 否则 compact 后 replacement history 会在下一轮再次丢失。
-        const limited = ensureLeadingCompactionMarkerSelected(
-          effectiveChain,
-          effectiveChain.slice(-maxHistory)
-        );
-        messages.push(...limited.map(nodeToMessage).filter(Boolean));
-      } else {
-        // 发送全部历史消息
-        messages.push(...effectiveChain.map(nodeToMessage).filter(Boolean));
-      }
-    }
-  } else {
-    // 只发送最后一条
-    const lastVisibleNode = [...effectiveChain].reverse().find((node) => {
-      return !(node?.responsesLocalCompactionStatus && !isUsableResponsesLocalCompactionMarker(node));
-    });
-    if (lastVisibleNode) {
-      const last = lastVisibleNode;
-      const lastContent = (mapRole(last.role) === 'user' && last?.outboundContent != null)
-        ? last.outboundContent
-        : last.content;
-      messages.push({ role: mapRole(last.role), content: sanitizeContentForSend(lastContent) });
+      // 发送全部历史消息
+      messages.push(...effectiveChain.map(nodeToMessage).filter(Boolean));
     }
   }
 

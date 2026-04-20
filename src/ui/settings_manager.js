@@ -35,7 +35,6 @@ const AI_FOOTER_SHARED_VARIABLE_PANEL_KEY = 'ai-footer-shared-variables';
  * @param {HTMLElement} appContext.dom.scaleFactorSlider - 缩放比例滑块元素
  * @param {HTMLElement} appContext.dom.scaleValueDisplay - 缩放比例显示值元素
  * @param {HTMLElement} appContext.dom.autoScrollSwitch - 自动滚动开关元素
- * @param {HTMLElement} appContext.dom.sendChatHistorySwitch - 发送聊天历史开关元素
  * @param {HTMLElement} appContext.dom.sidebarPositionSwitch - 侧边栏位置开关元素
  * @param {HTMLElement} appContext.dom.stopAtTopSwitch - 滚动到顶部时停止开关元素
  * @param {HTMLElement} appContext.dom.showThoughtProcessSwitch - 显示思考过程开关元素
@@ -44,7 +43,6 @@ const AI_FOOTER_SHARED_VARIABLE_PANEL_KEY = 'ai-footer-shared-variables';
  * @param {HTMLElement} appContext.dom.escSettingsMenu - Esc 面板内的设置容器
  * @param {HTMLElement} appContext.dom.settingsToggle - 设置面板切换按钮元素
  * @param {HTMLElement} appContext.dom.settingsBackButton - 设置面板返回按钮元素
- * @param {Function} appContext.services.messageSender.setSendChatHistory - 设置消息发送器的聊天历史开关状态
  * @param {Function} appContext.services.uiManager.closeExclusivePanels - 关闭独占面板的函数
  * @returns {Object} 设置管理器实例
  */
@@ -66,7 +64,6 @@ export function createSettingsManager(appContext) {
   const scaleFactorSlider = dom.scaleFactor;
   const scaleValueDisplay = dom.scaleValue;
   const autoScrollSwitch = dom.autoScrollSwitch;
-  const sendChatHistorySwitch = dom.sendChatHistorySwitch;
   const autoRetrySwitch = dom.autoRetrySwitch;
   const sidebarPositionSwitch = dom.sidebarPositionSwitch;
   const stopAtTopSwitch = dom.stopAtTopSwitch;
@@ -119,7 +116,6 @@ export function createSettingsManager(appContext) {
     lineHeight: 1.5, // Added for better text readability control
     chatWidth: 100, // Percentage of sidebar width
     autoScroll: true,
-    shouldSendChatHistory: true,
     // 对话标题生成：默认关闭，避免未配置时触发额外请求
     autoGenerateConversationTitle: false,
     // 对话标题生成：是否覆盖总结类标题（保留[总结]前缀）
@@ -924,16 +920,6 @@ export function createSettingsManager(appContext) {
       group: 'behavior',
       defaultValue: DEFAULT_SETTINGS.stopAtTop,
       apply: (v) => applyStopAtTop(v)
-    },
-    // 发送聊天历史
-    {
-      key: 'shouldSendChatHistory',
-      type: 'toggle',
-      id: 'send-chat-history-switch',
-      label: '发送聊天历史',
-      group: 'behavior',
-      defaultValue: DEFAULT_SETTINGS.shouldSendChatHistory,
-      apply: (v) => applySendChatHistory(v)
     },
     {
       key: 'autoGenerateConversationTitle',
@@ -3619,20 +3605,6 @@ export function createSettingsManager(appContext) {
     }
   }
   
-  // 应用发送聊天历史设置
-  function applySendChatHistory(enabled) {
-    // 更新UI元素
-    if (sendChatHistorySwitch) {
-      sendChatHistorySwitch.checked = enabled;
-    }
-    
-    // 更新消息发送器设置
-    const messageSender = getMessageSender();
-    if (messageSender && typeof messageSender.setSendChatHistory === 'function') {
-      messageSender.setSendChatHistory(enabled);
-    }
-  }
-  
   function applyAutoRetry(enabled) {
     const normalized = !!enabled;
     if (autoRetrySwitch) {
@@ -3883,9 +3855,6 @@ export function createSettingsManager(appContext) {
   function setStopAtTop(enabled) { setSetting('stopAtTop', enabled); }
   
   
-  // 设置发送聊天历史
-  function setSendChatHistory(enabled) { setSetting('shouldSendChatHistory', enabled); }
-
   function setAutoRetry(enabled) { setSetting('autoRetry', enabled); }
 
   function setQueueCurrentConversationMessages(enabled) { setSetting('queueCurrentConversationMessages', enabled); }
@@ -3966,7 +3935,6 @@ export function createSettingsManager(appContext) {
     setSettingValue,
     setAutoScroll,
     setStopAtTop,
-    setSendChatHistory,
     setAutoRetry,
     setQueueCurrentConversationMessages,
     setSidebarPosition,

@@ -100,7 +100,6 @@ function buildStorageSeed(baseUrl) {
     apiConfigs_chunk_0: JSON.stringify({ v: 2, items: [config], connectionSources: [source] }),
     apiConfigs_chunks_meta: { count: 1, updatedAt: Date.now() },
     selectedConfigIndex: 0,
-    sendChatHistory: true,
     showThoughtProcess: true,
     queueCurrentConversationMessages: true,
     autoGenerateConversationTitle: false

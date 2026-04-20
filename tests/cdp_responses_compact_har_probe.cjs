@@ -95,7 +95,6 @@ function buildStorageSeed(fixedEnv) {
     }),
     apiConfigs_chunks_meta: { count: 1, updatedAt: Date.now() },
     selectedConfigIndex: 0,
-    sendChatHistory: true
   };
 }
 

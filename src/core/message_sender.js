@@ -385,7 +385,6 @@ export function createMessageSender(appContext) {
   let lastStreamingConversationStateKey = '';
   let isTemporaryMode = false;
   let pageContent = null;
-  let shouldSendChatHistory = true;
   let autoRetryEnabled = false;
   // 同一会话内若已有流式/自动重试任务，后续发送默认进入该会话的 FIFO 队列。
   // 设计目标：
@@ -3676,8 +3675,7 @@ export function createMessageSender(appContext) {
       conversationSnapshot = null,
       activeThreadContext = null,
       regenerateMode = false,
-      messageId = null,
-      sendChatHistoryFlag = shouldSendChatHistory
+      messageId = null
     } = options;
 
     let conversationChain = null;
@@ -3694,7 +3692,6 @@ export function createMessageSender(appContext) {
 
     if (
       !activeThreadContext
-      && sendChatHistoryFlag
       && Array.isArray(conversationChain)
       && conversationChain.length <= 1
     ) {
@@ -5391,8 +5388,7 @@ export function createMessageSender(appContext) {
 
   async function buildResponsesLocalCompactionRequestBody({
     usedApiConfig,
-    conversationChain,
-    sendChatHistoryFlag
+    conversationChain
   }) {
     const compactMessages = composeMessages({
       prompts: promptSettingsManager.getPrompts(),
@@ -5404,7 +5400,6 @@ export function createMessageSender(appContext) {
       regenerateMode: false,
       messageId: null,
       conversationChain: Array.isArray(conversationChain) ? conversationChain : [],
-      sendChatHistory: !!sendChatHistoryFlag,
       maxHistory: usedApiConfig?.maxChatHistory ?? 500,
       maxUserHistory: usedApiConfig?.maxChatHistoryUser,
       maxAssistantHistory: usedApiConfig?.maxChatHistoryAssistant
@@ -5438,8 +5433,7 @@ export function createMessageSender(appContext) {
       : [];
     const compactRequestBody = await buildResponsesLocalCompactionRequestBody({
       usedApiConfig,
-      conversationChain,
-      sendChatHistoryFlag: normalizedPayload.sendChatHistoryFlag !== false
+      conversationChain
     });
     const compactRequestSummary = summarizeResponsesCompactRequestBody(compactRequestBody);
     if (typeof normalizedPayload.onStatusUpdate === 'function') {
@@ -5529,8 +5523,7 @@ export function createMessageSender(appContext) {
       conversationSnapshot: null,
       activeThreadContext,
       regenerateMode: false,
-      messageId: null,
-      sendChatHistoryFlag: shouldSendChatHistory
+      messageId: null
     });
     const latestAssistantEntry = findLatestAssistantPromptTokenEntry(conversationChain);
 
@@ -5629,7 +5622,6 @@ export function createMessageSender(appContext) {
           const result = await executeResponsesLocalCompaction({
             usedApiConfig: invocationContext.usedApiConfig,
             conversationChain: invocationContext.conversationChain,
-            sendChatHistoryFlag: true,
             activeThreadContext: invocationContext.activeThreadContext,
             historyMessagesRef: null,
             sourceAssistantMessageId: invocationContext.sourceAssistantMessageId,
@@ -10022,7 +10014,6 @@ export function createMessageSender(appContext) {
         || preferredApiConfig
         || lockConfig
         || apiManager.getSelectedConfig();
-      const sendChatHistoryFlag = shouldSendChatHistory || forceSendFullHistory;
 
       // 在重新生成模式下，不添加新的用户消息
       let userMessageDiv;
@@ -10299,8 +10290,7 @@ export function createMessageSender(appContext) {
         conversationSnapshot,
         activeThreadContext,
         regenerateMode,
-        messageId,
-        sendChatHistoryFlag
+        messageId
       });
       const configForMaxHistory = effectiveApiConfig
         || apiManager.getSelectedConfig();
@@ -10379,7 +10369,6 @@ export function createMessageSender(appContext) {
         regenerateMode,
         messageId,
         conversationChain: filteredConversationChain,
-        sendChatHistory: sendChatHistoryFlag,
         // 旧字段：按总条目数裁剪（向后兼容）
         maxHistory: configForMaxHistory?.maxChatHistory ?? 500,
         // 新字段：按角色分别裁剪（超长对话更易控）
@@ -13480,15 +13469,6 @@ export function createMessageSender(appContext) {
     return abortedAny;
   }
 
-  /**
-   * 设置是否发送聊天历史
-   * @public
-   * @param {boolean} value - 是否发送聊天历史
-   */
-  function setSendChatHistory(value) {
-    shouldSendChatHistory = value;
-  }
-
   function setAutoRetry(value) {
     autoRetryEnabled = !!value;
   }
@@ -13566,7 +13546,6 @@ export function createMessageSender(appContext) {
     exitTemporaryMode,
     toggleTemporaryMode,
     getTemporaryModeState,
-    setSendChatHistory,
     setAutoRetry,
     setQueueCurrentConversationMessages,
     setCurrentConversationId,

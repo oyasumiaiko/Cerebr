@@ -132,7 +132,6 @@ test('composeMessages uses outboundContent for historical user messages', async 
         content: '好的'
       }
     ],
-    sendChatHistory: true,
     maxHistory: 16,
     maxUserHistory: 16,
     maxAssistantHistory: 16
@@ -141,7 +140,7 @@ test('composeMessages uses outboundContent for historical user messages', async 
   assert.equal(messages[0].content, '真正发送给模型的内容\\n\\n当前网页内容：标题：Example');
 });
 
-test('composeMessages last-user fallback path also uses outboundContent', async () => {
+test('composeMessages maxHistory=0 fallback path still uses outboundContent', async () => {
   const { composeMessages } = await loadMessageComposerModule();
 
   const messages = composeMessages({
@@ -161,13 +160,59 @@ test('composeMessages last-user fallback path also uses outboundContent', async 
         outboundContent: '原始输入\\n\\n当前网页内容：标题：Example'
       }
     ],
-    sendChatHistory: false,
     maxHistory: 0,
     maxUserHistory: 0,
     maxAssistantHistory: 0
   });
 
   assert.equal(messages[0].content, '原始输入\\n\\n当前网页内容：标题：Example');
+});
+
+test('composeMessages maxHistory=0 path preserves hidden contextual items on the final user turn', async () => {
+  const { composeMessages } = await loadMessageComposerModule();
+
+  const contextualInputItems = [{
+    type: 'message',
+    role: 'user',
+    content: [
+      {
+        type: 'input_text',
+        text: '<environment_context><current_date>2026-04-20</current_date></environment_context>'
+      }
+    ]
+  }];
+
+  const messages = composeMessages({
+    prompts: { system: { prompt: '' } },
+    injectedSystemMessages: [],
+    pageContent: null,
+    imageContainsScreenshot: false,
+    omitDefaultSystemPrompt: true,
+    currentPromptType: 'none',
+    regenerateMode: false,
+    messageId: null,
+    conversationChain: [
+      {
+        id: 'u1',
+        role: 'user',
+        content: '你不用读取页面工具 看得到当前网址吗?',
+        contextual_input_items_before: contextualInputItems,
+        environmentContextSignature: '{"type":"environment_context","current_date":"2026-04-20","timezone":"Asia/Shanghai"}'
+      }
+    ],
+    maxHistory: 0,
+    maxUserHistory: 0,
+    maxAssistantHistory: 0
+  });
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, 'user');
+  assert.equal(messages[0].content, '你不用读取页面工具 看得到当前网址吗?');
+  assert.deepEqual(messages[0].contextual_input_items_before, contextualInputItems);
+  assert.equal(
+    messages[0].environmentContextSignature,
+    '{"type":"environment_context","current_date":"2026-04-20","timezone":"Asia/Shanghai"}'
+  );
 });
 
 test('composeMessages 只让最新 compact marker 及其之后的历史进入模型上下文', async () => {
@@ -202,7 +247,6 @@ test('composeMessages 只让最新 compact marker 及其之后的历史进入模
       },
       { id: 'u3', role: 'user', content: '最新 marker 之后的用户' }
     ],
-    sendChatHistory: true,
     maxHistory: 16,
     maxUserHistory: 16,
     maxAssistantHistory: 16
@@ -237,7 +281,6 @@ test('composeMessages 在 maxHistory 裁剪后仍保留最新 compact marker', a
       { id: 'u3', role: 'user', content: '最新 marker 之后的用户' },
       { id: 'a3', role: 'assistant', content: '最新回答' }
     ],
-    sendChatHistory: true,
     maxHistory: 1,
     maxUserHistory: null,
     maxAssistantHistory: null
@@ -271,7 +314,6 @@ test('composeMessages 在按角色裁剪时不把 compact marker 计入 assistan
       { id: 'u3', role: 'user', content: '最新 marker 之后的用户' },
       { id: 'a3', role: 'assistant', content: '最新回答' }
     ],
-    sendChatHistory: true,
     maxHistory: 16,
     maxUserHistory: 1,
     maxAssistantHistory: 1
@@ -311,7 +353,6 @@ test('composeMessages skips local-only compact status messages without replay it
       },
       { id: 'u2', role: 'user', content: 'latest user' }
     ],
-    sendChatHistory: true,
     maxHistory: 20,
     maxUserHistory: null,
     maxAssistantHistory: null
