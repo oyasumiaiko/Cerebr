@@ -280,132 +280,6 @@ export function createMessageProcessor(appContext) {
     return settingsManager?.getSetting?.('renderMarkdownForUserMessages') === true;
   }
 
-  function isUserMessageExpanded(messageDiv) {
-    return messageDiv?.dataset?.userMessageExpanded === 'true';
-  }
-
-  function setUserMessageExpandedState(messageDiv, expanded) {
-    if (!messageDiv?.dataset) return;
-    messageDiv.dataset.userMessageExpanded = expanded ? 'true' : 'false';
-  }
-
-  function updateUserMessageToggleButton(toggleButton, expanded) {
-    if (!(toggleButton instanceof HTMLElement)) return;
-    const icon = toggleButton.querySelector('.user-message-text-content__toggle-icon');
-    if (icon) {
-      icon.className = expanded
-        ? 'fa-solid fa-chevron-up user-message-text-content__toggle-icon'
-        : 'fa-solid fa-chevron-down user-message-text-content__toggle-icon';
-      icon.setAttribute('aria-hidden', 'true');
-    }
-    const label = expanded ? '收起' : '展开';
-    const text = toggleButton.querySelector('.user-message-text-content__toggle-label');
-    if (text) {
-      text.textContent = label;
-    } else {
-      toggleButton.textContent = label;
-    }
-    toggleButton.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-    toggleButton.setAttribute('title', `${label}用户消息`);
-    toggleButton.setAttribute('aria-label', `${label}用户消息`);
-  }
-
-  function measureUserMessageCollapsedOverflow(textContentDiv, body) {
-    if (!(textContentDiv instanceof HTMLElement) || !(body instanceof HTMLElement)) return false;
-    const wasExpanded = textContentDiv.classList.contains('is-expanded');
-    const hadCollapsibleClass = textContentDiv.classList.contains('is-collapsible');
-    if (wasExpanded) {
-      textContentDiv.classList.remove('is-expanded');
-    }
-    if (!hadCollapsibleClass) {
-      textContentDiv.classList.add('is-collapsible');
-    }
-    // 这里统一按“折叠态”的 50vh 约束测量一次，避免展开后误判为不需要按钮。
-    const isOverflowing = (body.scrollHeight - body.clientHeight) > 1;
-    if (!hadCollapsibleClass) {
-      textContentDiv.classList.remove('is-collapsible');
-    }
-    if (wasExpanded) {
-      textContentDiv.classList.add('is-expanded');
-    }
-    return isOverflowing;
-  }
-
-  function syncUserMessageTextContentOverflow(messageDiv, textContentDiv) {
-    if (!(messageDiv instanceof HTMLElement) || !(textContentDiv instanceof HTMLElement)) return;
-    const body = textContentDiv.querySelector('.user-message-text-content__body');
-    const footer = textContentDiv.querySelector('.user-message-text-content__footer');
-    const toggleButton = textContentDiv.querySelector('.user-message-text-content__toggle');
-    if (!(body instanceof HTMLElement) || !(footer instanceof HTMLElement) || !(toggleButton instanceof HTMLElement)) {
-      conversationDocumentViewer.syncConversationDocumentAttachmentStrip(messageDiv);
-      return;
-    }
-
-    const isOverflowing = measureUserMessageCollapsedOverflow(textContentDiv, body);
-    textContentDiv.classList.toggle('is-collapsible', isOverflowing);
-
-    if (!isOverflowing) {
-      setUserMessageExpandedState(messageDiv, false);
-      textContentDiv.classList.remove('is-expanded');
-      toggleButton.hidden = true;
-      updateUserMessageToggleButton(toggleButton, false);
-      footer.hidden = true;
-      conversationDocumentViewer.syncConversationDocumentAttachmentStrip(messageDiv);
-      return;
-    }
-
-    const expanded = isUserMessageExpanded(messageDiv);
-    textContentDiv.classList.toggle('is-expanded', expanded);
-    toggleButton.hidden = false;
-    footer.hidden = false;
-    updateUserMessageToggleButton(toggleButton, expanded);
-    conversationDocumentViewer.syncConversationDocumentAttachmentStrip(messageDiv);
-  }
-
-  function scheduleUserMessageOverflowSync(messageDiv, attempt = 0) {
-    scheduleAfterLayout(() => {
-      if (!(messageDiv instanceof HTMLElement)) return;
-      const textContentDiv = messageDiv.querySelector('.text-content.user-message-text-content');
-      if (!(textContentDiv instanceof HTMLElement) || !messageDiv.isConnected) {
-        if (attempt < 4) {
-          scheduleUserMessageOverflowSync(messageDiv, attempt + 1);
-        }
-        return;
-      }
-      syncUserMessageTextContentOverflow(messageDiv, textContentDiv);
-    });
-  }
-
-  function createUserMessageToggleButton(messageDiv, textContentDiv) {
-    const toggleButton = document.createElement('button');
-    toggleButton.type = 'button';
-    toggleButton.className = 'user-message-text-content__toggle';
-    toggleButton.hidden = true;
-
-    const icon = document.createElement('i');
-    icon.className = 'fa-solid fa-chevron-down user-message-text-content__toggle-icon';
-    icon.setAttribute('aria-hidden', 'true');
-    toggleButton.appendChild(icon);
-
-    const label = document.createElement('span');
-    label.className = 'user-message-text-content__toggle-label';
-    toggleButton.appendChild(label);
-
-    toggleButton.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      const nextExpanded = !isUserMessageExpanded(messageDiv);
-      runWithStableToggleScroll(toggleButton, () => {
-        setUserMessageExpandedState(messageDiv, nextExpanded);
-        textContentDiv.classList.toggle('is-expanded', nextExpanded);
-        updateUserMessageToggleButton(toggleButton, nextExpanded);
-      });
-    });
-
-    updateUserMessageToggleButton(toggleButton, isUserMessageExpanded(messageDiv));
-    return toggleButton;
-  }
-
   function renderUserMessageTextContent(messageDiv, textContentDiv, messageText) {
     if (!(messageDiv instanceof HTMLElement) || !(textContentDiv instanceof HTMLElement)) return;
     const enableDollarMath = settingsManager?.getSetting?.('enableDollarMath') !== false;
@@ -418,12 +292,6 @@ export function createMessageProcessor(appContext) {
     body.className = 'user-message-text-content__body';
     textContentDiv.appendChild(body);
 
-    const footer = document.createElement('div');
-    footer.className = 'user-message-text-content__footer';
-    footer.hidden = true;
-    footer.appendChild(createUserMessageToggleButton(messageDiv, textContentDiv));
-    textContentDiv.appendChild(footer);
-
     if (renderAsMarkdown) {
       body.classList.add('user-message-text-content__body--markdown');
       body.innerHTML = renderMarkdownSafe(messageText || '', {
@@ -432,7 +300,7 @@ export function createMessageProcessor(appContext) {
       });
       enhanceMarkdownContent(body, {
         onAsyncRenderComplete() {
-          scheduleUserMessageOverflowSync(messageDiv);
+          conversationDocumentViewer.syncConversationDocumentAttachmentStrip(messageDiv);
         }
       });
     } else {
@@ -440,7 +308,7 @@ export function createMessageProcessor(appContext) {
       body.innerText = messageText || '';
     }
 
-    scheduleUserMessageOverflowSync(messageDiv);
+    conversationDocumentViewer.syncConversationDocumentAttachmentStrip(messageDiv);
   }
 
   function rerenderUserMessagesForDisplaySettings() {

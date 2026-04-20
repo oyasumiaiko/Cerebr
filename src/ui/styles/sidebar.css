@@ -1958,9 +1958,8 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     }
 }
 .user-message .text-content.user-message-text-content {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+    max-height: 50vh;
+    overflow-y: auto;
 }
 
 .user-message .user-message-text-content__body {
@@ -1970,47 +1969,6 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 
 .user-message .user-message-text-content__body--plain {
     white-space: pre-wrap;
-}
-
-.user-message .text-content.user-message-text-content.is-collapsible:not(.is-expanded) .user-message-text-content__body {
-    max-height: 50vh;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    padding-right: 4px;
-}
-
-.user-message .text-content.user-message-text-content.is-collapsible.is-expanded .user-message-text-content__body {
-    max-height: none;
-    overflow: visible;
-}
-
-.user-message .user-message-text-content__footer {
-    display: flex;
-    justify-content: flex-end;
-}
-
-.user-message .user-message-text-content__toggle {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 0;
-    border: none;
-    background: transparent;
-    color: color-mix(in srgb, var(--cerebr-text-color) 74%, transparent);
-    font: inherit;
-    font-size: 12px;
-    line-height: 1.4;
-    cursor: pointer;
-}
-
-.user-message .user-message-text-content__toggle:hover,
-.user-message .user-message-text-content__toggle:focus-visible {
-    color: var(--cerebr-text-color);
-    outline: none;
-}
-
-.user-message .user-message-text-content__toggle-icon {
-    font-size: 11px;
 }
 /* 滚动条样式统一到全局 */
 

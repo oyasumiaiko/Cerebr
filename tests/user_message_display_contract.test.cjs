@@ -15,25 +15,26 @@ test('settings_manager 已注册用户消息 Markdown 渲染开关', async () =>
   assert.match(source, /label: '用户消息启用 Markdown 渲染'/);
 });
 
-test('message_processor 会按设置对用户消息走 Markdown 渲染，并只在超长时显示展开按钮', async () => {
+test('message_processor 会按设置对用户消息走 Markdown 渲染，且不再挂载展开按钮', async () => {
   const source = await readWorkspaceFile('src/core/message_processor.js');
 
   assert.match(source, /shouldRenderUserMessagesAsMarkdown/);
   assert.match(source, /renderMarkdownSafe\(messageText \|\| '', \{/);
   assert.match(source, /renderUserMessageTextContent\(messageDiv, textContentDiv, messageText\)/);
-  assert.match(source, /user-message-text-content__toggle/);
-  assert.match(source, /toggleButton\.hidden = true;/);
-  assert.match(source, /toggleButton\.hidden = false;/);
-  assert.match(source, /runWithStableToggleScroll\(toggleButton, \(\) => \{/);
+  assert.match(source, /syncConversationDocumentAttachmentStrip\(messageDiv\)/);
   assert.match(source, /subscribe\?\.\('renderMarkdownForUserMessages'/);
+  assert.doesNotMatch(source, /user-message-text-content__toggle/);
+  assert.doesNotMatch(source, /userMessageExpanded/);
+  assert.doesNotMatch(source, /createUserMessageToggleButton/);
 });
 
-test('sidebar.css 已为长用户消息提供 50vh 折叠体与右下角展开按钮样式', async () => {
+test('sidebar.css 保留用户消息滚动容器样式，不再定义展开按钮样式', async () => {
   const source = await readWorkspaceFile('src/ui/styles/sidebar.css');
 
-  assert.match(source, /\.user-message \.text-content\.user-message-text-content\.is-collapsible:not\(\.is-expanded\) \.user-message-text-content__body/);
+  assert.match(source, /\.user-message \.text-content\.user-message-text-content/);
   assert.match(source, /max-height: 50vh;/);
-  assert.match(source, /\.user-message \.user-message-text-content__footer/);
-  assert.match(source, /\.user-message \.user-message-text-content__toggle/);
-  assert.match(source, /user-message-text-content__toggle-icon/);
+  assert.match(source, /overflow-y: auto;/);
+  assert.doesNotMatch(source, /\.user-message \.user-message-text-content__footer/);
+  assert.doesNotMatch(source, /\.user-message \.user-message-text-content__toggle/);
+  assert.doesNotMatch(source, /user-message-text-content__toggle-icon/);
 });
