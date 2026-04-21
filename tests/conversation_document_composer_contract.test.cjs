@@ -36,10 +36,10 @@ test('输入控制器与聊天历史 UI 已为文档创建提供基础能力', a
   assert.match(chatHistoryUi, /async function ensureCurrentConversationId/);
   assert.match(chatHistoryUi, /ensureCurrentConversationId,/);
   assert.match(chatHistoryUi, /listConversationDocuments\(targetConversationId\)/);
-  assert.match(composerSource, /function shouldOfferLongTextDocumentPrompt\(text\)/);
-  assert.match(composerSource, /转为文件并发送链接/);
   assert.match(composerSource, /支持 \.md、\.txt、\.html、\.js 等纯文本文件/);
-  assert.match(messageSenderSource, /maybeHandleLongTextBeforeSend/);
+  assert.doesNotMatch(composerSource, /function shouldOfferLongTextDocumentPrompt\(text\)/);
+  assert.doesNotMatch(composerSource, /转为文件并发送链接/);
+  assert.doesNotMatch(messageSenderSource, /maybeHandleLongTextBeforeSend/);
 });
 
 test('文件创建面板支持导入本地文件，并为无文件名上传兜底 untitled', async () => {

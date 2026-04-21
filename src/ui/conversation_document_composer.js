@@ -76,19 +76,6 @@ function getComposerAccessoryMount(dom) {
   };
 }
 
-function countLogicalLines(text) {
-  const normalized = String(text || '').replace(/\r\n?/g, '\n');
-  if (!normalized) return 0;
-  return normalized.split('\n').length;
-}
-
-function shouldOfferLongTextDocumentPrompt(text) {
-  const normalized = String(text || '');
-  const charCount = Array.from(normalized).length;
-  const lineCount = countLogicalLines(normalized);
-  return charCount > 2000 || lineCount > 20;
-}
-
 /**
  * 输入区对话文档创建器。
  *
@@ -96,8 +83,6 @@ function shouldOfferLongTextDocumentPrompt(text) {
  * - 提供显式“新建文档”面板；
  * - 确保当前有可归属文档的会话 ID；
  * - 创建文档后把 Markdown 链接插回输入框，而不是自动发送。
- *
- * 后续“长文本转文档”提示也会复用这层创建与插入能力。
  */
 export function createConversationDocumentComposer(appContext) {
   const { dom, services, utils } = appContext;
@@ -106,8 +91,6 @@ export function createConversationDocumentComposer(appContext) {
   let pathInput = null;
   let contentTextarea = null;
   let uploadInput = null;
-  let longTextPromptPanel = null;
-  let longTextPromptResolver = null;
   let importedLocalFileDraft = null;
   let pendingUploadedFileEnvironmentEntries = [];
 
@@ -248,16 +231,6 @@ export function createConversationDocumentComposer(appContext) {
     contentTextarea = null;
     uploadInput = null;
     importedLocalFileDraft = null;
-  }
-
-  function removeLongTextPromptPanel(resolution = null) {
-    longTextPromptPanel?.remove();
-    longTextPromptPanel = null;
-    if (typeof longTextPromptResolver === 'function') {
-      const resolver = longTextPromptResolver;
-      longTextPromptResolver = null;
-      resolver(resolution || { action: 'cancel' });
-    }
   }
 
   function closeCreatePanel() {
@@ -407,7 +380,6 @@ export function createConversationDocumentComposer(appContext) {
   }
 
   function toggleCreatePanel() {
-    removeLongTextPromptPanel({ action: 'cancel' });
     if (panel) {
       closeCreatePanel();
       return false;
@@ -416,89 +388,10 @@ export function createConversationDocumentComposer(appContext) {
     return true;
   }
 
-  function ensureLongTextPromptPanel(text) {
-    if (longTextPromptPanel) return longTextPromptPanel;
-
-    longTextPromptPanel = document.createElement('section');
-    longTextPromptPanel.className = 'composer-accessory-drawer composer-document-prompt';
-
-    const surface = document.createElement('div');
-    surface.className = 'composer-accessory-drawer-surface composer-document-prompt-surface';
-
-    const title = document.createElement('div');
-    title.className = 'composer-document-prompt__title';
-    title.textContent = '长文本可转为文件';
-
-    const desc = document.createElement('div');
-    desc.className = 'composer-document-prompt__desc';
-    const charCount = Array.from(String(text || '')).length;
-    const lineCount = countLogicalLines(text);
-    desc.textContent = `当前输入约 ${charCount} 字符，${lineCount} 行。你可以直接发送，也可以先转成文件再发送链接。文件不限于 .md，只要是纯文本格式即可。`;
-
-    const actions = document.createElement('div');
-    actions.className = 'composer-document-prompt__actions';
-
-    const cancelButton = document.createElement('button');
-    cancelButton.type = 'button';
-    cancelButton.className = 'composer-document-prompt__button';
-    cancelButton.textContent = '取消';
-    cancelButton.addEventListener('click', () => removeLongTextPromptPanel({ action: 'cancel' }));
-
-    const sendDirectButton = document.createElement('button');
-    sendDirectButton.type = 'button';
-    sendDirectButton.className = 'composer-document-prompt__button';
-    sendDirectButton.textContent = '直接发送';
-    sendDirectButton.addEventListener('click', () => removeLongTextPromptPanel({ action: 'continue' }));
-
-    const convertButton = document.createElement('button');
-    convertButton.type = 'button';
-    convertButton.className = 'composer-document-prompt__button is-primary';
-    convertButton.textContent = '转为文件并发送链接';
-    convertButton.addEventListener('click', () => {
-      removeLongTextPromptPanel({
-        action: 'convert_to_document'
-      });
-    });
-
-    actions.appendChild(cancelButton);
-    actions.appendChild(sendDirectButton);
-    actions.appendChild(convertButton);
-    surface.appendChild(title);
-    surface.appendChild(desc);
-    surface.appendChild(actions);
-    longTextPromptPanel.appendChild(surface);
-
-    const { host, anchor } = getComposerAccessoryMount(dom);
-    if (host) {
-      if (anchor && anchor.parentElement === host) {
-        host.insertBefore(longTextPromptPanel, anchor.nextSibling);
-      } else {
-        host.appendChild(longTextPromptPanel);
-      }
-    }
-    return longTextPromptPanel;
-  }
-
-  async function maybeHandleLongTextBeforeSend(options = {}) {
-    const text = typeof options.text === 'string' ? options.text : '';
-    if (!shouldOfferLongTextDocumentPrompt(text)) {
-      return { action: 'continue' };
-    }
-
-    closeCreatePanel();
-    removeLongTextPromptPanel({ action: 'cancel' });
-
-    return await new Promise((resolve) => {
-      longTextPromptResolver = resolve;
-      ensureLongTextPromptPanel(text);
-    });
-  }
-
   return {
     openCreatePanel,
     closeCreatePanel,
     toggleCreatePanel,
-    maybeHandleLongTextBeforeSend,
     createDocumentAndInsertLink,
     consumePendingUploadedFileEnvironmentEntries,
     buildSuggestedDocumentPath: buildSuggestedConversationDocumentPath
