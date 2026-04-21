@@ -723,12 +723,10 @@ function deleteResponsesToolOutputPath(target, path) {
 
 function buildResponsesFileReadNotice(contentRead, fallbackText = '') {
   const normalized = isResponsesToolOutputPlainObject(contentRead) ? contentRead : {};
-  if (normalized.mode === 'line_range') {
-    return buildResponsesToolOutputLineSelectionNoticeText(
-      normalized.total_lines,
-      normalized.start_line,
-      normalized.end_line
-    );
+  // 对显式范围读取，不再额外拼“output too long”提示。
+  // 这里的省略是调用方主动请求的范围结果，不是工具层为了压缩输出而被动截断。
+  if (normalized.mode === 'line_range' || normalized.mode === 'char_range') {
+    return '';
   }
   const totalChars = Number(normalized.total_chars);
   const rangeStart = Number.isFinite(Number(normalized.skip_chars)) ? Number(normalized.skip_chars) : 0;
@@ -744,19 +742,22 @@ function buildResponsesFileReadNotice(contentRead, fallbackText = '') {
 
 function buildResponsesFileReadBlocks(file) {
   const normalized = isResponsesToolOutputPlainObject(file) ? file : {};
-  const notice = buildResponsesFileReadNotice(normalized.content_read, normalized.content || '');
+  // 带行号读取时只保留 numbered_content，避免同一段正文以 plain + numbered 两种形式重复输出。
+  const preferredText = typeof normalized.numbered_content === 'string' && normalized.numbered_content.trim()
+    ? normalized.numbered_content
+    : (typeof normalized.content === 'string' ? normalized.content : '');
+  const notice = buildResponsesFileReadNotice(normalized.content_read, preferredText);
   const blocks = [];
-  if (typeof normalized.content === 'string' && normalized.content.trim()) {
-    blocks.push({
-      tag: 'content',
-      text: appendStandaloneNoticeLine(normalized.content, notice),
-      truncation: null
-    });
-  }
   if (typeof normalized.numbered_content === 'string' && normalized.numbered_content.trim()) {
     blocks.push({
       tag: 'numbered_content',
       text: appendStandaloneNoticeLine(normalized.numbered_content, notice),
+      truncation: null
+    });
+  } else if (typeof normalized.content === 'string' && normalized.content.trim()) {
+    blocks.push({
+      tag: 'content',
+      text: appendStandaloneNoticeLine(normalized.content, notice),
       truncation: null
     });
   }

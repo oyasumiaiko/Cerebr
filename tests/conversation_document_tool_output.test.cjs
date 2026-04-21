@@ -54,6 +54,40 @@ test('read_file 的对话文档工具输出会把正文放进 content 块而不�
   assert.doesNotMatch(text, /"content": "hello\\nworld"/);
 });
 
+test('read_file 带行号时只输出 numbered_content，且显式行范围读取不追加截断提示', async () => {
+  const { buildResponsesConversationDocumentToolOutputContentItems } = await loadToolOutputModule();
+
+  const items = buildResponsesConversationDocumentToolOutputContentItems('read_file', {
+    ok: true,
+    conversation_id: 'conv-1',
+    file: {
+      path: 'docs/spec.md',
+      updated_at: '2026-04-14T10:00:00.000Z',
+      size_chars: 17,
+      content: 'line2\nline3',
+      numbered_content: '2 | line2\n3 | line3',
+      content_read: {
+        mode: 'line_range',
+        total_chars: 17,
+        total_lines: 4,
+        start_line: 2,
+        end_line: 3,
+        returned_line_count: 2,
+        returned_chars: 11,
+        omitted_chars: 6,
+        omitted_pct: '35.29',
+        truncated: true,
+        has_more_after_range: true
+      }
+    }
+  });
+
+  const text = items.map(item => item.text).join('\n');
+  assert.match(text, /<numbered_content>\s*2 \| line2/);
+  assert.doesNotMatch(text, /<content>\s*line2/);
+  assert.doesNotMatch(text, /output too long; truncated/);
+});
+
 test('list_files 的对话文档工具输出会把文件列表压成纯文本行', async () => {
   const { buildResponsesConversationDocumentToolOutputContentItems } = await loadToolOutputModule();
 

@@ -467,6 +467,37 @@ test('buildResponsesSkillRegistryToolOutputContentItems 对 read_file 改为 met
   assert.doesNotMatch(text, /"content": "Alpha"/);
 });
 
+test('buildResponsesSkillRegistryToolOutputContentItems 对带行号 read_file 只输出 numbered_content，且显式字符范围不追加截断提示', async () => {
+  const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesSkillRegistryToolOutputContentItems({
+    ok: true,
+    action: 'read_file',
+    skill: {
+      name: 'skill-creator',
+      file: {
+        path: 'SKILL.md',
+        content: 'Alpha',
+        numbered_content: '12 | Alpha',
+        content_read: {
+          mode: 'char_range',
+          total_chars: 100,
+          skip_chars: 11,
+          max_chars: 5,
+          returned_chars: 5,
+          omitted_chars: 95,
+          omitted_pct: '95.00',
+          truncated: true,
+          has_more_after_range: true
+        }
+      }
+    }
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<numbered_content>\s*12 \| Alpha\s*<\/numbered_content>/);
+  assert.doesNotMatch(text, /<content>\s*Alpha\s*<\/content>/);
+  assert.doesNotMatch(text, /output too long; truncated/);
+});
+
 test('buildResponsesSkillRegistryToolOutputContentItems 对 search_files 输出 matches + context XML 块', async () => {
   const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesSkillRegistryToolOutputContentItems({
