@@ -33,6 +33,12 @@ export function buildResponsesReplayFunctionCallItems(toolCallRecords) {
         name: (typeof record.name === 'string') ? record.name : '',
         arguments: (typeof record.arguments === 'string') ? record.arguments : ''
       };
+      const namespace = (typeof record.namespace === 'string' && record.namespace.trim())
+        ? record.namespace.trim()
+        : '';
+      if (namespace) {
+        item.namespace = namespace;
+      }
       const itemId = (typeof record.item_id === 'string' && record.item_id.trim())
         ? record.item_id.trim()
         : '';

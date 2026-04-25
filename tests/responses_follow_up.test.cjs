@@ -93,6 +93,33 @@ test('ensureResponsesReplayOutputItemsIncludeFunctionCalls 不会重复追加已
   });
 });
 
+test('ensureResponsesReplayOutputItemsIncludeFunctionCalls 会原样回放 function_call.namespace', async () => {
+  const { ensureResponsesReplayOutputItemsIncludeFunctionCalls } = await loadResponsesFollowUpModule();
+  const merged = ensureResponsesReplayOutputItemsIncludeFunctionCalls(
+    [],
+    [
+      {
+        type: 'function_call',
+        call_id: 'call_js_1',
+        item_id: 'fc_js_1',
+        namespace: 'cerebr_tools',
+        name: 'js_runtime_execute',
+        arguments: '{"code":"1+1"}',
+        status: 'completed'
+      }
+    ]
+  );
+
+  assert.equal(merged.length, 1);
+  assert.deepEqual(merged[0], {
+    type: 'function_call',
+    call_id: 'call_js_1',
+    namespace: 'cerebr_tools',
+    name: 'js_runtime_execute',
+    arguments: '{"code":"1+1"}'
+  });
+});
+
 test('sanitizeResponsesReplayItem 会移除不兼容 replay 的 item_id 运行态字段', async () => {
   const { sanitizeResponsesReplayItem } = await loadResponsesInputItemsModule();
   const sanitized = sanitizeResponsesReplayItem({
