@@ -67,6 +67,10 @@ import {
   buildResponsesGenericXmlToolOutputContentItems
 } from '../agent_tools/shared/responses_tool_output.js';
 import {
+  adaptResponsesCustomFunctionToolsForHostedToolSearch,
+  hasResponsesHostedToolSearchTool
+} from '../agent_tools/shared/responses_custom_tool_search.js';
+import {
   ensureResponsesReplayOutputItemsIncludeFunctionCalls
 } from '../utils/responses_follow_up.js';
 import {
@@ -192,6 +196,23 @@ const RESPONSES_VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME = CONVERSATION_DOCUMENT_APPLY
 const RESPONSES_VIRTUAL_FILE_LIST_FILES_TOOL_NAME = CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME;
 const RESPONSES_VIRTUAL_FILE_READ_FILE_TOOL_NAME = CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME;
 const RESPONSES_VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME = CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME;
+const RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES = Object.freeze([
+  RESPONSES_JS_RUNTIME_TOOL_NAME,
+  RESPONSES_PAGE_CONTENT_TOOL_NAME,
+  RESPONSES_PDF_CONTENT_TOOL_NAME,
+  RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME,
+  RESPONSES_VIEW_IMAGE_TOOL_NAME,
+  RESPONSES_HISTORY_SEARCH_TOOL_NAME,
+  RESPONSES_HISTORY_READ_TOOL_NAME,
+  RESPONSES_REQUEST_USER_INPUT_TOOL_NAME,
+  RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME,
+  RESPONSES_ASK_OTHER_AI_TOOL_NAME,
+  RESPONSES_SKILL_REGISTRY_TOOL_NAME,
+  RESPONSES_VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
+  RESPONSES_VIRTUAL_FILE_LIST_FILES_TOOL_NAME,
+  RESPONSES_VIRTUAL_FILE_READ_FILE_TOOL_NAME,
+  RESPONSES_VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME
+]);
 const RESPONSES_LOCAL_COMPACTION_MARKER_TEXT = '已压缩上下文（基于上一轮上下文大小）';
 const RESPONSES_LOCAL_COMPACTION_PENDING_TEXT = '上下文压缩中';
 const RESPONSES_LOCAL_COMPACTION_ERROR_TEXT = '上下文压缩失败';
@@ -1278,12 +1299,16 @@ export function createMessageSender(appContext) {
     const status = (typeof item.status === 'string') ? item.status : '';
 
     if (type === 'function_call') {
+      const namespace = (typeof item.namespace === 'string' && item.namespace.trim())
+        ? item.namespace.trim()
+        : '';
       const normalized = compactResponsesMetaValue({
         type,
         id,
         item_id: itemId || '',
         call_id: callId || '',
         status,
+        namespace,
         name: item.name || '',
         arguments: item.arguments || ''
       });
@@ -1327,6 +1352,13 @@ export function createMessageSender(appContext) {
       arguments: item.arguments || ''
     });
     return (normalized && typeof normalized === 'object' && !Array.isArray(normalized)) ? normalized : null;
+  }
+
+  function buildNamespacedResponsesFunctionName(functionName, namespace) {
+    const normalizedName = (typeof functionName === 'string') ? functionName.trim() : '';
+    const normalizedNamespace = (typeof namespace === 'string') ? namespace.trim() : '';
+    if (!normalizedName) return '';
+    return normalizedNamespace ? `${normalizedNamespace}/${normalizedName}` : normalizedName;
   }
 
   function createResponsesToolTimelineEntry(record, options = {}) {
@@ -7851,7 +7883,14 @@ export function createMessageSender(appContext) {
     pageToolEnvironment = resolveResponsesPageToolEnvironment()
   ) {
     if (!isOpenAIResponsesApiConfig(usedApiConfig)) return requestBody;
-    const customTools = getResponsesCustomFunctionTools(usedApiConfig, pageToolEnvironment);
+    const hostedToolSearchEnabled = hasResponsesHostedToolSearchTool(requestBody?.tools);
+    const customTools = adaptResponsesCustomFunctionToolsForHostedToolSearch(
+      getResponsesCustomFunctionTools(usedApiConfig, pageToolEnvironment),
+      {
+        hostedToolSearchEnabled,
+        searchableToolNames: RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES
+      }
+    );
     if (!Array.isArray(customTools) || customTools.length <= 0) return requestBody;
 
     const nextBody = cloneDataSafely(requestBody) || {};
@@ -8907,6 +8946,8 @@ export function createMessageSender(appContext) {
       ? toolCallRecord.call_id.trim()
       : ((typeof toolCallRecord?.id === 'string') ? toolCallRecord.id.trim() : '');
     const functionName = (typeof toolCallRecord?.name === 'string') ? toolCallRecord.name.trim() : '';
+    const functionNamespace = (typeof toolCallRecord?.namespace === 'string') ? toolCallRecord.namespace.trim() : '';
+    const canonicalFunctionName = buildNamespacedResponsesFunctionName(functionName, functionNamespace);
     if (!callId) {
       throw new Error(`Responses function_call 缺少 call_id，无法回传工具结果（${functionName || 'unknown'}）。`);
     }
@@ -8933,31 +8974,32 @@ export function createMessageSender(appContext) {
     }
 
     let outputPayload = null;
-    if (functionName === RESPONSES_JS_RUNTIME_TOOL_NAME) {
+    if (functionName === RESPONSES_JS_RUNTIME_TOOL_NAME || canonicalFunctionName === RESPONSES_JS_RUNTIME_TOOL_NAME) {
       outputPayload = await executeResponsesJsRuntimeFunction(parsedArgs, options);
-    } else if (isVirtualFileToolAction(functionName)) {
-      outputPayload = await executeResponsesVirtualFileFunction(functionName, parsedArgs, options);
+    } else if (isVirtualFileToolAction(functionName) || isVirtualFileToolAction(canonicalFunctionName)) {
+      outputPayload = await executeResponsesVirtualFileFunction(functionName || canonicalFunctionName, parsedArgs, options);
     } else if (
       functionName === RESPONSES_SKILL_REGISTRY_TOOL_NAME
+      || canonicalFunctionName === RESPONSES_SKILL_REGISTRY_TOOL_NAME
     ) {
       outputPayload = await executeResponsesSkillRegistryFunction(parsedArgs, options);
-    } else if (functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME) {
+    } else if (functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME || canonicalFunctionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME) {
       outputPayload = await executeResponsesRequestUserInputFunction(parsedArgs, options);
-    } else if (functionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME) {
+    } else if (functionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME || canonicalFunctionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME) {
       outputPayload = await executeResponsesListAskableModelsFunction(parsedArgs, options);
-    } else if (functionName === RESPONSES_ASK_OTHER_AI_TOOL_NAME) {
+    } else if (functionName === RESPONSES_ASK_OTHER_AI_TOOL_NAME || canonicalFunctionName === RESPONSES_ASK_OTHER_AI_TOOL_NAME) {
       outputPayload = await executeResponsesAskOtherAiFunction(parsedArgs, options);
-    } else if (functionName === RESPONSES_PAGE_CONTENT_TOOL_NAME) {
+    } else if (functionName === RESPONSES_PAGE_CONTENT_TOOL_NAME || canonicalFunctionName === RESPONSES_PAGE_CONTENT_TOOL_NAME) {
       outputPayload = await executeResponsesPageContentFunction(parsedArgs);
-    } else if (functionName === RESPONSES_PDF_CONTENT_TOOL_NAME) {
+    } else if (functionName === RESPONSES_PDF_CONTENT_TOOL_NAME || canonicalFunctionName === RESPONSES_PDF_CONTENT_TOOL_NAME) {
       outputPayload = await executeResponsesPdfContentFunction(parsedArgs);
-    } else if (functionName === RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME) {
+    } else if (functionName === RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME || canonicalFunctionName === RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME) {
       outputPayload = await executeResponsesWebpageScreenshotFunction(parsedArgs);
-    } else if (functionName === RESPONSES_VIEW_IMAGE_TOOL_NAME) {
+    } else if (functionName === RESPONSES_VIEW_IMAGE_TOOL_NAME || canonicalFunctionName === RESPONSES_VIEW_IMAGE_TOOL_NAME) {
       outputPayload = await executeResponsesViewImageFunction(parsedArgs);
-    } else if (functionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME) {
+    } else if (functionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME || canonicalFunctionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME) {
       outputPayload = await executeResponsesHistorySearchFunction(parsedArgs, options);
-    } else if (functionName === RESPONSES_HISTORY_READ_TOOL_NAME) {
+    } else if (functionName === RESPONSES_HISTORY_READ_TOOL_NAME || canonicalFunctionName === RESPONSES_HISTORY_READ_TOOL_NAME) {
       outputPayload = await executeResponsesHistoryReadFunction(parsedArgs, options);
     } else {
       outputPayload = {
@@ -8965,7 +9007,7 @@ export function createMessageSender(appContext) {
         value: null,
         items: [],
         error: {
-          message: `当前客户端尚未实现自定义函数 ${functionName || '(unnamed)'}。`,
+          message: `当前客户端尚未实现自定义函数 ${canonicalFunctionName || functionName || '(unnamed)'}。`,
           name: 'UnsupportedFunctionError',
           stack: ''
         }
@@ -8976,29 +9018,29 @@ export function createMessageSender(appContext) {
       type: 'function_call_output',
       call_id: callId,
       output:
-        functionName === RESPONSES_JS_RUNTIME_TOOL_NAME
+        functionName === RESPONSES_JS_RUNTIME_TOOL_NAME || canonicalFunctionName === RESPONSES_JS_RUNTIME_TOOL_NAME
             ? serializeResponsesJsRuntimeFunctionToolOutput(outputPayload)
-          : isVirtualFileToolAction(functionName)
-            ? serializeResponsesConversationDocumentFunctionToolOutput(functionName, outputPayload)
-          : functionName === RESPONSES_SKILL_REGISTRY_TOOL_NAME
+          : (isVirtualFileToolAction(functionName) || isVirtualFileToolAction(canonicalFunctionName))
+            ? serializeResponsesConversationDocumentFunctionToolOutput(functionName || canonicalFunctionName, outputPayload)
+          : functionName === RESPONSES_SKILL_REGISTRY_TOOL_NAME || canonicalFunctionName === RESPONSES_SKILL_REGISTRY_TOOL_NAME
             ? serializeResponsesSkillRegistryFunctionToolOutput(outputPayload)
-          : functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME
+          : functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME || canonicalFunctionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME
             ? serializeResponsesRequestUserInputFunctionToolOutput(outputPayload)
-          : functionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME
+          : functionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME || canonicalFunctionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME
             ? serializeResponsesListAskableModelsFunctionToolOutput(outputPayload)
-            : functionName === RESPONSES_ASK_OTHER_AI_TOOL_NAME
+            : functionName === RESPONSES_ASK_OTHER_AI_TOOL_NAME || canonicalFunctionName === RESPONSES_ASK_OTHER_AI_TOOL_NAME
               ? serializeResponsesAskOtherAiFunctionToolOutput(outputPayload)
-          : functionName === RESPONSES_PAGE_CONTENT_TOOL_NAME
+          : functionName === RESPONSES_PAGE_CONTENT_TOOL_NAME || canonicalFunctionName === RESPONSES_PAGE_CONTENT_TOOL_NAME
             ? serializeResponsesPageContentFunctionToolOutput(outputPayload)
-            : functionName === RESPONSES_PDF_CONTENT_TOOL_NAME
+            : functionName === RESPONSES_PDF_CONTENT_TOOL_NAME || canonicalFunctionName === RESPONSES_PDF_CONTENT_TOOL_NAME
               ? serializeResponsesPdfContentFunctionToolOutput(outputPayload)
-              : functionName === RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME
+              : functionName === RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME || canonicalFunctionName === RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME
                 ? serializeResponsesWebpageScreenshotFunctionToolOutput(outputPayload)
-              : functionName === RESPONSES_VIEW_IMAGE_TOOL_NAME
+              : functionName === RESPONSES_VIEW_IMAGE_TOOL_NAME || canonicalFunctionName === RESPONSES_VIEW_IMAGE_TOOL_NAME
                 ? serializeResponsesViewImageFunctionToolOutput(outputPayload)
-            : functionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME
+            : functionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME || canonicalFunctionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME
               ? serializeResponsesHistorySearchFunctionToolOutput(outputPayload)
-              : functionName === RESPONSES_HISTORY_READ_TOOL_NAME
+              : functionName === RESPONSES_HISTORY_READ_TOOL_NAME || canonicalFunctionName === RESPONSES_HISTORY_READ_TOOL_NAME
                 ? serializeResponsesHistoryReadFunctionToolOutput(outputPayload)
                 : serializeResponsesFunctionToolOutput(outputPayload)
     };
@@ -12456,6 +12498,7 @@ export function createMessageSender(appContext) {
             item_id: data?.item_id,
             call_id: data?.call_id,
             id: data?.id,
+            namespace: data?.namespace,
             name: data?.name,
             arguments: (typeof data?.arguments === 'string') ? data.arguments : ((typeof data?.delta === 'string') ? data.delta : ''),
             status: eventType === 'response.function_call_arguments.done' ? 'completed' : (data?.status || 'streaming')

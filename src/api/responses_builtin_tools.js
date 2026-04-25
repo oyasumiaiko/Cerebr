@@ -235,12 +235,12 @@ export const RESPONSES_BUILTIN_TOOL_SPECS = Object.freeze([
   createBuiltinToolSpec({
     id: 'tool_search',
     title: '工具搜索',
-    description: '这里单独管理 Responses API 的 hosted tool_search；开启后会自动附加 `{ type: "tool_search" }`。带 `defer_loading` 的具体工具定义仍需写在上面的 Tools 字段里。',
+    description: '这里单独管理 Responses API 的 hosted tool_search；开启后会自动附加 `{ type: "tool_search" }`。Cerebr 内置的大多数本地 function tools 会在发送时自动补成 `defer_loading`；若你手写额外工具 JSON，仍需自行声明其 defer_loading / namespace。',
     sectionToggleSpec: {
       path: ['builtin_tools', 'tool_search', 'enabled'],
       key: 'builtin_tools.tool_search.enabled',
       label: '启用工具搜索',
-      help: '启用后自动在 /responses 的 tools 中附加 { type: "tool_search" }。仅负责 hosted 模式入口；带 defer_loading 的 function / namespace / MCP server 仍需在 Tools JSON 中声明。'
+      help: '启用后自动在 /responses 的 tools 中附加 { type: "tool_search" }。Cerebr 自带的大多数 function tools 会自动改成可搜索的 defer_loading 形式；仅你额外手写的 function / namespace / MCP server 仍需在 Tools JSON 中自行声明。'
     },
     advancedSpecs: [],
     buildRequestOverride(toolSettings, helpers = {}) {

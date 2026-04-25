@@ -339,7 +339,7 @@ const RESPONSES_ADVANCED_FIELD_BASE_SPECS = Object.freeze([
     jsonMode: 'array',
     rows: 6,
     placeholder: '[\n  { \"type\": \"web_search\" }\n]',
-    help: '填写 JSON 数组。若启用 hosted tool_search，需要在这里声明带 defer_loading 的 function / namespace / MCP server。'
+    help: '填写 JSON 数组。若启用 hosted tool_search，Cerebr 内置的大多数本地 function tools 会在发送时自动补成 defer_loading；这里只需要为你额外手写的 function / namespace / MCP server 显式声明 defer_loading。'
   }
 ]);
 const RESPONSES_LOCAL_COMPACTION_FIELD_SPECS = Object.freeze([

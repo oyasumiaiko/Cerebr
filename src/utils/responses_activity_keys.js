@@ -22,7 +22,8 @@ export function getResponsesToolCallRecordKey(record, fallbackIndex = 0) {
   const id = (typeof record.id === 'string' && record.id) ? record.id : '';
   if (id) return `${type}:${id}`;
   if (type === 'function_call') {
-    return `${type}:${record.name || ''}:${fallbackIndex}`;
+    const namespace = (typeof record.namespace === 'string' && record.namespace) ? record.namespace : '';
+    return `${type}:${namespace}:${record.name || ''}:${fallbackIndex}`;
   }
   if (type === 'web_search_call') {
     return `${type}:${record.action_type || ''}:${record.query || ''}:${record.url || ''}:${record.pattern || ''}:${fallbackIndex}`;
