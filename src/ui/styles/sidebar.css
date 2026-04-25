@@ -3925,6 +3925,13 @@ input:checked + .slider::before {
     color: color-mix(in srgb, var(--cerebr-text-color) 92%, transparent);
 }
 
+.responses-extension-tools-subtext {
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.45;
+    color: color-mix(in srgb, var(--cerebr-text-color) 66%, transparent);
+}
+
 .backup-settings-panel {
     display: flex;
     flex-direction: column;

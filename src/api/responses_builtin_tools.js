@@ -6,6 +6,11 @@
  *   `api_settings.js` 的常量区、UI section 构造区、请求体 override 构造区三处；
  * - 保持纯函数接口，便于后续继续把 Gemini 或更多 provider 的内置工具接入同一套组织方式；
  * - 允许 `api_settings.js` 继续复用它自己的 compact / normalize 工具，避免在此处重新耦合 sync storage 细节。
+ *
+ * 说明：
+ * - 本模块只管理 OpenAI Responses 官方 hosted builtin tools；
+ * - Cerebr 扩展自身提供的本地 function tools 开关，统一收敛在
+ *   `responses_extension_tools.js` 与 API 设置里的“扩展提供工具”面板。
  */
 
 export const RESPONSES_WEB_SEARCH_SOURCE_INCLUDE = 'web_search_call.action.sources';

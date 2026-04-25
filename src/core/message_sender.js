@@ -71,6 +71,9 @@ import {
   hasResponsesHostedToolSearchTool
 } from '../agent_tools/shared/responses_custom_tool_search.js';
 import {
+  filterResponsesExtensionFunctionTools
+} from '../api/responses_extension_tools.js';
+import {
   ensureResponsesReplayOutputItemsIncludeFunctionCalls
 } from '../utils/responses_follow_up.js';
 import {
@@ -7822,7 +7825,10 @@ export function createMessageSender(appContext) {
     if (typeof utils?.executeJsRuntime === 'function') {
       tools.unshift(buildJsRuntimeExecuteFunctionToolDefinition(pageToolEnvironment));
     }
-    return tools;
+    return filterResponsesExtensionFunctionTools(
+      tools,
+      usedApiConfig?.responsesApiSettings
+    );
   }
 
   /**
@@ -7883,7 +7889,12 @@ export function createMessageSender(appContext) {
     pageToolEnvironment = resolveResponsesPageToolEnvironment()
   ) {
     if (!isOpenAIResponsesApiConfig(usedApiConfig)) return requestBody;
-    const hostedToolSearchEnabled = hasResponsesHostedToolSearchTool(requestBody?.tools);
+    const nextBody = cloneDataSafely(requestBody) || {};
+    nextBody.tools = filterResponsesExtensionFunctionTools(
+      nextBody.tools,
+      usedApiConfig?.responsesApiSettings
+    );
+    const hostedToolSearchEnabled = hasResponsesHostedToolSearchTool(nextBody.tools);
     const customTools = adaptResponsesCustomFunctionToolsForHostedToolSearch(
       getResponsesCustomFunctionTools(usedApiConfig, pageToolEnvironment),
       {
@@ -7891,9 +7902,8 @@ export function createMessageSender(appContext) {
         searchableToolNames: RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES
       }
     );
-    if (!Array.isArray(customTools) || customTools.length <= 0) return requestBody;
+    if (!Array.isArray(customTools) || customTools.length <= 0) return nextBody;
 
-    const nextBody = cloneDataSafely(requestBody) || {};
     nextBody.tools = mergeResponsesRequestTools(nextBody.tools, customTools);
     return nextBody;
   }

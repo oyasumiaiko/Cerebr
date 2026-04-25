@@ -27,6 +27,10 @@ import {
   buildResponsesBuiltinToolOverrides as buildResponsesBuiltinToolOverridesFromRegistry
 } from './responses_builtin_tools.js';
 import {
+  RESPONSES_EXTENSION_TOOL_SPECS,
+  isResponsesExtensionToolEnabled
+} from './responses_extension_tools.js';
+import {
   buildResponsesCompactRequestBody,
   resolveResponsesCompactEndpointUrl,
   normalizeResponsesLocalCompactionSettings
@@ -4220,6 +4224,96 @@ export function createApiManager(appContext) {
       setSettingsSnapshot: setResponsesSettingsSnapshot,
       updateSettingAtPath: updateResponsesSettingAtPath
     });
+    const createResponsesExtensionToolsSection = () => {
+      const section = document.createElement('section');
+      section.className = 'responses-settings-panel responses-extension-tools-panel';
+
+      const header = document.createElement('div');
+      header.className = 'responses-settings-header';
+      section.appendChild(header);
+
+      const title = document.createElement('div');
+      title.className = 'responses-settings-title';
+      title.textContent = '扩展提供工具';
+      header.appendChild(title);
+
+      const body = document.createElement('div');
+      body.className = 'responses-settings-body';
+      section.appendChild(body);
+
+      const description = document.createElement('div');
+      description.className = 'responses-settings-description';
+      description.textContent = '控制 Cerebr 暴露给 Responses API 的本地 function tools。关闭后，该工具不会进入最终请求体，即使自动注入链路本来支持它。';
+      body.appendChild(description);
+
+      const grid = document.createElement('div');
+      grid.className = 'responses-settings-grid responses-settings-grid--main';
+      body.appendChild(grid);
+
+      const setExtensionToolEnabled = (toolId, enabled) => {
+        const draft = cloneJsonCompatible(getResponsesSettingsSnapshot()) || {};
+        if (enabled) {
+          deleteNestedValue(draft, ['extension_tools', toolId, 'enabled']);
+          const toolState = getNestedValue(draft, ['extension_tools', toolId]);
+          if (!toolState || typeof toolState !== 'object' || Array.isArray(toolState) || Object.keys(toolState).length <= 0) {
+            deleteNestedValue(draft, ['extension_tools', toolId]);
+          }
+          const toolsRoot = getNestedValue(draft, ['extension_tools']);
+          if (!toolsRoot || typeof toolsRoot !== 'object' || Array.isArray(toolsRoot) || Object.keys(toolsRoot).length <= 0) {
+            delete draft.extension_tools;
+          }
+        } else {
+          setNestedValue(draft, ['extension_tools', toolId, 'enabled'], false);
+        }
+        setResponsesSettingsSnapshot(draft);
+      };
+
+      RESPONSES_EXTENSION_TOOL_SPECS.forEach((toolSpec) => {
+        const row = document.createElement('div');
+        row.className = 'switch-row backup-form-row';
+        if (toolSpec.description) {
+          row.title = toolSpec.description;
+        }
+
+        const textWrap = document.createElement('div');
+        textWrap.className = 'switch-row-left';
+        row.appendChild(textWrap);
+
+        const text = document.createElement('span');
+        text.className = 'switch-text';
+        text.textContent = toolSpec.title;
+        textWrap.appendChild(text);
+
+        if (toolSpec.description) {
+          const subtext = document.createElement('div');
+          subtext.className = 'responses-extension-tools-subtext';
+          subtext.textContent = toolSpec.description;
+          textWrap.appendChild(subtext);
+        }
+
+        const switchLabel = document.createElement('label');
+        switchLabel.className = 'switch';
+        const input = document.createElement('input');
+        input.type = 'checkbox';
+        input.checked = isResponsesExtensionToolEnabled(getResponsesSettingsSnapshot(), toolSpec.id);
+        input.title = input.checked ? '当前：已暴露给模型' : '当前：不暴露给模型';
+        const slider = document.createElement('span');
+        slider.className = 'slider';
+        switchLabel.appendChild(input);
+        switchLabel.appendChild(slider);
+        row.appendChild(switchLabel);
+
+        input.addEventListener('change', () => {
+          const enabled = !!input.checked;
+          input.title = enabled ? '当前：已暴露给模型' : '当前：不暴露给模型';
+          setExtensionToolEnabled(toolSpec.id, enabled);
+        });
+
+        grid.appendChild(row);
+      });
+
+      return section;
+    };
     const createResponsesLocalCompactionSection = () => createApiFieldSettingsSection({
       title: '本地上下文压缩',
       description: '仅保留手动 `/compact`；可为 compact 单独指定端点，不再自动触发。',
@@ -4370,6 +4464,7 @@ export function createApiManager(appContext) {
     const responsesBuiltinToolSections = RESPONSES_BUILTIN_TOOL_SPECS
       .map(spec => createResponsesBuiltinToolSection(spec))
       .filter(Boolean);
+    const responsesExtensionToolsSection = createResponsesExtensionToolsSection();
     const geminiSettingsSection = createGeminiSettingsSection();
     const providerSettingsHost = document.createElement('div');
     providerSettingsHost.className = 'provider-settings-host';
@@ -4393,6 +4488,10 @@ export function createApiManager(appContext) {
           section.hidden = false;
           nextSections.push(section);
         });
+        if (responsesExtensionToolsSection) {
+          responsesExtensionToolsSection.hidden = false;
+          nextSections.push(responsesExtensionToolsSection);
+        }
       } else if (responsesSettingsSection) {
         responsesSettingsSection.hidden = true;
         if (responsesLocalCompactionSection) {
@@ -4402,6 +4501,9 @@ export function createApiManager(appContext) {
           if (!section) return;
           section.hidden = true;
         });
+        if (responsesExtensionToolsSection) {
+          responsesExtensionToolsSection.hidden = true;
+        }
       }
       if (isGeminiConnectionSelected() && geminiSettingsSection) {
         geminiSettingsSection.hidden = false;
@@ -5036,6 +5138,7 @@ export function createApiManager(appContext) {
 
     const builtinToolOverrides = buildResponsesBuiltinToolOverrides(settings);
     delete settings.builtin_tools;
+    delete settings.extension_tools;
 
     if (builtinToolOverrides.tools.length > 0) {
       const existingTools = Array.isArray(settings.tools)
