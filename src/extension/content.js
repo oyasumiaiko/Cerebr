@@ -685,7 +685,9 @@ class CerebrSidebar {
       const iframe = document.createElement('iframe');
       iframe.className = 'cerebr-sidebar__iframe';
       iframe.dataset.cerebrSidebarInstanceId = this.instanceId;
-      iframe.src = chrome.runtime.getURL(`src/ui/sidebar/sidebar.html?instanceId=${encodeURIComponent(this.instanceId)}`);
+      iframe.src = chrome.runtime.getURL(
+        `src/ui/sidebar/sidebar.html?instanceId=${encodeURIComponent(this.instanceId)}&isPrimary=${this.isPrimary ? '1' : '0'}`
+      );
       iframe.allow = 'clipboard-write';
 
       // 重要：当用户在 DevTools 中对 iframe 执行「重新加载框架」时，iframe 内部状态会被重置；

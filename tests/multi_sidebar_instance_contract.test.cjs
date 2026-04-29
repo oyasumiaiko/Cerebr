@@ -34,20 +34,34 @@ test('content script creates embedded sidebar iframes with explicit instanceId q
   assert.match(source, /generateInstanceId\(\)/);
   assert.match(
     source,
-    /sidebar\.html\?instanceId=\$\{encodeURIComponent\(this\.instanceId\)\}/
+    /sidebar\.html\?instanceId=\$\{encodeURIComponent\(this\.instanceId\)\}&isPrimary=\$\{this\.isPrimary \? '1' : '0'\}/
   );
   assert.match(source, /case 'CREATE_ADDITIONAL_SIDEBAR':/);
+  assert.match(source, /case 'CLOSE_SIDEBAR':/);
 });
 
-test('sidebar app context reads instanceId without using shared storage', async () => {
+test('sidebar app context reads instance metadata without using shared storage', async () => {
   const source = await readRepoFile('src/ui/sidebar/sidebar_app_context.js');
 
   assert.match(source, /function resolveSidebarInstanceIdFromLocation\(\)/);
+  assert.match(source, /function resolveSidebarIsPrimaryFromLocation\(\)/);
   assert.match(source, /sidebarInstanceId: resolveSidebarInstanceIdFromLocation\(\)/);
+  assert.match(source, /isPrimarySidebar: resolveSidebarIsPrimaryFromLocation\(\)/);
 
-  const body = extractFunctionBody(source, 'resolveSidebarInstanceIdFromLocation');
-  assert.match(body, /searchParams\.get\('instanceId'\)/);
-  assert.doesNotMatch(body, /localStorage|sessionStorage|chrome\.storage/);
+  const instanceBody = extractFunctionBody(source, 'resolveSidebarInstanceIdFromLocation');
+  const primaryBody = extractFunctionBody(source, 'resolveSidebarIsPrimaryFromLocation');
+  assert.match(instanceBody, /searchParams\.get\('instanceId'\)/);
+  assert.match(primaryBody, /searchParams\.get\('isPrimary'\)/);
+  assert.doesNotMatch(instanceBody, /localStorage|sessionStorage|chrome\.storage/);
+  assert.doesNotMatch(primaryBody, /localStorage|sessionStorage|chrome\.storage/);
+});
+
+test('parallel sidebar button closes non-primary sidebars', async () => {
+  const source = await readRepoFile('src/ui/sidebar/sidebar_events.js');
+
+  assert.match(source, /isPrimarySidebar \? 'CREATE_ADDITIONAL_SIDEBAR' : 'CLOSE_SIDEBAR'/);
+  assert.match(source, /isPrimarySidebar \? 'far fa-window-restore' : 'far fa-window-close'/);
+  assert.match(source, /button\.title = isPrimarySidebar \? '新建并行侧栏' : '关闭此侧栏'/);
 });
 
 test('host page tool requests carry sidebarInstanceId through sender and background relay', async () => {
@@ -63,4 +77,3 @@ test('host page tool requests carry sidebarInstanceId through sender and backgro
   assert.match(backgroundSource, /GET_PDF_CONTENT_READ_RESULT_INTERNAL[\s\S]*sidebarInstanceId: typeof message\?\.sidebarInstanceId === 'string'/);
   assert.match(backgroundSource, /GET_WEBPAGE_SCREENSHOT_RESULT_INTERNAL[\s\S]*sidebarInstanceId: typeof message\?\.sidebarInstanceId === 'string'/);
 });
-

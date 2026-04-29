@@ -45,6 +45,23 @@ function resolveSidebarInstanceIdFromLocation() {
   return '';
 }
 
+function resolveSidebarIsPrimaryFromLocation() {
+  try {
+    const currentUrl = new URL(window.location.href);
+    const fromSearch = currentUrl.searchParams.get('isPrimary');
+    if (typeof fromSearch === 'string') {
+      return fromSearch === '1' || fromSearch.toLowerCase() === 'true';
+    }
+    const hashQuery = currentUrl.hash.startsWith('#') ? currentUrl.hash.slice(1) : '';
+    const hashParams = new URLSearchParams(hashQuery);
+    const fromHash = hashParams.get('isPrimary');
+    if (typeof fromHash === 'string') {
+      return fromHash === '1' || fromHash.toLowerCase() === 'true';
+    }
+  } catch (_) {}
+  return false;
+}
+
 function raceWithTimeout(promise, timeoutMs, timeoutMessage) {
   const normalizedTimeout = Number.isFinite(Number(timeoutMs)) ? Math.max(1, Math.trunc(Number(timeoutMs))) : 0;
   if (!normalizedTimeout) return promise;
@@ -165,6 +182,7 @@ export function createSidebarAppContext(isStandalone) {
     state: {
       isStandalone,
       sidebarInstanceId: resolveSidebarInstanceIdFromLocation(),
+      isPrimarySidebar: resolveSidebarIsPrimaryFromLocation(),
       isFullscreen: false,
       hostEmbedScale: 1,
       isComposing: false,

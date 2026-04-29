@@ -164,11 +164,15 @@ async function main() {
     await secondFrame.locator('#message-input').fill('second sidebar draft');
     const firstDraftAfter = await firstFrame.locator('#message-input').textContent();
     const secondDraftAfter = await secondFrame.locator('#message-input').textContent();
+    const primaryButtonTitle = await firstFrame.locator('#add-sidebar-button').getAttribute('title');
+    const secondaryButtonTitle = await secondFrame.locator('#add-sidebar-button').getAttribute('title');
     result.draftIsolation = {
       firstDraftBefore,
       secondDraftBefore,
       firstDraftAfter,
-      secondDraftAfter
+      secondDraftAfter,
+      primaryButtonTitle,
+      secondaryButtonTitle
     };
     if (firstDraftBefore !== 'first sidebar draft' || firstDraftAfter !== 'first sidebar draft') {
       throw new Error('Primary sidebar draft changed while editing the second sidebar.');
@@ -176,7 +180,29 @@ async function main() {
     if ((secondDraftBefore || '') !== '' || secondDraftAfter !== 'second sidebar draft') {
       throw new Error('Second sidebar draft is not isolated from the primary sidebar.');
     }
+    if (primaryButtonTitle !== '新建并行侧栏' || secondaryButtonTitle !== '关闭此侧栏') {
+      throw new Error(`Unexpected sidebar button titles: ${JSON.stringify({ primaryButtonTitle, secondaryButtonTitle })}`);
+    }
     result.steps.push('draft_isolation_verified');
+    result.steps.push('secondary_close_button_verified');
+
+    await secondFrame.locator('#add-sidebar-button').click();
+    const closeDebugState = await waitFor(async () => {
+      const payload = await extensionWorker.evaluate(
+        buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
+      );
+      const state = payload?.response?.debugState || null;
+      const visibleCount = Array.isArray(state?.instances)
+        ? state.instances.filter((item) => item?.isActuallyVisible).length
+        : 0;
+      return state?.sidebarCount === 2 && visibleCount === 1 ? state : null;
+    }, {
+      timeoutMs: 20_000,
+      intervalMs: 250,
+      label: 'secondary sidebar closed'
+    });
+    result.closeDebugState = closeDebugState;
+    result.steps.push('secondary_sidebar_closed');
 
     await Promise.all([
       firstFrame.locator('body').screenshot({

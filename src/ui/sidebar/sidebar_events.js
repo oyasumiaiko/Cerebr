@@ -1063,16 +1063,23 @@ function setupAddSidebarButton(appContext) {
     button.style.display = 'none';
     return;
   }
+  const icon = button.querySelector('i');
+  const isPrimarySidebar = appContext.state.isPrimarySidebar === true;
+  button.title = isPrimarySidebar ? '新建并行侧栏' : '关闭此侧栏';
+  button.setAttribute('aria-label', button.title);
+  if (icon) {
+    icon.className = isPrimarySidebar ? 'far fa-window-restore' : 'far fa-window-close';
+  }
   button.addEventListener('click', () => {
     try {
       window.parent.postMessage({
-        type: 'CREATE_ADDITIONAL_SIDEBAR',
+        type: isPrimarySidebar ? 'CREATE_ADDITIONAL_SIDEBAR' : 'CLOSE_SIDEBAR',
         source: 'cerebr-sidebar',
         instanceId: appContext.state.sidebarInstanceId || ''
       }, '*');
     } catch (error) {
-      console.error('请求新建并行侧栏失败:', error);
-      appContext.utils.showNotification?.({ message: '新建侧栏失败', type: 'error' });
+      console.error(isPrimarySidebar ? '请求新建并行侧栏失败:' : '请求关闭侧栏失败:', error);
+      appContext.utils.showNotification?.({ message: isPrimarySidebar ? '新建侧栏失败' : '关闭侧栏失败', type: 'error' });
     }
   });
 }
