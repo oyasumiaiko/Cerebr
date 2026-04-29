@@ -64,6 +64,16 @@ test('parallel sidebar button closes non-primary sidebars', async () => {
   assert.match(source, /button\.title = isPrimarySidebar \? '新建并行侧栏' : '关闭此侧栏'/);
 });
 
+test('global sidebar visibility commands operate on all instances', async () => {
+  const source = await readRepoFile('src/extension/content.js');
+
+  assert.match(source, /toggleAllSidebars\(\)/);
+  assert.match(source, /setAllSidebarsVisible\(isVisible\)/);
+  assert.match(source, /case 'TOGGLE_SIDEBAR_onClicked':[\s\S]*sidebarManager\?\.toggleAllSidebars\?\.\(\)/);
+  assert.match(source, /case 'OPEN_SIDEBAR':[\s\S]*sidebarManager\?\.setAllSidebarsVisible\?\.\(true\)/);
+  assert.match(source, /case 'CLOSE_SIDEBAR':[\s\S]*sidebarManager\?\.setAllSidebarsVisible\?\.\(false\)/);
+});
+
 test('host page tool requests carry sidebarInstanceId through sender and background relay', async () => {
   const messageSenderSource = await readRepoFile('src/core/message_sender.js');
   const sidebarEventsSource = await readRepoFile('src/ui/sidebar/sidebar_events.js');

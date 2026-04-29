@@ -204,6 +204,69 @@ async function main() {
     result.closeDebugState = closeDebugState;
     result.steps.push('secondary_sidebar_closed');
 
+    const reopenAllResponse = await extensionWorker.evaluate(
+      buildSendContentMessageExpression(JSON.stringify({ type: 'OPEN_SIDEBAR' }))
+    );
+    result.reopenAllResponse = reopenAllResponse;
+    const reopenedDebugState = await waitFor(async () => {
+      const payload = await extensionWorker.evaluate(
+        buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
+      );
+      const state = payload?.response?.debugState || null;
+      const visibleCount = Array.isArray(state?.instances)
+        ? state.instances.filter((item) => item?.isActuallyVisible).length
+        : 0;
+      return state?.sidebarCount === 2 && visibleCount === 2 ? state : null;
+    }, {
+      timeoutMs: 20_000,
+      intervalMs: 250,
+      label: 'all sidebars reopened'
+    });
+    result.reopenedDebugState = reopenedDebugState;
+    result.steps.push('all_sidebars_reopened');
+
+    const toggleClosedResponse = await extensionWorker.evaluate(
+      buildSendContentMessageExpression(JSON.stringify({ type: 'TOGGLE_SIDEBAR_onClicked' }))
+    );
+    result.toggleClosedResponse = toggleClosedResponse;
+    const toggleClosedDebugState = await waitFor(async () => {
+      const payload = await extensionWorker.evaluate(
+        buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
+      );
+      const state = payload?.response?.debugState || null;
+      const visibleCount = Array.isArray(state?.instances)
+        ? state.instances.filter((item) => item?.isActuallyVisible).length
+        : 0;
+      return state?.sidebarCount === 2 && visibleCount === 0 ? state : null;
+    }, {
+      timeoutMs: 20_000,
+      intervalMs: 250,
+      label: 'all sidebars closed by global toggle'
+    });
+    result.toggleClosedDebugState = toggleClosedDebugState;
+    result.steps.push('all_sidebars_closed_by_global_toggle');
+
+    const toggleReopenedResponse = await extensionWorker.evaluate(
+      buildSendContentMessageExpression(JSON.stringify({ type: 'TOGGLE_SIDEBAR_onClicked' }))
+    );
+    result.toggleReopenedResponse = toggleReopenedResponse;
+    const toggleReopenedDebugState = await waitFor(async () => {
+      const payload = await extensionWorker.evaluate(
+        buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
+      );
+      const state = payload?.response?.debugState || null;
+      const visibleCount = Array.isArray(state?.instances)
+        ? state.instances.filter((item) => item?.isActuallyVisible).length
+        : 0;
+      return state?.sidebarCount === 2 && visibleCount === 2 ? state : null;
+    }, {
+      timeoutMs: 20_000,
+      intervalMs: 250,
+      label: 'all sidebars reopened by global toggle'
+    });
+    result.toggleReopenedDebugState = toggleReopenedDebugState;
+    result.steps.push('all_sidebars_reopened_by_global_toggle');
+
     await Promise.all([
       firstFrame.locator('body').screenshot({
         path: path.join(outputDir, 'primary-sidebar-body.png'),

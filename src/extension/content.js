@@ -1148,6 +1148,17 @@ class CerebrSidebarManager {
     return this.sidebars.filter((item) => item?.isVisible && item?.sidebar);
   }
 
+  setAllSidebarsVisible(isVisible) {
+    const nextVisible = !!isVisible;
+    this.sidebars.forEach((item) => item.toggle(nextVisible));
+    this.layoutSidebars();
+  }
+
+  toggleAllSidebars() {
+    const shouldHideAll = this.sidebars.some((item) => item?.isVisible);
+    this.setAllSidebarsVisible(!shouldHideAll);
+  }
+
   layoutSidebars() {
     const gapPx = 12;
     const offsetByPosition = new Map();
@@ -1578,16 +1589,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     switch (message.type) {
       case 'TOGGLE_SIDEBAR_onClicked':
-        targetSidebar.toggle();  // 不传参数表示切换状态
-        sidebarManager?.layoutSidebars?.();
+        sidebarManager?.toggleAllSidebars?.();
         break;
       case 'OPEN_SIDEBAR':
-        targetSidebar.toggle(true);  // 明确传入 true 表示打开
-        sidebarManager?.layoutSidebars?.();
+        sidebarManager?.setAllSidebarsVisible?.(true);
         break;
       case 'CLOSE_SIDEBAR':
-        targetSidebar.toggle(false);  // 明确传入 false 表示关闭
-        sidebarManager?.layoutSidebars?.();
+        sidebarManager?.setAllSidebarsVisible?.(false);
         break;
       case 'GET_SIDEBAR_DEBUG_STATE':
         {
