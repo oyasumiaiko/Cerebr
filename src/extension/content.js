@@ -259,7 +259,16 @@ function openMarkdownLinkInPage(url) {
 }
 
 class CerebrSidebar {
-  constructor() {
+  constructor(options = {}) {
+    this.manager = options?.manager || null;
+    this.instanceId = (typeof options?.instanceId === 'string' && options.instanceId.trim())
+      ? options.instanceId.trim()
+      : `sidebar_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    this.isPrimary = options?.isPrimary === true;
+    this.stackOffsetPx = 0;
+    this.readyPromise = new Promise((resolve) => {
+      this._resolveReady = resolve;
+    });
     this.isVisible = false;
     this.sidebarWidth = 800;  // 默认值改为800px
     this.scaleFactor = 1.0;
@@ -279,8 +288,30 @@ class CerebrSidebar {
     this.dockStyleElement = null;
     // console.log('CerebrSidebar 实例创建');
     this.initializeSidebar();
-    this.setupUrlChangeListener();
-    this.setupDragAndDrop();
+  }
+
+  getIframe() {
+    return this.sidebar?.querySelector('.cerebr-sidebar__iframe') || null;
+  }
+
+  ownsWindow(sourceWindow) {
+    const iframe = this.getIframe();
+    return !!(iframe && iframe.contentWindow && iframe.contentWindow === sourceWindow);
+  }
+
+  postToIframe(message) {
+    const iframe = this.getIframe();
+    if (!iframe || !iframe.contentWindow) return false;
+    iframe.contentWindow.postMessage(message, '*');
+    return true;
+  }
+
+  setStackOffsetPx(offsetPx) {
+    const numeric = Number(offsetPx);
+    const nextOffset = Number.isFinite(numeric) && numeric > 0 ? Math.round(numeric) : 0;
+    if (this.stackOffsetPx === nextOffset) return;
+    this.stackOffsetPx = nextOffset;
+    this.updatePosition(this.sidebarPosition);
   }
 
   // 添加统一的宽度更新方法
@@ -301,7 +332,9 @@ class CerebrSidebar {
     // 移除两侧的定位
     style.left = '';
     style.right = '';
-    const offset = this.isDocked ? '0px' : 'calc(10px * var(--scale-ratio, 1))';
+    const baseOffset = this.isDocked ? '0px' : 'calc(10px * var(--scale-ratio, 1))';
+    const instanceOffset = this.stackOffsetPx > 0 ? `${this.stackOffsetPx}px` : '0px';
+    const offset = this.isDocked ? '0px' : `calc(${baseOffset} + ${instanceOffset})`;
     const hiddenOffset = this.isDocked ? '0px' : 'calc(10px * var(--scale-ratio, 1))';
     
     // 设置新的定位和变换
@@ -483,73 +516,11 @@ class CerebrSidebar {
     } else {
       this.clearDockLayout();
     }
-    if (!this.isFullscreen) {
-      this.updatePosition(this.sidebarPosition);
-    }
-  }
-
-  setupUrlChangeListener() {
-    let lastUrl = window.location.href;
-
-    // 检查URL是否发生实质性变化
-    const hasUrlChanged = (currentUrl) => {
-      if (currentUrl === lastUrl) return false;
-      if (document.contentType === 'application/pdf') return false;
-
-      const oldUrl = new URL(lastUrl);
-      const newUrl = new URL(currentUrl);
-      return oldUrl.pathname !== newUrl.pathname || oldUrl.search !== newUrl.search;
-    };
-
-    // 处理URL变化
-    const handleUrlChange = () => {
-      const currentUrl = window.location.href;
-      if (hasUrlChanged(currentUrl)) {
-        console.log('URL变化:', '从:', lastUrl, '到:', currentUrl);
-        lastUrl = currentUrl;
-
-        // 获取iframe并发送消息
-        const iframe = sidebar.sidebar?.querySelector('.cerebr-sidebar__iframe');
-        if (iframe) {
-          console.log('发送URL变化消息到iframe');
-          iframe.contentWindow.postMessage({
-            type: 'URL_CHANGED',
-            url: currentUrl,
-            title: document.title,
-            referrer: document.referrer,
-            lastModified: document.lastModified,
-            lang: document.documentElement.lang,
-            charset: document.characterSet
-          }, '*');
-        }
+      if (!this.isFullscreen) {
+        this.updatePosition(this.sidebarPosition);
       }
-    };
-
-    // 监听popstate事件
-    window.addEventListener('popstate', () => {
-      console.log('popstate事件触发');
-      handleUrlChange();
-    });
-
-    // 重写history方法
-    const originalPushState = history.pushState;
-    const originalReplaceState = history.replaceState;
-
-    history.pushState = function () {
-      originalPushState.apply(this, arguments);
-      console.log('pushState被调用');
-      handleUrlChange();
-    };
-
-    history.replaceState = function () {
-      originalReplaceState.apply(this, arguments);
-      console.log('replaceState被调用');
-      handleUrlChange();
-    };
-
-    // 添加定期检查
-    setInterval(handleUrlChange, 1000);
-  }
+      this.manager?.layoutSidebars?.();
+    }
 
   async initializeSidebar() {
     try {
@@ -564,6 +535,7 @@ class CerebrSidebar {
       // console.log(`初始化侧边栏: 宽度=${this.sidebarWidth}, 缩放=${this.scaleFactor}, 位置=${this.sidebarPosition}`);
 
       const container = document.createElement('cerebr-root');
+      container.dataset.cerebrSidebarInstanceId = this.instanceId;
       container.style.display = 'contents'; // 让容器内元素透出
 
       // 防止外部JavaScript访问和修改我们的元素
@@ -686,6 +658,7 @@ class CerebrSidebar {
 
       this.sidebar = document.createElement('div');
       this.sidebar.className = 'cerebr-sidebar';
+      this.sidebar.dataset.cerebrSidebarInstanceId = this.instanceId;
       if (this.isDocked) {
         this.sidebar.classList.add('docked');
       }
@@ -711,7 +684,8 @@ class CerebrSidebar {
 
       const iframe = document.createElement('iframe');
       iframe.className = 'cerebr-sidebar__iframe';
-      iframe.src = chrome.runtime.getURL('src/ui/sidebar/sidebar.html');
+      iframe.dataset.cerebrSidebarInstanceId = this.instanceId;
+      iframe.src = chrome.runtime.getURL(`src/ui/sidebar/sidebar.html?instanceId=${encodeURIComponent(this.instanceId)}`);
       iframe.allow = 'clipboard-write';
 
       // 重要：当用户在 DevTools 中对 iframe 执行「重新加载框架」时，iframe 内部状态会被重置；
@@ -811,6 +785,7 @@ class CerebrSidebar {
       requestAnimationFrame(() => {
         this.sidebar.classList.add('initialized');
         this.initialized = true;
+        this._resolveReady?.(this);
         // console.log('侧边栏初始化完成');
       });
 
@@ -833,13 +808,6 @@ class CerebrSidebar {
 
   setupEventListeners(resizer) {
     let startX, startWidth;
-
-    const syncHostAltKeyState = (isPressed) => {
-      const nextPressed = !!isPressed;
-      if (this.isAltKeyPressed === nextPressed) return;
-      this.isAltKeyPressed = nextPressed;
-      this.notifyIframeAltKeyState(nextPressed);
-    };
 
     resizer.addEventListener('mousedown', (e) => {
       // 如果是全屏模式，不允许调整大小
@@ -870,123 +838,27 @@ class CerebrSidebar {
       document.addEventListener('mouseup', handleMouseUp);
     });
 
-    // 说明：
-    // - 这里只做“观察并同步”父页面的 Alt 状态，不做 preventDefault / stopPropagation；
-    // - 这样可以让 iframe 内部在未聚焦时也提前挂上非 passive 的滚轮监听，
-    //   同时不破坏网页自身的 Alt 菜单、快捷键或浏览器默认行为。
-    window.addEventListener('keydown', (event) => {
-      if (event.key === 'Alt') {
-        syncHostAltKeyState(true);
-      }
-    }, true);
-    window.addEventListener('keyup', (event) => {
-      if (event.key === 'Alt') {
-        syncHostAltKeyState(false);
-      }
-    }, true);
-    window.addEventListener('blur', () => {
-      syncHostAltKeyState(false);
-    });
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState !== 'visible') {
-        syncHostAltKeyState(false);
-      }
-    });
-
-    // 监听来自 iframe 的消息
-    window.addEventListener('message', (event) => {
-      switch (event.data.type) {
-        case 'SIDEBAR_WIDTH_CHANGE':
-          this.updateWidth(event.data.width);
-          break;
-
-        case 'SCALE_FACTOR_CHANGE':
-          this.scaleFactor = event.data.value;
-          this.updateScale();
-          queueSyncSet({ scaleFactor: this.scaleFactor });
-          break;
-
-        case 'SIDEBAR_POSITION_CHANGE':
-          this.updatePosition(event.data.position);
-          break;
-        case 'TOGGLE_DOCK_MODE_FROM_IFRAME':
-          this.setDockMode(!this.isDocked);
-          break;
-
-        case 'CLOSE_SIDEBAR':
-          this.toggle(false);  // 明确传入 false 表示关闭
-          break;
-
-        case 'TOGGLE_FULLSCREEN_FROM_IFRAME':
-          console.log('处理全屏切换消息:', event.data.isFullscreen);
-          this.toggleFullscreen();
-          break;
-        case 'CAPTURE_SCREENSHOT':
-          captureAndDropScreenshot();
-          break;
-        case 'OPEN_MARKDOWN_LINK':
-          openMarkdownLinkInPage(event.data.url);
-          break;
-        case 'REQUEST_PAGE_INFO':
-          // console.log('收到请求页面信息消息');
-          const iframe = this.sidebar?.querySelector('.cerebr-sidebar__iframe');
-          if (iframe) {
-            iframe.contentWindow.postMessage({
-              type: 'URL_CHANGED',
-              url: window.location.href,
-              title: document.title,
-              referrer: document.referrer,
-              lastModified: document.lastModified,
-              lang: document.documentElement.lang,
-              charset: document.characterSet
-            }, '*');
-            // console.log('已发送当前页面信息到侧边栏');
-          }
-          break;
-        case 'REQUEST_FULLSCREEN_STATE':
-          this.notifyIframeFullscreenState(this.isFullscreen);
-          break;
-        case 'REQUEST_TEMP_MODE_STATE':
-          this.notifyIframeTempModeState(this.isTemporaryMode);
-          break;
-        case 'REQUEST_ALT_KEY_STATE':
-          this.notifyIframeAltKeyState(this.isAltKeyPressed);
-          break;
-        case 'REQUEST_HOST_EMBED_SCALE':
-          this.notifyIframeEmbedScale();
-          break;
-        case 'TEMP_MODE_STATE_CHANGED':
-          this.isTemporaryMode = !!event.data?.isOn;
-          break;
-      }
-    });
-
-    // 接收来自侧栏内部的选区同步消息，更新全局选区缓存
-    window.addEventListener('message', (event) => {
-      try {
-        const data = event.data || {};
-        if (data.type !== 'SIDEBAR_SELECTION_CHANGED') return;
-        if (data.source && data.source !== 'cerebr-sidebar') return;
-        currentSelection = (data.text || '').toString().trim();
-      } catch (e) {
-        console.warn('[Cerebr Selection] 处理侧栏选区消息失败:', e);
-      }
-    });
   }
 
   // 添加聚焦方法
   focusInput() {
-    const iframe = this.sidebar?.querySelector('.cerebr-sidebar__iframe');
-    if (iframe) {
-      iframe.contentWindow.postMessage({ type: 'FOCUS_INPUT' }, '*');
-    }
+    this.postToIframe({ type: 'FOCUS_INPUT' });
   }
   /**
    * 切换侧边栏的显示状态
    * @param {boolean|null} forceShow - 明确指定显示(true)或隐藏(false)，或为null时取反当前状态
    */
   toggle(forceShow = null) {
-    if (!this.initialized) return;
+    if (!this.initialized) {
+      // 背景命令可能早于 iframe 初始化完成到达；这里在实例内部重放显隐命令，
+      // 避免调用方到处感知 readyPromise，也避免早期 OPEN_SIDEBAR 被静默丢弃。
+      this.readyPromise
+        .then(() => this.toggle(forceShow))
+        .catch((error) => {
+          console.warn('侧栏初始化后重放显隐命令失败:', error);
+        });
+      return;
+    }
 
     try {
       const wasVisible = this.isVisible;
@@ -1040,10 +912,7 @@ class CerebrSidebar {
         }
 
         // 当侧边栏关闭时，确保不聚焦侧栏内的输入框
-        const iframe = this.sidebar?.querySelector('.cerebr-sidebar__iframe');
-        if (iframe) {
-          iframe.contentWindow.postMessage({ type: 'BLUR_INPUT' }, '*');
-        }
+        this.postToIframe({ type: 'BLUR_INPUT' });
         // 当动画过渡结束后，再把 display 设置为 none
         this.sidebar.addEventListener('transitionend', (e) => {
           if (!this.sidebar.classList.contains('visible')) {
@@ -1051,109 +920,13 @@ class CerebrSidebar {
             if (this.isDocked) {
               this.clearDockLayout();
             }
+            this.manager?.layoutSidebars?.();
           }
         }, { once: true });
       }
     } catch (error) {
       console.error('切换侧边栏失败:', error);
     }
-  }
-
-  setupDragAndDrop() {
-    // console.log('初始化拖放功能');
-
-    // 存储最后一次设置的图片数据
-    let lastImageData = null;
-
-    // 检查是否在侧边栏范围内的函数
-    const isInSidebarBounds = (x, y) => {
-      if (!this.sidebar) return false;
-      const sidebarRect = this.sidebar.getBoundingClientRect();
-      return (
-        x >= sidebarRect.left &&
-        x <= sidebarRect.right &&
-        y >= sidebarRect.top &&
-        y <= sidebarRect.bottom
-      );
-    };
-
-    // 监听页面上的所有图片
-    document.addEventListener('dragstart', (e) => {
-      console.log('拖动开始，目标元素:', e.target.tagName);
-      const img = e.target;
-      if (img.tagName === 'IMG') {
-        console.log('检测到图片拖动，图片src:', img.src);
-        // 尝试直接获取图片的 src
-        try {
-          // 对于跨域图片，尝试使用 fetch 获取
-          console.log('尝试获取图片数据');
-          fetch(img.src)
-            .then(response => response.blob())
-            .then(blob => {
-              console.log('成功获取图片blob数据，大小:', blob.size);
-              const reader = new FileReader();
-              reader.onloadend = () => {
-                const base64Data = reader.result;
-                console.log('成功转换为base64数据');
-                const imageData = {
-                  type: 'image',
-                  data: base64Data,
-                  name: img.alt || '拖放图片'
-                };
-                console.log('设置拖动数据:', imageData.name);
-                lastImageData = imageData;  // 保存最后一次的图片数据
-                e.dataTransfer.setData('text/plain', JSON.stringify(imageData));
-                e.dataTransfer.effectAllowed = 'copy';  // 设置拖动效果为复制
-              };
-              reader.readAsDataURL(blob);
-            })
-            .catch(error => {
-              console.error('获取图片数据失败:', error);
-              // 如果 fetch 失败，回退到 canvas 方法
-              console.log('尝试使用Canvas方法获取图片数据');
-              try {
-                const canvas = document.createElement('canvas');
-                canvas.width = img.naturalWidth;
-                canvas.height = img.naturalHeight;
-                const ctx = canvas.getContext('2d');
-                ctx.drawImage(img, 0, 0);
-                const base64Data = canvas.toDataURL(img.src.match(/\.png$/i) ? 'image/png' : 'image/jpeg');
-                console.log('成功使用Canvas获取图片数据');
-                const imageData = {
-                  type: 'image',
-                  data: base64Data,
-                  name: img.alt || '拖放图片'
-                };
-                console.log('设置拖动数据:', imageData.name);
-                lastImageData = imageData;  // 保存最后一次的图片数据
-                e.dataTransfer.setData('text/plain', JSON.stringify(imageData));
-                e.dataTransfer.effectAllowed = 'copy';  // 设置拖动效果为复制
-              } catch (canvasError) {
-                console.error('Canvas获取图片数据失败:', canvasError);
-              }
-            });
-        } catch (error) {
-          console.error('处理图片拖动失败:', error);
-        }
-      }
-    });
-
-    // 监听拖动结束事件
-    document.addEventListener('dragend', (e) => {
-      const inSidebar = isInSidebarBounds(e.clientX, e.clientY);
-      console.log('拖动结束，是否在侧边栏内:', inSidebar, '坐标:', e.clientX, e.clientY);
-
-      const iframe = this.sidebar?.querySelector('.cerebr-sidebar__iframe');
-      if (iframe && inSidebar && lastImageData && this.isVisible) {  // 确保侧边栏可见
-        console.log('在侧边栏内放下，发送图片数据到iframe');
-        iframe.contentWindow.postMessage({
-          type: 'DROP_IMAGE',
-          imageData: lastImageData
-        }, '*');
-      }
-      // 重置状态
-      lastImageData = null;
-    });
   }
 
   getIframeEmbedScale() {
@@ -1163,7 +936,7 @@ class CerebrSidebar {
   }
 
   updateScale() {
-    const iframe = this.sidebar?.querySelector('.cerebr-sidebar__iframe');
+    const iframe = this.getIframe();
     if (iframe) {
       const scale = this.getIframeEmbedScale();
       iframe.style.transformOrigin = 'top left';
@@ -1242,72 +1015,441 @@ class CerebrSidebar {
       this.sidebar.classList.add('visible');
       this.isVisible = true;
     }
+    this.manager?.layoutSidebars?.();
   }
   
   // 通知iframe全屏状态变化
   notifyIframeFullscreenState(isFullscreen) {
-    const iframe = this.sidebar.querySelector('.cerebr-sidebar__iframe');
-    if (iframe && iframe.contentWindow) {
-      try {
-        iframe.contentWindow.postMessage({
-          type: 'FULLSCREEN_STATE_CHANGED',
-          isFullscreen: isFullscreen
-        }, '*');
-      } catch (error) {
-        console.log('通知iframe全屏状态失败:', error);
-      }
+    try {
+      this.postToIframe({
+        type: 'FULLSCREEN_STATE_CHANGED',
+        isFullscreen: isFullscreen
+      });
+    } catch (error) {
+      console.log('通知iframe全屏状态失败:', error);
     }
   }
 
   // 通知 iframe 临时模式状态变化
   notifyIframeTempModeState(isOn) {
-    const iframe = this.sidebar.querySelector('.cerebr-sidebar__iframe');
-    if (iframe && iframe.contentWindow) {
-      try {
-        iframe.contentWindow.postMessage({
-          type: 'TEMP_MODE_STATE_SYNC',
-          isOn: !!isOn
-        }, '*');
-      } catch (error) {
-        console.log('通知iframe临时模式状态失败:', error);
-      }
+    try {
+      this.postToIframe({
+        type: 'TEMP_MODE_STATE_SYNC',
+        isOn: !!isOn
+      });
+    } catch (error) {
+      console.log('通知iframe临时模式状态失败:', error);
     }
   }
 
   // 通知 iframe 当前从宿主页观察到的 Alt 状态。
   // iframe 侧只据此切换滚轮监听模式，不会反向修改宿主页事件流。
   notifyIframeAltKeyState(isPressed) {
-    const iframe = this.sidebar.querySelector('.cerebr-sidebar__iframe');
-    if (iframe && iframe.contentWindow) {
-      try {
-        iframe.contentWindow.postMessage({
-          type: 'ALT_KEY_STATE_SYNC',
-          isPressed: !!isPressed
-        }, '*');
-      } catch (error) {
-        console.log('通知 iframe Alt 状态失败:', error);
-      }
+    this.isAltKeyPressed = !!isPressed;
+    try {
+      this.postToIframe({
+        type: 'ALT_KEY_STATE_SYNC',
+        isPressed: !!isPressed
+      });
+    } catch (error) {
+      console.log('通知 iframe Alt 状态失败:', error);
     }
   }
 
   notifyIframeEmbedScale(scale = this.getIframeEmbedScale()) {
-    const iframe = this.sidebar.querySelector('.cerebr-sidebar__iframe');
-    if (iframe && iframe.contentWindow) {
-      try {
-        iframe.contentWindow.postMessage({
-          type: 'HOST_EMBED_SCALE_SYNC',
-          scale
-        }, '*');
-      } catch (error) {
-        console.log('通知 iframe 嵌入缩放失败:', error);
-      }
+    try {
+      this.postToIframe({
+        type: 'HOST_EMBED_SCALE_SYNC',
+        scale
+      });
+    } catch (error) {
+      console.log('通知 iframe 嵌入缩放失败:', error);
     }
   }
 }
 
+class CerebrSidebarManager {
+  constructor() {
+    this.sidebars = [];
+    this.sidebarById = new Map();
+    this.activeSidebarId = null;
+    this.lastUrl = window.location.href;
+    this.lastImageData = null;
+    this.isAltKeyPressed = false;
+    this.nextInstanceSeq = 1;
+    this.createSidebar({ show: false, isPrimary: true });
+    this.setupUrlChangeListener();
+    this.setupHostEventListeners();
+    this.setupDragAndDrop();
+  }
+
+  generateInstanceId() {
+    const timestamp = Date.now().toString(36);
+    const seq = this.nextInstanceSeq++;
+    const random = Math.random().toString(36).slice(2, 8);
+    return `sidebar_${timestamp}_${seq}_${random}`;
+  }
+
+  createSidebar(options = {}) {
+    const instanceId = this.generateInstanceId();
+    const sidebarInstance = new CerebrSidebar({
+      manager: this,
+      instanceId,
+      isPrimary: options?.isPrimary === true
+    });
+    this.sidebars.push(sidebarInstance);
+    this.sidebarById.set(instanceId, sidebarInstance);
+    this.setActiveSidebar(sidebarInstance);
+    sidebarInstance.readyPromise.then(() => {
+      sidebarInstance.notifyIframeAltKeyState(this.isAltKeyPressed);
+      this.sendPageInfoToSidebar(sidebarInstance);
+      this.layoutSidebars();
+      if (options?.show === true) {
+        sidebarInstance.toggle(true);
+      }
+    }).catch((error) => {
+      console.warn('侧栏实例初始化完成回调失败:', error);
+    });
+    return sidebarInstance;
+  }
+
+  getPrimarySidebar() {
+    return this.sidebars[0] || null;
+  }
+
+  getActiveSidebar() {
+    return this.sidebarById.get(this.activeSidebarId) || this.getPrimarySidebar();
+  }
+
+  getSidebarById(instanceId) {
+    if (typeof instanceId !== 'string' || !instanceId.trim()) return null;
+    return this.sidebarById.get(instanceId.trim()) || null;
+  }
+
+  getSidebarByWindow(sourceWindow) {
+    return this.sidebars.find((item) => item.ownsWindow(sourceWindow)) || null;
+  }
+
+  setActiveSidebar(sidebarInstance) {
+    if (!sidebarInstance) return;
+    this.activeSidebarId = sidebarInstance.instanceId;
+    this.sidebars.forEach((item) => {
+      const isActive = item === sidebarInstance;
+      if (item.sidebar) {
+        item.sidebar.classList.toggle('active', isActive);
+        item.sidebar.style.zIndex = String(isActive ? 2147483647 : 2147483640);
+      }
+    });
+  }
+
+  getVisibleSidebars() {
+    return this.sidebars.filter((item) => item?.isVisible && item?.sidebar);
+  }
+
+  layoutSidebars() {
+    const gapPx = 12;
+    const offsetByPosition = new Map();
+    for (const item of this.sidebars) {
+      const position = item.sidebarPosition === 'left' ? 'left' : 'right';
+      if (!item.isVisible || item.isFullscreen) {
+        item.setStackOffsetPx(0);
+        continue;
+      }
+      const offset = offsetByPosition.get(position) || 0;
+      item.setStackOffsetPx(offset);
+      const rect = item.sidebar?.getBoundingClientRect?.();
+      const width = rect && rect.width > 0 ? rect.width : item.getDockWidth();
+      offsetByPosition.set(position, offset + Math.max(0, Math.round(width)) + gapPx);
+    }
+  }
+
+  buildPageInfoMessage() {
+    return {
+      type: 'URL_CHANGED',
+      url: window.location.href,
+      title: document.title,
+      referrer: document.referrer,
+      lastModified: document.lastModified,
+      lang: document.documentElement.lang,
+      charset: document.characterSet
+    };
+  }
+
+  sendPageInfoToSidebar(sidebarInstance) {
+    const target = sidebarInstance || this.getActiveSidebar();
+    if (!target) return;
+    target.postToIframe(this.buildPageInfoMessage());
+  }
+
+  broadcastPageInfo() {
+    const message = this.buildPageInfoMessage();
+    this.sidebars.forEach((item) => item.postToIframe(message));
+  }
+
+  syncHostAltKeyState(isPressed) {
+    const nextPressed = !!isPressed;
+    if (this.isAltKeyPressed === nextPressed) return;
+    this.isAltKeyPressed = nextPressed;
+    this.sidebars.forEach((item) => item.notifyIframeAltKeyState(nextPressed));
+  }
+
+  applyWidthToAll(width) {
+    this.sidebars.forEach((item) => item.updateWidth(width));
+    this.layoutSidebars();
+  }
+
+  applyScaleToAll(value) {
+    this.sidebars.forEach((item) => {
+      item.scaleFactor = value;
+      item.updateScale();
+    });
+    queueSyncSet({ scaleFactor: value });
+    this.layoutSidebars();
+  }
+
+  applyPositionToAll(position) {
+    this.sidebars.forEach((item) => item.updatePosition(position));
+    this.layoutSidebars();
+  }
+
+  setupUrlChangeListener() {
+    let lastUrl = window.location.href;
+
+    const hasUrlChanged = (currentUrl) => {
+      if (currentUrl === lastUrl) return false;
+      if (document.contentType === 'application/pdf') return false;
+
+      const oldUrl = new URL(lastUrl);
+      const newUrl = new URL(currentUrl);
+      return oldUrl.pathname !== newUrl.pathname || oldUrl.search !== newUrl.search;
+    };
+
+    const handleUrlChange = () => {
+      const currentUrl = window.location.href;
+      if (!hasUrlChanged(currentUrl)) return;
+      console.log('URL变化:', '从:', lastUrl, '到:', currentUrl);
+      lastUrl = currentUrl;
+      this.broadcastPageInfo();
+    };
+
+    window.addEventListener('popstate', () => {
+      console.log('popstate事件触发');
+      handleUrlChange();
+    });
+
+    const originalPushState = history.pushState;
+    const originalReplaceState = history.replaceState;
+
+    history.pushState = function () {
+      originalPushState.apply(this, arguments);
+      console.log('pushState被调用');
+      handleUrlChange();
+    };
+
+    history.replaceState = function () {
+      originalReplaceState.apply(this, arguments);
+      console.log('replaceState被调用');
+      handleUrlChange();
+    };
+
+    setInterval(handleUrlChange, 1000);
+  }
+
+  setupHostEventListeners() {
+    // 这里只观察父页面 Alt 状态并同步给所有侧栏实例，不拦截宿主页事件。
+    window.addEventListener('keydown', (event) => {
+      if (event.key === 'Alt') {
+        this.syncHostAltKeyState(true);
+      }
+    }, true);
+    window.addEventListener('keyup', (event) => {
+      if (event.key === 'Alt') {
+        this.syncHostAltKeyState(false);
+      }
+    }, true);
+    window.addEventListener('blur', () => {
+      this.syncHostAltKeyState(false);
+    });
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState !== 'visible') {
+        this.syncHostAltKeyState(false);
+      }
+    });
+
+    window.addEventListener('message', (event) => this.handleFrameMessage(event));
+  }
+
+  setupDragAndDrop() {
+    document.addEventListener('dragstart', (event) => {
+      console.log('拖动开始，目标元素:', event.target?.tagName);
+      const img = event.target;
+      if (!img || img.tagName !== 'IMG') return;
+      console.log('检测到图片拖动，图片src:', img.src);
+      try {
+        console.log('尝试获取图片数据');
+        fetch(img.src)
+          .then(response => response.blob())
+          .then(blob => {
+            console.log('成功获取图片blob数据，大小:', blob.size);
+            const reader = new FileReader();
+            reader.onloadend = () => {
+              const base64Data = reader.result;
+              console.log('成功转换为base64数据');
+              const imageData = {
+                type: 'image',
+                data: base64Data,
+                name: img.alt || '拖放图片'
+              };
+              console.log('设置拖动数据:', imageData.name);
+              this.lastImageData = imageData;
+              event.dataTransfer?.setData?.('text/plain', JSON.stringify(imageData));
+              if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copy';
+            };
+            reader.readAsDataURL(blob);
+          })
+          .catch(error => {
+            console.error('获取图片数据失败:', error);
+            console.log('尝试使用Canvas方法获取图片数据');
+            try {
+              const canvas = document.createElement('canvas');
+              canvas.width = img.naturalWidth;
+              canvas.height = img.naturalHeight;
+              const ctx = canvas.getContext('2d');
+              ctx.drawImage(img, 0, 0);
+              const base64Data = canvas.toDataURL(img.src.match(/\.png$/i) ? 'image/png' : 'image/jpeg');
+              console.log('成功使用Canvas获取图片数据');
+              const imageData = {
+                type: 'image',
+                data: base64Data,
+                name: img.alt || '拖放图片'
+              };
+              console.log('设置拖动数据:', imageData.name);
+              this.lastImageData = imageData;
+              event.dataTransfer?.setData?.('text/plain', JSON.stringify(imageData));
+              if (event.dataTransfer) event.dataTransfer.effectAllowed = 'copy';
+            } catch (canvasError) {
+              console.error('Canvas获取图片数据失败:', canvasError);
+            }
+          });
+      } catch (error) {
+        console.error('处理图片拖动失败:', error);
+      }
+    });
+
+    document.addEventListener('dragend', (event) => {
+      const target = this.findVisibleSidebarAtPoint(event.clientX, event.clientY);
+      console.log('拖动结束，命中的侧栏实例:', target?.instanceId || null, '坐标:', event.clientX, event.clientY);
+
+      if (target && this.lastImageData && target.isVisible) {
+        console.log('在侧边栏内放下，发送图片数据到iframe');
+        target.postToIframe({
+          type: 'DROP_IMAGE',
+          imageData: this.lastImageData
+        });
+        this.setActiveSidebar(target);
+      }
+      this.lastImageData = null;
+    });
+  }
+
+  findVisibleSidebarAtPoint(x, y) {
+    for (let i = this.sidebars.length - 1; i >= 0; i -= 1) {
+      const item = this.sidebars[i];
+      if (!item?.isVisible || !item?.sidebar) continue;
+      const rect = item.sidebar.getBoundingClientRect();
+      if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) {
+        return item;
+      }
+    }
+    return null;
+  }
+
+  handleFrameMessage(event) {
+    const data = event?.data || {};
+    if (!data?.type) return;
+    const sourceSidebar = this.getSidebarByWindow(event.source);
+    if (!sourceSidebar) return;
+    this.setActiveSidebar(sourceSidebar);
+
+    switch (data.type) {
+      case 'SIDEBAR_WIDTH_CHANGE':
+        this.applyWidthToAll(data.width);
+        break;
+      case 'SCALE_FACTOR_CHANGE':
+        this.applyScaleToAll(data.value);
+        break;
+      case 'SIDEBAR_POSITION_CHANGE':
+        this.applyPositionToAll(data.position);
+        break;
+      case 'TOGGLE_DOCK_MODE_FROM_IFRAME':
+        {
+          const nextDocked = !sourceSidebar.isDocked;
+          if (nextDocked) {
+            this.sidebars.forEach((item) => {
+              if (item !== sourceSidebar) item.setDockMode(false);
+            });
+          }
+          sourceSidebar.setDockMode(nextDocked);
+        }
+        this.layoutSidebars();
+        break;
+      case 'CLOSE_SIDEBAR':
+        sourceSidebar.toggle(false);
+        this.layoutSidebars();
+        break;
+      case 'TOGGLE_FULLSCREEN_FROM_IFRAME':
+        console.log('处理全屏切换消息:', data.isFullscreen);
+        if (!sourceSidebar.isFullscreen) {
+          this.sidebars.forEach((item) => {
+            if (item !== sourceSidebar && item.isFullscreen) item.toggleFullscreen(false);
+          });
+        }
+        sourceSidebar.toggleFullscreen();
+        this.layoutSidebars();
+        break;
+      case 'CREATE_ADDITIONAL_SIDEBAR':
+        this.createSidebar({ show: true });
+        break;
+      case 'CAPTURE_SCREENSHOT':
+        captureAndDropScreenshot(sourceSidebar);
+        break;
+      case 'OPEN_MARKDOWN_LINK':
+        openMarkdownLinkInPage(data.url);
+        break;
+      case 'REQUEST_PAGE_INFO':
+        this.sendPageInfoToSidebar(sourceSidebar);
+        break;
+      case 'REQUEST_FULLSCREEN_STATE':
+        sourceSidebar.notifyIframeFullscreenState(sourceSidebar.isFullscreen);
+        break;
+      case 'REQUEST_TEMP_MODE_STATE':
+        sourceSidebar.notifyIframeTempModeState(sourceSidebar.isTemporaryMode);
+        break;
+      case 'REQUEST_ALT_KEY_STATE':
+        sourceSidebar.notifyIframeAltKeyState(this.isAltKeyPressed);
+        break;
+      case 'REQUEST_HOST_EMBED_SCALE':
+        sourceSidebar.notifyIframeEmbedScale();
+        break;
+      case 'TEMP_MODE_STATE_CHANGED':
+        sourceSidebar.isTemporaryMode = !!data?.isOn;
+        break;
+      case 'SIDEBAR_SELECTION_CHANGED':
+        if (!data.source || data.source === 'cerebr-sidebar') {
+          currentSelection = (data.text || '').toString().trim();
+        }
+        break;
+      default:
+        break;
+    }
+  }
+}
+
+let sidebarManager;
 let sidebar;
 try {
-  sidebar = new CerebrSidebar();
+  sidebarManager = new CerebrSidebarManager();
+  sidebar = sidebarManager.getPrimarySidebar();
   // console.log('侧边栏实例已创建');
 } catch (error) {
   console.error('创建侧边栏实例失败:', error);
@@ -1318,8 +1460,14 @@ const picker = new ElementPicker({
   zIndex: 10000
 });
 
-let _iframe = null;
-let iframe = (_iframe || (_iframe = sidebar.sidebar?.querySelector('.cerebr-sidebar__iframe')));
+function getActiveSidebar() {
+  return sidebarManager?.getActiveSidebar?.() || sidebar || null;
+}
+
+function getSidebarForInternalRequest(message) {
+  const fromMessage = sidebarManager?.getSidebarById?.(message?.sidebarInstanceId);
+  return fromMessage || getActiveSidebar();
+}
 
 // 修改消息监听器
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -1348,9 +1496,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'GET_PAGE_CONTENT_READ_RESULT_INTERNAL') {
     console.log('收到 page_content_read 结果请求');
+    const pageReadSidebar = getSidebarForInternalRequest(message);
+    if (pageReadSidebar) sidebarManager?.setActiveSidebar?.(pageReadSidebar);
     isProcessing = true;
 
-    extractPageContent().then((content) => {
+    extractPageContent(pageReadSidebar).then((content) => {
       isProcessing = false;
       sendResponse(buildPageContentReadResultForTransport(content, message?.args));
     }).catch((error) => {
@@ -1370,9 +1520,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'GET_PDF_CONTENT_READ_RESULT_INTERNAL') {
     console.log('收到 pdf_content_read 结果请求');
+    const pdfReadSidebar = getSidebarForInternalRequest(message);
+    if (pdfReadSidebar) sidebarManager?.setActiveSidebar?.(pdfReadSidebar);
     isProcessing = true;
 
-    extractPageContent().then((content) => {
+    extractPageContent(pdfReadSidebar).then((content) => {
       isProcessing = false;
       sendResponse(buildPdfContentReadResultForTransport(content, message?.args));
     }).catch((error) => {
@@ -1392,9 +1544,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (message.type === 'GET_WEBPAGE_SCREENSHOT_RESULT_INTERNAL') {
     console.log('收到 webpage_screenshot 结果请求');
+    const screenshotSidebar = getSidebarForInternalRequest(message);
+    if (screenshotSidebar) sidebarManager?.setActiveSidebar?.(screenshotSidebar);
     isProcessing = true;
 
-    capturePromptFriendlyScreenshot(message?.args).then((result) => {
+    capturePromptFriendlyScreenshot(message?.args, screenshotSidebar).then((result) => {
       isProcessing = false;
       sendResponse(result);
     }).catch((error) => {
@@ -1414,90 +1568,108 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   try {
     // 接收来自background.js的消息
-    const iframe = sidebar.sidebar?.querySelector('.cerebr-sidebar__iframe');
+    const targetSidebar = getActiveSidebar();
+    if (!targetSidebar) {
+      sendResponse({ success: false, error: 'Active sidebar instance not found' });
+      return true;
+    }
 
     switch (message.type) {
       case 'TOGGLE_SIDEBAR_onClicked':
-        sidebar.toggle();  // 不传参数表示切换状态
+        targetSidebar.toggle();  // 不传参数表示切换状态
+        sidebarManager?.layoutSidebars?.();
         break;
       case 'OPEN_SIDEBAR':
-        sidebar.toggle(true);  // 明确传入 true 表示打开
+        targetSidebar.toggle(true);  // 明确传入 true 表示打开
+        sidebarManager?.layoutSidebars?.();
         break;
       case 'CLOSE_SIDEBAR':
-        sidebar.toggle(false);  // 明确传入 false 表示关闭
+        targetSidebar.toggle(false);  // 明确传入 false 表示关闭
+        sidebarManager?.layoutSidebars?.();
         break;
       case 'GET_SIDEBAR_DEBUG_STATE':
+        {
+          const activeDebugState = targetSidebar.getDebugState();
+          const instances = (sidebarManager?.sidebars || [targetSidebar]).map((item) => ({
+            instanceId: item.instanceId,
+            isActive: item.instanceId === targetSidebar.instanceId,
+            ...item.getDebugState()
+          }));
         sendResponse({
           success: true,
-          debugState: sidebar.getDebugState()
+          debugState: {
+            ...activeDebugState,
+            activeSidebarId: targetSidebar.instanceId,
+            sidebarCount: sidebarManager?.sidebars?.length || 1,
+            active: activeDebugState,
+            instances
+          }
         });
+        }
         return true;
       case 'TOGGLE_FULLSCREEN_FROM_BACKGROUND':
-        sidebar.toggleFullscreen();  // 切换全屏状态
+        targetSidebar.toggleFullscreen();  // 切换全屏状态
         break;
       case 'QUICK_SUMMARY':
-        sidebar.toggle(true);  // 明确传入 true 表示打开
+        targetSidebar.toggle(true);  // 明确传入 true 表示打开
         let selectedContent = currentSelection;
-        iframe.contentWindow.postMessage({
+        targetSidebar.postToIframe({
             type: 'QUICK_SUMMARY_COMMAND',
             selectedContent: selectedContent
-        }, '*');
+        });
         break;
       case 'QUICK_SUMMARY_QUERY':
-        sidebar.toggle(true);  // 明确传入 true 表示打开
+        targetSidebar.toggle(true);  // 明确传入 true 表示打开
         let selectedContentQuery = currentSelection;
-        iframe.contentWindow.postMessage({
+        targetSidebar.postToIframe({
             type: 'QUICK_SUMMARY_COMMAND_QUERY',
             selectedContent: selectedContentQuery
-        }, '*');
+        });
         break;
       case 'CLEAR_CHAT':
-        iframe?.contentWindow?.postMessage({ type: 'CLEAR_CHAT_COMMAND' }, '*');
+        targetSidebar.postToIframe({ type: 'CLEAR_CHAT_COMMAND' });
         break;
       case 'TOGGLE_TEMP_MODE':
-        iframe?.contentWindow?.postMessage({ type: 'TOGGLE_TEMP_MODE_FROM_EXTENSION' }, '*');
+        targetSidebar.postToIframe({ type: 'TOGGLE_TEMP_MODE_FROM_EXTENSION' });
         break;
       case 'EXPLAIN_IMAGE':
-        if (iframe && message.imageData) {
-          iframe.contentWindow.postMessage({
+        if (message.imageData) {
+          targetSidebar.postToIframe({
             type: 'DROP_IMAGE',
             imageData: message.imageData,
             explain: true
-          }, '*');
+          });
         }
         break;
       case 'CAPTURE_SCREENSHOT':
-        captureAndDropScreenshot();
+        captureAndDropScreenshot(targetSidebar);
         break;
       case 'ADD_PAGE_CONTENT_TO_CONTEXT':
         try {
           // 确保侧边栏已打开
-          sidebar.toggle(true);
+          targetSidebar.toggle(true);
 
           // 显示占位提示
-          try { sendPlaceholderUpdate('正在获取网页内容...'); } catch (_) {}
+          try { sendPlaceholderUpdate('正在获取网页内容...', 0, targetSidebar); } catch (_) {}
 
           // 复用现有提取函数
-          extractPageContent()
+          extractPageContent(targetSidebar)
             .then(content => {
               if (!content || !content.title || !content.url || !content.content) return;
 
               const composed = `已附加网页内容：\n标题：${content.title}\nURL：${content.url}\n内容：${content.content}`;
 
-              const iframe = sidebar.sidebar?.querySelector('.cerebr-sidebar__iframe');
-              if (iframe && iframe.contentWindow) {
-                iframe.contentWindow.postMessage({
-                  type: 'ADD_TEXT_TO_CONTEXT',
-                  text: composed
-                }, '*');
-              }
+              targetSidebar.postToIframe({
+                type: 'ADD_TEXT_TO_CONTEXT',
+                text: composed
+              });
 
               // 恢复占位
-              try { sendPlaceholderUpdate('已添加网页内容到历史（未发送）', 2000); } catch (_) {}
+              try { sendPlaceholderUpdate('已添加网页内容到历史（未发送）', 2000, targetSidebar); } catch (_) {}
             })
             .catch(err => {
               console.error('通过快捷键添加网页内容失败:', err);
-              try { sendPlaceholderUpdate('提取网页内容失败', 2000); } catch (_) {}
+              try { sendPlaceholderUpdate('提取网页内容失败', 2000, targetSidebar); } catch (_) {}
             });
         } catch (e) {
           console.error('处理 ADD_PAGE_CONTENT_TO_CONTEXT 失败:', e);
@@ -1505,7 +1677,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         break;
     }
 
-    sendResponse({ success: true, status: sidebar.isVisible });
+    sendResponse({ success: true, status: targetSidebar.isVisible, activeSidebarId: targetSidebar.instanceId });
   } catch (error) {
     console.error(`处理${message.type}命令失败:`, error);
     sendResponse({ success: false, error: error.message });
@@ -2028,7 +2200,7 @@ function buildPdfContentReadResultForTransport(pageContent, rawArgs) {
   };
 }
 
-async function extractPageContent() {
+async function extractPageContent(targetSidebar = null) {
   console.log('extractPageContent 开始提取页面内容');
 
   // 在提取开始时冻结页面元数据快照，保证 URL/标题 与本次内容抓取使用同一时间点。
@@ -2071,7 +2243,7 @@ async function extractPageContent() {
     }
 
     console.log('缓存中没有找到PDF内容或缓存无效，开始提取');
-    const pdfResult = await extractTextFromPDF(pdfUrl); // pdfResult 是 { fullText, chapters } 或 null
+    const pdfResult = await extractTextFromPDF(pdfUrl, targetSidebar); // pdfResult 是 { fullText, chapters } 或 null
     if (pdfResult && typeof pdfResult.fullText === 'string') {
       console.log('将PDF内容存入缓存');
       const resultToCache = {
@@ -2226,15 +2398,14 @@ async function extractPageContent() {
 }
 
 
-function sendPlaceholderUpdate(message, timeout = 0) {
+function sendPlaceholderUpdate(message, timeout = 0, targetSidebar = null) {
   console.log('发送placeholder更新:', message);
-  if (iframe) {
-    iframe.contentWindow.postMessage({
-      type: 'UPDATE_PLACEHOLDER',
-      placeholder: message,
-      timeout: timeout
-    }, '*');
-  }
+  const sidebarInstance = targetSidebar || getActiveSidebar();
+  sidebarInstance?.postToIframe?.({
+    type: 'UPDATE_PLACEHOLDER',
+    placeholder: message,
+    timeout: timeout
+  });
 };
 
 // PDF.js 库的路径
@@ -2244,7 +2415,7 @@ const PDFJS_WORKER_PATH = chrome.runtime.getURL('lib/pdf.worker.js');
 // 设置 PDF.js worker 路径
 pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER_PATH;
 
-async function downloadPDFData(url) {
+async function downloadPDFData(url, targetSidebar = null) {
   console.log('开始下载PDF:', url);
   // 获取PDF文件的初始信息
   const initResponse = await chrome.runtime.sendMessage({
@@ -2254,7 +2425,7 @@ async function downloadPDFData(url) {
 
   if (!initResponse.success) {
     console.error('PDF初始化失败，响应:', initResponse);
-    sendPlaceholderUpdate('PDF下载失败', 2000);
+    sendPlaceholderUpdate('PDF下载失败', 2000, targetSidebar);
     throw new Error('PDF初始化失败');
   }
 
@@ -2264,7 +2435,7 @@ async function downloadPDFData(url) {
   // 分块接收数据
   const chunks = new Array(totalChunks);
   for (let i = 0; i < totalChunks; i++) {
-    sendPlaceholderUpdate(`正在下载PDF文件 (${Math.round((i + 1) / totalChunks * 100)}%)...`);
+    sendPlaceholderUpdate(`正在下载PDF文件 (${Math.round((i + 1) / totalChunks * 100)}%)...`, 0, targetSidebar);
 
     const chunkResponse = await chrome.runtime.sendMessage({
       action: 'getPDFChunk',
@@ -2273,7 +2444,7 @@ async function downloadPDFData(url) {
     });
 
     if (!chunkResponse.success) {
-      sendPlaceholderUpdate('PDF下载失败', 2000);
+      sendPlaceholderUpdate('PDF下载失败', 2000, targetSidebar);
       throw new Error(`获取PDF块 ${i} 失败`);
     }
 
@@ -2291,7 +2462,7 @@ async function downloadPDFData(url) {
   return completeData;
 }
 
-async function parsePDFData(completeData) {
+async function parsePDFData(completeData, targetSidebar = null) {
   console.log('开始解析PDF文件');
   const loadingTask = pdfjsLib.getDocument({ data: completeData });
   const pdf = await loadingTask.promise;
@@ -2300,7 +2471,7 @@ async function parsePDFData(completeData) {
   let fullText = '';
   // 遍历所有页面
   for (let i = 1; i <= pdf.numPages; i++) {
-    sendPlaceholderUpdate(`正在提取文本 (${i}/${pdf.numPages})...`);
+    sendPlaceholderUpdate(`正在提取文本 (${i}/${pdf.numPages})...`, 0, targetSidebar);
     console.log(`开始处理第 ${i}/${pdf.numPages} 页`);
     const page = await pdf.getPage(i);
     const textContent = await page.getTextContent();
@@ -2312,11 +2483,11 @@ async function parsePDFData(completeData) {
   return fullText;
 }
 
-async function extractTextFromPDF(url) {
+async function extractTextFromPDF(url, targetSidebar = null) {
   try {
     // 下载PDF文件
-    sendPlaceholderUpdate('正在下载PDF文件...');
-    const completeData = await downloadPDFData(url);
+    sendPlaceholderUpdate('正在下载PDF文件...', 0, targetSidebar);
+    const completeData = await downloadPDFData(url, targetSidebar);
     console.log('PDF下载完成');
 
     // 克隆 PDF 数据，避免后续调用因 ArrayBuffer 被转移而失败
@@ -2324,36 +2495,27 @@ async function extractTextFromPDF(url) {
     const dataForChapters = new Uint8Array(completeData.buffer.slice(0));
 
     // 解析PDF文本
-    sendPlaceholderUpdate('正在解析PDF文件...');
-    const fullText = await parsePDFData(dataForText);
+    sendPlaceholderUpdate('正在解析PDF文件...', 0, targetSidebar);
+    const fullText = await parsePDFData(dataForText, targetSidebar);
 
     // 解析PDF章节
-    const chapters = await extractChaptersFromPDFData(dataForChapters);
+    const chapters = await extractChaptersFromPDFData(dataForChapters, targetSidebar);
 
     console.log('PDF文本提取完成，总文本长度:', fullText.length);
-    sendPlaceholderUpdate('PDF处理完成', 2000);
+    sendPlaceholderUpdate('PDF处理完成', 2000, targetSidebar);
     return { fullText, chapters };
   } catch (error) {
     console.error('PDF处理过程中出错:', error);
     console.error('错误堆栈:', error.stack);
-    if (sidebar && sidebar.sidebar) {
-      const iframe = sidebar.sidebar.querySelector('.cerebr-sidebar__iframe');
-      if (iframe) {
-        iframe.contentWindow.postMessage({
-          type: 'UPDATE_PLACEHOLDER',
-          placeholder: 'PDF处理失败',
-          timeout: 2000
-        }, '*');
-      }
-    }
+    sendPlaceholderUpdate('PDF处理失败', 2000, targetSidebar);
     return null;
   }
 }
 
 // 新增：从PDF数据解析章节内容的辅助函数
-async function extractChaptersFromPDFData(completeData) {
+async function extractChaptersFromPDFData(completeData, targetSidebar = null) {
   console.log('开始解析PDF章节内容');
-  const fullPageTexts = await parsePDFToPageTexts(completeData);
+  const fullPageTexts = await parsePDFToPageTexts(completeData, targetSidebar);
   console.log('成功提取每页文本, 页数:', fullPageTexts.length);
   
   // 克隆数据用于获取目录(书签)，不影响后续使用
@@ -2380,16 +2542,27 @@ async function extractChaptersFromPDFData(completeData) {
  * 截图前会先隐藏侧边栏，并在等待两帧后再进行截图，最后恢复侧边栏显示。
  */
 function captureVisibleTabWhileSidebarHidden(requestMessageBuilder) {
-  const sidebarVisibility = sidebar.sidebar.style.visibility; // 保存侧边栏原始可见状态
-  sidebar.sidebar.style.transition = 'none'; // 设置侧边栏无过渡效果
-  sidebar.sidebar.style.visibility = 'hidden'; // 立即隐藏侧边栏
+  const visibleSidebars = sidebarManager?.getVisibleSidebars?.() || [];
+  const hiddenEntries = visibleSidebars
+    .filter((item) => item?.sidebar)
+    .map((item) => ({
+      item,
+      visibility: item.sidebar.style.visibility,
+      transition: item.sidebar.style.transition
+    }));
+  hiddenEntries.forEach(({ item }) => {
+    item.sidebar.style.transition = 'none';
+    item.sidebar.style.visibility = 'hidden';
+  });
   let restored = false;
 
   function restoreSidebarVisibility() {
     if (restored) return;
     restored = true;
-    sidebar.sidebar.style.visibility = sidebarVisibility;
-    sidebar.sidebar.style.transition = '';
+    hiddenEntries.forEach(({ item, visibility, transition }) => {
+      item.sidebar.style.visibility = visibility;
+      item.sidebar.style.transition = transition;
+    });
   }
 
   /**
@@ -2429,18 +2602,16 @@ function captureVisibleTabWhileSidebarHidden(requestMessageBuilder) {
   return waitCaptureWithAnimationFrame(5); // 初始调用，设置递归层级为 5，实现等待五帧的效果
 }
 
-function captureAndDropScreenshot() {
-  captureVisibleTabWhileSidebarHidden(() => ({ action: 'capture_visible_tab' }))
+function captureAndDropScreenshot(targetSidebar = null) {
+  const sidebarInstance = targetSidebar || getActiveSidebar();
+  captureVisibleTabWhileSidebarHidden(() => ({ action: 'capture_visible_tab' }), sidebarInstance)
     .then((response) => {
-      const iframe = sidebar.sidebar?.querySelector('.cerebr-sidebar__iframe');
       if (response && response.success && response.dataURL) {
         console.log('页面截图完成，发送到侧边栏');
-        if (iframe) {
-          iframe.contentWindow.postMessage({
-            type: 'DROP_IMAGE',
-            imageData: { data: response.dataURL, name: 'page-screenshot.png' },
-          }, '*');
-        }
+        sidebarInstance?.postToIframe?.({
+          type: 'DROP_IMAGE',
+          imageData: { data: response.dataURL, name: 'page-screenshot.png' },
+        });
       } else {
         console.error('屏幕截图失败:', response && response.error);
       }
@@ -2461,11 +2632,11 @@ function captureAndDropScreenshot() {
  * @param {any} rawArgs
  * @returns {Promise<Object>}
  */
-function capturePromptFriendlyScreenshot(rawArgs) {
+function capturePromptFriendlyScreenshot(rawArgs, targetSidebar = null) {
   return captureVisibleTabWhileSidebarHidden(() => ({
     action: 'capture_visible_tab_for_prompt',
     args: rawArgs && typeof rawArgs === 'object' ? rawArgs : null
-  })).then((response) => {
+  }), targetSidebar).then((response) => {
     if (response && typeof response === 'object') {
       return response;
     }
@@ -2907,7 +3078,7 @@ function splitPdfTextByChapters(fullPageTexts, outline) {
  * @example
  * const pageTexts = await parsePDFToPageTexts(completeData);
  */
-async function parsePDFToPageTexts(completeData) {
+async function parsePDFToPageTexts(completeData, targetSidebar = null) {
   console.log('开始解析PDF为页文本数组');
   // 克隆数据，确保传递给pdf.js的ArrayBuffer是新的
   const freshData = new Uint8Array(completeData);
@@ -2916,7 +3087,7 @@ async function parsePDFToPageTexts(completeData) {
   console.log('PDF加载成功，总页数:', pdf.numPages);
   const pageTexts = [];
   for (let i = 1; i <= pdf.numPages; i++) {
-    sendPlaceholderUpdate(`正在提取第 ${i} 页文本...`);
+    sendPlaceholderUpdate(`正在提取第 ${i} 页文本...`, 0, targetSidebar);
     console.log(`开始处理第 ${i} 页`);
     const page = await pdf.getPage(i);
     const textContent = await page.getTextContent();

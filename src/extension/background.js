@@ -579,6 +579,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         logLabel: '获取 page_content_read 结果失败',
         contentMessage: {
           type: 'GET_PAGE_CONTENT_READ_RESULT_INTERNAL',
+          sidebarInstanceId: typeof message?.sidebarInstanceId === 'string' ? message.sidebarInstanceId : '',
           args: message?.args ?? null
         }
       });
@@ -595,6 +596,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         logLabel: '获取 pdf_content_read 结果失败',
         contentMessage: {
           type: 'GET_PDF_CONTENT_READ_RESULT_INTERNAL',
+          sidebarInstanceId: typeof message?.sidebarInstanceId === 'string' ? message.sidebarInstanceId : '',
           args: message?.args ?? null
         }
       });
@@ -619,6 +621,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         logLabel: '获取网页截图工具结果失败',
         contentMessage: {
           type: 'GET_WEBPAGE_SCREENSHOT_RESULT_INTERNAL',
+          sidebarInstanceId: typeof message?.sidebarInstanceId === 'string' ? message.sidebarInstanceId : '',
           args: message?.args ?? null
         }
       });

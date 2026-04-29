@@ -27,6 +27,7 @@ export function registerSidebarEventHandlers(appContext) {
   setupFullscreenToggle(appContext);
   setupDockModeToggle(appContext);
   setupScreenshotButton(appContext);
+  setupAddSidebarButton(appContext);
   setupWindowMessageHandlers(appContext);
   setupTempModeIndicator(appContext);
   setupMessageInputHandlers(appContext);
@@ -411,6 +412,7 @@ function setupEmptyStateHandlers(appContext) {
             chrome.runtime.sendMessage({
               type: 'GET_PAGE_CONTENT_READ_RESULT_FROM_SIDEBAR',
               tabId: Number.isFinite(Number(targetTabId)) ? Number(targetTabId) : null,
+              sidebarInstanceId: appContext.state.sidebarInstanceId || '',
               args: null
             }, (response) => {
               const runtimeError = chrome.runtime.lastError;
@@ -1051,6 +1053,27 @@ function setupScreenshotButton(appContext) {
   if (!appContext.dom.screenshotButton) return;
   appContext.dom.screenshotButton.addEventListener('click', () => {
     appContext.utils.requestScreenshot();
+  });
+}
+
+function setupAddSidebarButton(appContext) {
+  const button = appContext.dom.addSidebarButton;
+  if (!button) return;
+  if (appContext.state.isStandalone) {
+    button.style.display = 'none';
+    return;
+  }
+  button.addEventListener('click', () => {
+    try {
+      window.parent.postMessage({
+        type: 'CREATE_ADDITIONAL_SIDEBAR',
+        source: 'cerebr-sidebar',
+        instanceId: appContext.state.sidebarInstanceId || ''
+      }, '*');
+    } catch (error) {
+      console.error('请求新建并行侧栏失败:', error);
+      appContext.utils.showNotification?.({ message: '新建侧栏失败', type: 'error' });
+    }
   });
 }
 

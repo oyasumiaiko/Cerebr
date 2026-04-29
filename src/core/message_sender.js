@@ -7289,6 +7289,7 @@ export function createMessageSender(appContext) {
       return await chrome.runtime.sendMessage({
         type: 'GET_PAGE_CONTENT_READ_RESULT_FROM_SIDEBAR',
         tabId: Number.isFinite(Number(targetTabId)) ? Number(targetTabId) : null,
+        sidebarInstanceId: typeof state?.sidebarInstanceId === 'string' ? state.sidebarInstanceId : '',
         args: rawArgs && typeof rawArgs === 'object' ? rawArgs : null
       });
     } catch (error) {
@@ -7304,6 +7305,7 @@ export function createMessageSender(appContext) {
       return await chrome.runtime.sendMessage({
         type: 'GET_PDF_CONTENT_READ_RESULT_FROM_SIDEBAR',
         tabId: Number.isFinite(Number(targetTabId)) ? Number(targetTabId) : null,
+        sidebarInstanceId: typeof state?.sidebarInstanceId === 'string' ? state.sidebarInstanceId : '',
         args: rawArgs && typeof rawArgs === 'object' ? rawArgs : null
       });
     } catch (error) {
@@ -7319,6 +7321,7 @@ export function createMessageSender(appContext) {
       return await chrome.runtime.sendMessage({
         type: 'GET_WEBPAGE_SCREENSHOT_RESULT_FROM_SIDEBAR',
         tabId: Number.isFinite(Number(targetTabId)) ? Number(targetTabId) : null,
+        sidebarInstanceId: typeof state?.sidebarInstanceId === 'string' ? state.sidebarInstanceId : '',
         args: rawArgs && typeof rawArgs === 'object' ? rawArgs : null
       });
     } catch (error) {

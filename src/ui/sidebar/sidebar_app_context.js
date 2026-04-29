@@ -28,6 +28,23 @@ const JS_RUNTIME_FRAME_SNAPSHOT_TIMEOUT_MS = 5000;
 const JS_RUNTIME_EXECUTION_TIMEOUT_MS = 30000;
 const SKILL_REGISTRY_TIMEOUT_MS = 10000;
 
+function resolveSidebarInstanceIdFromLocation() {
+  try {
+    const currentUrl = new URL(window.location.href);
+    const fromSearch = currentUrl.searchParams.get('instanceId');
+    if (typeof fromSearch === 'string' && fromSearch.trim()) {
+      return fromSearch.trim();
+    }
+    const hashQuery = currentUrl.hash.startsWith('#') ? currentUrl.hash.slice(1) : '';
+    const hashParams = new URLSearchParams(hashQuery);
+    const fromHash = hashParams.get('instanceId');
+    if (typeof fromHash === 'string' && fromHash.trim()) {
+      return fromHash.trim();
+    }
+  } catch (_) {}
+  return '';
+}
+
 function raceWithTimeout(promise, timeoutMs, timeoutMessage) {
   const normalizedTimeout = Number.isFinite(Number(timeoutMs)) ? Math.max(1, Math.trunc(Number(timeoutMs))) : 0;
   if (!normalizedTimeout) return promise;
@@ -102,6 +119,7 @@ export function createSidebarAppContext(isStandalone) {
     clearChat: document.getElementById('clear-chat'),
     debugTreeButton: document.getElementById('debug-chat-tree-btn'),
     screenshotButton: document.getElementById('screenshot-button'),
+    addSidebarButton: document.getElementById('add-sidebar-button'),
     sidebarPositionSwitch: document.getElementById('sidebar-position-switch'),
     forkConversationButton: document.getElementById('fork-conversation'),
     copyAsImageButton: document.getElementById('copy-as-image'),
@@ -146,6 +164,7 @@ export function createSidebarAppContext(isStandalone) {
     services: {},
     state: {
       isStandalone,
+      sidebarInstanceId: resolveSidebarInstanceIdFromLocation(),
       isFullscreen: false,
       hostEmbedScale: 1,
       isComposing: false,
