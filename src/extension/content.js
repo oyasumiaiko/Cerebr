@@ -275,6 +275,10 @@ class CerebrSidebar {
     this.initialized = false;
     this.lastUrl = window.location.href;
     this.isFullscreen = false;
+    this.isDisposed = false;
+    this.container = null;
+    this.restoreObserver = null;
+    this.restoreTimeoutId = null;
     // 临时模式状态由父页面内存维护，用于 iframe 右键重载恢复，F5 刷新时自动重置。
     // 它现在不再控制“是否自动注入网页内容”，而是控制：
     // 1. 是否暴露宿主页增强工具；
@@ -547,6 +551,7 @@ class CerebrSidebar {
       // console.log(`初始化侧边栏: 宽度=${this.sidebarWidth}, 缩放=${this.scaleFactor}, 位置=${this.sidebarPosition}`);
 
       const container = document.createElement('cerebr-root');
+      this.container = container;
       container.dataset.cerebrSidebarInstanceId = this.instanceId;
       container.style.display = 'contents'; // 让容器内元素透出
 
@@ -851,13 +856,12 @@ class CerebrSidebar {
       });
 
       // 使用MutationObserver确保我们的元素不会被移除
-      let restoreTimeoutId = null;
-
       const scheduleRestore = () => {
-        if (restoreTimeoutId) return;
+        if (this.isDisposed || this.restoreTimeoutId) return;
 
-        restoreTimeoutId = setTimeout(() => {
-          restoreTimeoutId = null;
+        this.restoreTimeoutId = setTimeout(() => {
+          this.restoreTimeoutId = null;
+          if (this.isDisposed) return;
 
           if (!root.contains(container)) {
             console.log('检测到侧边栏被移除，正在恢复...');
@@ -880,6 +884,7 @@ class CerebrSidebar {
       observer.observe(root, {
         childList: true
       });
+      this.restoreObserver = observer;
 
       // console.log('侧边栏已添加到文档');
 
@@ -1204,6 +1209,39 @@ class CerebrSidebar {
       console.log('通知 iframe 嵌入缩放失败:', error);
     }
   }
+
+  dispose() {
+    this.isDisposed = true;
+    try {
+      this.restoreObserver?.disconnect?.();
+    } catch (_) {}
+    this.restoreObserver = null;
+
+    if (this.restoreTimeoutId) {
+      clearTimeout(this.restoreTimeoutId);
+      this.restoreTimeoutId = null;
+    }
+
+    try {
+      if (this.isDocked) this.clearDockLayout();
+    } catch (_) {}
+
+    try {
+      this.postToIframe({ type: 'BLUR_INPUT' });
+    } catch (_) {}
+
+    try {
+      if (this.container?.parentNode) {
+        this.container.parentNode.removeChild(this.container);
+      }
+    } catch (error) {
+      console.warn('销毁侧栏实例失败:', error);
+    }
+
+    this.sidebar = null;
+    this.container = null;
+    this.initialized = false;
+  }
 }
 
 class CerebrSidebarManager {
@@ -1242,6 +1280,11 @@ class CerebrSidebarManager {
     sidebarInstance.readyPromise.then(() => {
       sidebarInstance.notifyIframeAltKeyState(this.isAltKeyPressed);
       this.sendPageInfoToSidebar(sidebarInstance);
+      if (this.shouldAttachNewSidebarToFullscreenLayout(sidebarInstance, options)) {
+        this.attachNewSidebarToFullscreenLayout(sidebarInstance);
+        return;
+      }
+
       this.layoutSidebars();
       if (options?.show === true) {
         sidebarInstance.toggle(true);
@@ -1250,6 +1293,29 @@ class CerebrSidebarManager {
       console.warn('侧栏实例初始化完成回调失败:', error);
     });
     return sidebarInstance;
+  }
+
+  shouldAttachNewSidebarToFullscreenLayout(sidebarInstance, options = {}) {
+    return options?.show === true
+      && this.sidebars.length > 1
+      && this.sidebars.some((item) => item !== sidebarInstance && item?.isFullscreen);
+  }
+
+  attachNewSidebarToFullscreenLayout(sidebarInstance) {
+    if (!sidebarInstance) return;
+
+    if (!this.multiFullscreenRestoreStateById) {
+      this.multiFullscreenRestoreStateById = this.buildMultiFullscreenRestoreState();
+    }
+
+    // 在全屏中点击“新建侧栏”代表用户显式增加一个并行工作区。
+    // 因此退出全屏时，新实例应保持可见，而不是按 ready 前的隐藏初始态恢复。
+    this.multiFullscreenRestoreStateById.set(sidebarInstance.instanceId, {
+      wasVisible: true,
+      wasDocked: false
+    });
+    sidebarInstance.toggle(true);
+    this.enterMultiSidebarFullscreen(sidebarInstance);
   }
 
   getPrimarySidebar() {
@@ -1267,6 +1333,28 @@ class CerebrSidebarManager {
 
   getSidebarByWindow(sourceWindow) {
     return this.sidebars.find((item) => item.ownsWindow(sourceWindow)) || null;
+  }
+
+  destroySidebar(sidebarInstance) {
+    if (!sidebarInstance) return;
+    const index = this.sidebars.indexOf(sidebarInstance);
+    if (index === -1) return;
+
+    this.sidebars.splice(index, 1);
+    this.sidebarById.delete(sidebarInstance.instanceId);
+    this.multiFullscreenRestoreStateById?.delete?.(sidebarInstance.instanceId);
+    sidebarInstance.dispose();
+
+    if (this.activeSidebarId === sidebarInstance.instanceId) {
+      this.activeSidebarId = null;
+      const nextActive = this.sidebars[Math.min(index, this.sidebars.length - 1)] || this.getPrimarySidebar();
+      if (nextActive) this.setActiveSidebar(nextActive);
+    }
+
+    if (this.sidebars.length <= 1) {
+      this.multiFullscreenRestoreStateById = null;
+    }
+    this.layoutSidebars();
   }
 
   setActiveSidebar(sidebarInstance) {
@@ -1736,8 +1824,12 @@ class CerebrSidebarManager {
         this.layoutSidebars();
         break;
       case 'CLOSE_SIDEBAR':
-        sourceSidebar.toggle(false);
-        this.layoutSidebars();
+        if (sourceSidebar.isPrimary) {
+          sourceSidebar.toggle(false);
+          this.layoutSidebars();
+        } else {
+          this.destroySidebar(sourceSidebar);
+        }
         break;
       case 'TOGGLE_FULLSCREEN_FROM_IFRAME':
         console.log('处理全屏切换消息:', data.isFullscreen);

@@ -90,6 +90,10 @@ test('multi-sidebar fullscreen is coordinated by manager and split across viewpo
   const source = await readRepoFile('src/extension/content.js');
 
   assert.match(source, /multiFullscreenRestoreStateById/);
+  assert.match(source, /shouldAttachNewSidebarToFullscreenLayout\(sidebarInstance, options\)/);
+  assert.match(source, /attachNewSidebarToFullscreenLayout\(sidebarInstance\)/);
+  assert.match(source, /destroySidebar\(sidebarInstance\)/);
+  assert.match(source, /dispose\(\)/);
   assert.match(source, /toggleFullscreenForSidebar\(sidebarInstance\)/);
   assert.match(source, /enterMultiSidebarFullscreen\(sourceSidebar\)/);
   assert.match(source, /exitMultiSidebarFullscreen\(\)/);
@@ -99,6 +103,8 @@ test('multi-sidebar fullscreen is coordinated by manager and split across viewpo
   assert.match(source, /widthExpression = `calc\(100vw \/ \$\{safeTotal\}\)`/);
   assert.match(source, /case 'TOGGLE_FULLSCREEN_FROM_IFRAME':[\s\S]*this\.toggleFullscreenForSidebar\(sourceSidebar\)/);
   assert.match(source, /case 'TOGGLE_FULLSCREEN_FROM_BACKGROUND':[\s\S]*sidebarManager\?\.toggleFullscreenForSidebar\?\.\(targetSidebar\)/);
+  assert.match(source, /case 'CLOSE_SIDEBAR':[\s\S]*this\.destroySidebar\(sourceSidebar\)/);
+  assert.match(source, /this\.multiFullscreenRestoreStateById\.set\(sidebarInstance\.instanceId,[\s\S]*wasVisible: true/);
 });
 
 test('host page tool requests carry sidebarInstanceId through sender and background relay', async () => {

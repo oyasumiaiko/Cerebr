@@ -39,6 +39,24 @@ function findInstanceState(debugState, instanceId) {
     : null;
 }
 
+function isEvenFullscreenSplit(debugState, expectedCount, viewportWidth) {
+  const states = Array.isArray(debugState?.instances) ? debugState.instances : [];
+  if (debugState?.sidebarCount !== expectedCount || states.length !== expectedCount) return false;
+  if (states.some((item) => !item?.isActuallyVisible || !item?.isFullscreen)) return false;
+
+  const expectedWidth = viewportWidth / expectedCount;
+  const sortedRects = states
+    .map((item) => item.rect)
+    .filter(Boolean)
+    .sort((a, b) => a.x - b.x);
+  return sortedRects.length === expectedCount
+    && sortedRects.every((rect, index) => (
+      Math.abs(rect.width - expectedWidth) <= 16
+      && Math.abs(rect.x - expectedWidth * index) <= 16
+      && rect.y === 0
+    ));
+}
+
 async function writeResult(outputDir, result) {
   await fsp.mkdir(outputDir, { recursive: true });
   await fsp.writeFile(
@@ -172,6 +190,7 @@ async function main() {
     const secondDraftAfter = await secondFrame.locator('#message-input').textContent();
     const primaryButtonTitle = await firstFrame.locator('#add-sidebar-button').getAttribute('title');
     const secondaryButtonTitle = await secondFrame.locator('#add-sidebar-button').getAttribute('title');
+    const secondInstanceId = extractInstanceId(secondFrame.url());
     result.draftIsolation = {
       firstDraftBefore,
       secondDraftBefore,
@@ -201,24 +220,8 @@ async function main() {
         buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
       );
       const state = payload?.response?.debugState || null;
-      const states = instanceIds.map((id) => findInstanceState(state, id));
-      if (state?.sidebarCount !== 2 || states.some((item) => !item?.isActuallyVisible || !item?.isFullscreen)) {
-        return null;
-      }
-
       const viewportWidth = Number(page.viewportSize()?.width) || 1920;
-      const expectedWidth = viewportWidth / states.length;
-      const sortedRects = states
-        .map((item) => item.rect)
-        .filter(Boolean)
-        .sort((a, b) => a.x - b.x);
-      const isSplitAcrossViewport = sortedRects.length === states.length
-        && sortedRects.every((rect, index) => (
-          Math.abs(rect.width - expectedWidth) <= 16
-          && Math.abs(rect.x - expectedWidth * index) <= 16
-          && rect.y === 0
-        ));
-      return isSplitAcrossViewport ? state : null;
+      return isEvenFullscreenSplit(state, 2, viewportWidth) ? state : null;
     }, {
       timeoutMs: 20_000,
       intervalMs: 250,
@@ -226,6 +229,60 @@ async function main() {
     });
     result.fullscreenDebugState = fullscreenDebugState;
     result.steps.push('multi_sidebar_fullscreen_split_verified');
+
+    await firstFrame.locator('#add-sidebar-button').click();
+    result.steps.push('add_sidebar_clicked_while_fullscreen');
+    const fullscreenAfterAddDebugState = await waitFor(async () => {
+      const payload = await extensionWorker.evaluate(
+        buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
+      );
+      const state = payload?.response?.debugState || null;
+      const viewportWidth = Number(page.viewportSize()?.width) || 1920;
+      return isEvenFullscreenSplit(state, 3, viewportWidth) ? state : null;
+    }, {
+      timeoutMs: 20_000,
+      intervalMs: 250,
+      label: 'new sidebar joins fullscreen split'
+    });
+    result.fullscreenAfterAddDebugState = fullscreenAfterAddDebugState;
+    result.steps.push('new_sidebar_joined_fullscreen_split');
+
+    const fullscreenFramesAfterAdd = await waitFor(async () => {
+      const frames = getSidebarFrames(page, extensionId);
+      return frames.length === 3 ? frames : null;
+    }, {
+      timeoutMs: 30_000,
+      intervalMs: 250,
+      label: 'three sidebar frames after fullscreen add'
+    });
+    const thirdFrame = fullscreenFramesAfterAdd.find((frame) => {
+      const id = extractInstanceId(frame.url());
+      return id && !instanceIds.includes(id);
+    });
+    if (!thirdFrame) {
+      throw new Error('Cannot identify the fullscreen-created third sidebar frame.');
+    }
+    const thirdInstanceId = extractInstanceId(thirdFrame.url());
+    result.thirdInstanceId = thirdInstanceId;
+
+    await secondFrame.locator('#add-sidebar-button').click();
+    const fullscreenAfterCloseDebugState = await waitFor(async () => {
+      const payload = await extensionWorker.evaluate(
+        buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
+      );
+      const state = payload?.response?.debugState || null;
+      const viewportWidth = Number(page.viewportSize()?.width) || 1920;
+      return !findInstanceState(state, secondInstanceId)
+        && isEvenFullscreenSplit(state, 2, viewportWidth)
+        ? state
+        : null;
+    }, {
+      timeoutMs: 20_000,
+      intervalMs: 250,
+      label: 'closed fullscreen sidebar is destroyed and layout resplits'
+    });
+    result.fullscreenAfterCloseDebugState = fullscreenAfterCloseDebugState;
+    result.steps.push('fullscreen_sidebar_destroyed_and_resplit');
 
     const exitFullscreenResponse = await extensionWorker.evaluate(
       buildSendContentMessageExpression(JSON.stringify({ type: 'TOGGLE_FULLSCREEN_FROM_BACKGROUND' }))
@@ -239,9 +296,11 @@ async function main() {
       const visibleCount = Array.isArray(state?.instances)
         ? state.instances.filter((item) => item?.isActuallyVisible).length
         : 0;
-      const states = instanceIds.map((id) => findInstanceState(state, id));
+      const remainingIds = [firstInstanceId, thirdInstanceId];
+      const states = remainingIds.map((id) => findInstanceState(state, id));
       return state?.sidebarCount === 2
         && visibleCount === 2
+        && !findInstanceState(state, secondInstanceId)
         && states.every((item) => item && !item.isFullscreen)
         ? state
         : null;
@@ -253,7 +312,7 @@ async function main() {
     result.exitFullscreenDebugState = exitFullscreenDebugState;
     result.steps.push('multi_sidebar_fullscreen_exit_verified');
 
-    await secondFrame.locator('#add-sidebar-button').click();
+    await thirdFrame.locator('#add-sidebar-button').click();
     const closeDebugState = await waitFor(async () => {
       const payload = await extensionWorker.evaluate(
         buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
@@ -262,14 +321,14 @@ async function main() {
       const visibleCount = Array.isArray(state?.instances)
         ? state.instances.filter((item) => item?.isActuallyVisible).length
         : 0;
-      return state?.sidebarCount === 2 && visibleCount === 1 ? state : null;
+      return state?.sidebarCount === 1 && visibleCount === 1 ? state : null;
     }, {
       timeoutMs: 20_000,
       intervalMs: 250,
-      label: 'secondary sidebar closed'
+      label: 'remaining secondary sidebar destroyed'
     });
     result.closeDebugState = closeDebugState;
-    result.steps.push('secondary_sidebar_closed');
+    result.steps.push('remaining_secondary_sidebar_destroyed');
 
     const reopenAllResponse = await extensionWorker.evaluate(
       buildSendContentMessageExpression(JSON.stringify({ type: 'OPEN_SIDEBAR' }))
@@ -283,14 +342,14 @@ async function main() {
       const visibleCount = Array.isArray(state?.instances)
         ? state.instances.filter((item) => item?.isActuallyVisible).length
         : 0;
-      return state?.sidebarCount === 2 && visibleCount === 2 ? state : null;
+      return state?.sidebarCount === 1 && visibleCount === 1 ? state : null;
     }, {
       timeoutMs: 20_000,
       intervalMs: 250,
-      label: 'all sidebars reopened'
+      label: 'primary sidebar remains after destroyed secondaries'
     });
     result.reopenedDebugState = reopenedDebugState;
-    result.steps.push('all_sidebars_reopened');
+    result.steps.push('primary_sidebar_remains_after_destroyed_secondaries');
 
     const toggleClosedResponse = await extensionWorker.evaluate(
       buildSendContentMessageExpression(JSON.stringify({ type: 'TOGGLE_SIDEBAR_onClicked' }))
@@ -304,14 +363,14 @@ async function main() {
       const visibleCount = Array.isArray(state?.instances)
         ? state.instances.filter((item) => item?.isActuallyVisible).length
         : 0;
-      return state?.sidebarCount === 2 && visibleCount === 0 ? state : null;
+      return state?.sidebarCount === 1 && visibleCount === 0 ? state : null;
     }, {
       timeoutMs: 20_000,
       intervalMs: 250,
-      label: 'all sidebars closed by global toggle'
+      label: 'primary sidebar closed by global toggle'
     });
     result.toggleClosedDebugState = toggleClosedDebugState;
-    result.steps.push('all_sidebars_closed_by_global_toggle');
+    result.steps.push('primary_sidebar_closed_by_global_toggle');
 
     const toggleReopenedResponse = await extensionWorker.evaluate(
       buildSendContentMessageExpression(JSON.stringify({ type: 'TOGGLE_SIDEBAR_onClicked' }))
@@ -325,16 +384,48 @@ async function main() {
       const visibleCount = Array.isArray(state?.instances)
         ? state.instances.filter((item) => item?.isActuallyVisible).length
         : 0;
+      return state?.sidebarCount === 1 && visibleCount === 1 ? state : null;
+    }, {
+      timeoutMs: 20_000,
+      intervalMs: 250,
+      label: 'primary sidebar reopened by global toggle'
+    });
+    result.toggleReopenedDebugState = toggleReopenedDebugState;
+    result.steps.push('primary_sidebar_reopened_by_global_toggle');
+
+    await firstFrame.locator('#add-sidebar-button').click();
+    const sidebarAfterRecreateDebugState = await waitFor(async () => {
+      const payload = await extensionWorker.evaluate(
+        buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
+      );
+      const state = payload?.response?.debugState || null;
+      const visibleCount = Array.isArray(state?.instances)
+        ? state.instances.filter((item) => item?.isActuallyVisible).length
+        : 0;
       return state?.sidebarCount === 2 && visibleCount === 2 ? state : null;
     }, {
       timeoutMs: 20_000,
       intervalMs: 250,
-      label: 'all sidebars reopened by global toggle'
+      label: 'second sidebar recreated for drag regression'
     });
-    result.toggleReopenedDebugState = toggleReopenedDebugState;
-    result.steps.push('all_sidebars_reopened_by_global_toggle');
+    result.sidebarAfterRecreateDebugState = sidebarAfterRecreateDebugState;
+    result.steps.push('second_sidebar_recreated_for_drag_regression');
 
-    const secondBeforeDrag = findInstanceState(toggleReopenedDebugState, secondFrame ? extractInstanceId(secondFrame.url()) : '');
+    const framesAfterRecreate = await waitFor(async () => {
+      const frames = getSidebarFrames(page, extensionId);
+      return frames.length === 2 ? frames : null;
+    }, {
+      timeoutMs: 30_000,
+      intervalMs: 250,
+      label: 'two sidebar frames after recreate'
+    });
+    const recreatedSecondFrame = framesAfterRecreate.find((frame) => extractInstanceId(frame.url()) !== firstInstanceId);
+    if (!recreatedSecondFrame) {
+      throw new Error('Cannot identify recreated second sidebar frame.');
+    }
+    const recreatedSecondInstanceId = extractInstanceId(recreatedSecondFrame.url());
+
+    const secondBeforeDrag = findInstanceState(sidebarAfterRecreateDebugState, recreatedSecondInstanceId);
     if (!secondBeforeDrag?.rect) {
       throw new Error('Cannot find second sidebar debug state before drag.');
     }
@@ -351,7 +442,7 @@ async function main() {
         buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
       );
       const state = payload?.response?.debugState || null;
-      const secondState = findInstanceState(state, extractInstanceId(secondFrame.url()));
+      const secondState = findInstanceState(state, recreatedSecondInstanceId);
       return secondState?.isActuallyVisible
         && secondState?.sidebarPosition === 'left'
         && Number(secondState?.computedOpacity) > 0.99
@@ -365,7 +456,7 @@ async function main() {
     result.dragReorderDebugState = dragReorderDebugState;
     result.steps.push('secondary_sidebar_dragged_to_left');
 
-    const secondBeforeResize = findInstanceState(dragReorderDebugState, extractInstanceId(secondFrame.url()));
+    const secondBeforeResize = findInstanceState(dragReorderDebugState, recreatedSecondInstanceId);
     if (!secondBeforeResize?.rect || !Number.isFinite(Number(secondBeforeResize.sidebarWidth))) {
       throw new Error('Cannot find second sidebar debug state before resize.');
     }
@@ -386,7 +477,7 @@ async function main() {
         buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
       );
       const state = payload?.response?.debugState || null;
-      const secondState = findInstanceState(state, extractInstanceId(secondFrame.url()));
+      const secondState = findInstanceState(state, recreatedSecondInstanceId);
       return secondState?.sidebarPosition === 'left'
         && Number(secondState?.sidebarWidth) > Number(secondBeforeResize.sidebarWidth) + 40
         ? state
@@ -406,7 +497,7 @@ async function main() {
       }).catch((error) => {
         result.primarySidebarScreenshotError = String(error && (error.stack || error.message || error));
       }),
-      secondFrame.locator('body').screenshot({
+      recreatedSecondFrame.locator('body').screenshot({
         path: path.join(outputDir, 'second-sidebar-body.png'),
         timeout: 5_000
       }).catch((error) => {
