@@ -192,6 +192,67 @@ async function main() {
     result.steps.push('draft_isolation_verified');
     result.steps.push('secondary_close_button_verified');
 
+    const enterFullscreenResponse = await extensionWorker.evaluate(
+      buildSendContentMessageExpression(JSON.stringify({ type: 'TOGGLE_FULLSCREEN_FROM_BACKGROUND' }))
+    );
+    result.enterFullscreenResponse = enterFullscreenResponse;
+    const fullscreenDebugState = await waitFor(async () => {
+      const payload = await extensionWorker.evaluate(
+        buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
+      );
+      const state = payload?.response?.debugState || null;
+      const states = instanceIds.map((id) => findInstanceState(state, id));
+      if (state?.sidebarCount !== 2 || states.some((item) => !item?.isActuallyVisible || !item?.isFullscreen)) {
+        return null;
+      }
+
+      const viewportWidth = Number(page.viewportSize()?.width) || 1920;
+      const expectedWidth = viewportWidth / states.length;
+      const sortedRects = states
+        .map((item) => item.rect)
+        .filter(Boolean)
+        .sort((a, b) => a.x - b.x);
+      const isSplitAcrossViewport = sortedRects.length === states.length
+        && sortedRects.every((rect, index) => (
+          Math.abs(rect.width - expectedWidth) <= 16
+          && Math.abs(rect.x - expectedWidth * index) <= 16
+          && rect.y === 0
+        ));
+      return isSplitAcrossViewport ? state : null;
+    }, {
+      timeoutMs: 20_000,
+      intervalMs: 250,
+      label: 'multi-sidebar fullscreen splits viewport'
+    });
+    result.fullscreenDebugState = fullscreenDebugState;
+    result.steps.push('multi_sidebar_fullscreen_split_verified');
+
+    const exitFullscreenResponse = await extensionWorker.evaluate(
+      buildSendContentMessageExpression(JSON.stringify({ type: 'TOGGLE_FULLSCREEN_FROM_BACKGROUND' }))
+    );
+    result.exitFullscreenResponse = exitFullscreenResponse;
+    const exitFullscreenDebugState = await waitFor(async () => {
+      const payload = await extensionWorker.evaluate(
+        buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
+      );
+      const state = payload?.response?.debugState || null;
+      const visibleCount = Array.isArray(state?.instances)
+        ? state.instances.filter((item) => item?.isActuallyVisible).length
+        : 0;
+      const states = instanceIds.map((id) => findInstanceState(state, id));
+      return state?.sidebarCount === 2
+        && visibleCount === 2
+        && states.every((item) => item && !item.isFullscreen)
+        ? state
+        : null;
+    }, {
+      timeoutMs: 20_000,
+      intervalMs: 250,
+      label: 'multi-sidebar fullscreen exits cleanly'
+    });
+    result.exitFullscreenDebugState = exitFullscreenDebugState;
+    result.steps.push('multi_sidebar_fullscreen_exit_verified');
+
     await secondFrame.locator('#add-sidebar-button').click();
     const closeDebugState = await waitFor(async () => {
       const payload = await extensionWorker.evaluate(

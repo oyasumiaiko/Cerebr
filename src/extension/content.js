@@ -727,6 +727,11 @@ class CerebrSidebar {
           border-radius: 0;
           transform: translateX(0) !important;
         }
+        .cerebr-sidebar.fullscreen.fullscreen-split {
+          left: var(--cerebr-fullscreen-left, 0px) !important;
+          right: auto !important;
+          width: var(--cerebr-fullscreen-width, 100vw) !important;
+        }
         .cerebr-sidebar.fullscreen.visible {
           transform: translateX(0) !important;
           box-shadow: none !important;
@@ -1132,6 +1137,24 @@ class CerebrSidebar {
     }
     this.manager?.layoutSidebars?.();
   }
+
+  applyFullscreenSplitLayout(index, total) {
+    if (!this.sidebar || !this.isFullscreen) return;
+    const safeTotal = Math.max(1, Number(total) || 1);
+    const safeIndex = Math.min(Math.max(0, Number(index) || 0), safeTotal - 1);
+    const widthExpression = `calc(100vw / ${safeTotal})`;
+    const leftExpression = `calc(100vw * ${safeIndex} / ${safeTotal})`;
+    this.sidebar.classList.add('fullscreen-split');
+    this.sidebar.style.setProperty('--cerebr-fullscreen-left', leftExpression);
+    this.sidebar.style.setProperty('--cerebr-fullscreen-width', widthExpression);
+  }
+
+  clearFullscreenSplitLayout() {
+    if (!this.sidebar) return;
+    this.sidebar.classList.remove('fullscreen-split');
+    this.sidebar.style.removeProperty('--cerebr-fullscreen-left');
+    this.sidebar.style.removeProperty('--cerebr-fullscreen-width');
+  }
   
   // 通知iframe全屏状态变化
   notifyIframeFullscreenState(isFullscreen) {
@@ -1192,6 +1215,7 @@ class CerebrSidebarManager {
     this.lastImageData = null;
     this.isAltKeyPressed = false;
     this.nextInstanceSeq = 1;
+    this.multiFullscreenRestoreStateById = null;
     this.createSidebar({ show: false, isPrimary: true });
     this.setupUrlChangeListener();
     this.setupHostEventListeners();
@@ -1297,6 +1321,81 @@ class CerebrSidebarManager {
     this.setAllSidebarsVisible(!shouldHideAll);
   }
 
+  isMultiSidebarFullscreenActive() {
+    return this.sidebars.length > 1
+      && this.sidebars.some((item) => item?.isFullscreen);
+  }
+
+  buildMultiFullscreenRestoreState() {
+    const restoreStateById = new Map();
+    this.sidebars.forEach((item) => {
+      restoreStateById.set(item.instanceId, {
+        wasVisible: !!item.isVisible,
+        wasDocked: !!item.isDocked
+      });
+    });
+    return restoreStateById;
+  }
+
+  enterMultiSidebarFullscreen(sourceSidebar) {
+    if (this.sidebars.length <= 1) {
+      sourceSidebar?.toggleFullscreen?.();
+      return;
+    }
+
+    if (!this.multiFullscreenRestoreStateById) {
+      this.multiFullscreenRestoreStateById = this.buildMultiFullscreenRestoreState();
+    }
+
+    // 多侧栏全屏是一个页面级布局状态：所有实例一起进入全屏并平分视口。
+    // 这里主动显示隐藏实例，退出时再按进入前快照恢复，避免快捷键状态依赖当前 active 侧栏。
+    this.sidebars.forEach((item) => {
+      if (item.isDocked) item.setDockMode(false);
+      item.toggle(true);
+      item.toggleFullscreen(true);
+    });
+    if (sourceSidebar) this.setActiveSidebar(sourceSidebar);
+    this.layoutSidebars();
+  }
+
+  exitMultiSidebarFullscreen() {
+    const restoreStateById = this.multiFullscreenRestoreStateById;
+    this.sidebars.forEach((item) => {
+      item.clearFullscreenSplitLayout();
+      item.toggleFullscreen(false);
+    });
+
+    if (restoreStateById) {
+      this.sidebars.forEach((item) => {
+        const restoreState = restoreStateById.get(item.instanceId);
+        if (!restoreState) return;
+        item.setDockMode(!!restoreState.wasDocked);
+        item.toggle(!!restoreState.wasVisible);
+      });
+    }
+
+    this.multiFullscreenRestoreStateById = null;
+    document.documentElement.style.overflow = '';
+    this.layoutSidebars();
+  }
+
+  toggleFullscreenForSidebar(sidebarInstance) {
+    const target = sidebarInstance || this.getActiveSidebar();
+    if (!target) return;
+
+    if (this.sidebars.length > 1) {
+      if (this.isMultiSidebarFullscreenActive()) {
+        this.exitMultiSidebarFullscreen();
+      } else {
+        this.enterMultiSidebarFullscreen(target);
+      }
+      return;
+    }
+
+    target.toggleFullscreen();
+    this.layoutSidebars();
+  }
+
   moveSidebarBefore(sidebarInstance, beforeSidebar) {
     if (!sidebarInstance || sidebarInstance === beforeSidebar) return;
     const currentIndex = this.sidebars.indexOf(sidebarInstance);
@@ -1374,9 +1473,26 @@ class CerebrSidebarManager {
 
   layoutSidebars() {
     const gapPx = 12;
+    const fullscreenSidebars = this.sidebars.filter((item) => (
+      item?.isVisible
+      && item?.isFullscreen
+      && item?.sidebar
+    ));
+    if (fullscreenSidebars.length > 1) {
+      fullscreenSidebars.forEach((item, index) => {
+        item.setStackOffsetPx(0);
+        item.applyFullscreenSplitLayout(index, fullscreenSidebars.length);
+      });
+      this.sidebars.forEach((item) => {
+        if (!fullscreenSidebars.includes(item)) item.clearFullscreenSplitLayout();
+      });
+      return;
+    }
+
     const offsetByPosition = new Map();
     for (const item of this.sidebars) {
       const position = item.sidebarPosition === 'left' ? 'left' : 'right';
+      item.clearFullscreenSplitLayout();
       if (!item.isVisible || item.isFullscreen) {
         item.setStackOffsetPx(0);
         continue;
@@ -1625,13 +1741,7 @@ class CerebrSidebarManager {
         break;
       case 'TOGGLE_FULLSCREEN_FROM_IFRAME':
         console.log('处理全屏切换消息:', data.isFullscreen);
-        if (!sourceSidebar.isFullscreen) {
-          this.sidebars.forEach((item) => {
-            if (item !== sourceSidebar && item.isFullscreen) item.toggleFullscreen(false);
-          });
-        }
-        sourceSidebar.toggleFullscreen();
-        this.layoutSidebars();
+        this.toggleFullscreenForSidebar(sourceSidebar);
         break;
       case 'CREATE_ADDITIONAL_SIDEBAR':
         this.createSidebar({ show: true });
@@ -1831,7 +1941,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
         return true;
       case 'TOGGLE_FULLSCREEN_FROM_BACKGROUND':
-        targetSidebar.toggleFullscreen();  // 切换全屏状态
+        sidebarManager?.toggleFullscreenForSidebar?.(targetSidebar);
         break;
       case 'QUICK_SUMMARY':
         targetSidebar.toggle(true);  // 明确传入 true 表示打开

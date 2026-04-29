@@ -86,6 +86,21 @@ test('embedded sidebar manager supports drag reorder and per-instance resize', a
   assert.match(source, /sidebarWidth: Math\.round\(Number\(this\.sidebarWidth\) \|\| 0\)/);
 });
 
+test('multi-sidebar fullscreen is coordinated by manager and split across viewport', async () => {
+  const source = await readRepoFile('src/extension/content.js');
+
+  assert.match(source, /multiFullscreenRestoreStateById/);
+  assert.match(source, /toggleFullscreenForSidebar\(sidebarInstance\)/);
+  assert.match(source, /enterMultiSidebarFullscreen\(sourceSidebar\)/);
+  assert.match(source, /exitMultiSidebarFullscreen\(\)/);
+  assert.match(source, /applyFullscreenSplitLayout\(index, total\)/);
+  assert.match(source, /--cerebr-fullscreen-left/);
+  assert.match(source, /--cerebr-fullscreen-width/);
+  assert.match(source, /widthExpression = `calc\(100vw \/ \$\{safeTotal\}\)`/);
+  assert.match(source, /case 'TOGGLE_FULLSCREEN_FROM_IFRAME':[\s\S]*this\.toggleFullscreenForSidebar\(sourceSidebar\)/);
+  assert.match(source, /case 'TOGGLE_FULLSCREEN_FROM_BACKGROUND':[\s\S]*sidebarManager\?\.toggleFullscreenForSidebar\?\.\(targetSidebar\)/);
+});
+
 test('host page tool requests carry sidebarInstanceId through sender and background relay', async () => {
   const messageSenderSource = await readRepoFile('src/core/message_sender.js');
   const sidebarEventsSource = await readRepoFile('src/ui/sidebar/sidebar_events.js');
