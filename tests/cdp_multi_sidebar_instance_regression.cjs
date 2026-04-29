@@ -33,6 +33,12 @@ function extractInstanceId(frameUrl) {
   return url.searchParams.get('instanceId') || '';
 }
 
+function findInstanceState(debugState, instanceId) {
+  return Array.isArray(debugState?.instances)
+    ? debugState.instances.find((item) => item?.instanceId === instanceId) || null
+    : null;
+}
+
 async function writeResult(outputDir, result) {
   await fsp.mkdir(outputDir, { recursive: true });
   await fsp.writeFile(
@@ -266,6 +272,71 @@ async function main() {
     });
     result.toggleReopenedDebugState = toggleReopenedDebugState;
     result.steps.push('all_sidebars_reopened_by_global_toggle');
+
+    const secondBeforeDrag = findInstanceState(toggleReopenedDebugState, secondFrame ? extractInstanceId(secondFrame.url()) : '');
+    if (!secondBeforeDrag?.rect) {
+      throw new Error('Cannot find second sidebar debug state before drag.');
+    }
+    await page.mouse.move(
+      secondBeforeDrag.rect.x + Math.round(secondBeforeDrag.rect.width / 2),
+      secondBeforeDrag.rect.y + 8
+    );
+    await page.mouse.down();
+    await page.mouse.move(80, secondBeforeDrag.rect.y + 8, { steps: 12 });
+    await page.mouse.up();
+
+    const dragReorderDebugState = await waitFor(async () => {
+      const payload = await extensionWorker.evaluate(
+        buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
+      );
+      const state = payload?.response?.debugState || null;
+      const secondState = findInstanceState(state, extractInstanceId(secondFrame.url()));
+      return secondState?.isActuallyVisible
+        && secondState?.sidebarPosition === 'left'
+        && Number(secondState?.computedOpacity) > 0.99
+        ? state
+        : null;
+    }, {
+      timeoutMs: 20_000,
+      intervalMs: 250,
+      label: 'secondary sidebar moved to left by drag'
+    });
+    result.dragReorderDebugState = dragReorderDebugState;
+    result.steps.push('secondary_sidebar_dragged_to_left');
+
+    const secondBeforeResize = findInstanceState(dragReorderDebugState, extractInstanceId(secondFrame.url()));
+    if (!secondBeforeResize?.rect || !Number.isFinite(Number(secondBeforeResize.sidebarWidth))) {
+      throw new Error('Cannot find second sidebar debug state before resize.');
+    }
+    await page.mouse.move(
+      secondBeforeResize.rect.x + secondBeforeResize.rect.width - 6,
+      secondBeforeResize.rect.y + Math.round(secondBeforeResize.rect.height / 2)
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      secondBeforeResize.rect.x + secondBeforeResize.rect.width + 140,
+      secondBeforeResize.rect.y + Math.round(secondBeforeResize.rect.height / 2),
+      { steps: 10 }
+    );
+    await page.mouse.up();
+
+    const resizeDebugState = await waitFor(async () => {
+      const payload = await extensionWorker.evaluate(
+        buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
+      );
+      const state = payload?.response?.debugState || null;
+      const secondState = findInstanceState(state, extractInstanceId(secondFrame.url()));
+      return secondState?.sidebarPosition === 'left'
+        && Number(secondState?.sidebarWidth) > Number(secondBeforeResize.sidebarWidth) + 40
+        ? state
+        : null;
+    }, {
+      timeoutMs: 20_000,
+      intervalMs: 250,
+      label: 'secondary sidebar resized by drag'
+    });
+    result.resizeDebugState = resizeDebugState;
+    result.steps.push('secondary_sidebar_resized_by_drag');
 
     await Promise.all([
       firstFrame.locator('body').screenshot({

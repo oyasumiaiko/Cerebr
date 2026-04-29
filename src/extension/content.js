@@ -311,19 +311,23 @@ class CerebrSidebar {
     const nextOffset = Number.isFinite(numeric) && numeric > 0 ? Math.round(numeric) : 0;
     if (this.stackOffsetPx === nextOffset) return;
     this.stackOffsetPx = nextOffset;
-    this.updatePosition(this.sidebarPosition);
+    this.updatePosition(this.sidebarPosition, { persist: false });
   }
 
   // 添加统一的宽度更新方法
-  updateWidth(width) {
+  updateWidth(width, options = {}) {
+    const shouldPersist = options?.persist !== false;
     this.sidebarWidth = width;
     this.sidebar.style.width = `calc(${this.sidebarWidth}px * var(--scale-ratio, 1) / ${this.scaleFactor})`;
-    queueSyncSet({ sidebarWidth: this.sidebarWidth });
+    if (shouldPersist) {
+      queueSyncSet({ sidebarWidth: this.sidebarWidth });
+    }
     this.updateDockLayout();
   }
 
   // 添加更新侧边栏位置的方法
-  updatePosition(position) {
+  updatePosition(position, options = {}) {
+    const shouldPersist = options?.persist !== false;
     this.sidebarPosition = position;
     if (!this.sidebar) return; // 确保sidebar已经创建
     if (this.isFullscreen) return; // 全屏模式不改变位置
@@ -339,11 +343,15 @@ class CerebrSidebar {
     
     // 设置新的定位和变换
     if (position === 'left') {
+      this.sidebar.classList.add('position-left');
+      this.sidebar.classList.remove('position-right');
       style.left = offset;
       // 更新进入和退出动画的变换
       this.sidebar.style.setProperty('--transform-hidden', `translateX(calc(-100% - ${hiddenOffset}))`);
       this.sidebar.style.setProperty('--box-shadow-visible', this.isDocked ? 'none' : `2px 0 15px rgba(0,0,0,0.1)`);
     } else {
+      this.sidebar.classList.add('position-right');
+      this.sidebar.classList.remove('position-left');
       style.right = offset;
       // 更新进入和退出动画的变换
       this.sidebar.style.setProperty('--transform-hidden', `translateX(calc(100% + ${hiddenOffset}))`);
@@ -355,7 +363,9 @@ class CerebrSidebar {
       this.sidebar.style.transform = `var(--transform-hidden)`;
     }
 
-    queueSyncSet({ sidebarPosition: this.sidebarPosition });
+    if (shouldPersist) {
+      queueSyncSet({ sidebarPosition: this.sidebarPosition });
+    }
     this.updateDockLayout();
     
     // console.log(`侧边栏位置已更新为: ${position}, 可见状态: ${this.isVisible}`);
@@ -485,6 +495,8 @@ class CerebrSidebar {
       isFullscreen: !!this.isFullscreen,
       isDocked: !!this.isDocked,
       sidebarPosition: this.sidebarPosition || 'right',
+      stackOffsetPx: this.stackOffsetPx,
+      sidebarWidth: Math.round(Number(this.sidebarWidth) || 0),
       hasVisibleClass,
       hasIframe,
       inlineDisplay,
@@ -590,6 +602,51 @@ class CerebrSidebar {
           transition: transform 0.3s ease, box-shadow 0.3s ease, opacity 0.3s ease, visibility 0s linear 0s;
         }
 
+        .cerebr-sidebar.dragging {
+          transition: none !important;
+          opacity: 0.92;
+        }
+
+        .cerebr-sidebar.resizing {
+          transition: none !important;
+        }
+
+        .cerebr-sidebar__header {
+          position: absolute;
+          top: 0;
+          left: 50%;
+          transform: translateX(-50%);
+          width: min(160px, calc(100% - 80px));
+          height: 16px;
+          z-index: 2;
+          cursor: grab;
+          pointer-events: auto;
+        }
+
+        .cerebr-sidebar__header::before {
+          content: '';
+          position: absolute;
+          left: 50%;
+          top: 5px;
+          transform: translateX(-50%);
+          width: 56px;
+          height: 5px;
+          border-radius: 999px;
+          background: rgba(120, 120, 120, 0.36);
+          opacity: 0;
+          transition: opacity 0.16s ease, background 0.16s ease;
+        }
+
+        .cerebr-sidebar__header:hover::before,
+        .cerebr-sidebar.dragging .cerebr-sidebar__header::before {
+          opacity: 1;
+          background: rgba(120, 120, 120, 0.62);
+        }
+
+        .cerebr-sidebar.dragging .cerebr-sidebar__header {
+          cursor: grabbing;
+        }
+
         .cerebr-sidebar__content {
           height: 100%;
           overflow: auto;
@@ -621,6 +678,42 @@ class CerebrSidebar {
           border-radius: 0;
         }
 
+        .cerebr-sidebar__resizer {
+          position: absolute;
+          top: 0;
+          bottom: 0;
+          width: 12px;
+          z-index: 3;
+          cursor: col-resize;
+          pointer-events: auto;
+          opacity: 0;
+          transition: opacity 0.16s ease;
+        }
+
+        .cerebr-sidebar__resizer::before {
+          content: '';
+          position: absolute;
+          top: 16px;
+          bottom: 16px;
+          left: 5px;
+          width: 2px;
+          border-radius: 999px;
+          background: rgba(120, 120, 120, 0.5);
+        }
+
+        .cerebr-sidebar.position-right .cerebr-sidebar__resizer {
+          left: 0;
+        }
+
+        .cerebr-sidebar.position-left .cerebr-sidebar__resizer {
+          right: 0;
+        }
+
+        .cerebr-sidebar__resizer:hover,
+        .cerebr-sidebar.resizing .cerebr-sidebar__resizer {
+          opacity: 1;
+        }
+
         .cerebr-sidebar.fullscreen {
           transition: all 0s !important;
 
@@ -637,6 +730,10 @@ class CerebrSidebar {
         .cerebr-sidebar.fullscreen.visible {
           transform: translateX(0) !important;
           box-shadow: none !important;
+        }
+        .cerebr-sidebar.fullscreen .cerebr-sidebar__header,
+        .cerebr-sidebar.fullscreen .cerebr-sidebar__resizer {
+          display: none;
         }
         .cerebr-sidebar.fullscreen .cerebr-sidebar__content {
           border-radius: 0;
@@ -781,7 +878,7 @@ class CerebrSidebar {
 
       // console.log('侧边栏已添加到文档');
 
-      this.setupEventListeners(resizer);
+      this.setupEventListeners(header, resizer);
 
       // 使用 requestAnimationFrame 确保状态已经应用
       requestAnimationFrame(() => {
@@ -808,36 +905,52 @@ class CerebrSidebar {
     }
   }
 
-  setupEventListeners(resizer) {
+  setupEventListeners(header, resizer) {
     let startX, startWidth;
 
     resizer.addEventListener('mousedown', (e) => {
       // 如果是全屏模式，不允许调整大小
       if (this.isFullscreen) return;
 
+      e.preventDefault();
+      e.stopPropagation();
       startX = e.clientX;
       startWidth = this.sidebarWidth;
+      this.manager?.setActiveSidebar?.(this);
+      this.sidebar?.classList.add('resizing');
+      const interactionOverlay = this.manager?.createInteractionOverlay?.('col-resize') || null;
 
       const handleMouseMove = (e) => {
         // 如果是全屏模式，不允许调整大小
         if (this.isFullscreen) return;
 
-        const diff = this.sidebarPosition === 'left' ? 
-          e.clientX - startX : // 左侧模式：拖动距离为正时增加宽度
-          startX - e.clientX;  // 右侧模式：拖动距离为负时增加宽度
-        
         const scale = this.scaleFactor / window.devicePixelRatio;
-        const newWidth = Math.min(Math.max(500, startWidth - diff / scale), 2000);
+        const dragDelta = this.sidebarPosition === 'left'
+          ? e.clientX - startX
+          : startX - e.clientX;
+        const newWidth = Math.min(Math.max(500, startWidth + dragDelta / scale), 2000);
         this.updateWidth(newWidth);
+        this.manager?.layoutSidebars?.();
       };
 
-      const handleMouseUp = () => {
-        document.removeEventListener('mousemove', handleMouseMove);
-        document.removeEventListener('mouseup', handleMouseUp);
+      const cleanupResize = () => {
+        this.sidebar?.classList.remove('resizing');
+        interactionOverlay?.removeEventListener?.('mousemove', handleMouseMove, true);
+        interactionOverlay?.removeEventListener?.('mouseup', cleanupResize, true);
+        window.removeEventListener('blur', cleanupResize, true);
+        interactionOverlay?.remove?.();
       };
 
-      document.addEventListener('mousemove', handleMouseMove);
-      document.addEventListener('mouseup', handleMouseUp);
+      interactionOverlay?.addEventListener?.('mousemove', handleMouseMove, true);
+      interactionOverlay?.addEventListener?.('mouseup', cleanupResize, true);
+      window.addEventListener('blur', cleanupResize, true);
+    });
+
+    header?.addEventListener('mousedown', (event) => {
+      if (this.isFullscreen || this.isDocked) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.manager?.startSidebarDrag?.(this, event);
     });
 
   }
@@ -1148,6 +1261,31 @@ class CerebrSidebarManager {
     return this.sidebars.filter((item) => item?.isVisible && item?.sidebar);
   }
 
+  getVisibleSidebarsByPosition(position) {
+    const normalizedPosition = position === 'left' ? 'left' : 'right';
+    return this.sidebars.filter((item) => (
+      item?.isVisible
+      && item?.sidebar
+      && !item.isFullscreen
+      && (item.sidebarPosition === 'left' ? 'left' : 'right') === normalizedPosition
+    ));
+  }
+
+  createInteractionOverlay(cursor = 'default') {
+    const overlay = document.createElement('div');
+    overlay.dataset.cerebrInteractionOverlay = 'true';
+    Object.assign(overlay.style, {
+      position: 'fixed',
+      inset: '0',
+      zIndex: '2147483647',
+      cursor,
+      background: 'transparent',
+      pointerEvents: 'auto'
+    });
+    document.documentElement.appendChild(overlay);
+    return overlay;
+  }
+
   setAllSidebarsVisible(isVisible) {
     const nextVisible = !!isVisible;
     this.sidebars.forEach((item) => item.toggle(nextVisible));
@@ -1157,6 +1295,81 @@ class CerebrSidebarManager {
   toggleAllSidebars() {
     const shouldHideAll = this.sidebars.some((item) => item?.isVisible);
     this.setAllSidebarsVisible(!shouldHideAll);
+  }
+
+  moveSidebarBefore(sidebarInstance, beforeSidebar) {
+    if (!sidebarInstance || sidebarInstance === beforeSidebar) return;
+    const currentIndex = this.sidebars.indexOf(sidebarInstance);
+    if (currentIndex === -1) return;
+    this.sidebars.splice(currentIndex, 1);
+    if (!beforeSidebar) {
+      this.sidebars.push(sidebarInstance);
+      return;
+    }
+    const nextIndex = this.sidebars.indexOf(beforeSidebar);
+    if (nextIndex === -1) {
+      this.sidebars.push(sidebarInstance);
+      return;
+    }
+    this.sidebars.splice(nextIndex, 0, sidebarInstance);
+  }
+
+  reorderSidebarFromPointer(sidebarInstance, clientX) {
+    if (!sidebarInstance || !sidebarInstance.sidebar || sidebarInstance.isFullscreen || sidebarInstance.isDocked) return;
+    const viewportMidpoint = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1) / 2;
+    const targetPosition = clientX < viewportMidpoint ? 'left' : 'right';
+    if (sidebarInstance.sidebarPosition !== targetPosition) {
+      sidebarInstance.updatePosition(targetPosition, { persist: false });
+    }
+    const peers = this.getVisibleSidebarsByPosition(targetPosition)
+      .filter((item) => item !== sidebarInstance);
+    let beforeSidebar = null;
+    if (targetPosition === 'right') {
+      for (const item of peers) {
+        const rect = item.sidebar.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        if (clientX > centerX) {
+          beforeSidebar = item;
+          break;
+        }
+      }
+    } else {
+      for (const item of peers) {
+        const rect = item.sidebar.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        if (clientX < centerX) {
+          beforeSidebar = item;
+          break;
+        }
+      }
+    }
+    this.moveSidebarBefore(sidebarInstance, beforeSidebar);
+    this.layoutSidebars();
+  }
+
+  startSidebarDrag(sidebarInstance, startEvent) {
+    if (!sidebarInstance || sidebarInstance.isFullscreen || sidebarInstance.isDocked) return;
+    this.setActiveSidebar(sidebarInstance);
+    sidebarInstance.sidebar?.classList.add('dragging');
+    const interactionOverlay = this.createInteractionOverlay('grabbing');
+    const handleMouseMove = (event) => {
+      this.reorderSidebarFromPointer(sidebarInstance, event.clientX);
+    };
+    const cleanupDrag = (event) => {
+      sidebarInstance.sidebar?.classList.remove('dragging');
+      if (Number.isFinite(Number(event?.clientX))) {
+        this.reorderSidebarFromPointer(sidebarInstance, event.clientX);
+      }
+      this.layoutSidebars();
+      interactionOverlay.removeEventListener('mousemove', handleMouseMove, true);
+      interactionOverlay.removeEventListener('mouseup', cleanupDrag, true);
+      window.removeEventListener('blur', cleanupDrag, true);
+      interactionOverlay.remove();
+    };
+    interactionOverlay.addEventListener('mousemove', handleMouseMove, true);
+    interactionOverlay.addEventListener('mouseup', cleanupDrag, true);
+    window.addEventListener('blur', cleanupDrag, true);
+    this.reorderSidebarFromPointer(sidebarInstance, startEvent.clientX);
   }
 
   layoutSidebars() {

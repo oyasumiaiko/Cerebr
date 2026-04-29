@@ -74,6 +74,18 @@ test('global sidebar visibility commands operate on all instances', async () => 
   assert.match(source, /case 'CLOSE_SIDEBAR':[\s\S]*sidebarManager\?\.setAllSidebarsVisible\?\.\(false\)/);
 });
 
+test('embedded sidebar manager supports drag reorder and per-instance resize', async () => {
+  const source = await readRepoFile('src/extension/content.js');
+
+  assert.match(source, /startSidebarDrag\(sidebarInstance, startEvent\)/);
+  assert.match(source, /reorderSidebarFromPointer\(sidebarInstance, clientX\)/);
+  assert.match(source, /moveSidebarBefore\(sidebarInstance, beforeSidebar\)/);
+  assert.match(source, /classList\.add\('dragging'\)/);
+  assert.match(source, /classList\.add\('resizing'\)/);
+  assert.match(source, /stackOffsetPx: this\.stackOffsetPx/);
+  assert.match(source, /sidebarWidth: Math\.round\(Number\(this\.sidebarWidth\) \|\| 0\)/);
+});
+
 test('host page tool requests carry sidebarInstanceId through sender and background relay', async () => {
   const messageSenderSource = await readRepoFile('src/core/message_sender.js');
   const sidebarEventsSource = await readRepoFile('src/ui/sidebar/sidebar_events.js');
