@@ -5139,14 +5139,10 @@ export function createMessageSender(appContext) {
       (item) => item && item.id !== node.id && String(item.role || '').toLowerCase() === 'user'
     );
     if (!hasOtherUserMessage && pageMeta && typeof pageMeta === 'object') {
-      if (pageMeta.isolated === true) {
-        node.pageMeta = { url: '', title: '', isolated: true };
-      } else {
-        const url = typeof pageMeta.url === 'string' ? pageMeta.url.trim() : '';
-        const title = typeof pageMeta.title === 'string' ? pageMeta.title.trim() : '';
-        if (url || title) {
-          node.pageMeta = { url, title };
-        }
+      const url = typeof pageMeta.url === 'string' ? pageMeta.url.trim() : '';
+      const title = typeof pageMeta.title === 'string' ? pageMeta.title.trim() : '';
+      if (url || title) {
+        node.pageMeta = { url, title };
       }
     }
 
@@ -10112,8 +10108,7 @@ export function createMessageSender(appContext) {
                 container: activeThreadContext.container,
                 historyParentId,
                 preserveCurrentNode: true,
-                historyPatch,
-                skipPageMetaSnapshot: isTemporaryMode
+                historyPatch
               }
             );
 
@@ -10137,15 +10132,12 @@ export function createMessageSender(appContext) {
             historyPatch: preprocessHistoryPatch || null,
             meta: historyMeta,
             historyMessagesRef: attempt?.historyMessagesRef || null,
-            pageMeta: pageContentSnapshot || (isTemporaryMode ? { isolated: true } : buildCurrentPageMetaSnapshot())
+            pageMeta: pageContentSnapshot || buildCurrentPageMetaSnapshot()
           });
         }
 
         if (!userMessageDiv && !detachedUserMessageNode) {
-          const messageOptions = {
-            ...(preprocessHistoryPatch ? { historyPatch: preprocessHistoryPatch } : {}),
-            skipPageMetaSnapshot: isTemporaryMode
-          };
+          const messageOptions = preprocessHistoryPatch ? { historyPatch: preprocessHistoryPatch } : null;
           userMessageDiv = messageProcessor.appendMessage(
             messageTextForHistory,
             'user',
@@ -10641,7 +10633,7 @@ export function createMessageSender(appContext) {
         messageId,
         targetAiMessageId: effectiveTargetAiMessageId,
         forceSendFullHistory,
-        pageContentSnapshot: pageContentSnapshot || (isTemporaryMode ? null : buildCurrentPageMetaSnapshot()),
+        pageContentSnapshot: pageContentSnapshot || buildCurrentPageMetaSnapshot(),
         conversationSnapshot: Array.isArray(conversationChain) ? conversationChain : conversationSnapshot,
         omitDefaultSystemPrompt,
         aspectRatioOverride,

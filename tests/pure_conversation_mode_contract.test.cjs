@@ -22,16 +22,18 @@ test('纯对话模式只隔离新请求工具，不重写既有历史 contextual
   assert.doesNotMatch(source, /sanitizeMessagesForPureConversation/);
 });
 
-test('纯对话模式不会把宿主页 metadata 冻结到新对话来源', async () => {
+test('纯对话模式仍允许保存宿主页 metadata 作为会话来源记录', async () => {
   const senderSource = await readWorkspaceFile('src/core/message_sender.js');
   const processorSource = await readWorkspaceFile('src/core/message_processor.js');
   const historyUiSource = await readWorkspaceFile('src/ui/chat_history_ui.js');
 
-  assert.match(senderSource, /skipPageMetaSnapshot: isTemporaryMode/);
-  assert.match(senderSource, /isTemporaryMode \? \{ isolated: true \} : buildCurrentPageMetaSnapshot\(\)/);
-  assert.match(processorSource, /node\.pageMeta = \{ url: '', title: '', isolated: true \}/);
-  assert.match(historyUiSource, /fromNode\?\.isolated === true/);
-  assert.match(historyUiSource, /source: 'isolated_conversation'/);
+  assert.match(senderSource, /pageMeta: pageContentSnapshot \|\| buildCurrentPageMetaSnapshot\(\)/);
+  assert.match(senderSource, /pageContentSnapshot: pageContentSnapshot \|\| buildCurrentPageMetaSnapshot\(\)/);
+  assert.match(processorSource, /const snapshot = createPageMetaSnapshot\(state\?\.pageInfo\)/);
+  assert.match(historyUiSource, /source: 'first_user_message'/);
+  assert.doesNotMatch(senderSource, /isolated: true/);
+  assert.doesNotMatch(processorSource, /isolated: true/);
+  assert.doesNotMatch(historyUiSource, /isolated_conversation/);
 });
 
 test('纯对话模式的 skill 请求显式关闭 background sender.tab.id 回退', async () => {
