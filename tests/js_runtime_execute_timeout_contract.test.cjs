@@ -67,3 +67,15 @@ test('js_runtime_execute 暴露 timeout_ms 并把它接到 sidebar 与 backgroun
     /timeoutMs: message\?\.timeoutMs,/
   );
 });
+
+test('js_runtime_execute 在纯对话模式下的工具说明不再指向宿主页', async () => {
+  const jsRuntimeToolModule = await importWorkspaceModule('src/agent_tools/js_runtime_execute/tool.js');
+  const toolDefinition = jsRuntimeToolModule.buildJsRuntimeExecuteFunctionToolDefinition({
+    exposeHostPageTools: false
+  });
+
+  assert.match(toolDefinition.description, /纯对话\/隔离模式/);
+  assert.match(toolDefinition.description, /不能访问宿主页 DOM、URL、标题或 frame/);
+  assert.match(toolDefinition.parameters.properties.frame_ids.description, /忽略宿主页 frame/);
+  assert.doesNotMatch(toolDefinition.description, /当前页面是单页应用/);
+});

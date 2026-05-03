@@ -29,12 +29,18 @@ export function normalizeSidebarTargetTabId(value) {
  * 2. 否则只允许回退到 sender.tab.id；
  * 3. 明确禁止再回退到“当前活动标签页”，避免用户切换标签页后把工具打到错误页面。
  *
- * @param {{explicitTabId?: any, senderTabId?: any}} source
+ * @param {{explicitTabId?: any, senderTabId?: any, allowSenderTabFallback?: boolean}} source
  * @returns {number|null}
  */
 export function resolveSidebarRequestTargetTabId(source = {}) {
   const explicitTabId = normalizeSidebarTargetTabId(source?.explicitTabId);
   if (explicitTabId !== null) return explicitTabId;
+
+  // 纯对话 / 独立隔离模式会显式关闭 sender.tab.id 回退。
+  // 这能区分“调用方忘了传 tabId”和“调用方明确要求本次不要绑定宿主页”。
+  if (source?.allowSenderTabFallback === false) {
+    return null;
+  }
 
   const senderTabId = normalizeSidebarTargetTabId(source?.senderTabId);
   return senderTabId;

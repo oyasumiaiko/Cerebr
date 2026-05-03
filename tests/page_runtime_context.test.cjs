@@ -51,7 +51,7 @@ test('host page runtime context 会包含 URL、Title 与 frame 列表', async (
   assert.match(text, /<frame id="2" top="false">/);
 });
 
-test('isolated sandbox runtime context 使用紧凑 XML 结构', async () => {
+test('isolated sandbox runtime context 不再生成隐藏页面上下文', async () => {
   const {
     buildPageRuntimeContextPayload,
     buildPageRuntimeContextInputItems
@@ -66,11 +66,9 @@ test('isolated sandbox runtime context 使用紧凑 XML 结构', async () => {
     frames: null
   });
 
-  assert.equal(payload.mode, 'isolated_sandbox');
+  assert.equal(payload, null);
   const items = buildPageRuntimeContextInputItems(payload);
-  const text = items[0].content[0].text;
-  assert.match(text, /<page_runtime_context mode="isolated_sandbox">/);
-  assert.match(text, /<js_runtime_environment>isolated_sandbox_iframe<\/js_runtime_environment>/);
+  assert.deepEqual(items, []);
 });
 
 test('resolvePageRuntimeContextAttachment 在签名未变化时不重复追加上下文', async () => {
@@ -108,11 +106,10 @@ test('resolvePageRuntimeContextAttachment 在签名未变化时不重复追加�
   assert.ok(Array.isArray(changed.inputItems));
 });
 
-test('resolvePageRuntimeContextAttachment 在纯对话模式且此前没有上下文时不主动插入说明', async () => {
+test('resolvePageRuntimeContextAttachment 在纯对话模式下不会追加覆盖性页面说明', async () => {
   const {
     buildPageRuntimeContextPayload,
-    resolvePageRuntimeContextAttachment,
-    buildPageRuntimeContextSignature
+    resolvePageRuntimeContextAttachment
   } = await loadPageRuntimeContextModule();
 
   const isolatedPayload = buildPageRuntimeContextPayload({
@@ -131,23 +128,12 @@ test('resolvePageRuntimeContextAttachment 在纯对话模式且此前没有上�
   assert.equal(firstPureTurn.signature, null);
   assert.equal(firstPureTurn.inputItems, null);
 
-  const priorHostPayload = buildPageRuntimeContextPayload({
-    pageToolEnvironment: {
-      exposePageContentTool: true,
-      jsRuntimeEnvironment: 'bound_host_page'
-    },
-    pageMeta: {
-      url: 'https://example.com/page',
-      title: 'Example Page'
-    },
-    frames: [{ frameId: 0, isTop: true, url: 'https://example.com/page', title: 'Example Page' }]
-  });
   const switchedFromHost = resolvePageRuntimeContextAttachment({
     payload: isolatedPayload,
-    previousEffectiveSignature: buildPageRuntimeContextSignature(priorHostPayload)
+    previousEffectiveSignature: '{"type":"page_runtime_context","mode":"host_page"}'
   });
-  assert.equal(typeof switchedFromHost.signature, 'string');
-  assert.ok(Array.isArray(switchedFromHost.inputItems));
+  assert.equal(switchedFromHost.signature, null);
+  assert.equal(switchedFromHost.inputItems, null);
 });
 
 test('page runtime context 会过滤高频挑战 iframe 与无描述 blank 辅助 frame', async () => {

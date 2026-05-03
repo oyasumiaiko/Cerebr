@@ -1,0 +1,46 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+
+async function readWorkspaceFile(relativePath) {
+  return fs.readFile(path.resolve(__dirname, '..', relativePath), 'utf8');
+}
+
+test('纯对话模式只隔离新请求工具，不重写既有历史 contextual items', async () => {
+  const source = await readWorkspaceFile('src/core/message_sender.js');
+
+  assert.match(source, /const canWriteContextToCurrentUserNode = !regenerateMode/);
+  assert.match(
+    source,
+    /targetUserNodeForContext\?\.id === currentUserMessageIdForContext/
+  );
+  assert.match(
+    source,
+    /if \(canWriteContextToCurrentUserNode\) \{\s*syncUserContextualInputsForConversationTurn/s
+  );
+  assert.doesNotMatch(source, /sanitizeMessagesForPureConversation/);
+});
+
+test('纯对话模式不会把宿主页 metadata 冻结到新对话来源', async () => {
+  const senderSource = await readWorkspaceFile('src/core/message_sender.js');
+  const processorSource = await readWorkspaceFile('src/core/message_processor.js');
+  const historyUiSource = await readWorkspaceFile('src/ui/chat_history_ui.js');
+
+  assert.match(senderSource, /skipPageMetaSnapshot: isTemporaryMode/);
+  assert.match(senderSource, /isTemporaryMode \? \{ isolated: true \} : buildCurrentPageMetaSnapshot\(\)/);
+  assert.match(processorSource, /node\.pageMeta = \{ url: '', title: '', isolated: true \}/);
+  assert.match(historyUiSource, /fromNode\?\.isolated === true/);
+  assert.match(historyUiSource, /source: 'isolated_conversation'/);
+});
+
+test('纯对话模式的 skill 请求显式关闭 background sender.tab.id 回退', async () => {
+  const sidebarSource = await readWorkspaceFile('src/ui/sidebar/sidebar_app_context.js');
+  const backgroundSource = await readWorkspaceFile('src/extension/background.js');
+
+  assert.match(sidebarSource, /isolateFromHostPage = pageToolEnvironment\?\.exposeHostPageTools !== true/);
+  assert.match(sidebarSource, /type: 'GET_MATCHING_SKILL_SUMMARIES'[\s\S]*isolateFromHostPage/);
+  assert.match(sidebarSource, /type: 'SKILL_REGISTRY_ACTION'[\s\S]*isolateFromHostPage/);
+  assert.match(backgroundSource, /allowSenderTabFallback: !isolateFromHostPage/);
+  assert.match(backgroundSource, /const targetTabId = isolateFromHostPage\s*\?\s*null/);
+});

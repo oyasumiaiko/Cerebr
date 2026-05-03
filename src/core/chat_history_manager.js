@@ -36,7 +36,7 @@ import { normalizeResponsesPromptCacheKey } from '../utils/responses_prompt_cach
  * @property {Object|null} [promptMeta] - 与 promptType 配套的元信息（例如 { selectionText }，可选）
  * @property {string|null} [preprocessOriginalText] - 用户消息预处理前的原始文本（可选）
  * @property {string|null} [preprocessRenderedText] - 预处理后的文本快照（可选）
- * @property {{url: string, title: string}|null} [pageMeta] - 首条用户消息发出时的页面元数据快照（仅 url/title，用于固定会话来源）
+ * @property {{url: string, title: string, isolated?: boolean}|null} [pageMeta] - 首条用户消息发出时的页面元数据快照（纯对话模式下可显式标记 isolated，避免回退到宿主页）
  * @property {string|Array<any>|null} [outboundContent] - 发送给模型时使用的稳定正文快照（例如已拼接页面内容的用户消息，可选）
  * @property {Array<any>|null} [contextual_input_items_before] - 仅供模型可见、位于该消息前面的隐藏 contextual input items（不参与 UI 渲染，可选）
  * @property {string|null} [pageRuntimeContextSignature] - 页面运行环境隐藏上下文的稳定签名；为空表示沿用更早一次已生效的上下文（可选）

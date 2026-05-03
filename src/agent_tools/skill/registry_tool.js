@@ -1607,14 +1607,24 @@ function isLegacySkillRegistryCompatAction(action) {
   ]).has(normalizeString(action).toLowerCase());
 }
 
-export function buildSkillRegistryFunctionToolDefinition() {
+export function buildSkillRegistryFunctionToolDefinition(pageToolEnvironment = null) {
+  const exposeHostPageTools = pageToolEnvironment?.exposeHostPageTools !== false;
+  const scopeDescription = exposeHostPageTools
+    ? '其中 `action="list"` 默认只返回当前页可见的 skill；如果要忽略网站过滤列出全部 skill，请传 `include_all_sites=true`。'
+    : '当前处于纯对话/隔离模式：不会绑定宿主页；`action="list"` 默认只返回内置和 guidance skill，`mount_on_current_page` / `refresh_current_document` 不可用。若要忽略网站过滤列出全部 skill，请传 `include_all_sites=true`。';
+  const actionDescription = exposeHostPageTools
+    ? '必填。支持 list、create_skill、delete_skill、enable_skill、disable_skill、mount_on_current_page。'
+    : '必填。支持 list、create_skill、delete_skill、enable_skill、disable_skill；纯对话/隔离模式下不支持 mount_on_current_page。';
+  const includeAllSitesDescription = exposeHostPageTools
+    ? '仅 action=list 时使用。true 表示忽略当前页面 URL，返回所有已注册 skill；默认 false，只返回当前页可见的 skill。'
+    : '仅 action=list 时使用。true 表示忽略网站过滤返回所有已注册 skill；默认 false 时不读取当前页面，只返回内置和 guidance skill。';
   return {
     type: 'function',
     name: SKILL_REGISTRY_TOOL_NAME,
     description: [
       '管理浏览器里的 skill 生命周期与当前页挂载。',
       '只负责列出、创建、删除、启用、停用 skill，以及在需要时把指定 skill 挂载到当前页。',
-      '其中 `action="list"` 默认只返回当前页可见的 skill；如果要忽略网站过滤列出全部 skill，请传 `include_all_sites=true`。'
+      scopeDescription
     ].join(' '),
     strict: false,
     parameters: {
@@ -1623,11 +1633,11 @@ export function buildSkillRegistryFunctionToolDefinition() {
       properties: {
         action: {
           type: 'string',
-          description: '必填。支持 list、create_skill、delete_skill、enable_skill、disable_skill、mount_on_current_page。'
+          description: actionDescription
         },
         include_all_sites: {
           type: ['boolean', 'null'],
-          description: '仅 action=list 时使用。true 表示忽略当前页面 URL，返回所有已注册 skill；默认 false，只返回当前页可见的 skill。'
+          description: includeAllSitesDescription
         },
         skill_name: {
           type: ['string', 'null'],

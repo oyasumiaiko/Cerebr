@@ -33,3 +33,15 @@ test('resolveSidebarRequestTargetTabId 不再隐式退回当前活动标签页',
     null
   );
 });
+
+test('resolveSidebarRequestTargetTabId 可显式关闭 sender.tab.id 回退', async () => {
+  const { resolveSidebarRequestTargetTabId } = await loadSidebarTargetTabModule();
+  assert.equal(
+    resolveSidebarRequestTargetTabId({
+      explicitTabId: null,
+      senderTabId: 23,
+      allowSenderTabFallback: false
+    }),
+    null
+  );
+});

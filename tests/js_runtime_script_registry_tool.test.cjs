@@ -450,6 +450,24 @@ test('normalizeSkillRegistryToolArguments 会收敛为新的 package/file action
   });
 });
 
+test('skill_registry 在纯对话模式下的工具说明不再默认指向当前页', async () => {
+  const {
+    buildSkillRegistryFunctionToolDefinition
+  } = await loadSkillRegistryToolModule();
+
+  const definition = buildSkillRegistryFunctionToolDefinition({
+    exposeHostPageTools: false
+  });
+
+  assert.match(definition.description, /纯对话\/隔离模式/);
+  assert.match(definition.description, /不会绑定宿主页/);
+  assert.match(definition.parameters.properties.include_all_sites.description, /不读取当前页面/);
+  assert.doesNotMatch(
+    definition.parameters.properties.action.description,
+    /支持 list、create_skill、delete_skill、enable_skill、disable_skill、mount_on_current_page/
+  );
+});
+
 test('skill 读取参数支持字符偏移与按行续读', async () => {
   const {
     buildSkillDetail,

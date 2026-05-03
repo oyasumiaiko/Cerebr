@@ -486,9 +486,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     (async () => {
       try {
         await ensureSkillManagerReady();
-        const targetTabId = Number.isFinite(Number(message?.tabId))
-          ? Number(message.tabId)
-          : null;
+        const isolateFromHostPage = message?.isolateFromHostPage === true;
+        const targetTabId = isolateFromHostPage
+          ? null
+          : resolveSidebarRequestTargetTabId({
+              explicitTabId: message?.tabId,
+              senderTabId: sender?.tab?.id,
+              allowSenderTabFallback: false
+            });
         const result = await skillManager.executeRegistryAction(message?.payload || {}, {
           tabId: targetTabId
         });
@@ -508,11 +513,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       try {
         await ensureSkillManagerReady();
         const standaloneSidebar = typeof sender?.url === 'string' && sender.url.includes('#standalone');
+        const isolateFromHostPage = standaloneSidebar || message?.isolateFromHostPage === true;
         const targetTabId = standaloneSidebar
           ? null
           : resolveSidebarRequestTargetTabId({
               explicitTabId: message?.tabId,
-              senderTabId: sender?.tab?.id
+              senderTabId: sender?.tab?.id,
+              allowSenderTabFallback: !isolateFromHostPage
             });
 
         const result = await skillManager.listMatchingSkillSummariesForTab(targetTabId);

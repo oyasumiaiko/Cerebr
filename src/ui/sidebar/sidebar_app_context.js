@@ -1317,7 +1317,7 @@ export function registerSidebarUtilities(appContext) {
    * - 宿主页模式下返回“内置指导 skill + 当前 URL 命中的页面 skill”；
    * - 独立页/无稳定宿主页时至少返回内置指导 skill，而不是整组清空。
    */
-  appContext.utils.getMatchingSkillSummaries = async () => {
+  appContext.utils.getMatchingSkillSummaries = async (options = {}) => {
     if (!chrome?.runtime?.sendMessage) {
       return {
         success: false,
@@ -1325,14 +1325,18 @@ export function registerSidebarUtilities(appContext) {
       };
     }
     try {
-      const pageToolEnvironment = resolveCurrentPageToolEnvironment();
+      const pageToolEnvironment = (options?.pageToolEnvironment && typeof options.pageToolEnvironment === 'object')
+        ? options.pageToolEnvironment
+        : resolveCurrentPageToolEnvironment();
+      const isolateFromHostPage = pageToolEnvironment?.exposeHostPageTools !== true;
       const targetTabId = pageToolEnvironment.jsRuntimeEnvironment === JS_RUNTIME_ENV_BOUND_HOST_PAGE
         ? await resolveBoundSidebarTargetTabId()
         : null;
       return await raceWithTimeout(
         chrome.runtime.sendMessage({
           type: 'GET_MATCHING_SKILL_SUMMARIES',
-          tabId: targetTabId
+          tabId: targetTabId,
+          isolateFromHostPage
         }),
         SKILL_REGISTRY_TIMEOUT_MS,
         '读取当前页面匹配的技能摘要超时'
@@ -1360,11 +1364,16 @@ export function registerSidebarUtilities(appContext) {
       };
     }
     try {
-      const targetTabId = await resolveBoundSidebarTargetTabId();
+      const pageToolEnvironment = resolveCurrentPageToolEnvironment();
+      const isolateFromHostPage = pageToolEnvironment?.exposeHostPageTools !== true;
+      const targetTabId = isolateFromHostPage
+        ? null
+        : await resolveBoundSidebarTargetTabId();
       return await raceWithTimeout(
         chrome.runtime.sendMessage({
           type: 'SKILL_REGISTRY_ACTION',
           tabId: Number.isFinite(targetTabId) ? targetTabId : null,
+          isolateFromHostPage,
           payload: (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {}
         }),
         SKILL_REGISTRY_TIMEOUT_MS,

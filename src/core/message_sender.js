@@ -5139,10 +5139,14 @@ export function createMessageSender(appContext) {
       (item) => item && item.id !== node.id && String(item.role || '').toLowerCase() === 'user'
     );
     if (!hasOtherUserMessage && pageMeta && typeof pageMeta === 'object') {
-      const url = typeof pageMeta.url === 'string' ? pageMeta.url.trim() : '';
-      const title = typeof pageMeta.title === 'string' ? pageMeta.title.trim() : '';
-      if (url || title) {
-        node.pageMeta = { url, title };
+      if (pageMeta.isolated === true) {
+        node.pageMeta = { url: '', title: '', isolated: true };
+      } else {
+        const url = typeof pageMeta.url === 'string' ? pageMeta.url.trim() : '';
+        const title = typeof pageMeta.title === 'string' ? pageMeta.title.trim() : '';
+        if (url || title) {
+          node.pageMeta = { url, title };
+        }
       }
     }
 
@@ -7812,7 +7816,7 @@ export function createMessageSender(appContext) {
       buildVirtualFileListFilesFunctionToolDefinition(),
       buildVirtualFileReadFileFunctionToolDefinition(),
       buildVirtualFileSearchFilesFunctionToolDefinition(),
-      buildSkillRegistryFunctionToolDefinition(),
+      buildSkillRegistryFunctionToolDefinition(pageToolEnvironment),
       buildRequestUserInputFunctionToolDefinition(),
       buildViewImageFunctionToolDefinition(),
       buildListAskableModelsFunctionToolDefinition(),
@@ -8359,7 +8363,10 @@ export function createMessageSender(appContext) {
   async function executeResponsesHistorySearchFunction(rawArgs, options = {}) {
     try {
       const snapshot = await getHistoryToolSnapshot(options?.attemptState || null);
-      const currentPageMeta = buildCurrentPageMetaSnapshot();
+      const pageToolEnvironment = resolveResponsesPageToolEnvironment(options?.attemptState || null);
+      const currentPageMeta = pageToolEnvironment?.exposeHostPageTools === true
+        ? buildCurrentPageMetaSnapshot()
+        : null;
       return await executeHistorySearchTool(rawArgs, {
         snapshot,
         currentPageUrl: currentPageMeta?.url || '',
@@ -10105,7 +10112,8 @@ export function createMessageSender(appContext) {
                 container: activeThreadContext.container,
                 historyParentId,
                 preserveCurrentNode: true,
-                historyPatch
+                historyPatch,
+                skipPageMetaSnapshot: isTemporaryMode
               }
             );
 
@@ -10129,12 +10137,15 @@ export function createMessageSender(appContext) {
             historyPatch: preprocessHistoryPatch || null,
             meta: historyMeta,
             historyMessagesRef: attempt?.historyMessagesRef || null,
-            pageMeta: pageContentSnapshot || buildCurrentPageMetaSnapshot()
+            pageMeta: pageContentSnapshot || (isTemporaryMode ? { isolated: true } : buildCurrentPageMetaSnapshot())
           });
         }
 
         if (!userMessageDiv && !detachedUserMessageNode) {
-          const messageOptions = preprocessHistoryPatch ? { historyPatch: preprocessHistoryPatch } : null;
+          const messageOptions = {
+            ...(preprocessHistoryPatch ? { historyPatch: preprocessHistoryPatch } : {}),
+            skipPageMetaSnapshot: isTemporaryMode
+          };
           userMessageDiv = messageProcessor.appendMessage(
             messageTextForHistory,
             'user',
@@ -10388,7 +10399,9 @@ export function createMessageSender(appContext) {
         });
       }
       if (shouldPrepareSkillContext) {
-        const skillSummaryResult = await utils.getMatchingSkillSummaries();
+        const skillSummaryResult = await utils.getMatchingSkillSummaries({
+          pageToolEnvironment: responsesPageToolEnvironment
+        });
         skillContextPayload = buildSkillContextPayload({
           mode: responsesPageToolEnvironment?.jsRuntimeEnvironment === JS_RUNTIME_ENV_BOUND_HOST_PAGE
             ? 'host_page'
@@ -10403,15 +10416,24 @@ export function createMessageSender(appContext) {
         const uploadedFileEnvironmentEntries = Array.isArray(consumedUploadedFileEnvironmentEntries)
           ? consumedUploadedFileEnvironmentEntries
           : [];
-        syncUserContextualInputsForConversationTurn({
-          conversationChain: filteredConversationChain,
-          targetUserNode: findLatestUserNodeInConversationChain(filteredConversationChain),
-          pageRuntimeContextPayload,
-          skillContextPayload,
-          environmentContextPayload: buildEnvironmentContextPayload({
-            uploadedFiles: uploadedFileEnvironmentEntries
-          })
-        });
+        const targetUserNodeForContext = findLatestUserNodeInConversationChain(filteredConversationChain);
+        const currentUserMessageIdForContext = userMessageDiv?.getAttribute?.('data-message-id')
+          || detachedUserMessageNode?.id
+          || '';
+        const canWriteContextToCurrentUserNode = !regenerateMode
+          && !!currentUserMessageIdForContext
+          && targetUserNodeForContext?.id === currentUserMessageIdForContext;
+        if (canWriteContextToCurrentUserNode) {
+          syncUserContextualInputsForConversationTurn({
+            conversationChain: filteredConversationChain,
+            targetUserNode: targetUserNodeForContext,
+            pageRuntimeContextPayload,
+            skillContextPayload,
+            environmentContextPayload: buildEnvironmentContextPayload({
+              uploadedFiles: uploadedFileEnvironmentEntries
+            })
+          });
+        }
       }
 
       const messages = composeMessages({
@@ -10619,7 +10641,7 @@ export function createMessageSender(appContext) {
         messageId,
         targetAiMessageId: effectiveTargetAiMessageId,
         forceSendFullHistory,
-        pageContentSnapshot: pageContentSnapshot || buildCurrentPageMetaSnapshot(),
+        pageContentSnapshot: pageContentSnapshot || (isTemporaryMode ? null : buildCurrentPageMetaSnapshot()),
         conversationSnapshot: Array.isArray(conversationChain) ? conversationChain : conversationSnapshot,
         omitDefaultSystemPrompt,
         aspectRatioOverride,

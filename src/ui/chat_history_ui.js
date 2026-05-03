@@ -2069,13 +2069,16 @@ export function createChatHistoryUI(appContext) {
      *
      * @param {Array<any>} messages
      * @param {any} fallbackPageInfo
-     * @returns {{url: string, title: string, source: 'first_user_message'|'state_pageInfo'}}
+     * @returns {{url: string, title: string, source: 'first_user_message'|'state_pageInfo'|'isolated_conversation'}}
      */
     const resolveConversationStartPageMeta = (messages, fallbackPageInfo) => {
       const list = Array.isArray(messages) ? messages : [];
       const firstUser = list.find(m => String(m?.role || '').toLowerCase() === 'user') || null;
 
       const fromNode = firstUser?.pageMeta || null;
+      if (fromNode?.isolated === true) {
+        return { url: '', title: '', source: 'isolated_conversation' };
+      }
       const urlFromNode = typeof fromNode?.url === 'string' ? fromNode.url.trim() : '';
       const titleFromNode = typeof fromNode?.title === 'string' ? fromNode.title.trim() : '';
       if (urlFromNode || titleFromNode) {
@@ -2134,8 +2137,11 @@ export function createChatHistoryUI(appContext) {
         console.error("获取会话记录失败:", error);
       }
     } else {
+      const startPageSourceLabel = startPageMeta.source === 'first_user_message'
+        ? '首条用户消息的页面快照'
+        : (startPageMeta.source === 'isolated_conversation' ? '纯对话隔离来源' : '当前页面信息');
       console.log(
-        `首次保存会话，使用${startPageMeta.source === 'first_user_message' ? '首条用户消息的页面快照' : '当前页面信息'}: ` +
+        `首次保存会话，使用${startPageSourceLabel}: ` +
         `URL=${startPageMeta.url || ''}, 标题=${startPageMeta.title || ''}`
       );
     }

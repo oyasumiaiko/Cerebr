@@ -1511,7 +1511,9 @@ export function createMessageProcessor(appContext) {
             const hasOtherUserMessage = chatHistoryManager.chatHistory.messages.some(
               (m) => m && m.id !== node.id && String(m.role || '').toLowerCase() === 'user'
             );
-            if (!hasOtherUserMessage) {
+            if (!hasOtherUserMessage && options?.skipPageMetaSnapshot === true) {
+              node.pageMeta = { url: '', title: '', isolated: true };
+            } else if (!hasOtherUserMessage) {
               const snapshot = createPageMetaSnapshot(state?.pageInfo);
               if (snapshot) node.pageMeta = snapshot;
             }

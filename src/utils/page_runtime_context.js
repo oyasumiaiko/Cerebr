@@ -109,7 +109,8 @@ export function normalizePageRuntimeContextFrames(frames) {
  * 设计原则：
  * - 这是独立的隐藏 contextual item，不污染用户正文；
  * - 同时承载“当前是否宿主页增强模式”与“宿主页 frame 列表”等信息；
- * - 在纯对话/隔离模式下也保留一条简短上下文，防止历史里旧的宿主页上下文误导模型。
+ * - 纯对话/隔离模式下直接返回 null，避免把“当前没有页面工具”这种运行页状态也写进对话。
+ *   已经存在于历史中的旧上下文保持原样，避免破坏 Responses prompt cache 的前缀一致性。
  *
  * @param {{
  *   pageToolEnvironment?: {
@@ -126,6 +127,10 @@ export function buildPageRuntimeContextPayload(options = {}) {
   const pageToolEnvironment = (options?.pageToolEnvironment && typeof options.pageToolEnvironment === 'object')
     ? options.pageToolEnvironment
     : null;
+  if (pageToolEnvironment?.exposeHostPageTools === false) {
+    return null;
+  }
+
   const normalizedFrames = normalizePageRuntimeContextFrames(options?.frames);
   const rawPageMeta = (options?.pageMeta && typeof options.pageMeta === 'object')
     ? options.pageMeta
@@ -139,12 +144,14 @@ export function buildPageRuntimeContextPayload(options = {}) {
   const jsRuntimeEnvironment = (typeof pageToolEnvironment?.jsRuntimeEnvironment === 'string')
     ? pageToolEnvironment.jsRuntimeEnvironment
     : JS_RUNTIME_ENV_ISOLATED_SANDBOX;
-  const exposePageContentTool = pageToolEnvironment?.exposePageContentTool === true;
-  const mode = jsRuntimeEnvironment === JS_RUNTIME_ENV_BOUND_HOST_PAGE
-    ? 'host_page'
-    : 'isolated_sandbox';
+  if (jsRuntimeEnvironment !== JS_RUNTIME_ENV_BOUND_HOST_PAGE) {
+    return null;
+  }
 
-  if (!url && !title && normalizedFrames.length === 0 && mode !== 'isolated_sandbox') {
+  const exposePageContentTool = pageToolEnvironment?.exposePageContentTool === true;
+  const mode = 'host_page';
+
+  if (!url && !title && normalizedFrames.length === 0) {
     return null;
   }
 
@@ -205,15 +212,6 @@ function buildHostPageRuntimeContextText(payload) {
   return lines.join('\n');
 }
 
-function buildIsolatedSandboxRuntimeContextText(payload) {
-  return [
-    `<page_runtime_context mode="${escapeXmlText(payload.mode)}">`,
-    `  <page_content_tool>${escapeXmlText(payload.page_content_tool)}</page_content_tool>`,
-    `  <js_runtime_environment>${escapeXmlText(payload.js_runtime_environment)}</js_runtime_environment>`,
-    '</page_runtime_context>'
-  ].join('\n');
-}
-
 /**
  * 将页面运行上下文负载转成可直接插入 Responses `input` 的隐藏 contextual items。
  *
@@ -222,9 +220,8 @@ function buildIsolatedSandboxRuntimeContextText(payload) {
  */
 export function buildPageRuntimeContextInputItems(payload) {
   if (!payload || typeof payload !== 'object') return [];
-  const text = payload.mode === 'host_page'
-    ? buildHostPageRuntimeContextText(payload)
-    : buildIsolatedSandboxRuntimeContextText(payload);
+  if (payload.mode !== 'host_page') return [];
+  const text = buildHostPageRuntimeContextText(payload);
   if (!text.trim()) return [];
   return [{
     type: 'message',
@@ -256,13 +253,6 @@ export function resolvePageRuntimeContextAttachment(options = {}) {
   const inputItems = buildPageRuntimeContextInputItems(payload);
 
   if (!signature || inputItems.length <= 0) {
-    return {
-      signature: null,
-      inputItems: null
-    };
-  }
-
-  if (payload?.mode === 'isolated_sandbox' && !previousEffectiveSignature) {
     return {
       signature: null,
       inputItems: null
