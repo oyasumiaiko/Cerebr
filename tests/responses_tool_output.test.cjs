@@ -298,6 +298,23 @@ test('buildResponsesSkillRegistryToolOutputContentItems 会把 apply_patch 压�
   assert.doesNotMatch(text, /"match": \[/);
 });
 
+test('buildResponsesSkillRegistryToolOutputContentItems 会把文件管理操作压成单行摘要', async () => {
+  const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesSkillRegistryToolOutputContentItems({
+    ok: true,
+    action: 'copy_file',
+    skill: {
+      name: 'dom-probe'
+    },
+    source_file_path: 'references/a.md',
+    destination_file_path: 'references/b.md'
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<skill_registry_result ok="true" target="skill" skill="dom-probe" from="references\/a\.md" to="references\/b\.md">/);
+  assert.match(text, /copy references\/a\.md -> references\/b\.md/);
+  assert.doesNotMatch(text, /"source_file_path"/);
+});
+
 test('buildResponsesConversationDocumentToolOutputContentItems 只在会话文件新增或修改时附单独 reminder 块，但不影响 skill 输出', async () => {
   const {
     buildResponsesConversationDocumentToolOutputContentItems,

@@ -1597,6 +1597,8 @@ function isLegacySkillRegistryFileAction(action) {
     'read_file',
     'apply_patch',
     'update',
+    'copy_file',
+    'move_file',
     'delete_file'
   ]).has(normalizeString(action).toLowerCase());
 }
@@ -1868,6 +1870,37 @@ export function normalizeSkillRegistryToolArguments(rawArgs) {
 
   if (!skillName) {
     throw new Error(`skill_registry 参数错误：action=${originalAction || action} 时 skill_name 不能为空。`);
+  }
+
+  if (action === 'copy_file' || action === 'move_file') {
+    const sourceFilePath = normalizeOptionalString(args.source_file_path || args.source_path || args.from);
+    const destinationFilePath = normalizeOptionalString(args.destination_file_path || args.destination_path || args.to);
+    if (!sourceFilePath || !destinationFilePath) {
+      throw new Error(`skill_registry 参数错误：action=${originalAction || action} 时 source_file_path 与 destination_file_path 不能为空。`);
+    }
+    return {
+      original_action: originalAction || action,
+      action,
+      skill_name: skillName,
+      skill: null,
+      file_path: null,
+      source_file_path: normalizeSkillFilePath(sourceFilePath),
+      destination_file_path: normalizeSkillFilePath(destinationFilePath),
+      file: null,
+      patch: null,
+      pattern: null,
+      regex: false,
+      case_mode: 'smart',
+      path_glob: null,
+      context_before: 0,
+      context_after: 0,
+      max_results: SKILL_SEARCH_DEFAULT_MAX_RESULTS,
+      read_options: null,
+      include_line_numbers: false,
+      deprecated_compat_action: true,
+      next_instruction_path: null,
+      next_runtime_entry_path: null
+    };
   }
 
   if (action === 'read_file' || action === 'delete_file') {

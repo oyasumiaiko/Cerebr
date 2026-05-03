@@ -15,8 +15,11 @@ test('message_sender 已注册对话文档顶层工具并接入专用执行分�
   assert.match(source, /buildVirtualFileListFilesFunctionToolDefinition\(\)/);
   assert.match(source, /buildVirtualFileReadFileFunctionToolDefinition\(\)/);
   assert.match(source, /buildVirtualFileSearchFilesFunctionToolDefinition\(\)/);
-  assert.match(source, /executeResponsesVirtualFileFunction\(functionName, parsedArgs, options\)/);
-  assert.match(source, /serializeResponsesConversationDocumentFunctionToolOutput\(functionName, outputPayload\)/);
+  assert.match(source, /buildVirtualFileCopyFileFunctionToolDefinition\(\)/);
+  assert.match(source, /buildVirtualFileMoveFileFunctionToolDefinition\(\)/);
+  assert.match(source, /buildVirtualFileDeleteFileFunctionToolDefinition\(\)/);
+  assert.match(source, /executeResponsesVirtualFileFunction\(functionName \|\| canonicalFunctionName, parsedArgs, options\)/);
+  assert.match(source, /serializeResponsesConversationDocumentFunctionToolOutput\(functionName \|\| canonicalFunctionName, outputPayload\)/);
   assert.match(source, /consumePendingUploadedFileEnvironmentEntries/);
   assert.match(source, /uploadedFiles: uploadedFileEnvironmentEntries/);
 });

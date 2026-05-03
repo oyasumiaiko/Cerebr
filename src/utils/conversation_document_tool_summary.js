@@ -1,6 +1,9 @@
 import {
   VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
+  VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
+  VIRTUAL_FILE_DELETE_FILE_TOOL_NAME,
   VIRTUAL_FILE_LIST_FILES_TOOL_NAME,
+  VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
   VIRTUAL_FILE_READ_FILE_TOOL_NAME,
   VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME,
   VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
@@ -45,6 +48,14 @@ function resolveSearchPatternArg(args) {
   return normalizeSummaryText(args?.pattern);
 }
 
+function resolveFromArg(args) {
+  return normalizeSummaryText(args?.from);
+}
+
+function resolveToArg(args) {
+  return normalizeSummaryText(args?.to);
+}
+
 function resolveVirtualFileTarget(args) {
   const target = (args?.target && typeof args.target === 'object' && !Array.isArray(args.target))
     ? args.target
@@ -76,7 +87,10 @@ export function isVirtualFileToolCall(record) {
       VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
       VIRTUAL_FILE_LIST_FILES_TOOL_NAME,
       VIRTUAL_FILE_READ_FILE_TOOL_NAME,
-      VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME
+      VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME,
+      VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
+      VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
+      VIRTUAL_FILE_DELETE_FILE_TOOL_NAME
     ].includes(normalizeSummaryText(record?.name));
 }
 
@@ -160,6 +174,34 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
       value: pattern || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文件'),
       valueUrl: '',
       meta: joinSummaryMeta([targetMeta, resolveGlobArg(args)]),
+      locationAction: '',
+      locationValue: '',
+      locationUrl: ''
+    };
+  }
+
+  if (toolName === VIRTUAL_FILE_COPY_FILE_TOOL_NAME || toolName === VIRTUAL_FILE_MOVE_FILE_TOOL_NAME) {
+    const from = resolveFromArg(args);
+    const to = resolveToArg(args);
+    return {
+      action: toolName === VIRTUAL_FILE_COPY_FILE_TOOL_NAME
+        ? (isInProgress ? '正在复制' : '复制')
+        : (isInProgress ? '正在移动' : '移动'),
+      value: from && to ? `${from} -> ${to}` : (from || to || '文件'),
+      valueUrl: '',
+      meta: targetMeta,
+      locationAction: '',
+      locationValue: '',
+      locationUrl: ''
+    };
+  }
+
+  if (toolName === VIRTUAL_FILE_DELETE_FILE_TOOL_NAME) {
+    return {
+      action: isInProgress ? '正在删除' : '删除',
+      value: resolvePathArg(args) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文件'),
+      valueUrl: '',
+      meta: targetMeta,
       locationAction: '',
       locationValue: '',
       locationUrl: ''

@@ -132,6 +132,58 @@ test('顶层 read_file/search_files 摘要支持 bash 风格参数', async () =>
   });
 });
 
+test('顶层 copy_file/move_file/delete_file 摘要使用 shell 风格动词', async () => {
+  const {
+    buildVirtualFileSummaryParts,
+    buildVirtualFilePrimaryText
+  } = await loadModule();
+
+  const copyRecord = {
+    type: 'function_call',
+    name: 'copy_file',
+    arguments: JSON.stringify({
+      from: 'local/project/src/a.js',
+      to: 'workspace/project/src/a.js'
+    })
+  };
+  assert.deepEqual(buildVirtualFileSummaryParts(copyRecord), {
+    action: '复制',
+    value: 'local/project/src/a.js -> workspace/project/src/a.js',
+    valueUrl: '',
+    meta: '',
+    locationAction: '',
+    locationValue: '',
+    locationUrl: ''
+  });
+  assert.equal(
+    buildVirtualFilePrimaryText(copyRecord),
+    '复制 local/project/src/a.js -> workspace/project/src/a.js'
+  );
+
+  const moveRecord = {
+    type: 'function_call',
+    name: 'move_file',
+    arguments: JSON.stringify({
+      target: {
+        kind: 'skill',
+        name: 'dom-probe'
+      },
+      from: 'references/old.md',
+      to: 'references/new.md'
+    })
+  };
+  assert.equal(buildVirtualFilePrimaryText(moveRecord), '移动 references/old.md -> references/new.md dom-probe');
+
+  const deleteRecord = {
+    type: 'function_call',
+    name: 'delete_file',
+    arguments: JSON.stringify({
+      path: 'workspace/project/src/a.js'
+    })
+  };
+  assert.equal(buildVirtualFilePrimaryText(deleteRecord), '删除 workspace/project/src/a.js');
+});
+
 test('顶层 apply_patch 在 skill target 下会显示首个文件与 diff 汇总', async () => {
   const {
     buildVirtualFileSummaryParts,

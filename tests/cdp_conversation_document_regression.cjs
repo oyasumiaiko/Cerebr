@@ -534,7 +534,7 @@ async function main() {
     result.firstRequestToolNames = mockServer.getFirstRequestToolNames();
     result.functionCallOutputText = mockServer.getFunctionCallOutputText();
 
-    const expectedTools = ['apply_patch', 'list_files', 'read_file', 'search_files'];
+    const expectedTools = ['apply_patch', 'list_files', 'read_file', 'search_files', 'copy_file', 'move_file', 'delete_file'];
     for (const toolName of expectedTools) {
       if (!result.firstRequestToolNames.includes(toolName)) {
         throw new Error(`first request missing tool ${toolName}: ${JSON.stringify(result.firstRequestToolNames)}`);

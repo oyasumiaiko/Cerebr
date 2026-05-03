@@ -347,6 +347,62 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   assert.equal(calls.execute.length, 11);
 });
 
+test('copy_file/move_file/delete_file 支持 skill 虚拟文件管理', async () => {
+  const { createSkillManager } = await loadSkillManagerModule();
+  const calls = {
+    update: []
+  };
+  const manager = createSkillManager({
+    store: createMockStore([buildSkillInput('dom-probe')]),
+    userScriptsApi: {
+      async getScripts() { return []; },
+      async register() {},
+      async update(definitions) { calls.update.push(clone(definitions)); },
+      async unregister() {}
+    }
+  });
+
+  const copied = await manager.executeRegistryAction({
+    action: 'copy_file',
+    skill_name: 'dom-probe',
+    source_file_path: 'src/helpers/dom.js',
+    destination_file_path: 'src/helpers/dom-copy.js'
+  });
+  assert.equal(copied.ok, true);
+  assert.deepEqual(copied.affected_files.added, ['src/helpers/dom-copy.js']);
+  assert.equal(copied.files.total_count, 5);
+
+  const moved = await manager.executeRegistryAction({
+    action: 'move_file',
+    skill_name: 'dom-probe',
+    source_file_path: 'src/helpers/dom-copy.js',
+    destination_file_path: 'src/helpers/dom-renamed.js'
+  });
+  assert.equal(moved.ok, true);
+  assert.deepEqual(moved.affected_files.modified, ['src/helpers/dom-renamed.js']);
+  assert.deepEqual(moved.affected_files.deleted, ['src/helpers/dom-copy.js']);
+
+  await assert.rejects(
+    () => manager.executeRegistryAction({
+      action: 'copy_file',
+      skill_name: 'dom-probe',
+      source_file_path: 'src/helpers/dom.js',
+      destination_file_path: 'src/main.js'
+    }),
+    /已存在文件 src\/main\.js/
+  );
+
+  const deleted = await manager.executeRegistryAction({
+    action: 'delete_file',
+    skill_name: 'dom-probe',
+    file_path: 'src/helpers/dom-renamed.js'
+  });
+  assert.equal(deleted.ok, true);
+  assert.deepEqual(deleted.affected_files.deleted, ['src/helpers/dom-renamed.js']);
+  assert.equal(deleted.files.total_count, 4);
+  assert.ok(calls.update.length >= 3);
+});
+
 test('模板式 create_skill 默认禁用且不会自动 refresh 当前文档', async () => {
   const { createSkillManager } = await loadSkillManagerModule();
 

@@ -1029,6 +1029,57 @@ function buildResponsesFileSearchToolOutputText(rootTag, result, options = {}) {
   });
 }
 
+function buildResponsesFileOperationToolOutputText(rootTag, result, options = {}) {
+  const normalized = isResponsesToolOutputPlainObject(result) ? result : {};
+  const action = typeof normalized.action === 'string' && normalized.action.trim()
+    ? normalized.action.trim()
+    : String(options?.toolName || '').trim();
+  const sourcePath = typeof normalized.source_path === 'string'
+    ? normalized.source_path.trim()
+    : (typeof normalized.source_file_path === 'string' ? normalized.source_file_path.trim() : '');
+  const destinationPath = typeof normalized.destination_path === 'string'
+    ? normalized.destination_path.trim()
+    : (typeof normalized.destination_file_path === 'string' ? normalized.destination_file_path.trim() : '');
+  const deletedPath = typeof normalized.deleted_path === 'string'
+    ? normalized.deleted_path.trim()
+    : (typeof normalized.deleted_file_path === 'string' ? normalized.deleted_file_path.trim() : '');
+  const rootAttributes = {
+    ...buildResponsesFileBaseAttributes(normalized, normalized.file || null, options),
+    from: sourcePath,
+    to: destinationPath,
+    path: deletedPath
+  };
+  const resultLine = (() => {
+    if (action === 'copy_file') return sourcePath && destinationPath ? `copy ${sourcePath} -> ${destinationPath}` : 'copy complete';
+    if (action === 'move_file') return sourcePath && destinationPath ? `move ${sourcePath} -> ${destinationPath}` : 'move complete';
+    if (action === 'delete_file') return deletedPath ? `delete ${deletedPath}` : 'delete complete';
+    return 'file operation complete';
+  })();
+  const blocks = [
+    {
+      tag: 'result',
+      text: resultLine
+    }
+  ];
+  const targetKind = getResponsesFileTargetKind(normalized, normalized.file || null, options?.defaultTargetKind);
+  if (targetKind !== 'skill' && (action === 'copy_file' || action === 'move_file')) {
+    blocks.push({
+      tag: 'reminder',
+      text: '你这次创建或移动了一个会话文件。如果需要被用户看到，请在 final channel 里输出该文件的 Markdown 相对路径链接，例如 [计划](docs/plan.md)。仅创建或移动文件本身不会自动展示给用户。'
+    });
+  }
+  if (normalized.error) {
+    blocks.push({
+      tag: 'error',
+      text: formatResponsesJsRuntimeErrorText(normalized.error)
+    });
+  }
+  return buildXmlToolResultText(rootTag, null, blocks, {
+    ...(options?.xmlOptions || {}),
+    rootAttributes
+  });
+}
+
 function buildResponsesSkillPackageFilesBlock(files) {
   const normalizedFiles = Array.isArray(files) ? files : [];
   return normalizedFiles.map((file, index) => {
@@ -1700,6 +1751,15 @@ export function buildResponsesSkillRegistryToolOutputContentItems(result, option
       options
     );
   }
+  if (['copy_file', 'move_file', 'delete_file'].includes(String(normalized.action || '').trim())) {
+    return buildResponsesXmlToolOutputContentItems(
+      buildResponsesFileOperationToolOutputText('skill_registry_result', normalized, {
+        defaultTargetKind: 'skill',
+        toolName: String(normalized.action || '').trim()
+      }),
+      options
+    );
+  }
   if (String(normalized.action || '').trim() === 'read_detail') {
     return buildResponsesXmlToolOutputContentItems(
       buildResponsesSkillReadDetailToolOutputText(normalized),
@@ -1738,6 +1798,17 @@ export function buildResponsesConversationDocumentToolOutputContentItems(toolNam
     return buildResponsesXmlToolOutputContentItems(
       buildResponsesFileSearchToolOutputText(rootTag, normalized, {
         matches: normalized.matches
+      }),
+      options
+    );
+  }
+  if (
+    normalized.ok === true
+    && ['copy_file', 'move_file', 'delete_file'].includes(String(toolName || '').trim())
+  ) {
+    return buildResponsesXmlToolOutputContentItems(
+      buildResponsesFileOperationToolOutputText(rootTag, normalized, {
+        toolName: String(toolName || '').trim()
       }),
       options
     );

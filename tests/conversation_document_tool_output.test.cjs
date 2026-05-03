@@ -151,3 +151,42 @@ test('search_files 的对话文档工具输出会把命中上下文渲染成 rg 
   assert.doesNotMatch(text, /<match rank="1">/);
   assert.doesNotMatch(text, /"before": \[/);
 });
+
+test('copy_file/move_file/delete_file 的对话文档工具输出会压成单行操作摘要', async () => {
+  const { buildResponsesConversationDocumentToolOutputContentItems } = await loadToolOutputModule();
+
+  const copyItems = buildResponsesConversationDocumentToolOutputContentItems('copy_file', {
+    ok: true,
+    action: 'copy_file',
+    target: { kind: 'conversation_document' },
+    source_path: 'local/project/src/a.js',
+    destination_path: 'workspace/project/src/a.js'
+  });
+  const copyText = copyItems.map(item => item.text).join('\n');
+  assert.match(copyText, /<copy_file_result ok="true" target="conversation_document" from="local\/project\/src\/a\.js" to="workspace\/project\/src\/a\.js">/);
+  assert.match(copyText, /copy local\/project\/src\/a\.js -> workspace\/project\/src\/a\.js/);
+  assert.match(copyText, /<reminder>/);
+  assert.doesNotMatch(copyText, /"source_path"/);
+
+  const moveItems = buildResponsesConversationDocumentToolOutputContentItems('move_file', {
+    ok: true,
+    action: 'move_file',
+    target: { kind: 'skill', name: 'dom-probe' },
+    source_path: 'references/old.md',
+    destination_path: 'references/new.md',
+    skill: { name: 'dom-probe' }
+  });
+  const moveText = moveItems.map(item => item.text).join('\n');
+  assert.match(moveText, /<move_file_result ok="true" target="skill" skill="dom-probe" from="references\/old\.md" to="references\/new\.md">/);
+  assert.match(moveText, /move references\/old\.md -> references\/new\.md/);
+  assert.doesNotMatch(moveText, /<reminder>/);
+
+  const deleteItems = buildResponsesConversationDocumentToolOutputContentItems('delete_file', {
+    ok: true,
+    action: 'delete_file',
+    deleted_path: 'workspace/project/src/a.js'
+  });
+  const deleteText = deleteItems.map(item => item.text).join('\n');
+  assert.match(deleteText, /<delete_file_result ok="true" target="conversation_document" path="workspace\/project\/src\/a\.js">/);
+  assert.match(deleteText, /delete workspace\/project\/src\/a\.js/);
+});

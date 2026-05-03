@@ -646,6 +646,138 @@ export function createSkillManager(options = {}) {
     };
   }
 
+  function findSkillPackageFileIndex(skill, filePath) {
+    return skill.files.findIndex((file) => file.path === filePath);
+  }
+
+  function assertSkillFileOperationPathIsMutable(filePath, action) {
+    if (normalizeSkillFilePath(filePath) === SKILL_VIRTUAL_MANIFEST_PATH) {
+      throw new Error(`manifest.json 是保留虚拟文件，不能用于 ${action}。`);
+    }
+  }
+
+  function assertDifferentSkillFileOperationPaths(sourcePath, destinationPath, action) {
+    if (sourcePath === destinationPath) {
+      throw new Error(`skill_registry 参数错误：${action} 的源路径与目标路径不能相同。`);
+    }
+  }
+
+  async function copySkillFile(skillName, sourceFilePath, destinationFilePath, options = {}) {
+    const existing = await getMutableStoredSkillRecord(skillName, 'copy_file');
+    const normalizedExisting = normalizeStoredSkillRecord(existing);
+    if (!normalizedExisting) {
+      throw new Error(`技能 ${skillName} 不存在，无法复制文件。`);
+    }
+
+    const sourcePath = normalizeSkillFilePath(sourceFilePath);
+    const destinationPath = normalizeSkillFilePath(destinationFilePath);
+    assertDifferentSkillFileOperationPaths(sourcePath, destinationPath, 'copy_file');
+    assertSkillFileOperationPathIsMutable(sourcePath, 'copy_file');
+    assertSkillFileOperationPathIsMutable(destinationPath, 'copy_file');
+
+    const sourceIndex = findSkillPackageFileIndex(normalizedExisting, sourcePath);
+    if (sourceIndex < 0) {
+      throw new Error(`技能 ${skillName} 中不存在文件 ${sourcePath}。`);
+    }
+    if (findSkillPackageFileIndex(normalizedExisting, destinationPath) >= 0) {
+      throw new Error(`技能 ${skillName} 中已存在文件 ${destinationPath}。`);
+    }
+
+    const sourceFile = normalizedExisting.files[sourceIndex];
+    const nextFiles = [
+      ...normalizedExisting.files.map((file) => ({ ...file })),
+      {
+        path: destinationPath,
+        kind: sourceFile.kind || null,
+        content: sourceFile.content || ''
+      }
+    ];
+    const nextRecord = buildStoredSkillRecord({
+      ...normalizedExisting,
+      files: nextFiles
+    }, normalizedExisting);
+    const persistedRecord = await persistMutatedSkillRecord(normalizedExisting, nextRecord);
+
+    return {
+      ok: true,
+      action: 'copy_file',
+      source_file_path: sourcePath,
+      destination_file_path: destinationPath,
+      skill: buildSkillSummary(persistedRecord),
+      files: buildSkillFileManifest(persistedRecord, { includeContent: false }),
+      affected_files: {
+        added: [destinationPath],
+        modified: [],
+        deleted: []
+      },
+      ...(await maybeRefreshCurrentDocument(options?.tabId))
+    };
+  }
+
+  async function moveSkillFile(skillName, sourceFilePath, destinationFilePath, options = {}) {
+    const existing = await getMutableStoredSkillRecord(skillName, 'move_file');
+    const normalizedExisting = normalizeStoredSkillRecord(existing);
+    if (!normalizedExisting) {
+      throw new Error(`技能 ${skillName} 不存在，无法移动文件。`);
+    }
+
+    const sourcePath = normalizeSkillFilePath(sourceFilePath);
+    const destinationPath = normalizeSkillFilePath(destinationFilePath);
+    assertDifferentSkillFileOperationPaths(sourcePath, destinationPath, 'move_file');
+    assertSkillFileOperationPathIsMutable(sourcePath, 'move_file');
+    assertSkillFileOperationPathIsMutable(destinationPath, 'move_file');
+
+    const sourceIndex = findSkillPackageFileIndex(normalizedExisting, sourcePath);
+    if (sourceIndex < 0) {
+      throw new Error(`技能 ${skillName} 中不存在文件 ${sourcePath}。`);
+    }
+    if (findSkillPackageFileIndex(normalizedExisting, destinationPath) >= 0) {
+      throw new Error(`技能 ${skillName} 中已存在文件 ${destinationPath}。`);
+    }
+
+    const sourceFile = normalizedExisting.files[sourceIndex];
+    const nextFiles = normalizedExisting.files.map((file) => ({ ...file }));
+    nextFiles[sourceIndex] = {
+      path: destinationPath,
+      kind: sourceFile.kind || null,
+      content: sourceFile.content || ''
+    };
+
+    const nextInstructionPath = normalizedExisting.instruction.path === sourcePath
+      ? destinationPath
+      : normalizedExisting.instruction.path;
+    const nextRuntimeEntryPath = normalizedExisting.runtime.entry_path === sourcePath
+      ? destinationPath
+      : normalizedExisting.runtime.entry_path;
+
+    const nextRecord = buildStoredSkillRecord({
+      ...normalizedExisting,
+      instruction: {
+        path: nextInstructionPath
+      },
+      runtime: {
+        entry_path: nextRuntimeEntryPath
+      },
+      files: nextFiles
+    }, normalizedExisting);
+    const persistedRecord = await persistMutatedSkillRecord(normalizedExisting, nextRecord);
+
+    return {
+      ok: true,
+      action: 'move_file',
+      source_file_path: sourcePath,
+      destination_file_path: destinationPath,
+      skill: buildSkillSummary(persistedRecord),
+      files: buildSkillFileManifest(persistedRecord, { includeContent: false }),
+      affected_files: {
+        added: [],
+        modified: [destinationPath],
+        deleted: [sourcePath]
+      },
+      ...(await maybeRefreshCurrentDocument(options?.tabId))
+    };
+  }
+
   async function deleteSkillFile(skillName, filePath, options = {}) {
     const existing = await getMutableStoredSkillRecord(skillName, 'delete_file');
     const normalizedExisting = normalizeStoredSkillRecord(existing);
@@ -695,6 +827,11 @@ export function createSkillManager(options = {}) {
       deleted_file_path: normalizedPath,
       skill: buildSkillSummary(persistedRecord),
       files: buildSkillFileManifest(persistedRecord, { includeContent: false }),
+      affected_files: {
+        added: [],
+        modified: [],
+        deleted: [normalizedPath]
+      },
       ...(await maybeRefreshCurrentDocument(options?.tabId))
     };
   }
@@ -873,6 +1010,20 @@ export function createSkillManager(options = {}) {
         return await applySkillPatch(normalizedArgs.skill_name, normalizedArgs.patch, {
           tabId: options?.tabId
         });
+      case 'copy_file':
+        return await copySkillFile(
+          normalizedArgs.skill_name,
+          normalizedArgs.source_file_path,
+          normalizedArgs.destination_file_path,
+          { tabId: options?.tabId }
+        );
+      case 'move_file':
+        return await moveSkillFile(
+          normalizedArgs.skill_name,
+          normalizedArgs.source_file_path,
+          normalizedArgs.destination_file_path,
+          { tabId: options?.tabId }
+        );
       case 'delete_file':
         return await deleteSkillFile(normalizedArgs.skill_name, normalizedArgs.file_path, {
           tabId: options?.tabId,

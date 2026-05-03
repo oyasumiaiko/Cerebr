@@ -41,22 +41,37 @@ export const RESPONSES_EXTENSION_TOOL_SPECS = Object.freeze([
   createExtensionToolSpec({
     id: 'apply_patch',
     title: '虚拟文件 Apply Patch',
-    description: '允许模型对会话文档树执行补丁式文件修改。'
+    description: '允许模型对可写虚拟文件执行补丁式修改。'
   }),
   createExtensionToolSpec({
     id: 'list_files',
     title: '虚拟文件列目录',
-    description: '允许模型列出会话文档树中的文件与目录。'
+    description: '允许模型列出虚拟文件空间中的文件。'
   }),
   createExtensionToolSpec({
     id: 'read_file',
     title: '虚拟文件读文件',
-    description: '允许模型读取会话文档树中的文件内容。'
+    description: '允许模型读取虚拟文件空间中的文件内容。'
   }),
   createExtensionToolSpec({
     id: 'search_files',
     title: '虚拟文件搜索',
-    description: '允许模型在会话文档树中按文本搜索。'
+    description: '允许模型在虚拟文件空间中按文本搜索。'
+  }),
+  createExtensionToolSpec({
+    id: 'copy_file',
+    title: '虚拟文件复制',
+    description: '允许模型把虚拟文件复制到新的虚拟路径。'
+  }),
+  createExtensionToolSpec({
+    id: 'move_file',
+    title: '虚拟文件移动',
+    description: '允许模型移动或重命名可写虚拟文件。'
+  }),
+  createExtensionToolSpec({
+    id: 'delete_file',
+    title: '虚拟文件删除',
+    description: '允许模型删除可写虚拟文件。'
   }),
   createExtensionToolSpec({
     id: 'skill_registry',
