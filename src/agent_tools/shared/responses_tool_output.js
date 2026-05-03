@@ -763,18 +763,6 @@ function getResponsesFileTargetKind(result, file = null, fallback = 'workspace')
   return targetKind || fallback || 'workspace';
 }
 
-function buildResponsesFileBaseAttributes(result, file = null, options = {}) {
-  const normalized = isResponsesToolOutputPlainObject(result) ? result : {};
-  const normalizedFile = isResponsesToolOutputPlainObject(file) ? file : {};
-  const attributes = {
-    ok: normalized.ok === true ? 'true' : '',
-    target: getResponsesFileTargetKind(normalized, normalizedFile, options?.defaultTargetKind)
-  };
-  const skillName = getResponsesFileSkillName(normalized, normalizedFile);
-  if (skillName) attributes.skill = skillName;
-  return attributes;
-}
-
 function buildResponsesFileReadRangeAttribute(contentRead) {
   const normalized = isResponsesToolOutputPlainObject(contentRead) ? contentRead : {};
   const mode = typeof normalized.mode === 'string' ? normalized.mode.trim() : '';
@@ -817,45 +805,42 @@ function buildResponsesFileReadNotice(contentRead, fallbackText = '') {
   );
 }
 
-function buildResponsesFileReadBlocks(file) {
+function buildResponsesFileReadDisplayPath(result, file) {
   const normalized = isResponsesToolOutputPlainObject(file) ? file : {};
-  // 带行号读取时只保留 numbered_content，避免同一段正文以 plain + numbered 两种形式重复输出。
+  const path = typeof normalized.path === 'string' ? normalized.path.trim() : '';
+  const skillName = getResponsesFileSkillName(result, normalized);
+  if (!path) return skillName || '';
+  return skillName ? `${skillName}/${path}` : path;
+}
+
+function buildResponsesFileReadPlainContent(file) {
+  const normalized = isResponsesToolOutputPlainObject(file) ? file : {};
   const preferredText = typeof normalized.numbered_content === 'string' && normalized.numbered_content.trim()
     ? normalized.numbered_content
     : (typeof normalized.content === 'string' ? normalized.content : '');
   const notice = buildResponsesFileReadNotice(normalized.content_read, preferredText);
-  const blocks = [];
-  if (typeof normalized.numbered_content === 'string' && normalized.numbered_content.trim()) {
-    blocks.push({
-      tag: 'numbered_content',
-      text: appendStandaloneNoticeLine(normalized.numbered_content, notice),
-      truncation: null
-    });
-  } else if (typeof normalized.content === 'string' && normalized.content.trim()) {
-    blocks.push({
-      tag: 'content',
-      text: appendStandaloneNoticeLine(normalized.content, notice),
-      truncation: null
-    });
-  }
-  return blocks;
+  return appendStandaloneNoticeLine(preferredText, notice);
 }
 
 function buildResponsesFileListLine(file) {
   const normalized = isResponsesToolOutputPlainObject(file) ? file : {};
   const path = typeof normalized.path === 'string' ? normalized.path.trim() : '';
   const metaParts = [];
+  const pushMetaPart = (value) => {
+    const text = typeof value === 'string' ? value.trim() : '';
+    if (text && !metaParts.includes(text)) metaParts.push(text);
+  };
   if (typeof normalized.skill_name === 'string' && normalized.skill_name.trim()) {
-    metaParts.push(`skill=${normalized.skill_name.trim()}`);
+    pushMetaPart(`skill=${normalized.skill_name.trim()}`);
   }
   if (typeof normalized.kind === 'string' && normalized.kind.trim()) {
-    metaParts.push(normalized.kind.trim());
+    pushMetaPart(normalized.kind.trim());
   }
-  if (normalized.is_manifest === true) metaParts.push('manifest');
-  if (normalized.is_instruction === true) metaParts.push('instruction');
-  if (normalized.is_runtime_entry === true) metaParts.push('runtime_entry');
+  if (normalized.is_manifest === true) pushMetaPart('manifest');
+  if (normalized.is_instruction === true) pushMetaPart('instruction');
+  if (normalized.is_runtime_entry === true) pushMetaPart('runtime_entry');
   if (Number.isFinite(Number(normalized.size_chars))) {
-    metaParts.push(`${Math.max(0, Math.trunc(Number(normalized.size_chars)))} chars`);
+    pushMetaPart(`${Math.max(0, Math.trunc(Number(normalized.size_chars)))} chars`);
   }
   return path
     ? `${path}${metaParts.length > 0 ? `  ${metaParts.join('  ')}` : ''}`
@@ -913,99 +898,56 @@ function buildResponsesFileSearchContext(match) {
   return lines.join('\n');
 }
 
-function buildResponsesXmlItemWithOptionalAttributes(tagName, blocks = [], attributes = {}) {
-  const safeTagName = (typeof tagName === 'string' && tagName.trim()) ? tagName.trim() : '';
-  if (!safeTagName) return '';
-  const attrEntries = Object.entries(isResponsesToolOutputPlainObject(attributes) ? attributes : {})
-    .filter(([, value]) => value != null && String(value).trim() !== '')
-    .map(([key, value]) => `${key}="${xmlAttributeEscape(value)}"`);
-  const body = (Array.isArray(blocks) ? blocks : [])
-    .map((block) => {
-      if (!block || typeof block !== 'object') return '';
-      const tag = (typeof block.tag === 'string' && block.tag.trim()) ? block.tag.trim() : '';
-      const text = trimTrailingWhitespace(block.text);
-      if (!tag || !text) return '';
-      return buildXmlBlock(tag, text);
-    })
-    .filter(Boolean)
-    .join('\n\n');
-  const openTag = attrEntries.length > 0
-    ? `<${safeTagName} ${attrEntries.join(' ')}>`
-    : `<${safeTagName}>`;
-  return body
-    ? `${openTag}\n${body}\n</${safeTagName}>`
-    : `${openTag}\n</${safeTagName}>`;
-}
-
 function buildResponsesFileReadToolOutputText(rootTag, result, options = {}) {
   const normalized = isResponsesToolOutputPlainObject(result) ? result : {};
   const file = isResponsesToolOutputPlainObject(options?.file) ? options.file : {};
-  const rootAttributes = {
-    ...buildResponsesFileBaseAttributes(normalized, file, options),
-    path: typeof file.path === 'string' ? file.path : '',
-    range: buildResponsesFileReadRangeAttribute(file.content_read),
-    more: file?.content_read?.has_more_after_range === true ? 'true' : ''
-  };
-  const blocks = [...buildResponsesFileReadBlocks(file)];
+  void rootTag;
+  const path = buildResponsesFileReadDisplayPath(normalized, file);
+  const range = buildResponsesFileReadRangeAttribute(file.content_read);
+  const more = file?.content_read?.has_more_after_range === true ? 'more' : '';
+  const headerDetail = [range, more].filter(Boolean).join('; ');
+  const lines = [];
+  if (path) lines.push(`# ${path}${headerDetail ? ` (${headerDetail})` : ''}`);
+  const content = buildResponsesFileReadPlainContent(file);
+  if (content) lines.push(content);
   if (normalized.error) {
-    blocks.push({
-      tag: 'error',
-      text: formatResponsesJsRuntimeErrorText(normalized.error)
-    });
+    lines.push(`Error: ${formatResponsesJsRuntimeErrorText(normalized.error)}`);
   }
-  return buildXmlToolResultText(rootTag, null, blocks, {
-    ...(options?.xmlOptions || {}),
-    rootAttributes
-  });
+  return lines.join('\n') || 'No content.';
 }
 
 function buildResponsesFileListToolOutputText(rootTag, result, options = {}) {
   const normalized = isResponsesToolOutputPlainObject(result) ? result : {};
-  const blocks = [];
+  void rootTag;
   const files = Array.isArray(options?.files) ? options.files : [];
-  const rootAttributes = {
-    ...buildResponsesFileBaseAttributes(normalized, files[0], options),
-    total: readNonNegativeInteger(normalized.total_files ?? normalized.total_count) ?? '',
-    returned: readNonNegativeInteger(normalized.returned_file_count ?? files.length) ?? '',
-    path_glob: typeof normalized.path_glob === 'string' ? normalized.path_glob : ''
-  };
+  const lines = [];
   if (files.length > 0) {
     const listText = files
       .map((file) => buildResponsesFileListLine(file))
       .filter(Boolean)
       .join('\n');
     if (listText) {
-      blocks.push({
-        tag: 'files',
-        text: listText
-      });
+      lines.push(listText);
     }
+  } else {
+    lines.push('No files found.');
+  }
+  const total = readNonNegativeInteger(normalized.total_files ?? normalized.total_count);
+  const returned = readNonNegativeInteger(normalized.returned_file_count ?? files.length);
+  if (total != null && returned != null && total > returned) {
+    lines.push(`... returned ${returned} of ${total} files`);
   }
   if (normalized.error) {
-    blocks.push({
-      tag: 'error',
-      text: formatResponsesJsRuntimeErrorText(normalized.error)
-    });
+    lines.push(`Error: ${formatResponsesJsRuntimeErrorText(normalized.error)}`);
   }
-  return buildXmlToolResultText(rootTag, null, blocks, {
-    ...(options?.xmlOptions || {}),
-    rootAttributes
-  });
+  return lines.filter(Boolean).join('\n');
 }
 
 function buildResponsesFileSearchToolOutputText(rootTag, result, options = {}) {
   const normalized = isResponsesToolOutputPlainObject(result) ? result : {};
-  const blocks = [];
+  void rootTag;
   const matches = Array.isArray(options?.matches) ? options.matches : [];
-  const rootAttributes = {
-    ...buildResponsesFileBaseAttributes(normalized, matches[0], options),
-    pattern: typeof normalized.pattern === 'string' ? normalized.pattern : '',
-    regex: normalized.regex === true ? 'true' : '',
-    total: readNonNegativeInteger(normalized.total_matches) ?? '',
-    returned: readNonNegativeInteger(normalized.returned_match_count ?? matches.length) ?? '',
-    truncated: normalized.truncated === true ? 'true' : '',
-    path_glob: typeof normalized.path_glob === 'string' ? normalized.path_glob : ''
-  };
+  const lines = [];
   if (matches.length > 0) {
     // 这里刻意采用接近 `rg --line-number --column` 的纯文本形状：
     // `path:line:column:text` 是模型后续 read_file / apply_patch 最常用的定位信息，
@@ -1015,26 +957,30 @@ function buildResponsesFileSearchToolOutputText(rootTag, result, options = {}) {
       .filter(Boolean)
       .join('\n--\n');
     if (matchesText) {
-      blocks.push({
-        tag: 'matches',
-        text: matchesText
-      });
+      lines.push(matchesText);
     }
+  } else {
+    const pattern = typeof normalized.pattern === 'string' && normalized.pattern.trim()
+      ? ` for "${normalized.pattern.trim()}"`
+      : '';
+    lines.push(`No matches found${pattern}.`);
+  }
+  const total = readNonNegativeInteger(normalized.total_matches);
+  const returned = readNonNegativeInteger(normalized.returned_match_count ?? matches.length);
+  if (total != null && returned != null && total > returned) {
+    lines.push(`... returned ${returned} of ${total} matches`);
+  } else if (normalized.truncated === true && returned != null) {
+    lines.push(`... returned ${returned} matches; output truncated`);
   }
   if (normalized.error) {
-    blocks.push({
-      tag: 'error',
-      text: formatResponsesJsRuntimeErrorText(normalized.error)
-    });
+    lines.push(`Error: ${formatResponsesJsRuntimeErrorText(normalized.error)}`);
   }
-  return buildXmlToolResultText(rootTag, null, blocks, {
-    ...(options?.xmlOptions || {}),
-    rootAttributes
-  });
+  return lines.filter(Boolean).join('\n');
 }
 
 function buildResponsesFileOperationToolOutputText(rootTag, result, options = {}) {
   const normalized = isResponsesToolOutputPlainObject(result) ? result : {};
+  void rootTag;
   const action = typeof normalized.action === 'string' && normalized.action.trim()
     ? normalized.action.trim()
     : String(options?.toolName || '').trim();
@@ -1047,71 +993,38 @@ function buildResponsesFileOperationToolOutputText(rootTag, result, options = {}
   const deletedPath = typeof normalized.deleted_path === 'string'
     ? normalized.deleted_path.trim()
     : (typeof normalized.deleted_file_path === 'string' ? normalized.deleted_file_path.trim() : '');
-  const rootAttributes = {
-    ...buildResponsesFileBaseAttributes(normalized, normalized.file || null, options),
-    from: sourcePath,
-    to: destinationPath,
-    path: deletedPath
-  };
   const resultLine = (() => {
     if (action === 'copy_file') return sourcePath && destinationPath ? `copy ${sourcePath} -> ${destinationPath}` : 'copy complete';
     if (action === 'move_file') return sourcePath && destinationPath ? `move ${sourcePath} -> ${destinationPath}` : 'move complete';
     if (action === 'delete_file') return deletedPath ? `delete ${deletedPath}` : 'delete complete';
     return 'file operation complete';
   })();
-  const blocks = [
-    {
-      tag: 'result',
-      text: resultLine
-    }
-  ];
+  const lines = [resultLine];
   const targetKind = getResponsesFileTargetKind(normalized, normalized.file || null, options?.defaultTargetKind);
   if (targetKind !== 'skill' && (action === 'copy_file' || action === 'move_file')) {
-    blocks.push({
-      tag: 'reminder',
-      text: '你这次创建或移动了一个 workspace 文件。如果需要被用户看到，请在 final channel 里输出该文件的 Markdown 相对路径链接，例如 [计划](workspace/plan.md)。仅创建或移动文件本身不会自动展示给用户。'
-    });
+    lines.push('Reminder: 这次创建或移动了一个 workspace 文件。如果需要被用户看到，请在 final channel 里输出该文件的 Markdown 相对路径链接，例如 [计划](workspace/plan.md)。仅创建或移动文件本身不会自动展示给用户。');
   }
   if (normalized.error) {
-    blocks.push({
-      tag: 'error',
-      text: formatResponsesJsRuntimeErrorText(normalized.error)
-    });
+    lines.push(`Error: ${formatResponsesJsRuntimeErrorText(normalized.error)}`);
   }
-  return buildXmlToolResultText(rootTag, null, blocks, {
-    ...(options?.xmlOptions || {}),
-    rootAttributes
-  });
-}
-
-function buildResponsesSkillPackageFilesBlock(files) {
-  const normalizedFiles = Array.isArray(files) ? files : [];
-  return normalizedFiles.map((file, index) => {
-    const metadata = cloneResponsesToolOutputWithoutRawContent(file);
-    const sections = [];
-    const metadataText = trimJsonMetadataValue(metadata);
-    if (metadataText) {
-      sections.push({
-        tag: 'metadata',
-        text: metadataText
-      });
-    }
-    sections.push(...buildResponsesFileReadBlocks(file));
-    return buildResponsesXmlItemWithOptionalAttributes('file', sections, {
-      rank: index + 1,
-      path: typeof file?.path === 'string' ? file.path : ''
-    });
-  }).filter(Boolean).join('\n\n');
+  return lines.filter(Boolean).join('\n');
 }
 
 function buildResponsesSkillReadDetailToolOutputText(result) {
   const normalized = isResponsesToolOutputPlainObject(result) ? result : {};
-  const metadata = cloneResponsesToolOutputWithoutRawContent(normalized);
-  deleteResponsesToolOutputPath(metadata, ['skill', 'files', 'files']);
+  const readContext = { ...normalized };
+  delete readContext.error;
   const instruction = isResponsesToolOutputPlainObject(normalized?.skill?.instruction)
     ? normalized.skill.instruction
     : {};
-  const blocks = [...buildResponsesFileReadBlocks(instruction)];
+  const lines = [];
+  const instructionText = buildResponsesFileReadToolOutputText('skill_registry_result', readContext, {
+    file: instruction,
+    defaultTargetKind: 'skill'
+  });
+  if (instructionText && instructionText !== 'No content.') {
+    lines.push(instructionText);
+  }
   const files = Array.isArray(normalized?.skill?.files?.files) ? normalized.skill.files.files : [];
   if (files.length > 0) {
     const filesText = files
@@ -1119,43 +1032,43 @@ function buildResponsesSkillReadDetailToolOutputText(result) {
       .filter(Boolean)
       .join('\n');
     if (filesText) {
-      blocks.push({
-        tag: 'files',
-        text: filesText
-      });
+      lines.push(`Files:\n${filesText}`);
     }
   }
   if (normalized.error) {
-    blocks.push({
-      tag: 'error',
-      text: formatResponsesJsRuntimeErrorText(normalized.error)
-    });
+    lines.push(`Error: ${formatResponsesJsRuntimeErrorText(normalized.error)}`);
   }
-  return buildXmlToolResultText('skill_registry_result', metadata, blocks);
+  return lines.filter(Boolean).join('\n\n') || 'No content.';
 }
 
 function buildResponsesSkillReadPackageToolOutputText(result) {
   const normalized = isResponsesToolOutputPlainObject(result) ? result : {};
-  const metadata = cloneResponsesToolOutputWithoutRawContent(normalized);
-  deleteResponsesToolOutputPath(metadata, ['skill', 'files', 'files']);
-  const blocks = [];
+  const readContext = { ...normalized };
+  delete readContext.error;
   const files = Array.isArray(normalized?.skill?.files?.files) ? normalized.skill.files.files : [];
+  const lines = [];
   if (files.length > 0) {
-    const filesText = buildResponsesSkillPackageFilesBlock(files);
-    if (filesText) {
-      blocks.push({
-        tag: 'files',
-        text: filesText
-      });
-    }
+    lines.push(...files
+      .map((file) => buildResponsesFileReadToolOutputText('skill_registry_result', readContext, {
+        file,
+        defaultTargetKind: 'skill'
+      }))
+      .filter((text) => text && text !== 'No content.'));
+  } else {
+    lines.push('No files found.');
+  }
+  const fileSummary = isResponsesToolOutputPlainObject(normalized?.skill?.files)
+    ? normalized.skill.files
+    : {};
+  const total = readNonNegativeInteger(fileSummary.total_count ?? normalized.total_count);
+  const returned = readNonNegativeInteger(fileSummary.returned_file_count ?? files.length);
+  if (total != null && returned != null && total > returned) {
+    lines.push(`... returned ${returned} of ${total} files`);
   }
   if (normalized.error) {
-    blocks.push({
-      tag: 'error',
-      text: formatResponsesJsRuntimeErrorText(normalized.error)
-    });
+    lines.push(`Error: ${formatResponsesJsRuntimeErrorText(normalized.error)}`);
   }
-  return buildXmlToolResultText('skill_registry_result', metadata, blocks);
+  return lines.filter(Boolean).join('\n\n');
 }
 
 function buildResponsesPageContentToolOutputText(result) {
@@ -1721,10 +1634,7 @@ export function buildResponsesSkillRegistryToolOutputContentItems(result, option
   if (normalized.ok === true) {
     const summaryText = buildSkillMutationSummaryText(normalized);
     if (summaryText) {
-      return buildResponsesGenericXmlToolOutputContentItems('skill_registry_result', {
-        ok: true,
-        value: summaryText
-      }, options);
+      return buildResponsesXmlToolOutputContentItems(summaryText, options);
     }
   }
   if (String(normalized.action || '').trim() === 'read_file') {
@@ -1781,8 +1691,9 @@ export function buildResponsesSkillRegistryToolOutputContentItems(result, option
 
 export function buildResponsesConversationDocumentToolOutputContentItems(toolName, result, options = {}) {
   const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
-  const rootTag = `${String(toolName || 'virtual_file').trim() || 'virtual_file'}_result`;
-  if (normalized.ok === true && String(toolName || '').trim() === 'read_file') {
+  const normalizedToolName = String(toolName || '').trim();
+  const rootTag = `${normalizedToolName || 'virtual_file'}_result`;
+  if (normalizedToolName === 'read_file') {
     return buildResponsesXmlToolOutputContentItems(
       buildResponsesFileReadToolOutputText(rootTag, normalized, {
         file: normalized.file
@@ -1790,7 +1701,7 @@ export function buildResponsesConversationDocumentToolOutputContentItems(toolNam
       options
     );
   }
-  if (normalized.ok === true && String(toolName || '').trim() === 'list_files') {
+  if (normalizedToolName === 'list_files') {
     return buildResponsesXmlToolOutputContentItems(
       buildResponsesFileListToolOutputText(rootTag, normalized, {
         files: normalized.files
@@ -1798,7 +1709,7 @@ export function buildResponsesConversationDocumentToolOutputContentItems(toolNam
       options
     );
   }
-  if (normalized.ok === true && String(toolName || '').trim() === 'search_files') {
+  if (normalizedToolName === 'search_files') {
     return buildResponsesXmlToolOutputContentItems(
       buildResponsesFileSearchToolOutputText(rootTag, normalized, {
         matches: normalized.matches
@@ -1807,59 +1718,51 @@ export function buildResponsesConversationDocumentToolOutputContentItems(toolNam
     );
   }
   if (
-    normalized.ok === true
-    && ['copy_file', 'move_file', 'delete_file'].includes(String(toolName || '').trim())
+    ['copy_file', 'move_file', 'delete_file'].includes(normalizedToolName)
   ) {
     return buildResponsesXmlToolOutputContentItems(
       buildResponsesFileOperationToolOutputText(rootTag, normalized, {
-        toolName: String(toolName || '').trim()
+        toolName: normalizedToolName
       }),
       options
     );
   }
-  if (normalized.ok === true && String(toolName || '').trim() === 'apply_patch') {
+  if (normalizedToolName === 'apply_patch' && normalized.ok !== true) {
+    const errorText = normalized.error
+      ? `Error: ${formatResponsesJsRuntimeErrorText(normalized.error)}`
+      : 'Patch failed.';
+    return buildResponsesXmlToolOutputContentItems(errorText, options);
+  }
+  if (normalized.ok === true && normalizedToolName === 'apply_patch') {
     const affected = (normalized?.affected_files && typeof normalized.affected_files === 'object') ? normalized.affected_files : {};
-    const lines = [];
+    const changedLines = [];
     let hasCreatedOrModifiedConversationFile = false;
     for (const value of Array.isArray(affected.added) ? affected.added : []) {
       const path = typeof value === 'string' ? value.trim() : '';
       if (path) {
-        lines.push(`A ${path}`);
+        changedLines.push(`A ${path}`);
         hasCreatedOrModifiedConversationFile = true;
       }
     }
     for (const value of Array.isArray(affected.modified) ? affected.modified : []) {
       const path = typeof value === 'string' ? value.trim() : '';
       if (path) {
-        lines.push(`M ${path}`);
+        changedLines.push(`M ${path}`);
         hasCreatedOrModifiedConversationFile = true;
       }
     }
     for (const value of Array.isArray(affected.deleted) ? affected.deleted : []) {
       const path = typeof value === 'string' ? value.trim() : '';
-      if (path) lines.push(`D ${path}`);
+      if (path) changedLines.push(`D ${path}`);
     }
-    const summaryText = lines.length > 0
-      ? `Success. Updated the following files:\n${lines.join('\n')}`
+    const summaryText = changedLines.length > 0
+      ? `Success. Updated the following files:\n${changedLines.join('\n')}`
       : 'Patch applied successfully.';
-    const blocks = [
-      {
-        tag: 'result',
-        text: summaryText
-      }
-    ];
+    const resultLines = [summaryText];
     if (hasCreatedOrModifiedConversationFile) {
-      blocks.push({
-        tag: 'reminder',
-        text: '你这次创建或修改了一个 workspace 文件。如果需要被用户看到，请在 final channel 里输出该文件的 Markdown 相对路径链接，例如 [计划](workspace/plan.md)。仅创建或修改文件本身不会自动展示给用户。'
-      });
+      resultLines.push('Reminder: 这次创建或修改了一个 workspace 文件。如果需要被用户看到，请在 final channel 里输出该文件的 Markdown 相对路径链接，例如 [计划](workspace/plan.md)。仅创建或修改文件本身不会自动展示给用户。');
     }
-    return buildResponsesXmlToolOutputContentItems(
-      buildXmlToolResultText(rootTag, {
-        ok: true
-      }, blocks, options),
-      options
-    );
+    return buildResponsesXmlToolOutputContentItems(resultLines.join('\n'), options);
   }
   return buildResponsesGenericXmlToolOutputContentItems(rootTag, normalized, options);
 }

@@ -289,11 +289,11 @@ test('buildResponsesSkillRegistryToolOutputContentItems 会把 apply_patch 压�
     }
   });
   const text = formatResponsesToolOutputForDisplay(items);
-  assert.match(text, /<skill_registry_result>/);
   assert.match(text, /Success\. Updated the following files:/);
   assert.match(text, /A references\/experiment-loop\.md/);
   assert.match(text, /M SKILL\.md/);
   assert.match(text, /Mounted on current document: worldquant-brain-sim-state/);
+  assert.doesNotMatch(text, /<skill_registry_result>/);
   assert.doesNotMatch(text, /"affected_files"/);
   assert.doesNotMatch(text, /"match": \[/);
 });
@@ -310,7 +310,7 @@ test('buildResponsesSkillRegistryToolOutputContentItems 会把文件管理操作
     destination_file_path: 'references/b.md'
   });
   const text = formatResponsesToolOutputForDisplay(items);
-  assert.match(text, /<skill_registry_result ok="true" target="skill" skill="dom-probe" from="references\/a\.md" to="references\/b\.md">/);
+  assert.doesNotMatch(text, /<skill_registry_result/);
   assert.match(text, /copy references\/a\.md -> references\/b\.md/);
   assert.doesNotMatch(text, /"source_file_path"/);
 });
@@ -334,10 +334,10 @@ test('buildResponsesConversationDocumentToolOutputContentItems 只在会话文�
   const conversationText = formatResponsesToolOutputForDisplay(conversationItems);
   assert.match(conversationText, /Success\. Updated the following files:/);
   assert.match(conversationText, /A workspace\/plan\.md/);
-  assert.match(conversationText, /<reminder>/);
-  assert.match(conversationText, /你这次创建或修改了一个 workspace 文件/);
+  assert.match(conversationText, /Reminder: /);
+  assert.match(conversationText, /Reminder: 这次创建或修改了一个 workspace 文件/);
   assert.match(conversationText, /在 final channel 里输出该文件的 Markdown 相对路径链接/);
-  assert.match(conversationText, /<result>[\s\S]*<\/result>\s*<reminder>/);
+  assert.doesNotMatch(conversationText, /<apply_patch_result|<result>|<reminder>/);
 
   const deleteOnlyItems = buildResponsesConversationDocumentToolOutputContentItems('apply_patch', {
     ok: true,
@@ -349,7 +349,7 @@ test('buildResponsesConversationDocumentToolOutputContentItems 只在会话文�
     }
   });
   const deleteOnlyText = formatResponsesToolOutputForDisplay(deleteOnlyItems);
-  assert.doesNotMatch(deleteOnlyText, /<reminder>/);
+  assert.doesNotMatch(deleteOnlyText, /Reminder:/);
 
   const skillItems = buildResponsesSkillRegistryToolOutputContentItems({
     ok: true,
@@ -366,7 +366,7 @@ test('buildResponsesConversationDocumentToolOutputContentItems 只在会话文�
   });
   const skillText = formatResponsesToolOutputForDisplay(skillItems);
   assert.doesNotMatch(skillText, /会话文件/);
-  assert.doesNotMatch(skillText, /<reminder>/);
+  assert.doesNotMatch(skillText, /Reminder:/);
 });
 
 test('buildResponsesSkillRegistryToolOutputContentItems 会把模板式 create_skill 渲染成脚手架摘要与 next steps', async () => {
@@ -457,7 +457,7 @@ test('buildResponsesSkillRegistryToolOutputContentItems 会显式提示 refresh 
   assert.doesNotMatch(text, /Mounted on current document:/);
 });
 
-test('buildResponsesSkillRegistryToolOutputContentItems 对 read_file 改为属性 + 原文 content 块', async () => {
+test('buildResponsesSkillRegistryToolOutputContentItems 对 read_file 改为 shell 风格 header + 原文内容', async () => {
   const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesSkillRegistryToolOutputContentItems({
     ok: true,
@@ -476,8 +476,9 @@ test('buildResponsesSkillRegistryToolOutputContentItems 对 read_file 改为属�
     }
   });
   const text = formatResponsesToolOutputForDisplay(items);
-  assert.match(text, /<skill_registry_result ok="true" target="skill" skill="skill-creator" path="SKILL\.md" range="chars 0-5\/5">/);
-  assert.match(text, /<content>\s*Alpha\s*<\/content>/);
+  assert.match(text, /^# skill-creator\/SKILL\.md \(chars 0-5\/5\)\nAlpha/m);
+  assert.doesNotMatch(text, /<skill_registry_result/);
+  assert.doesNotMatch(text, /<content>/);
   assert.doesNotMatch(text, /<metadata>/);
   assert.doesNotMatch(text, /"content": "Alpha"/);
 });
@@ -508,8 +509,9 @@ test('buildResponsesSkillRegistryToolOutputContentItems 对带行号 read_file �
     }
   });
   const text = formatResponsesToolOutputForDisplay(items);
-  assert.match(text, /<numbered_content>\s*12 \| Alpha\s*<\/numbered_content>/);
-  assert.doesNotMatch(text, /<content>\s*Alpha\s*<\/content>/);
+  assert.match(text, /^# skill-creator\/SKILL\.md \(chars 11-16\/100; more\)\n12 \| Alpha/m);
+  assert.doesNotMatch(text, /<numbered_content>/);
+  assert.doesNotMatch(text, /<content>/);
   assert.doesNotMatch(text, /output too long; truncated/);
 });
 
@@ -537,8 +539,8 @@ test('buildResponsesSkillRegistryToolOutputContentItems 对 search_files 输出 
     ]
   });
   const text = formatResponsesToolOutputForDisplay(items);
-  assert.match(text, /<skill_registry_result ok="true" target="skill" skill="dom-probe" pattern="token" total="1" returned="1">/);
-  assert.match(text, /<matches>/);
+  assert.doesNotMatch(text, /<skill_registry_result/);
+  assert.doesNotMatch(text, /<matches>/);
   assert.match(text, /dom-probe\/src\/main\.js-1-before line/);
   assert.match(text, /dom-probe\/src\/main\.js:2:7:alpha token beta/);
   assert.match(text, /dom-probe\/src\/main\.js-3-after line/);
@@ -546,7 +548,51 @@ test('buildResponsesSkillRegistryToolOutputContentItems 对 search_files 输出 
   assert.doesNotMatch(text, /"line_text": "alpha token beta"/);
 });
 
-test('buildResponsesSkillRegistryToolOutputContentItems 对 read_package 输出多文件原文块', async () => {
+test('buildResponsesSkillRegistryToolOutputContentItems 对 read_detail 输出说明正文和文件列表纯文本', async () => {
+  const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const items = buildResponsesSkillRegistryToolOutputContentItems({
+    ok: true,
+    action: 'read_detail',
+    skill: {
+      name: 'dom-probe',
+      instruction: {
+        path: 'SKILL.md',
+        content: 'Instruction body',
+        content_read: {
+          mode: 'preview',
+          total_chars: 16,
+          returned_chars: 16
+        }
+      },
+      files: {
+        total_count: 2,
+        returned_file_count: 2,
+        files: [
+          {
+            path: 'SKILL.md',
+            kind: 'instruction',
+            is_instruction: true,
+            size_chars: 16
+          },
+          {
+            path: 'src/main.js',
+            kind: 'runtime_source',
+            size_chars: 18
+          }
+        ]
+      }
+    }
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /^# dom-probe\/SKILL\.md \(chars 0-16\/16\)\nInstruction body/m);
+  assert.match(text, /Files:\nSKILL\.md  instruction  16 chars/);
+  assert.match(text, /src\/main\.js  runtime_source  18 chars/);
+  assert.doesNotMatch(text, /<skill_registry_result/);
+  assert.doesNotMatch(text, /<files>/);
+  assert.doesNotMatch(text, /<content>/);
+});
+
+test('buildResponsesSkillRegistryToolOutputContentItems 对 read_package 输出多文件原文块纯文本', async () => {
   const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesSkillRegistryToolOutputContentItems({
     ok: true,
@@ -583,11 +629,13 @@ test('buildResponsesSkillRegistryToolOutputContentItems 对 read_package 输出�
     }
   });
   const text = formatResponsesToolOutputForDisplay(items);
-  assert.match(text, /<files>/);
-  assert.match(text, /<file rank="1" path="SKILL\.md">/);
-  assert.match(text, /<file rank="2" path="src\/main\.js">/);
-  assert.match(text, /<content>\s*Instruction body/);
+  assert.match(text, /^# dom-probe\/SKILL\.md \(chars 0-16\/16\)\nInstruction body/m);
+  assert.match(text, /^# dom-probe\/src\/main\.js \(chars 0-18\/18\)\nconsole\.log\("hi"\);/m);
   assert.match(text, /console\.log\("hi"\);/);
+  assert.doesNotMatch(text, /<skill_registry_result/);
+  assert.doesNotMatch(text, /<files>/);
+  assert.doesNotMatch(text, /<file rank=/);
+  assert.doesNotMatch(text, /<content>/);
   assert.doesNotMatch(text, /"content": "Instruction body"/);
 });
 

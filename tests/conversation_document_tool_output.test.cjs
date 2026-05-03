@@ -21,13 +21,13 @@ test('apply_patch 的对话文档工具输出会压成简洁变更摘要', async
   });
 
   const text = items.map(item => item.text).join('\n');
-  assert.match(text, /apply_patch_result/);
   assert.match(text, /A workspace\/a\.md/);
   assert.match(text, /M workspace\/b\.md/);
   assert.match(text, /D workspace\/c\.md/);
+  assert.doesNotMatch(text, /<apply_patch_result/);
 });
 
-test('read_file 的对话文档工具输出会把定位信息压到属性并只保留原文 content 块', async () => {
+test('read_file 的对话文档工具输出会改成 shell 风格 header + 原文内容', async () => {
   const { buildResponsesConversationDocumentToolOutputContentItems } = await loadToolOutputModule();
 
   const items = buildResponsesConversationDocumentToolOutputContentItems('read_file', {
@@ -47,8 +47,10 @@ test('read_file 的对话文档工具输出会把定位信息压到属性并只�
   });
 
   const text = items.map(item => item.text).join('\n');
-  assert.match(text, /<read_file_result ok="true" target="workspace" path="workspace\/spec\.md" range="chars 0-11\/11">/);
-  assert.match(text, /<content>\s*hello/);
+  assert.match(text, /^# workspace\/spec\.md \(chars 0-11\/11\)\nhello/m);
+  assert.match(text, /world/);
+  assert.doesNotMatch(text, /<read_file_result/);
+  assert.doesNotMatch(text, /<content>/);
   assert.doesNotMatch(text, /<metadata>/);
   assert.doesNotMatch(text, /"content": "hello\\nworld"/);
 });
@@ -82,8 +84,9 @@ test('read_file 带行号时只输出 numbered_content，且显式行范围读�
   });
 
   const text = items.map(item => item.text).join('\n');
-  assert.match(text, /<numbered_content>\s*2 \| line2/);
-  assert.doesNotMatch(text, /<content>\s*line2/);
+  assert.match(text, /^# workspace\/spec\.md \(lines 2-3\/4; more\)\n2 \| line2/m);
+  assert.doesNotMatch(text, /<numbered_content>/);
+  assert.doesNotMatch(text, /<content>/);
   assert.doesNotMatch(text, /output too long; truncated/);
 });
 
@@ -110,8 +113,8 @@ test('list_files 的对话文档工具输出会把文件列表压成低噪声纯
   });
 
   const text = items.map(item => item.text).join('\n');
-  assert.match(text, /<list_files_result ok="true" target="workspace" total="2" returned="2">/);
-  assert.match(text, /<files>/);
+  assert.doesNotMatch(text, /<list_files_result/);
+  assert.doesNotMatch(text, /<files>/);
   assert.match(text, /workspace\/a\.md  10 chars/);
   assert.match(text, /workspace\/b\.md  20 chars/);
   assert.doesNotMatch(text, /updated_at=/);
@@ -143,8 +146,8 @@ test('search_files 的对话文档工具输出会把命中上下文渲染成 rg 
   });
 
   const text = items.map(item => item.text).join('\n');
-  assert.match(text, /<search_files_result ok="true" target="workspace" pattern="token" total="1" returned="1">/);
-  assert.match(text, /<matches>/);
+  assert.doesNotMatch(text, /<search_files_result/);
+  assert.doesNotMatch(text, /<matches>/);
   assert.match(text, /workspace\/spec\.md-1-before line/);
   assert.match(text, /workspace\/spec\.md:2:7:alpha token beta/);
   assert.match(text, /workspace\/spec\.md-3-after line/);
@@ -163,9 +166,9 @@ test('copy_file/move_file/delete_file 的对话文档工具输出会压成单行
     destination_path: 'workspace/project/src/a.js'
   });
   const copyText = copyItems.map(item => item.text).join('\n');
-  assert.match(copyText, /<copy_file_result ok="true" target="workspace" from="local\/project\/src\/a\.js" to="workspace\/project\/src\/a\.js">/);
+  assert.doesNotMatch(copyText, /<copy_file_result/);
   assert.match(copyText, /copy local\/project\/src\/a\.js -> workspace\/project\/src\/a\.js/);
-  assert.match(copyText, /<reminder>/);
+  assert.match(copyText, /Reminder: /);
   assert.doesNotMatch(copyText, /"source_path"/);
 
   const moveItems = buildResponsesConversationDocumentToolOutputContentItems('move_file', {
@@ -177,9 +180,9 @@ test('copy_file/move_file/delete_file 的对话文档工具输出会压成单行
     skill: { name: 'dom-probe' }
   });
   const moveText = moveItems.map(item => item.text).join('\n');
-  assert.match(moveText, /<move_file_result ok="true" target="skill" skill="dom-probe" from="references\/old\.md" to="references\/new\.md">/);
+  assert.doesNotMatch(moveText, /<move_file_result/);
   assert.match(moveText, /move references\/old\.md -> references\/new\.md/);
-  assert.doesNotMatch(moveText, /<reminder>/);
+  assert.doesNotMatch(moveText, /Reminder:/);
 
   const deleteItems = buildResponsesConversationDocumentToolOutputContentItems('delete_file', {
     ok: true,
@@ -187,6 +190,26 @@ test('copy_file/move_file/delete_file 的对话文档工具输出会压成单行
     deleted_path: 'workspace/project/src/a.js'
   });
   const deleteText = deleteItems.map(item => item.text).join('\n');
-  assert.match(deleteText, /<delete_file_result ok="true" target="workspace" path="workspace\/project\/src\/a\.js">/);
+  assert.doesNotMatch(deleteText, /<delete_file_result/);
   assert.match(deleteText, /delete workspace\/project\/src\/a\.js/);
+});
+
+test('对话文档文件工具失败时也保持纯文本错误输出', async () => {
+  const { buildResponsesConversationDocumentToolOutputContentItems } = await loadToolOutputModule();
+
+  const readItems = buildResponsesConversationDocumentToolOutputContentItems('read_file', {
+    ok: false,
+    error: '文件不存在'
+  });
+  const readText = readItems.map(item => item.text).join('\n');
+  assert.match(readText, /Error: 文件不存在/);
+  assert.doesNotMatch(readText, /<read_file_result|<error>/);
+
+  const patchItems = buildResponsesConversationDocumentToolOutputContentItems('apply_patch', {
+    ok: false,
+    error: 'patch failed'
+  });
+  const patchText = patchItems.map(item => item.text).join('\n');
+  assert.match(patchText, /Error: patch failed/);
+  assert.doesNotMatch(patchText, /<apply_patch_result|<error>/);
 });
