@@ -16,7 +16,7 @@ export function buildVirtualFileListFilesFunctionToolDefinition() {
   return {
     type: 'function',
     name: VIRTUAL_FILE_LIST_FILES_TOOL_NAME,
-    description: '列出虚拟文件路径与基本元数据。默认作用于当前对话纯文本文件；当 `target.kind="skill"` 时可列出单个或全部 skill 文件。',
+    description: '列出虚拟文件路径，输出为紧凑的 path + 简短标记/大小行。默认作用于当前对话纯文本文件；当 `target.kind="skill"` 时可列出单个或全部 skill 文件。',
     strict: false,
     parameters: {
       type: 'object',

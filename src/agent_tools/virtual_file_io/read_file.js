@@ -73,7 +73,7 @@ export function buildVirtualFileReadFileFunctionToolDefinition() {
   return {
     type: 'function',
     name: VIRTUAL_FILE_READ_FILE_TOOL_NAME,
-    description: '读取单个虚拟文件。默认返回安全预览，可按字符或行范围读取；当 `target.kind="skill"` 时必须指定 `target.name`。',
+    description: '读取单个虚拟文件。输出会尽量接近终端读文件结果：少量 path/range 属性 + 原文 content/numbered_content；默认读取安全预览，可按字符或行范围读取；当 `target.kind="skill"` 时必须指定 `target.name`。',
     strict: false,
     parameters: buildCommonFileReadParametersDescription()
   };

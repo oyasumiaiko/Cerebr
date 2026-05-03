@@ -440,7 +440,7 @@ test('buildResponsesSkillRegistryToolOutputContentItems 会显式提示 refresh 
   assert.doesNotMatch(text, /Mounted on current document:/);
 });
 
-test('buildResponsesSkillRegistryToolOutputContentItems 对 read_file 改为 metadata + 原文 content 块', async () => {
+test('buildResponsesSkillRegistryToolOutputContentItems 对 read_file 改为属性 + 原文 content 块', async () => {
   const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesSkillRegistryToolOutputContentItems({
     ok: true,
@@ -459,11 +459,9 @@ test('buildResponsesSkillRegistryToolOutputContentItems 对 read_file 改为 met
     }
   });
   const text = formatResponsesToolOutputForDisplay(items);
-  assert.match(text, /<skill_registry_result>/);
-  assert.match(text, /<metadata>/);
-  assert.match(text, /"action": "read_file"/);
-  assert.match(text, /"path": "SKILL\.md"/);
+  assert.match(text, /<skill_registry_result ok="true" target="skill" skill="skill-creator" path="SKILL\.md" range="chars 0-5\/5">/);
   assert.match(text, /<content>\s*Alpha\s*<\/content>/);
+  assert.doesNotMatch(text, /<metadata>/);
   assert.doesNotMatch(text, /"content": "Alpha"/);
 });
 
@@ -498,7 +496,7 @@ test('buildResponsesSkillRegistryToolOutputContentItems 对带行号 read_file �
   assert.doesNotMatch(text, /output too long; truncated/);
 });
 
-test('buildResponsesSkillRegistryToolOutputContentItems 对 search_files 输出 matches + context XML 块', async () => {
+test('buildResponsesSkillRegistryToolOutputContentItems 对 search_files 输出 rg 风格 matches 块', async () => {
   const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesSkillRegistryToolOutputContentItems({
     ok: true,
@@ -522,11 +520,12 @@ test('buildResponsesSkillRegistryToolOutputContentItems 对 search_files 输出 
     ]
   });
   const text = formatResponsesToolOutputForDisplay(items);
+  assert.match(text, /<skill_registry_result ok="true" target="skill" skill="dom-probe" pattern="token" total="1" returned="1">/);
   assert.match(text, /<matches>/);
-  assert.match(text, /<match rank="1">/);
-  assert.match(text, /<context>\s*1 \| before line/);
-  assert.match(text, /2 \| alpha token beta/);
-  assert.match(text, /3 \| after line/);
+  assert.match(text, /dom-probe\/src\/main\.js-1-before line/);
+  assert.match(text, /dom-probe\/src\/main\.js:2:7:alpha token beta/);
+  assert.match(text, /dom-probe\/src\/main\.js-3-after line/);
+  assert.doesNotMatch(text, /<match rank="1">/);
   assert.doesNotMatch(text, /"line_text": "alpha token beta"/);
 });
 

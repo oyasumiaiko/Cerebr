@@ -27,7 +27,7 @@ test('apply_patch 的对话文档工具输出会压成简洁变更摘要', async
   assert.match(text, /D docs\/c\.md/);
 });
 
-test('read_file 的对话文档工具输出会把正文放进 content 块而不是 JSON 字符串', async () => {
+test('read_file 的对话文档工具输出会把定位信息压到属性并只保留原文 content 块', async () => {
   const { buildResponsesConversationDocumentToolOutputContentItems } = await loadToolOutputModule();
 
   const items = buildResponsesConversationDocumentToolOutputContentItems('read_file', {
@@ -47,10 +47,9 @@ test('read_file 的对话文档工具输出会把正文放进 content 块而不�
   });
 
   const text = items.map(item => item.text).join('\n');
-  assert.match(text, /<read_file_result>/);
-  assert.match(text, /<metadata>/);
-  assert.match(text, /"path": "docs\/spec\.md"/);
+  assert.match(text, /<read_file_result ok="true" target="conversation_document" path="docs\/spec\.md" range="chars 0-11\/11">/);
   assert.match(text, /<content>\s*hello/);
+  assert.doesNotMatch(text, /<metadata>/);
   assert.doesNotMatch(text, /"content": "hello\\nworld"/);
 });
 
@@ -88,7 +87,7 @@ test('read_file 带行号时只输出 numbered_content，且显式行范围读�
   assert.doesNotMatch(text, /output too long; truncated/);
 });
 
-test('list_files 的对话文档工具输出会把文件列表压成纯文本行', async () => {
+test('list_files 的对话文档工具输出会把文件列表压成低噪声纯文本行', async () => {
   const { buildResponsesConversationDocumentToolOutputContentItems } = await loadToolOutputModule();
 
   const items = buildResponsesConversationDocumentToolOutputContentItems('list_files', {
@@ -111,13 +110,15 @@ test('list_files 的对话文档工具输出会把文件列表压成纯文本行
   });
 
   const text = items.map(item => item.text).join('\n');
+  assert.match(text, /<list_files_result ok="true" target="conversation_document" total="2" returned="2">/);
   assert.match(text, /<files>/);
-  assert.match(text, /docs\/a\.md \| size_chars=10 \| updated_at=2026-04-14T10:00:00\.000Z/);
-  assert.match(text, /docs\/b\.md \| size_chars=20 \| updated_at=2026-04-14T10:05:00\.000Z/);
+  assert.match(text, /docs\/a\.md  10 chars/);
+  assert.match(text, /docs\/b\.md  20 chars/);
+  assert.doesNotMatch(text, /updated_at=/);
   assert.doesNotMatch(text, /"files": \[/);
 });
 
-test('search_files 的对话文档工具输出会把命中上下文拆成 matches XML', async () => {
+test('search_files 的对话文档工具输出会把命中上下文渲染成 rg 风格行', async () => {
   const { buildResponsesConversationDocumentToolOutputContentItems } = await loadToolOutputModule();
 
   const items = buildResponsesConversationDocumentToolOutputContentItems('search_files', {
@@ -142,10 +143,11 @@ test('search_files 的对话文档工具输出会把命中上下文拆成 matche
   });
 
   const text = items.map(item => item.text).join('\n');
+  assert.match(text, /<search_files_result ok="true" target="conversation_document" pattern="token" total="1" returned="1">/);
   assert.match(text, /<matches>/);
-  assert.match(text, /<match rank="1">/);
-  assert.match(text, /<context>\s*1 \| before line/);
-  assert.match(text, /2 \| alpha token beta/);
-  assert.match(text, /3 \| after line/);
+  assert.match(text, /docs\/spec\.md-1-before line/);
+  assert.match(text, /docs\/spec\.md:2:7:alpha token beta/);
+  assert.match(text, /docs\/spec\.md-3-after line/);
+  assert.doesNotMatch(text, /<match rank="1">/);
   assert.doesNotMatch(text, /"before": \[/);
 });
