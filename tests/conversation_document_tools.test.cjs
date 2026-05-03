@@ -119,8 +119,6 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
     file_path: 'docs/spec.md',
     include_line_numbers: true,
     read_options: {
-      mode: undefined,
-      skip_chars: undefined,
       max_chars: undefined,
       start_line: 20,
       end_line: 40
@@ -173,7 +171,10 @@ test('read_file/search_files 工具定义优先暴露 bash 风格参数', async 
   assert.ok(readDefinition.parameters.properties.path);
   assert.ok(readDefinition.parameters.properties.line_range);
   assert.ok(readDefinition.parameters.properties.numbered);
-  assert.equal(readDefinition.parameters.required, undefined);
+  assert.deepEqual(readDefinition.parameters.required, ['path']);
+  assert.equal(readDefinition.parameters.properties.file_path, undefined);
+  assert.equal(readDefinition.parameters.properties.start_line, undefined);
+  assert.equal(readDefinition.parameters.properties.include_line_numbers, undefined);
 
   const searchDefinition = buildVirtualFileSearchFilesFunctionToolDefinition();
   assert.match(searchDefinition.description, /rg "pattern"/);
@@ -181,6 +182,9 @@ test('read_file/search_files 工具定义优先暴露 bash 风格参数', async 
   assert.ok(searchDefinition.parameters.properties.before);
   assert.ok(searchDefinition.parameters.properties.after);
   assert.ok(searchDefinition.parameters.properties.ignore_case);
+  assert.equal(searchDefinition.parameters.properties.path_glob, undefined);
+  assert.equal(searchDefinition.parameters.properties.case_mode, undefined);
+  assert.equal(searchDefinition.parameters.properties.max_results, undefined);
   assert.deepEqual(searchDefinition.parameters.required, ['pattern']);
 });
 

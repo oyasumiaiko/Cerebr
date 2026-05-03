@@ -23,7 +23,7 @@ test('顶层 read_file 在 skill target 下会显示文件前缀与简短摘要'
         kind: 'skill',
         name: 'dom-probe'
       },
-      file_path: 'src/helpers/dom.js'
+      path: 'src/helpers/dom.js'
     })
   };
 
@@ -55,10 +55,9 @@ test('顶层 read_file 在按行范围读取时会把 Lx-Ly 追加到文件路�
         kind: 'skill',
         name: 'worldquant-brain-knowledge-cache'
       },
-      file_path: 'src/cache.js',
-      start_line: 1,
-      end_line: 260,
-      include_line_numbers: true
+      path: 'src/cache.js',
+      line_range: '1:260',
+      numbered: true
     })
   };
 
@@ -78,7 +77,7 @@ test('顶层 read_file 在按行范围读取时会把 Lx-Ly 追加到文件路�
   );
 });
 
-test('顶层 read_file/search_files 摘要支持 bash 风格别名参数', async () => {
+test('顶层 read_file/search_files 摘要支持 bash 风格参数', async () => {
   const {
     buildVirtualFileSummaryParts,
     buildVirtualFilePrimaryText

@@ -34,17 +34,15 @@ function joinSummaryMeta(parts) {
 }
 
 function resolvePathArg(args) {
-  return normalizeSummaryText(args?.path) || normalizeSummaryText(args?.file_path);
+  return normalizeSummaryText(args?.path);
 }
 
 function resolveGlobArg(args) {
-  return normalizeSummaryText(args?.glob)
-    || normalizeSummaryText(args?.path_glob)
-    || normalizeSummaryText(args?.path);
+  return normalizeSummaryText(args?.glob);
 }
 
 function resolveSearchPatternArg(args) {
-  return normalizeSummaryText(args?.pattern) || normalizeSummaryText(args?.query);
+  return normalizeSummaryText(args?.pattern);
 }
 
 function resolveVirtualFileTarget(args) {
@@ -60,23 +58,16 @@ function resolveVirtualFileTarget(args) {
 
 function formatReadLineRangeSuffix(args) {
   const lineRange = normalizeSummaryText(args?.line_range);
-  if (lineRange) {
-    const compact = lineRange
-      .replace(/^['"]|['"]$/g, '')
-      .replace(/\s+/g, '')
-      .replace(/p$/i, '');
-    const rangeMatch = compact.match(/^L?(\d+)(?:[:-]|,)L?(\d+)$/i);
-    if (rangeMatch) return `L${rangeMatch[1]}-L${rangeMatch[2]}`;
-    const singleMatch = compact.match(/^L?(\d+)$/i);
-    if (singleMatch) return `L${singleMatch[1]}`;
-    return compact ? (compact.startsWith('L') ? compact : `L${compact}`) : '';
-  }
-  const startLine = Number(args?.start_line);
-  const endLine = Number(args?.end_line);
-  if (!Number.isFinite(startLine) || !Number.isFinite(endLine)) return '';
-  const normalizedStart = Math.max(1, Math.trunc(startLine));
-  const normalizedEnd = Math.max(normalizedStart, Math.trunc(endLine));
-  return `L${normalizedStart}-L${normalizedEnd}`;
+  if (!lineRange) return '';
+  const compact = lineRange
+    .replace(/^['"]|['"]$/g, '')
+    .replace(/\s+/g, '')
+    .replace(/p$/i, '');
+  const rangeMatch = compact.match(/^L?(\d+)(?:[:-]|,)L?(\d+)$/i);
+  if (rangeMatch) return `L${rangeMatch[1]}-L${rangeMatch[2]}`;
+  const singleMatch = compact.match(/^L?(\d+)$/i);
+  if (singleMatch) return `L${singleMatch[1]}`;
+  return compact ? (compact.startsWith('L') ? compact : `L${compact}`) : '';
 }
 
 export function isVirtualFileToolCall(record) {
