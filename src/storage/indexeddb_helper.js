@@ -3,6 +3,7 @@
  */
 
 const CONVERSATION_DOCUMENT_STORE = 'conversation_documents';
+const LOCAL_FILE_MOUNT_STORE = 'local_file_mounts';
 
 /**
  * 打开或创建 "ChatHistoryDB" 数据库以及 "conversations" 对象存储
@@ -18,11 +19,12 @@ export function openChatHistoryDB() {
 
   cachedDbPromise = new Promise((resolve, reject) => {
     // v4: 新增按会话归属的 conversation_documents store，用于保存“对话级虚拟文档”。
+    // v5: 新增 local_file_mounts store，只保存用户授权的 FileSystemHandle 与虚拟挂载点。
     // - conversations.endTime/url 仍用于历史列表与 URL 筛选；
     // - conversation_documents 采用 [conversation_id, path] 复合主键，便于级联删除与全文列举。
     // - endTime：用于快速按“最近对话”分页加载（避免全量扫描 + 排序）
     // - url：用于“按当前 URL 快速筛选历史会话”（按前缀范围查询）
-    const request = indexedDB.open('ChatHistoryDB', 4);
+    const request = indexedDB.open('ChatHistoryDB', 5);
     request.onerror = () => {
       cachedDbPromise = null;
       reject(request.error);
@@ -85,12 +87,35 @@ export function openChatHistoryDB() {
           console.warn('升级 conversation_documents 索引失败（可能由浏览器兼容性/事务状态导致）:', e);
         }
       }
+
+      if (!db.objectStoreNames.contains(LOCAL_FILE_MOUNT_STORE)) {
+        const store = db.createObjectStore(LOCAL_FILE_MOUNT_STORE, {
+          keyPath: ['conversation_id', 'mount_path']
+        });
+        store.createIndex('conversation_id', 'conversation_id', { unique: false });
+        store.createIndex('conversation_id_updated_at', ['conversation_id', 'updated_at'], { unique: false });
+      } else {
+        try {
+          const store = tx.objectStore(LOCAL_FILE_MOUNT_STORE);
+          if (store && !store.indexNames.contains('conversation_id')) {
+            store.createIndex('conversation_id', 'conversation_id', { unique: false });
+          }
+          if (store && !store.indexNames.contains('conversation_id_updated_at')) {
+            store.createIndex('conversation_id_updated_at', ['conversation_id', 'updated_at'], { unique: false });
+          }
+        } catch (e) {
+          console.warn('升级 local_file_mounts 索引失败（可能由浏览器兼容性/事务状态导致）:', e);
+        }
+      }
       
       if (event.oldVersion < 3) {
         console.log('升级数据库：为 conversations 增加 endTime/url 索引（提升历史列表与 URL 筛选性能）');
       }
       if (event.oldVersion < 4) {
         console.log('升级数据库：新增 conversation_documents store（用于对话级文档虚拟文件）');
+      }
+      if (event.oldVersion < 5) {
+        console.log('升级数据库：新增 local_file_mounts store（用于只读本地文件映射）');
       }
     };
   });
@@ -713,9 +738,10 @@ export async function putConversation(conversation, separateContent = false) {
 export async function deleteConversation(conversationId) {
   const db = await openChatHistoryDB();
   
-  const transaction = db.transaction(['conversations', CONVERSATION_DOCUMENT_STORE], 'readwrite');
+  const transaction = db.transaction(['conversations', CONVERSATION_DOCUMENT_STORE, LOCAL_FILE_MOUNT_STORE], 'readwrite');
   const conversationStore = transaction.objectStore('conversations');
   const documentStore = transaction.objectStore(CONVERSATION_DOCUMENT_STORE);
+  const localMountStore = transaction.objectStore(LOCAL_FILE_MOUNT_STORE);
   
   // 删除会话记录，并级联清理该会话的虚拟文档。
   return new Promise((resolve, reject) => {
@@ -735,6 +761,18 @@ export async function deleteConversation(conversationId) {
             return;
           }
           documentStore.delete(cursor.primaryKey);
+          cursor.continue();
+        };
+        const localIndex = localMountStore.index('conversation_id');
+        const localRange = IDBKeyRange.only(String(conversationId || ''));
+        const localCursorRequest = localIndex.openKeyCursor(localRange);
+        localCursorRequest.onerror = () => reject(localCursorRequest.error);
+        localCursorRequest.onsuccess = () => {
+          const cursor = localCursorRequest.result;
+          if (!cursor) {
+            return;
+          }
+          localMountStore.delete(cursor.primaryKey);
           cursor.continue();
         };
       } catch (error) {

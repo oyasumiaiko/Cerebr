@@ -15,6 +15,14 @@ const USER_UPLOADED_FILE_POLICY_RULES = [
   '长代码块、长报告或其他自包含且可能反复修改的内容，默认优先作为文件处理。'
 ];
 
+const LOCAL_FILE_MOUNT_POLICY_RULES = [
+  '这些路径是用户显式添加的本机文件或文件夹映射，位于 local/... 虚拟路径下。',
+  'local/... 内容不会预先复制进对话存储，读取时由文件工具实时读取本机当前内容。',
+  'local/... 是只读映射，不允许 apply_patch、move_file 或 delete_file 直接修改。',
+  '如果需要修改本地映射内容，请先用 copy_file 把 local/... 复制到 workspace/...，后续只修改 workspace 副本。',
+  '读取文件夹时优先用 list_files 或 search_files 缩小范围，不要假设整个文件夹内容已经在上下文中。'
+];
+
 /**
  * 规范化 IANA 时区名；若不可用则回退到 Etc/UTC。
  *
@@ -117,6 +125,37 @@ function normalizeUploadedFiles(entries) {
   return normalized;
 }
 
+function normalizeLocalMountEntry(entry) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+  const path = typeof entry.path === 'string' ? entry.path.trim() : '';
+  if (!path) return null;
+  const kindText = typeof entry.kind === 'string' ? entry.kind.trim().toLowerCase() : '';
+  const kind = kindText === 'directory' ? 'directory' : 'file';
+  const sourceName = typeof entry.source_name === 'string' ? entry.source_name.trim() : '';
+  const mountEventId = typeof entry.mount_event_id === 'string' ? entry.mount_event_id.trim() : '';
+  return {
+    path,
+    kind,
+    source_name: sourceName,
+    mount_event_id: mountEventId
+  };
+}
+
+function normalizeLocalMounts(entries) {
+  if (!Array.isArray(entries)) return [];
+  const normalized = [];
+  const seenKeys = new Set();
+  entries.forEach((entry, index) => {
+    const next = normalizeLocalMountEntry(entry);
+    if (!next) return;
+    const dedupeKey = next.mount_event_id || `${next.path}::${next.kind}::${next.source_name}::${index}`;
+    if (seenKeys.has(dedupeKey)) return;
+    seenKeys.add(dedupeKey);
+    normalized.push(next);
+  });
+  return normalized;
+}
+
 /**
  * 构造隐藏 environment_context 负载。
  *
@@ -124,9 +163,10 @@ function normalizeUploadedFiles(entries) {
  *   timezone?: string|null,
  *   currentDate?: string|null,
  *   now?: number|Date|null,
- *   uploadedFiles?: Array<Object>|null
+ *   uploadedFiles?: Array<Object>|null,
+ *   localMounts?: Array<Object>|null
  * }} [options]
- * @returns {{type:'environment_context', current_date:string, timezone:string, uploaded_files?:Array<Object>}}
+ * @returns {{type:'environment_context', current_date:string, timezone:string, uploaded_files?:Array<Object>, local_mounts?:Array<Object>}}
  */
 export function buildEnvironmentContextPayload(options = {}) {
   const timezone = normalizeEnvironmentTimezone(options?.timezone || detectEnvironmentTimezone());
@@ -134,6 +174,7 @@ export function buildEnvironmentContextPayload(options = {}) {
     ? options.currentDate.trim()
     : formatEnvironmentCurrentDate(timezone, options?.now);
   const uploadedFiles = normalizeUploadedFiles(options?.uploadedFiles);
+  const localMounts = normalizeLocalMounts(options?.localMounts);
 
   const payload = {
     type: 'environment_context',
@@ -142,6 +183,9 @@ export function buildEnvironmentContextPayload(options = {}) {
   };
   if (uploadedFiles.length > 0) {
     payload.uploaded_files = uploadedFiles;
+  }
+  if (localMounts.length > 0) {
+    payload.local_mounts = localMounts;
   }
   return payload;
 }
@@ -173,6 +217,7 @@ export function buildEnvironmentContextInputItems(payload) {
   const timezone = (typeof payload.timezone === 'string') ? payload.timezone.trim() : '';
   if (!currentDate || !timezone) return [];
   const uploadedFiles = normalizeUploadedFiles(payload.uploaded_files);
+  const localMounts = normalizeLocalMounts(payload.local_mounts);
 
   const lines = [
     '<environment_context>',
@@ -196,6 +241,25 @@ export function buildEnvironmentContextInputItems(payload) {
       lines.push(`    <rule>${escapeXmlText(rule)}</rule>`);
     });
     lines.push('  </user_uploaded_file_policy>');
+  }
+  if (localMounts.length > 0) {
+    lines.push('  <local_file_mounts>');
+    localMounts.forEach((mount) => {
+      lines.push('    <mount>');
+      lines.push(`      <path>${escapeXmlText(mount.path)}</path>`);
+      lines.push(`      <kind>${escapeXmlText(mount.kind)}</kind>`);
+      if (mount.source_name) {
+        lines.push(`      <source_name>${escapeXmlText(mount.source_name)}</source_name>`);
+      }
+      lines.push('      <read_only>true</read_only>');
+      lines.push('    </mount>');
+    });
+    lines.push('  </local_file_mounts>');
+    lines.push('  <local_file_mount_policy>');
+    LOCAL_FILE_MOUNT_POLICY_RULES.forEach((rule) => {
+      lines.push(`    <rule>${escapeXmlText(rule)}</rule>`);
+    });
+    lines.push('  </local_file_mount_policy>');
   }
   lines.push('</environment_context>');
   const text = lines.join('\n');

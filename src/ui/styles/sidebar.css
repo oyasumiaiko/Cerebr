@@ -9585,6 +9585,7 @@ body.chat-history-panel-resizing {
 
 .composer-document-panel__actions {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
 }

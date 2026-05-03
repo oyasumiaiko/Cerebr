@@ -51,3 +51,16 @@ test('文件创建面板支持导入本地文件，并为无文件名上传兜�
   assert.match(composerSource, /importLocalDocumentFile/);
   assert.match(composerSource, /consumePendingUploadedFileEnvironmentEntries/);
 });
+
+test('文件创建面板支持添加只读 local 文件与文件夹映射', async () => {
+  const composerSource = await readWorkspaceFile('src/ui/conversation_document_composer.js');
+  const contentScript = await readWorkspaceFile('src/extension/content.js');
+
+  assert.match(composerSource, /showOpenFilePicker/);
+  assert.match(composerSource, /showDirectoryPicker/);
+  assert.match(composerSource, /添加本地文件/);
+  assert.match(composerSource, /添加本地文件夹/);
+  assert.match(composerSource, /putLocalFileMount/);
+  assert.match(composerSource, /consumePendingLocalMountEnvironmentEntries/);
+  assert.match(contentScript, /file-system-access/);
+});

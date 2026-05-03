@@ -795,7 +795,7 @@ class CerebrSidebar {
       iframe.src = chrome.runtime.getURL(
         `src/ui/sidebar/sidebar.html?instanceId=${encodeURIComponent(this.instanceId)}&isPrimary=${this.isPrimary ? '1' : '0'}`
       );
-      iframe.allow = 'clipboard-write';
+      iframe.allow = 'clipboard-write; file-system-access';
 
       // 重要：当用户在 DevTools 中对 iframe 执行「重新加载框架」时，iframe 内部状态会被重置；
       // 但父页面仍持有全屏/临时模式状态，因此需要在 iframe 每次 load 完成后同步一次，

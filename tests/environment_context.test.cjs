@@ -124,3 +124,33 @@ test('buildEnvironmentContextInputItems 会在用户上传文件时附带文件�
   assert.match(text, /Markdown 相对路径链接/);
   assert.match(text, /apply_patch 的 \*\*\* Move to:/);
 });
+
+test('buildEnvironmentContextInputItems 会声明 local mount 是只读实时映射', async () => {
+  const {
+    buildEnvironmentContextPayload,
+    buildEnvironmentContextInputItems
+  } = await loadEnvironmentContextModule();
+
+  const payload = buildEnvironmentContextPayload({
+    timezone: 'Asia/Shanghai',
+    currentDate: '2026-04-20',
+    localMounts: [
+      {
+        path: 'local/project',
+        kind: 'directory',
+        source_name: 'project',
+        mount_event_id: 'mount-1'
+      }
+    ]
+  });
+
+  assert.equal(Array.isArray(payload.local_mounts), true);
+  assert.equal(payload.local_mounts.length, 1);
+  const text = buildEnvironmentContextInputItems(payload)[0].content[0].text;
+  assert.match(text, /<local_file_mounts>/);
+  assert.match(text, /<path>local\/project<\/path>/);
+  assert.match(text, /<kind>directory<\/kind>/);
+  assert.match(text, /<read_only>true<\/read_only>/);
+  assert.match(text, /copy_file 把 local\/\.\.\. 复制到 workspace\/\.\.\./);
+  assert.match(text, /list_files 或 search_files/);
+});

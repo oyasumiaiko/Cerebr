@@ -60,6 +60,7 @@ import {
   listConversationDocuments,
   replaceConversationDocuments
 } from '../storage/conversation_document_store.js';
+import { copyLocalFileMounts } from '../storage/local_file_mount_store.js';
 import {
   CHAT_HISTORY_PANEL_LAYOUT_MODE_FULLSCREEN,
   CHAT_HISTORY_PANEL_LAYOUT_MODE_SIDEBAR,
@@ -14748,6 +14749,7 @@ export function createChatHistoryUI(appContext) {
       await putConversation(newConversation);
       if (parentConversationId) {
         await copyConversationDocuments(parentConversationId, newConversationId);
+        await copyLocalFileMounts(parentConversationId, newConversationId);
       }
       invalidateMetadataCache();
       

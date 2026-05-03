@@ -62,6 +62,7 @@ test('chat_history_ui 已在 fork 与备份恢复链路中处理对话文档', a
   const source = await readWorkspaceFile('src/ui/chat_history_ui.js');
 
   assert.match(source, /copyConversationDocuments\(parentConversationId, newConversationId\)/);
+  assert.match(source, /copyLocalFileMounts\(parentConversationId, newConversationId\)/);
   assert.match(source, /const documents = await listConversationDocuments\(meta\.id\);/);
   assert.match(source, /await replaceConversationDocuments\(conversationToStore\.id, documentSnapshot\);/);
 });

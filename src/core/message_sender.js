@@ -8929,7 +8929,7 @@ export function createMessageSender(appContext) {
         }
         return {
           ...result,
-          target: normalizedArgs.target
+          target: result?.target || normalizedArgs.target
         };
       }
 
@@ -10423,6 +10423,11 @@ export function createMessageSender(appContext) {
         const uploadedFileEnvironmentEntries = Array.isArray(consumedUploadedFileEnvironmentEntries)
           ? consumedUploadedFileEnvironmentEntries
           : [];
+        const consumedLocalMountEnvironmentEntries = conversationDocumentComposer
+          ?.consumePendingLocalMountEnvironmentEntries?.(messageText);
+        const localMountEnvironmentEntries = Array.isArray(consumedLocalMountEnvironmentEntries)
+          ? consumedLocalMountEnvironmentEntries
+          : [];
         const targetUserNodeForContext = findLatestUserNodeInConversationChain(filteredConversationChain);
         const currentUserMessageIdForContext = userMessageDiv?.getAttribute?.('data-message-id')
           || detachedUserMessageNode?.id
@@ -10437,7 +10442,8 @@ export function createMessageSender(appContext) {
             pageRuntimeContextPayload,
             skillContextPayload,
             environmentContextPayload: buildEnvironmentContextPayload({
-              uploadedFiles: uploadedFileEnvironmentEntries
+              uploadedFiles: uploadedFileEnvironmentEntries,
+              localMounts: localMountEnvironmentEntries
             })
           });
         }

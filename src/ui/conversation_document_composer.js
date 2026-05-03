@@ -6,6 +6,13 @@ import {
   executeConversationDocumentAction,
   normalizeConversationDocumentPath
 } from '../agent_tools/virtual_file_io/index.js';
+import {
+  buildLocalMountCollisionPath
+} from '../agent_tools/virtual_file_io/local_mount.js';
+import {
+  listLocalFileMounts,
+  putLocalFileMount
+} from '../storage/local_file_mount_store.js';
 
 function normalizeComposerString(value) {
   return (typeof value === 'string' || typeof value === 'number')
@@ -63,6 +70,12 @@ function buildSuggestedConversationDocumentPathFromUploadName(fileName) {
   return `workspace/${filename}`;
 }
 
+function buildSuggestedLocalMountPath(sourceName) {
+  const normalizedName = sanitizeDocumentFileSegment(sourceName);
+  const filename = normalizedName || `local-${buildTimestampSuffix()}`;
+  return `local/${filename}`;
+}
+
 function buildUploadedFileEventId() {
   return `${buildTimestampSuffix()}-${Math.random().toString(36).slice(2, 8)}`;
 }
@@ -93,6 +106,7 @@ export function createConversationDocumentComposer(appContext) {
   let uploadInput = null;
   let importedLocalFileDraft = null;
   let pendingUploadedFileEnvironmentEntries = [];
+  let pendingLocalMountEnvironmentEntries = [];
 
   function dispatchDocumentChangeEvent(changeEvent) {
     if (!changeEvent) return;
@@ -204,6 +218,72 @@ export function createConversationDocumentComposer(appContext) {
     }
   }
 
+  async function resolveLocalMountPath(conversationId, requestedPath) {
+    const candidatePath = buildSuggestedLocalMountPath(requestedPath);
+    const mounts = await listLocalFileMounts(conversationId);
+    const occupiedPaths = Array.isArray(mounts)
+      ? mounts.map((mount) => mount?.mount_path).filter(Boolean)
+      : [];
+    return buildLocalMountCollisionPath(candidatePath, occupiedPaths);
+  }
+
+  function insertLocalMountPathReference(mountPath) {
+    const reference = `\`${mountPath}\``;
+    services.inputController?.insertTextAtCursor?.(reference);
+    services.inputController?.focusToEnd?.();
+    services.uiManager?.updateSendButtonState?.();
+  }
+
+  async function mountLocalHandle(handle, kind) {
+    if (!handle || typeof handle !== 'object') {
+      throw new Error('没有可用的本地文件句柄。');
+    }
+    const conversationId = await ensureDocumentConversationId();
+    const sourceName = normalizeComposerString(handle.name);
+    const mountPath = await resolveLocalMountPath(conversationId, sourceName);
+    const record = await putLocalFileMount(conversationId, {
+      mount_path: mountPath,
+      kind,
+      source_name: sourceName,
+      updated_at: new Date().toISOString(),
+      handle
+    });
+    pendingLocalMountEnvironmentEntries.push({
+      path: record.mount_path,
+      kind: record.kind,
+      source_name: record.source_name,
+      mount_event_id: buildUploadedFileEventId()
+    });
+    insertLocalMountPathReference(record.mount_path);
+    utils.showNotification?.({
+      message: `已添加本地${record.kind === 'directory' ? '文件夹' : '文件'}映射：${record.mount_path}`,
+      type: 'success',
+      duration: 2200
+    });
+    return record;
+  }
+
+  async function mountLocalFile() {
+    if (typeof window.showOpenFilePicker !== 'function') {
+      throw new Error('当前浏览器环境不支持 File System Access API，无法添加本地文件映射。');
+    }
+    const handles = await window.showOpenFilePicker({
+      multiple: false
+    });
+    const handle = Array.isArray(handles) ? handles[0] : null;
+    return await mountLocalHandle(handle, 'file');
+  }
+
+  async function mountLocalDirectory() {
+    if (typeof window.showDirectoryPicker !== 'function') {
+      throw new Error('当前浏览器环境不支持 File System Access API，无法添加本地文件夹映射。');
+    }
+    const handle = await window.showDirectoryPicker({
+      mode: 'read'
+    });
+    return await mountLocalHandle(handle, 'directory');
+  }
+
   function consumePendingUploadedFileEnvironmentEntries(messageText) {
     const normalizedMessageText = typeof messageText === 'string' ? messageText : '';
     if (!normalizedMessageText.trim()) return [];
@@ -221,6 +301,26 @@ export function createConversationDocumentComposer(appContext) {
       }
     });
     pendingUploadedFileEnvironmentEntries = remaining;
+    return matched;
+  }
+
+  function consumePendingLocalMountEnvironmentEntries(messageText) {
+    const normalizedMessageText = typeof messageText === 'string' ? messageText : '';
+    if (!normalizedMessageText.trim()) return [];
+    if (!Array.isArray(pendingLocalMountEnvironmentEntries) || pendingLocalMountEnvironmentEntries.length <= 0) {
+      return [];
+    }
+    const matched = [];
+    const remaining = [];
+    pendingLocalMountEnvironmentEntries.forEach((entry) => {
+      const mountPath = normalizeComposerString(entry?.path);
+      if (mountPath && normalizedMessageText.includes(mountPath)) {
+        matched.push({ ...entry });
+      } else {
+        remaining.push(entry);
+      }
+    });
+    pendingLocalMountEnvironmentEntries = remaining;
     return matched;
   }
 
@@ -309,6 +409,44 @@ export function createConversationDocumentComposer(appContext) {
     importButton.textContent = '导入本地文件';
     importButton.addEventListener('click', () => uploadInput?.click?.());
 
+    const mountFileButton = document.createElement('button');
+    mountFileButton.type = 'button';
+    mountFileButton.className = 'composer-document-panel__button';
+    mountFileButton.textContent = '添加本地文件';
+    mountFileButton.addEventListener('click', async () => {
+      try {
+        await mountLocalFile();
+        closeCreatePanel();
+      } catch (error) {
+        if (error?.name === 'AbortError') return;
+        console.error('添加本地文件映射失败:', error);
+        utils.showNotification?.({
+          message: `添加本地文件失败：${error?.message || '未知错误'}`,
+          type: 'error',
+          duration: 3000
+        });
+      }
+    });
+
+    const mountDirectoryButton = document.createElement('button');
+    mountDirectoryButton.type = 'button';
+    mountDirectoryButton.className = 'composer-document-panel__button';
+    mountDirectoryButton.textContent = '添加本地文件夹';
+    mountDirectoryButton.addEventListener('click', async () => {
+      try {
+        await mountLocalDirectory();
+        closeCreatePanel();
+      } catch (error) {
+        if (error?.name === 'AbortError') return;
+        console.error('添加本地文件夹映射失败:', error);
+        utils.showNotification?.({
+          message: `添加本地文件夹失败：${error?.message || '未知错误'}`,
+          type: 'error',
+          duration: 3000
+        });
+      }
+    });
+
     const cancelButton = document.createElement('button');
     cancelButton.type = 'button';
     cancelButton.className = 'composer-document-panel__button';
@@ -343,6 +481,8 @@ export function createConversationDocumentComposer(appContext) {
     });
 
     actions.appendChild(importButton);
+    actions.appendChild(mountFileButton);
+    actions.appendChild(mountDirectoryButton);
     actions.appendChild(cancelButton);
     actions.appendChild(createButton);
     surface.appendChild(header);
@@ -394,6 +534,7 @@ export function createConversationDocumentComposer(appContext) {
     toggleCreatePanel,
     createDocumentAndInsertLink,
     consumePendingUploadedFileEnvironmentEntries,
+    consumePendingLocalMountEnvironmentEntries,
     buildSuggestedDocumentPath: buildSuggestedConversationDocumentPath
   };
 }

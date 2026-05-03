@@ -3,12 +3,12 @@
  *
  * 说明：
  * - 顶层公开给模型的文件工具统一为 `apply_patch` / `list_files` / `read_file` / `search_files`；
- * - 文件工具通过结构化 `target` 选择作用域，模型可见空间为 `workspace` / `skill`，后续本地映射会占用 `local/...` 路径；
- * - workspace 文件仍在侧栏本地 IndexedDB 执行；skill 文件则复用现有 skill package / background 执行链路；
+ * - 文件工具通过结构化 `target` 选择 skill，默认 workspace；本地映射通过 `local/...` 路径进入；
+ * - workspace 文件仍在侧栏本地 IndexedDB 执行；local 文件实时读取用户授权 handle；skill 文件复用现有 skill package / background 执行链路；
  * - UI 为了编辑对话文档与完整查看，会额外复用 `write_file` / `read_file_full` 两个内部 action。
  *
  * 当前目录结构：
- * - 顶层四把文件工具各自拥有独立文件；
+ * - 顶层文件工具按动作拆到独立文件；
  * - `index.js` 负责保留公共导出面与执行路由；
  * - 这样既能保持外部调用稳定，也能让 tool-family 内部不再继续扁平堆叠。
  */
@@ -20,6 +20,7 @@ import {
   putConversationDocument,
   replaceConversationDocuments
 } from '../../storage/conversation_document_store.js';
+import { listLocalFileMounts } from '../../storage/local_file_mount_store.js';
 import {
   CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
   CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME,
@@ -45,6 +46,7 @@ import {
   VIRTUAL_FILE_READ_FILE_TOOL_NAME,
   VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME,
   VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
+  VIRTUAL_FILE_TARGET_KIND_LOCAL,
   VIRTUAL_FILE_TARGET_KIND_SKILL,
   VIRTUAL_FILE_TARGET_KIND_WORKSPACE,
   buildDocumentSizeChars,
@@ -97,6 +99,13 @@ import {
   normalizeVirtualFileDeleteFileArguments,
   normalizeVirtualFileMoveFileArguments
 } from './file_ops.js';
+import {
+  assertPatchDoesNotTouchLocalPaths,
+  assertWritableWorkspacePath,
+  isLocalVirtualPath,
+  listLocalVirtualFileDocuments,
+  readLocalVirtualFileDocument
+} from './local_mount.js';
 
 export {
   CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
@@ -121,6 +130,7 @@ export {
   VIRTUAL_FILE_READ_FILE_TOOL_NAME,
   VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME,
   VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
+  VIRTUAL_FILE_TARGET_KIND_LOCAL,
   VIRTUAL_FILE_TARGET_KIND_SKILL,
   VIRTUAL_FILE_TARGET_KIND_WORKSPACE
 };
@@ -371,6 +381,10 @@ function normalizeSearchPathGlob(value) {
   return normalizedGlob;
 }
 
+function hasVirtualPathGlobSyntax(value) {
+  return /[*?]/.test(String(value || ''));
+}
+
 function buildPathGlobRegExp(pathGlob) {
   if (!pathGlob) return null;
   const normalized = normalizeSearchPathGlob(pathGlob);
@@ -482,11 +496,16 @@ function buildDocumentManifest(documents, options = {}) {
   const files = (Array.isArray(documents) ? documents : [])
     .filter((doc) => !pathGlobRegExp || pathGlobRegExp.test(doc.path))
     .sort((left, right) => left.path.localeCompare(right.path))
-    .map((doc) => ({
-      path: doc.path,
-      size_chars: buildDocumentSizeChars(doc.content),
-      updated_at: toIsoTimestamp(doc.updated_at)
-    }));
+    .map((doc) => {
+      const sizeChars = doc.size_chars != null && Number.isFinite(Number(doc.size_chars))
+        ? Math.max(0, Math.trunc(Number(doc.size_chars)))
+        : (typeof doc.content === 'string' ? buildDocumentSizeChars(doc.content) : null);
+      return {
+        path: doc.path,
+        ...(sizeChars != null ? { size_chars: sizeChars } : {}),
+        updated_at: toIsoTimestamp(doc.updated_at)
+      };
+    });
   return {
     path_glob: pathGlob,
     total_files: files.length,
@@ -709,6 +728,22 @@ function ensureStore(store = null) {
   const missing = requiredMethods.filter((name) => typeof resolved?.[name] !== 'function');
   if (missing.length > 0) {
     throw new Error(`当前环境没有可用的 conversation file store，缺少方法：${missing.join(', ')}`);
+  }
+  return resolved;
+}
+
+function createDefaultLocalFileMountStore() {
+  return {
+    listMounts: listLocalFileMounts
+  };
+}
+
+function ensureLocalMountStore(store = null) {
+  const resolved = store || createDefaultLocalFileMountStore();
+  const requiredMethods = ['listMounts'];
+  const missing = requiredMethods.filter((name) => typeof resolved?.[name] !== 'function');
+  if (missing.length > 0) {
+    throw new Error(`当前环境没有可用的 local file mount store，缺少方法：${missing.join(', ')}`);
   }
   return resolved;
 }
@@ -1106,9 +1141,28 @@ export async function executeConversationDocumentAction(action, rawArgs, options
   });
   const conversationId = normalizeConversationId(options?.conversationId);
   const store = ensureStore(options?.store || null);
+  const localMountStore = ensureLocalMountStore(options?.localMountStore || null);
 
   switch (normalizedAction) {
     case CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME: {
+      if (isLocalVirtualPath(normalizedArgs.path_glob)) {
+        const shouldRefilterWithGlob = hasVirtualPathGlobSyntax(normalizedArgs.path_glob);
+        const localDocuments = await listLocalVirtualFileDocuments(conversationId, {
+          path_glob: normalizedArgs.path_glob,
+          store: localMountStore
+        });
+        const manifest = buildDocumentManifest(localDocuments, {
+          path_glob: shouldRefilterWithGlob ? normalizedArgs.path_glob : null
+        });
+        return {
+          ok: true,
+          action: normalizedAction,
+          conversation_id: conversationId,
+          target: { kind: VIRTUAL_FILE_TARGET_KIND_LOCAL, name: null },
+          ...manifest,
+          path_glob: normalizedArgs.path_glob
+        };
+      }
       const documents = await store.listDocuments(conversationId);
       return {
         ok: true,
@@ -1120,6 +1174,20 @@ export async function executeConversationDocumentAction(action, rawArgs, options
       };
     }
     case CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME: {
+      if (isLocalVirtualPath(normalizedArgs.file_path)) {
+        const localDocumentRecord = await readLocalVirtualFileDocument(
+          conversationId,
+          normalizedArgs.file_path,
+          localMountStore
+        );
+        return {
+          ok: true,
+          action: normalizedAction,
+          conversation_id: conversationId,
+          target: { kind: VIRTUAL_FILE_TARGET_KIND_LOCAL, name: null },
+          file: buildReadFilePayload(localDocumentRecord, normalizedArgs.read_options, normalizedArgs.include_line_numbers)
+        };
+      }
       const documentRecord = await store.getDocument(conversationId, normalizedArgs.file_path);
       if (!documentRecord) {
         throw new Error(`当前对话中不存在文件 ${normalizedArgs.file_path}。`);
@@ -1132,6 +1200,40 @@ export async function executeConversationDocumentAction(action, rawArgs, options
       };
     }
     case CONVERSATION_DOCUMENT_INTERNAL_READ_FILE_FULL_ACTION: {
+      if (isLocalVirtualPath(normalizedArgs.file_path)) {
+        try {
+          const localDocumentRecord = await readLocalVirtualFileDocument(
+            conversationId,
+            normalizedArgs.file_path,
+            localMountStore
+          );
+          return {
+            ok: true,
+            action: normalizedAction,
+            conversation_id: conversationId,
+            target: { kind: VIRTUAL_FILE_TARGET_KIND_LOCAL, name: null },
+            file: {
+              path: localDocumentRecord.path,
+              updated_at: toIsoTimestamp(localDocumentRecord.updated_at),
+              size_chars: buildDocumentSizeChars(localDocumentRecord.content),
+              content: localDocumentRecord.content
+            }
+          };
+        } catch (error) {
+          return {
+            ok: false,
+            action: normalizedAction,
+            conversation_id: conversationId,
+            missing: true,
+            file_path: normalizedArgs.file_path,
+            error: {
+              message: error?.message || String(error || ''),
+              name: error?.name || 'LocalMountReadError',
+              stack: error?.stack || ''
+            }
+          };
+        }
+      }
       const documentRecord = await store.getDocument(conversationId, normalizedArgs.file_path);
       if (!documentRecord) {
         return {
@@ -1155,6 +1257,25 @@ export async function executeConversationDocumentAction(action, rawArgs, options
       };
     }
     case CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME: {
+      if (isLocalVirtualPath(normalizedArgs.path_glob)) {
+        const shouldRefilterWithGlob = hasVirtualPathGlobSyntax(normalizedArgs.path_glob);
+        const localDocuments = await listLocalVirtualFileDocuments(conversationId, {
+          path_glob: normalizedArgs.path_glob,
+          includeContent: true,
+          store: localMountStore
+        });
+        return {
+          ok: true,
+          action: normalizedAction,
+          conversation_id: conversationId,
+          target: { kind: VIRTUAL_FILE_TARGET_KIND_LOCAL, name: null },
+          ...searchConversationDocuments(localDocuments, {
+            ...normalizedArgs,
+            path_glob: shouldRefilterWithGlob ? normalizedArgs.path_glob : null
+          }),
+          path_glob: normalizedArgs.path_glob
+        };
+      }
       const documents = await store.listDocuments(conversationId);
       return {
         ok: true,
@@ -1165,6 +1286,49 @@ export async function executeConversationDocumentAction(action, rawArgs, options
     }
     case CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME: {
       assertDifferentFileOperationPaths(normalizedArgs.source_path, normalizedArgs.destination_path, 'copy_file');
+      assertWritableWorkspacePath(normalizedArgs.destination_path, 'copy_file');
+      if (isLocalVirtualPath(normalizedArgs.source_path)) {
+        const existingDocuments = cloneDocuments(await store.listDocuments(conversationId))
+          .map((doc) => normalizeDocumentRecord(doc))
+          .sort((left, right) => left.path.localeCompare(right.path));
+        assertConversationDocumentDestinationAvailable(
+          existingDocuments,
+          normalizedArgs.destination_path,
+          'copy_file'
+        );
+        const sourceDocument = await readLocalVirtualFileDocument(
+          conversationId,
+          normalizedArgs.source_path,
+          localMountStore
+        );
+        const now = new Date().toISOString();
+        const copiedDocument = normalizeDocumentRecord({
+          path: normalizedArgs.destination_path,
+          content: sourceDocument.content,
+          updated_at: now
+        }, now);
+        const persistedDocuments = await store.replaceDocuments(conversationId, [
+          ...existingDocuments,
+          copiedDocument
+        ].sort((left, right) => left.path.localeCompare(right.path)));
+        return {
+          ok: true,
+          action: normalizedAction,
+          conversation_id: conversationId,
+          source_path: normalizedArgs.source_path,
+          destination_path: copiedDocument.path,
+          file: buildFileOperationFilePayload(copiedDocument),
+          files: buildDocumentManifest(persistedDocuments),
+          affected_files: {
+            added: [copiedDocument.path],
+            modified: [],
+            deleted: []
+          },
+          change_event: buildChangeEventPayload(conversationId, normalizedAction, {
+            updated_paths: [copiedDocument.path]
+          })
+        };
+      }
       const existingDocuments = cloneDocuments(await store.listDocuments(conversationId))
         .map((doc) => normalizeDocumentRecord(doc))
         .sort((left, right) => left.path.localeCompare(right.path));
@@ -1208,6 +1372,8 @@ export async function executeConversationDocumentAction(action, rawArgs, options
     }
     case CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME: {
       assertDifferentFileOperationPaths(normalizedArgs.source_path, normalizedArgs.destination_path, 'move_file');
+      assertWritableWorkspacePath(normalizedArgs.source_path, 'move_file');
+      assertWritableWorkspacePath(normalizedArgs.destination_path, 'move_file');
       const existingDocuments = cloneDocuments(await store.listDocuments(conversationId))
         .map((doc) => normalizeDocumentRecord(doc))
         .sort((left, right) => left.path.localeCompare(right.path));
@@ -1253,6 +1419,7 @@ export async function executeConversationDocumentAction(action, rawArgs, options
       };
     }
     case CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME: {
+      assertWritableWorkspacePath(normalizedArgs.file_path, 'delete_file');
       const existingDocuments = cloneDocuments(await store.listDocuments(conversationId))
         .map((doc) => normalizeDocumentRecord(doc))
         .sort((left, right) => left.path.localeCompare(right.path));
@@ -1282,6 +1449,7 @@ export async function executeConversationDocumentAction(action, rawArgs, options
       };
     }
     case CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION: {
+      assertWritableWorkspacePath(normalizedArgs.file_path, 'write_file');
       const nextRecord = await store.putDocument(conversationId, {
         path: normalizedArgs.file_path,
         content: normalizedArgs.content,
@@ -1304,6 +1472,7 @@ export async function executeConversationDocumentAction(action, rawArgs, options
       };
     }
     case CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME: {
+      assertPatchDoesNotTouchLocalPaths(normalizedArgs.patch);
       const existingDocuments = await store.listDocuments(conversationId);
       const patched = applyConversationDocumentPatch(existingDocuments, normalizedArgs.patch);
       const persistedDocuments = await store.replaceDocuments(conversationId, patched.documents);

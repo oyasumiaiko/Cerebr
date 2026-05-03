@@ -44,6 +44,71 @@ function createInMemoryDocumentStore(seed = {}) {
   };
 }
 
+function createLocalFileHandle(name, content) {
+  return {
+    kind: 'file',
+    name,
+    async queryPermission() {
+      return 'granted';
+    },
+    async getFile() {
+      return {
+        name,
+        lastModified: Date.parse('2026-04-13T00:00:00.000Z'),
+        async text() {
+          return content;
+        }
+      };
+    }
+  };
+}
+
+function createLocalDirectoryHandle(name, tree) {
+  const entries = new Map();
+  Object.entries(tree || {}).forEach(([entryName, value]) => {
+    entries.set(
+      entryName,
+      typeof value === 'string'
+        ? createLocalFileHandle(entryName, value)
+        : createLocalDirectoryHandle(entryName, value)
+    );
+  });
+  return {
+    kind: 'directory',
+    name,
+    async queryPermission() {
+      return 'granted';
+    },
+    async *entries() {
+      for (const entry of entries.entries()) {
+        yield entry;
+      }
+    },
+    async getDirectoryHandle(entryName) {
+      const entry = entries.get(entryName);
+      if (!entry || entry.kind !== 'directory') {
+        throw new Error(`missing directory ${entryName}`);
+      }
+      return entry;
+    },
+    async getFileHandle(entryName) {
+      const entry = entries.get(entryName);
+      if (!entry || entry.kind !== 'file') {
+        throw new Error(`missing file ${entryName}`);
+      }
+      return entry;
+    }
+  };
+}
+
+function createInMemoryLocalMountStore(mounts = []) {
+  return {
+    async listMounts() {
+      return mounts.map((mount) => ({ ...mount }));
+    }
+  };
+}
+
 test('normalizeConversationDocumentPath 支持空格与 Unicode，并拒绝越界路径', async () => {
   const {
     normalizeConversationDocumentHrefPath,
@@ -362,6 +427,7 @@ test('write_file 内部 action 会写回内容并产出 change_event', async () 
 
 test('copy_file/move_file/delete_file 会显式管理对话虚拟文件且不覆盖目标', async () => {
   const {
+    CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
     CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
     CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME,
     CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME,
@@ -387,6 +453,27 @@ test('copy_file/move_file/delete_file 会显式管理对话虚拟文件且不覆
   assert.equal(copied.ok, true);
   assert.equal(copied.file.path, 'workspace/source-copy.md');
   assert.deepEqual(copied.affected_files.added, ['workspace/source-copy.md']);
+
+  await assert.rejects(
+    () => executeConversationDocumentAction(
+      CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
+      {
+        patch: [
+          '*** Begin Patch',
+          '*** Update File: local/project/src/a.js',
+          '@@',
+          '-const token = 1;',
+          '+const token = 2;',
+          '*** End Patch'
+        ].join('\n')
+      },
+      {
+        conversationId: 'conv-doc-5',
+        store
+      }
+    ),
+    /不能直接修改 local 映射路径/
+  );
 
   await assert.rejects(
     () => executeConversationDocumentAction(
@@ -431,4 +518,109 @@ test('copy_file/move_file/delete_file 会显式管理对话虚拟文件且不覆
   );
   assert.equal(deleted.ok, true);
   assert.deepEqual(deleted.affected_files.deleted, ['workspace/renamed.md']);
+});
+
+test('local mount 路径支持只读 read/list/search，并可复制到 workspace 副本', async () => {
+  const {
+    CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
+    CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
+    CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
+    CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
+    executeConversationDocumentAction
+  } = await loadConversationDocumentToolsModule();
+
+  const store = createInMemoryDocumentStore({});
+  const localMountStore = createInMemoryLocalMountStore([
+    {
+      mount_path: 'local/project',
+      kind: 'directory',
+      source_name: 'project',
+      updated_at: '2026-04-13T00:00:00.000Z',
+      handle: createLocalDirectoryHandle('project', {
+        'README.md': '# Project\n',
+        src: {
+          'a.js': 'const token = 1;\n'
+        }
+      })
+    }
+  ]);
+
+  const readResult = await executeConversationDocumentAction(
+    CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
+    {
+      file_path: 'local/project/src/a.js',
+      start_line: 1,
+      end_line: 1,
+      include_line_numbers: true
+    },
+    {
+      conversationId: 'conv-local-1',
+      store,
+      localMountStore
+    }
+  );
+  assert.equal(readResult.ok, true);
+  assert.equal(readResult.target.kind, 'local');
+  assert.match(readResult.file.numbered_content, /1 \| const token = 1;/);
+
+  const listResult = await executeConversationDocumentAction(
+    CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
+    {
+      path_glob: 'local/project/**/*.js'
+    },
+    {
+      conversationId: 'conv-local-1',
+      store,
+      localMountStore
+    }
+  );
+  assert.deepEqual(listResult.files.map((file) => file.path), ['local/project/src/a.js']);
+
+  const searchResult = await executeConversationDocumentAction(
+    CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
+    {
+      pattern: 'token',
+      path_glob: 'local/project'
+    },
+    {
+      conversationId: 'conv-local-1',
+      store,
+      localMountStore
+    }
+  );
+  assert.equal(searchResult.target.kind, 'local');
+  assert.equal(searchResult.returned_match_count, 1);
+  assert.equal(searchResult.matches[0].file_path, 'local/project/src/a.js');
+
+  const copyResult = await executeConversationDocumentAction(
+    CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
+    {
+      source_path: 'local/project/src/a.js',
+      destination_path: 'workspace/project/src/a.js'
+    },
+    {
+      conversationId: 'conv-local-1',
+      store,
+      localMountStore
+    }
+  );
+  assert.equal(copyResult.ok, true);
+  assert.deepEqual(copyResult.affected_files.added, ['workspace/project/src/a.js']);
+  assert.equal((await store.getDocument('conv-local-1', 'workspace/project/src/a.js')).content, 'const token = 1;\n');
+
+  await assert.rejects(
+    () => executeConversationDocumentAction(
+      CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
+      {
+        source_path: 'workspace/project/src/a.js',
+        destination_path: 'local/project/src/b.js'
+      },
+      {
+        conversationId: 'conv-local-1',
+        store,
+        localMountStore
+      }
+    ),
+    /本地映射是只读/
+  );
 });

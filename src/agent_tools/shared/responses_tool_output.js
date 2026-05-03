@@ -756,6 +756,10 @@ function getResponsesFileSkillName(result, file = null) {
 function getResponsesFileTargetKind(result, file = null, fallback = 'workspace') {
   if (getResponsesFileSkillName(result, file)) return 'skill';
   const targetKind = typeof result?.target?.kind === 'string' ? result.target.kind.trim() : '';
+  const filePath = typeof file?.path === 'string'
+    ? file.path.trim()
+    : (typeof result?.file_path === 'string' ? result.file_path.trim() : '');
+  if (!targetKind && (filePath === 'local' || filePath.startsWith('local/'))) return 'local';
   return targetKind || fallback || 'workspace';
 }
 
