@@ -54,13 +54,13 @@ function buildSuggestedConversationDocumentPath(content) {
   const heading = firstLine.replace(/^#+\s*/, '').trim();
   const candidate = sanitizeDocumentFileSegment(heading || firstLine);
   const filename = candidate || `file-${buildTimestampSuffix()}`;
-  return `docs/${filename}.md`;
+  return `workspace/${filename}.md`;
 }
 
 function buildSuggestedConversationDocumentPathFromUploadName(fileName) {
   const normalizedName = sanitizeDocumentFileSegment(fileName);
   const filename = normalizedName || 'untitled';
-  return `docs/${filename}`;
+  return `workspace/${filename}`;
 }
 
 function buildUploadedFileEventId() {
@@ -265,7 +265,7 @@ export function createConversationDocumentComposer(appContext) {
     pathInput = document.createElement('input');
     pathInput.type = 'text';
     pathInput.className = 'composer-document-panel__input';
-    pathInput.placeholder = '留空时默认生成 docs/<标题>.md；也可以自定义 .txt / .html / .js 等纯文本路径';
+    pathInput.placeholder = '留空时默认生成 workspace/<标题>.md；也可以自定义 .txt / .html / .js 等纯文本路径';
     pathField.appendChild(pathLabel);
     pathField.appendChild(pathInput);
 

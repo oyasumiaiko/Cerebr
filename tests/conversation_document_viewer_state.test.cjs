@@ -16,11 +16,11 @@ test('对 md/txt/code 文件会推断出正确的默认显示模式', async () =
     resolveConversationDocumentRenderState
   } = await importViewerStateModule();
 
-  const mdState = resolveConversationDocumentRenderState('docs/plan.md', {});
+  const mdState = resolveConversationDocumentRenderState('workspace/plan.md', {});
   assert.equal(mdState.mode, CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN);
   assert.equal(mdState.allowMarkdownToggle, true);
 
-  const txtState = resolveConversationDocumentRenderState('docs/notes.txt', {});
+  const txtState = resolveConversationDocumentRenderState('workspace/notes.txt', {});
   assert.equal(txtState.mode, CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN);
   assert.equal(txtState.allowMarkdownToggle, true);
 
@@ -28,7 +28,7 @@ test('对 md/txt/code 文件会推断出正确的默认显示模式', async () =
   assert.equal(codeState.mode, CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT);
   assert.equal(codeState.allowCodeHighlightToggle, true);
 
-  const otherState = resolveConversationDocumentRenderState('docs/readme.rst', {});
+  const otherState = resolveConversationDocumentRenderState('workspace/readme.rst', {});
   assert.equal(otherState.mode, CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN);
   assert.equal(otherState.allowMarkdownToggle, false);
 });
@@ -40,15 +40,15 @@ test('全局默认值与按路径 override 会正确合并', async () => {
     resolveConversationDocumentRenderState
   } = await importViewerStateModule();
 
-  const txtMarkdownState = resolveConversationDocumentRenderState('docs/notes.txt', {
+  const txtMarkdownState = resolveConversationDocumentRenderState('workspace/notes.txt', {
     documentRenderMarkdownForTxt: true
   });
   assert.equal(txtMarkdownState.mode, CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN);
 
-  const overriddenMdState = resolveConversationDocumentRenderState('docs/plan.md', {
+  const overriddenMdState = resolveConversationDocumentRenderState('workspace/plan.md', {
     documentRenderMarkdownForMd: true,
     documentViewModeOverrides: {
-      'docs/plan.md': 'plain'
+      'workspace/plan.md': 'plain'
     }
   });
   assert.equal(overriddenMdState.mode, CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN);

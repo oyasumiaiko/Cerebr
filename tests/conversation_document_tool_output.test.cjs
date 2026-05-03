@@ -14,17 +14,17 @@ test('apply_patch 的对话文档工具输出会压成简洁变更摘要', async
   const items = buildResponsesConversationDocumentToolOutputContentItems('apply_patch', {
     ok: true,
     affected_files: {
-      added: ['docs/a.md'],
-      modified: ['docs/b.md'],
-      deleted: ['docs/c.md']
+      added: ['workspace/a.md'],
+      modified: ['workspace/b.md'],
+      deleted: ['workspace/c.md']
     }
   });
 
   const text = items.map(item => item.text).join('\n');
   assert.match(text, /apply_patch_result/);
-  assert.match(text, /A docs\/a\.md/);
-  assert.match(text, /M docs\/b\.md/);
-  assert.match(text, /D docs\/c\.md/);
+  assert.match(text, /A workspace\/a\.md/);
+  assert.match(text, /M workspace\/b\.md/);
+  assert.match(text, /D workspace\/c\.md/);
 });
 
 test('read_file 的对话文档工具输出会把定位信息压到属性并只保留原文 content 块', async () => {
@@ -34,7 +34,7 @@ test('read_file 的对话文档工具输出会把定位信息压到属性并只�
     ok: true,
     conversation_id: 'conv-1',
     file: {
-      path: 'docs/spec.md',
+      path: 'workspace/spec.md',
       updated_at: '2026-04-14T10:00:00.000Z',
       size_chars: 11,
       content: 'hello\nworld',
@@ -47,7 +47,7 @@ test('read_file 的对话文档工具输出会把定位信息压到属性并只�
   });
 
   const text = items.map(item => item.text).join('\n');
-  assert.match(text, /<read_file_result ok="true" target="conversation_document" path="docs\/spec\.md" range="chars 0-11\/11">/);
+  assert.match(text, /<read_file_result ok="true" target="workspace" path="workspace\/spec\.md" range="chars 0-11\/11">/);
   assert.match(text, /<content>\s*hello/);
   assert.doesNotMatch(text, /<metadata>/);
   assert.doesNotMatch(text, /"content": "hello\\nworld"/);
@@ -60,7 +60,7 @@ test('read_file 带行号时只输出 numbered_content，且显式行范围读�
     ok: true,
     conversation_id: 'conv-1',
     file: {
-      path: 'docs/spec.md',
+      path: 'workspace/spec.md',
       updated_at: '2026-04-14T10:00:00.000Z',
       size_chars: 17,
       content: 'line2\nline3',
@@ -97,12 +97,12 @@ test('list_files 的对话文档工具输出会把文件列表压成低噪声纯
     returned_file_count: 2,
     files: [
       {
-        path: 'docs/a.md',
+        path: 'workspace/a.md',
         size_chars: 10,
         updated_at: '2026-04-14T10:00:00.000Z'
       },
       {
-        path: 'docs/b.md',
+        path: 'workspace/b.md',
         size_chars: 20,
         updated_at: '2026-04-14T10:05:00.000Z'
       }
@@ -110,10 +110,10 @@ test('list_files 的对话文档工具输出会把文件列表压成低噪声纯
   });
 
   const text = items.map(item => item.text).join('\n');
-  assert.match(text, /<list_files_result ok="true" target="conversation_document" total="2" returned="2">/);
+  assert.match(text, /<list_files_result ok="true" target="workspace" total="2" returned="2">/);
   assert.match(text, /<files>/);
-  assert.match(text, /docs\/a\.md  10 chars/);
-  assert.match(text, /docs\/b\.md  20 chars/);
+  assert.match(text, /workspace\/a\.md  10 chars/);
+  assert.match(text, /workspace\/b\.md  20 chars/);
   assert.doesNotMatch(text, /updated_at=/);
   assert.doesNotMatch(text, /"files": \[/);
 });
@@ -130,7 +130,7 @@ test('search_files 的对话文档工具输出会把命中上下文渲染成 rg 
     matches: [
       {
         match_id: 'm1',
-        file_path: 'docs/spec.md',
+        file_path: 'workspace/spec.md',
         line_number: 2,
         column_start: 7,
         column_end: 12,
@@ -143,11 +143,11 @@ test('search_files 的对话文档工具输出会把命中上下文渲染成 rg 
   });
 
   const text = items.map(item => item.text).join('\n');
-  assert.match(text, /<search_files_result ok="true" target="conversation_document" pattern="token" total="1" returned="1">/);
+  assert.match(text, /<search_files_result ok="true" target="workspace" pattern="token" total="1" returned="1">/);
   assert.match(text, /<matches>/);
-  assert.match(text, /docs\/spec\.md-1-before line/);
-  assert.match(text, /docs\/spec\.md:2:7:alpha token beta/);
-  assert.match(text, /docs\/spec\.md-3-after line/);
+  assert.match(text, /workspace\/spec\.md-1-before line/);
+  assert.match(text, /workspace\/spec\.md:2:7:alpha token beta/);
+  assert.match(text, /workspace\/spec\.md-3-after line/);
   assert.doesNotMatch(text, /<match rank="1">/);
   assert.doesNotMatch(text, /"before": \[/);
 });
@@ -158,12 +158,12 @@ test('copy_file/move_file/delete_file 的对话文档工具输出会压成单行
   const copyItems = buildResponsesConversationDocumentToolOutputContentItems('copy_file', {
     ok: true,
     action: 'copy_file',
-    target: { kind: 'conversation_document' },
+    target: { kind: 'workspace' },
     source_path: 'local/project/src/a.js',
     destination_path: 'workspace/project/src/a.js'
   });
   const copyText = copyItems.map(item => item.text).join('\n');
-  assert.match(copyText, /<copy_file_result ok="true" target="conversation_document" from="local\/project\/src\/a\.js" to="workspace\/project\/src\/a\.js">/);
+  assert.match(copyText, /<copy_file_result ok="true" target="workspace" from="local\/project\/src\/a\.js" to="workspace\/project\/src\/a\.js">/);
   assert.match(copyText, /copy local\/project\/src\/a\.js -> workspace\/project\/src\/a\.js/);
   assert.match(copyText, /<reminder>/);
   assert.doesNotMatch(copyText, /"source_path"/);
@@ -187,6 +187,6 @@ test('copy_file/move_file/delete_file 的对话文档工具输出会压成单行
     deleted_path: 'workspace/project/src/a.js'
   });
   const deleteText = deleteItems.map(item => item.text).join('\n');
-  assert.match(deleteText, /<delete_file_result ok="true" target="conversation_document" path="workspace\/project\/src\/a\.js">/);
+  assert.match(deleteText, /<delete_file_result ok="true" target="workspace" path="workspace\/project\/src\/a\.js">/);
   assert.match(deleteText, /delete workspace\/project\/src\/a\.js/);
 });

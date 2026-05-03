@@ -1399,7 +1399,7 @@ export function registerSidebarUtilities(appContext) {
           return {
             ok: false,
             error: {
-              message: '当前对话尚未持久化，暂时无法访问对话文件。',
+              message: '当前对话尚未持久化，暂时无法访问 workspace 文件。',
               name: 'ConversationDocumentUnavailableError',
               stack: ''
             }

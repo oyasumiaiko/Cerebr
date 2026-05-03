@@ -3,8 +3,8 @@
  *
  * 说明：
  * - 顶层公开给模型的文件工具统一为 `apply_patch` / `list_files` / `read_file` / `search_files`；
- * - 文件工具通过结构化 `target` 选择作用域，当前支持 `conversation_document` 与 `skill`；
- * - 对话文档仍在侧栏本地 IndexedDB 执行；skill 文件则复用现有 skill package / background 执行链路；
+ * - 文件工具通过结构化 `target` 选择作用域，模型可见空间为 `workspace` / `skill`，后续本地映射会占用 `local/...` 路径；
+ * - workspace 文件仍在侧栏本地 IndexedDB 执行；skill 文件则复用现有 skill package / background 执行链路；
  * - UI 为了编辑对话文档与完整查看，会额外复用 `write_file` / `read_file_full` 两个内部 action。
  *
  * 当前目录结构：
@@ -46,6 +46,7 @@ import {
   VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME,
   VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
   VIRTUAL_FILE_TARGET_KIND_SKILL,
+  VIRTUAL_FILE_TARGET_KIND_WORKSPACE,
   buildDocumentSizeChars,
   clampNonNegativeInt,
   clampPositiveInt,
@@ -120,7 +121,8 @@ export {
   VIRTUAL_FILE_READ_FILE_TOOL_NAME,
   VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME,
   VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
-  VIRTUAL_FILE_TARGET_KIND_SKILL
+  VIRTUAL_FILE_TARGET_KIND_SKILL,
+  VIRTUAL_FILE_TARGET_KIND_WORKSPACE
 };
 
 export {
@@ -147,7 +149,7 @@ export {
 function normalizeConversationId(value) {
   const text = normalizeString(value);
   if (!text) {
-    throw new Error('conversation_document 参数错误：conversation_id 不能为空。');
+    throw new Error('workspace 参数错误：conversation_id 不能为空。');
   }
   return text;
 }
@@ -185,13 +187,13 @@ function normalizeConversationDocumentReadRangeArgs(rawArgs, options = {}) {
   const hasEndLine = args.end_line != null;
 
   if ((hasStartLine || hasEndLine) && (hasSkipChars || hasMaxChars)) {
-    throw new Error('conversation_document 参数错误：不能同时使用字符区间和行区间读取参数。');
+    throw new Error('virtual_file 参数错误：不能同时使用字符区间和行区间读取参数。');
   }
   if (!allowLineRange && (hasStartLine || hasEndLine)) {
-    throw new Error('conversation_document 参数错误：当前 action 不支持 start_line / end_line。');
+    throw new Error('virtual_file 参数错误：当前 action 不支持 start_line / end_line。');
   }
   if (allowLineRange && (hasStartLine || hasEndLine) && !(hasStartLine && hasEndLine)) {
-    throw new Error('conversation_document 参数错误：使用行区间读取时，start_line 与 end_line 需要同时提供。');
+    throw new Error('virtual_file 参数错误：使用行区间读取时，start_line 与 end_line 需要同时提供。');
   }
 
   const skipChars = hasSkipChars ? clampNonNegativeInt(args.skip_chars, 0) : null;
@@ -213,7 +215,7 @@ function normalizeConversationDocumentReadRangeArgs(rawArgs, options = {}) {
     const startLine = clampPositiveInt(args.start_line, 1);
     const endLine = clampPositiveInt(args.end_line, startLine);
     if (endLine < startLine) {
-      throw new Error('conversation_document 参数错误：end_line 不能小于 start_line。');
+      throw new Error('virtual_file 参数错误：end_line 不能小于 start_line。');
     }
     return {
       mode: 'line_range',
@@ -339,7 +341,7 @@ function normalizeSearchCaseMode(value) {
   const text = normalizeString(value).toLowerCase();
   if (!text || text === 'smart') return 'smart';
   if (text === 'sensitive' || text === 'insensitive') return text;
-  throw new Error(`conversation_document 参数错误：不支持的 case_mode \`${value}\`。`);
+  throw new Error(`virtual_file 参数错误：不支持的 case_mode \`${value}\`。`);
 }
 
 function normalizeSearchMaxResults(value) {
@@ -360,11 +362,11 @@ function normalizeSearchPathGlob(value) {
     : withoutLeadingDot;
   if (!normalizedGlob) return null;
   if (normalizedGlob.length > 512) {
-    throw new Error('conversation_document 参数错误：path_glob 长度不能超过 512。');
+    throw new Error('virtual_file 参数错误：path_glob 长度不能超过 512。');
   }
   const segments = normalizedGlob.split('/');
   if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
-    throw new Error(`conversation_document 参数错误：path_glob \`${normalizedGlob}\` 不能包含空段、"." 或 ".."。`);
+    throw new Error(`virtual_file 参数错误：path_glob \`${normalizedGlob}\` 不能包含空段、"." 或 ".."。`);
   }
   return normalizedGlob;
 }
@@ -496,7 +498,7 @@ function buildDocumentManifest(documents, options = {}) {
 function searchConversationDocuments(documents, rawOptions = {}) {
   const pattern = normalizeString(rawOptions.pattern);
   if (!pattern) {
-    throw new Error('conversation_document 参数错误：search_files 时 pattern 不能为空。');
+    throw new Error('virtual_file 参数错误：search_files 时 pattern 不能为空。');
   }
 
   const searchFlags = resolveSearchFlags(pattern, rawOptions);
@@ -504,7 +506,7 @@ function searchConversationDocuments(documents, rawOptions = {}) {
     try {
       new RegExp(pattern, searchFlags.case_sensitive ? 'g' : 'gi');
     } catch (error) {
-      throw new Error(`conversation_document 参数错误：无效的正则 pattern：${error?.message || error}`);
+      throw new Error(`virtual_file 参数错误：无效的正则 pattern：${error?.message || error}`);
     }
   }
   const maxResults = normalizeSearchMaxResults(rawOptions.max_results);
@@ -729,14 +731,14 @@ function buildReadFilePayload(documentRecord, readOptions, includeLineNumbers) {
 
 function assertDifferentFileOperationPaths(sourcePath, destinationPath, action) {
   if (sourcePath === destinationPath) {
-    throw new Error(`conversation_document 参数错误：${action} 的 from 与 to 不能相同。`);
+    throw new Error(`workspace 参数错误：${action} 的 from 与 to 不能相同。`);
   }
 }
 
 function findRequiredConversationDocument(documents, filePath, action) {
   const index = findDocumentIndex(documents, filePath);
   if (index < 0) {
-    throw new Error(`conversation_document 参数错误：${action} 找不到文件 ${filePath}。`);
+    throw new Error(`workspace 参数错误：${action} 找不到文件 ${filePath}。`);
   }
   return {
     index,
@@ -746,7 +748,7 @@ function findRequiredConversationDocument(documents, filePath, action) {
 
 function assertConversationDocumentDestinationAvailable(documents, filePath, action) {
   if (findDocumentIndex(documents, filePath) >= 0) {
-    throw new Error(`conversation_document 参数错误：${action} 目标文件 ${filePath} 已存在。`);
+    throw new Error(`workspace 参数错误：${action} 目标文件 ${filePath} 已存在。`);
   }
 }
 
@@ -850,7 +852,7 @@ export function buildConversationDocumentActionPayloadFromVirtualFileAction(acti
         file_path: input.file_path
       };
     default:
-      throw new Error(`virtual_file 参数错误：未处理的 conversation_document action \`${action}\`。`);
+      throw new Error(`virtual_file 参数错误：未处理的 workspace action \`${action}\`。`);
   }
 }
 
@@ -923,7 +925,7 @@ function normalizeActionArgs(action, rawArgs, options = {}) {
   const args = ensurePlainObject(rawArgs);
   const normalizedAction = normalizeString(action).toLowerCase();
   if (!VIRTUAL_FILE_PUBLIC_ACTIONS.has(normalizedAction) && !(allowInternalActions && VIRTUAL_FILE_INTERNAL_ACTIONS.has(normalizedAction))) {
-    throw new Error(`conversation_document 参数错误：不支持的 action \`${action}\`。`);
+    throw new Error(`workspace 参数错误：不支持的 action \`${action}\`。`);
   }
 
   const includeLineNumbers = args.include_line_numbers === true;
@@ -938,7 +940,7 @@ function normalizeActionArgs(action, rawArgs, options = {}) {
   switch (normalizedAction) {
     case CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME:
       if (!normalizeString(args.patch)) {
-        throw new Error('conversation_document 参数错误：apply_patch 需要 patch。');
+        throw new Error('workspace 参数错误：apply_patch 需要 patch。');
       }
       return {
         action: normalizedAction,
@@ -989,7 +991,7 @@ function normalizeActionArgs(action, rawArgs, options = {}) {
       };
     case CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME:
       if (!normalizeString(args.pattern)) {
-        throw new Error('conversation_document 参数错误：search_files 需要 pattern。');
+        throw new Error('workspace 参数错误：search_files 需要 pattern。');
       }
       return {
         action: normalizedAction,
@@ -1093,7 +1095,7 @@ function normalizeActionArgs(action, rawArgs, options = {}) {
         content: typeof args.content === 'string' ? args.content : ''
       };
     default:
-      throw new Error(`conversation_document 参数错误：未处理的 action \`${action}\`。`);
+      throw new Error(`workspace 参数错误：未处理的 action \`${action}\`。`);
   }
 }
 
@@ -1322,7 +1324,7 @@ export async function executeConversationDocumentAction(action, rawArgs, options
       };
     }
     default:
-      throw new Error(`conversation_document 参数错误：未处理的 action \`${action}\`。`);
+      throw new Error(`workspace 参数错误：未处理的 action \`${action}\`。`);
   }
 }
 

@@ -753,10 +753,10 @@ function getResponsesFileSkillName(result, file = null) {
   return '';
 }
 
-function getResponsesFileTargetKind(result, file = null, fallback = 'conversation_document') {
+function getResponsesFileTargetKind(result, file = null, fallback = 'workspace') {
   if (getResponsesFileSkillName(result, file)) return 'skill';
   const targetKind = typeof result?.target?.kind === 'string' ? result.target.kind.trim() : '';
-  return targetKind || fallback || 'conversation_document';
+  return targetKind || fallback || 'workspace';
 }
 
 function buildResponsesFileBaseAttributes(result, file = null, options = {}) {
@@ -1065,7 +1065,7 @@ function buildResponsesFileOperationToolOutputText(rootTag, result, options = {}
   if (targetKind !== 'skill' && (action === 'copy_file' || action === 'move_file')) {
     blocks.push({
       tag: 'reminder',
-      text: '你这次创建或移动了一个会话文件。如果需要被用户看到，请在 final channel 里输出该文件的 Markdown 相对路径链接，例如 [计划](docs/plan.md)。仅创建或移动文件本身不会自动展示给用户。'
+      text: '你这次创建或移动了一个 workspace 文件。如果需要被用户看到，请在 final channel 里输出该文件的 Markdown 相对路径链接，例如 [计划](workspace/plan.md)。仅创建或移动文件本身不会自动展示给用户。'
     });
   }
   if (normalized.error) {
@@ -1777,7 +1777,7 @@ export function buildResponsesSkillRegistryToolOutputContentItems(result, option
 
 export function buildResponsesConversationDocumentToolOutputContentItems(toolName, result, options = {}) {
   const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
-  const rootTag = `${String(toolName || 'conversation_document').trim() || 'conversation_document'}_result`;
+  const rootTag = `${String(toolName || 'virtual_file').trim() || 'virtual_file'}_result`;
   if (normalized.ok === true && String(toolName || '').trim() === 'read_file') {
     return buildResponsesXmlToolOutputContentItems(
       buildResponsesFileReadToolOutputText(rootTag, normalized, {
@@ -1847,7 +1847,7 @@ export function buildResponsesConversationDocumentToolOutputContentItems(toolNam
     if (hasCreatedOrModifiedConversationFile) {
       blocks.push({
         tag: 'reminder',
-        text: '你这次创建或修改了一个会话文件。如果需要被用户看到，请在 final channel 里输出该文件的 Markdown 相对路径链接，例如 [计划](docs/plan.md)。仅创建或修改文件本身不会自动展示给用户。'
+        text: '你这次创建或修改了一个 workspace 文件。如果需要被用户看到，请在 final channel 里输出该文件的 Markdown 相对路径链接，例如 [计划](workspace/plan.md)。仅创建或修改文件本身不会自动展示给用户。'
       });
     }
     return buildResponsesXmlToolOutputContentItems(

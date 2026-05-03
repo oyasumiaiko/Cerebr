@@ -118,7 +118,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
       if (preview.totalFiles > 1) metaParts.push(`另 ${preview.totalFiles - 1} 个文件`);
       return {
         action: isInProgress ? '正在修改' : '修改',
-        value: normalizeSummaryText(firstFile?.path) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文件'),
+        value: normalizeSummaryText(firstFile?.path) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : 'workspace 文件'),
         valueUrl: '',
         meta: joinSummaryMeta(metaParts),
         locationAction: '',
@@ -128,7 +128,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
     }
     return {
       action: isInProgress ? '正在修改' : '修改',
-      value: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? (targetMeta || '技能文件') : '当前对话文件',
+      value: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? (targetMeta || '技能文件') : 'workspace 文件',
       valueUrl: '',
       meta: '',
       locationAction: '',
@@ -141,7 +141,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
     const glob = resolveGlobArg(args);
     return {
       action: isInProgress ? '正在查看列表' : '查看列表',
-      value: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? (targetMeta || '全部技能') : (glob || '当前对话文件'),
+      value: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? (targetMeta || '全部技能') : (glob || 'workspace'),
       valueUrl: '',
       meta: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? glob : '',
       locationAction: '',
@@ -154,7 +154,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
     return {
       action: isInProgress ? '正在读取' : '读取',
       value: [
-        resolvePathArg(args) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文件'),
+        resolvePathArg(args) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : 'workspace 文件'),
         lineRangeSuffix
       ]
         .filter(Boolean)
@@ -171,7 +171,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
     const pattern = resolveSearchPatternArg(args);
     return {
       action: isInProgress ? '正在搜索' : '搜索',
-      value: pattern || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文件'),
+      value: pattern || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : 'workspace'),
       valueUrl: '',
       meta: joinSummaryMeta([targetMeta, resolveGlobArg(args)]),
       locationAction: '',
@@ -199,7 +199,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
   if (toolName === VIRTUAL_FILE_DELETE_FILE_TOOL_NAME) {
     return {
       action: isInProgress ? '正在删除' : '删除',
-      value: resolvePathArg(args) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文件'),
+      value: resolvePathArg(args) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : 'workspace 文件'),
       valueUrl: '',
       meta: targetMeta,
       locationAction: '',

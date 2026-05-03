@@ -326,16 +326,16 @@ test('buildResponsesConversationDocumentToolOutputContentItems 只在会话文�
     ok: true,
     action: 'apply_patch',
     affected_files: {
-      added: ['docs/plan.md'],
+      added: ['workspace/plan.md'],
       modified: [],
       deleted: []
     }
   });
   const conversationText = formatResponsesToolOutputForDisplay(conversationItems);
   assert.match(conversationText, /Success\. Updated the following files:/);
-  assert.match(conversationText, /A docs\/plan\.md/);
+  assert.match(conversationText, /A workspace\/plan\.md/);
   assert.match(conversationText, /<reminder>/);
-  assert.match(conversationText, /你这次创建或修改了一个会话文件/);
+  assert.match(conversationText, /你这次创建或修改了一个 workspace 文件/);
   assert.match(conversationText, /在 final channel 里输出该文件的 Markdown 相对路径链接/);
   assert.match(conversationText, /<result>[\s\S]*<\/result>\s*<reminder>/);
 
@@ -345,7 +345,7 @@ test('buildResponsesConversationDocumentToolOutputContentItems 只在会话文�
     affected_files: {
       added: [],
       modified: [],
-      deleted: ['docs/plan.md']
+      deleted: ['workspace/plan.md']
     }
   });
   const deleteOnlyText = formatResponsesToolOutputForDisplay(deleteOnlyItems);

@@ -36,7 +36,7 @@ export function normalizeVirtualFileTarget(rawTarget, options = {}) {
     };
   }
   if (name) {
-    throw new Error('virtual_file 参数错误：target.kind=conversation_document 时不能提供 target.name。');
+    throw new Error('virtual_file 参数错误：target.kind=workspace 时不能提供 target.name。');
   }
   return {
     kind,
@@ -49,13 +49,13 @@ export function buildVirtualFileTargetSchemaDescription(options = {}) {
   return {
     type: ['object', 'null'],
     description: requireSkillName
-      ? '可选。文件目标作用域。默认 `conversation_document`；若 `kind="skill"` 则必须提供 `name`。'
-      : '可选。文件目标作用域。默认 `conversation_document`；当 `kind="skill"` 时可用 `name` 指定单个技能。',
+      ? '可选。文件目标作用域。默认 `workspace`；若 `kind="skill"` 则必须提供 `name`。本地映射文件会使用 `local/...` 路径，但当前版本尚未实现 local mount。'
+      : '可选。文件目标作用域。默认 `workspace`；当 `kind="skill"` 时可用 `name` 指定单个技能。本地映射文件会使用 `local/...` 路径，但当前版本尚未实现 local mount。',
     additionalProperties: false,
     properties: {
       kind: {
         type: ['string', 'null'],
-        description: '可选。支持 `conversation_document` 与 `skill`。省略时默认 `conversation_document`。'
+        description: '可选。支持 `workspace` 与 `skill`。省略时默认 `workspace`。'
       },
       name: {
         type: ['string', 'null'],

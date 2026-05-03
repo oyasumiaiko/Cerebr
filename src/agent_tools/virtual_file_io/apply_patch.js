@@ -20,7 +20,7 @@ export function buildVirtualFileApplyPatchFunctionToolDefinition() {
   return {
     type: 'function',
     name: VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
-    description: '对虚拟文件应用 Codex apply_patch。支持当前对话纯文本文件和 skill 文件；可用于笔记、Markdown、代码、HTML、配置等任意纯文本格式，不会修改真实工作区文件。',
+    description: '对可写虚拟纯文本文件应用 Codex apply_patch，可修改 Markdown、HTML、JS、CSS 等文本内容。默认修改 workspace 可写区；skill 文件需传 `target.kind="skill"` 与 `target.name`。本地映射路径 `local/...` 设计为只读，后续需要修改时先用 copy_file 复制到 workspace。',
     strict: false,
     parameters: {
       type: 'object',

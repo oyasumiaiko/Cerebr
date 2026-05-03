@@ -8885,7 +8885,7 @@ export function createMessageSender(appContext) {
     }
     if (conversationId) return conversationId;
 
-    throw new Error('当前对话尚未持久化，无法访问对话文件。');
+    throw new Error('当前对话尚未持久化，无法访问 workspace 文件。');
   }
 
   async function executeResponsesSkillRegistryInternalAction(rawArgs, options = {}) {

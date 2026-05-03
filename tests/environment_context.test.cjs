@@ -106,7 +106,7 @@ test('buildEnvironmentContextInputItems 会在用户上传文件时附带文件�
     currentDate: '2026-04-20',
     uploadedFiles: [
       {
-        path: 'docs/untitled',
+        path: 'workspace/untitled',
         source_name: '',
         file_name_was_missing: true,
         upload_event_id: 'upload-1'
@@ -118,7 +118,7 @@ test('buildEnvironmentContextInputItems 会在用户上传文件时附带文件�
   assert.equal(payload.uploaded_files.length, 1);
   const text = buildEnvironmentContextInputItems(payload)[0].content[0].text;
   assert.match(text, /<user_uploaded_files>/);
-  assert.match(text, /<path>docs\/untitled<\/path>/);
+  assert.match(text, /<path>workspace\/untitled<\/path>/);
   assert.match(text, /<file_name_was_missing>true<\/file_name_was_missing>/);
   assert.match(text, /untitled/);
   assert.match(text, /Markdown 相对路径链接/);
