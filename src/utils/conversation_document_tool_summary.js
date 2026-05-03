@@ -33,6 +33,20 @@ function joinSummaryMeta(parts) {
     .join(' · ');
 }
 
+function resolvePathArg(args) {
+  return normalizeSummaryText(args?.path) || normalizeSummaryText(args?.file_path);
+}
+
+function resolveGlobArg(args) {
+  return normalizeSummaryText(args?.glob)
+    || normalizeSummaryText(args?.path_glob)
+    || normalizeSummaryText(args?.path);
+}
+
+function resolveSearchPatternArg(args) {
+  return normalizeSummaryText(args?.pattern) || normalizeSummaryText(args?.query);
+}
+
 function resolveVirtualFileTarget(args) {
   const target = (args?.target && typeof args.target === 'object' && !Array.isArray(args.target))
     ? args.target
@@ -45,6 +59,18 @@ function resolveVirtualFileTarget(args) {
 }
 
 function formatReadLineRangeSuffix(args) {
+  const lineRange = normalizeSummaryText(args?.line_range);
+  if (lineRange) {
+    const compact = lineRange
+      .replace(/^['"]|['"]$/g, '')
+      .replace(/\s+/g, '')
+      .replace(/p$/i, '');
+    const rangeMatch = compact.match(/^L?(\d+)(?:[:-]|,)L?(\d+)$/i);
+    if (rangeMatch) return `L${rangeMatch[1]}-L${rangeMatch[2]}`;
+    const singleMatch = compact.match(/^L?(\d+)$/i);
+    if (singleMatch) return `L${singleMatch[1]}`;
+    return compact ? (compact.startsWith('L') ? compact : `L${compact}`) : '';
+  }
   const startLine = Number(args?.start_line);
   const endLine = Number(args?.end_line);
   if (!Number.isFinite(startLine) || !Number.isFinite(endLine)) return '';
@@ -107,11 +133,12 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
   }
 
   if (toolName === VIRTUAL_FILE_LIST_FILES_TOOL_NAME) {
+    const glob = resolveGlobArg(args);
     return {
       action: isInProgress ? '正在查看列表' : '查看列表',
-      value: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? (targetMeta || '全部技能') : (normalizeSummaryText(args?.path_glob) || '当前对话文件'),
+      value: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? (targetMeta || '全部技能') : (glob || '当前对话文件'),
       valueUrl: '',
-      meta: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? normalizeSummaryText(args?.path_glob) : '',
+      meta: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? glob : '',
       locationAction: '',
       locationValue: '',
       locationUrl: ''
@@ -122,7 +149,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
     return {
       action: isInProgress ? '正在读取' : '读取',
       value: [
-        normalizeSummaryText(args?.file_path) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文件'),
+        resolvePathArg(args) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文件'),
         lineRangeSuffix
       ]
         .filter(Boolean)
@@ -136,11 +163,12 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
   }
 
   if (toolName === VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME) {
+    const pattern = resolveSearchPatternArg(args);
     return {
       action: isInProgress ? '正在搜索' : '搜索',
-      value: normalizeSummaryText(args?.pattern) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文件'),
+      value: pattern || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '文件'),
       valueUrl: '',
-      meta: joinSummaryMeta([targetMeta, normalizeSummaryText(args?.path_glob)]),
+      meta: joinSummaryMeta([targetMeta, resolveGlobArg(args)]),
       locationAction: '',
       locationValue: '',
       locationUrl: ''

@@ -78,6 +78,61 @@ test('顶层 read_file 在按行范围读取时会把 Lx-Ly 追加到文件路�
   );
 });
 
+test('顶层 read_file/search_files 摘要支持 bash 风格别名参数', async () => {
+  const {
+    buildVirtualFileSummaryParts,
+    buildVirtualFilePrimaryText
+  } = await loadModule();
+
+  const readRecord = {
+    type: 'function_call',
+    name: 'read_file',
+    arguments: JSON.stringify({
+      target: {
+        kind: 'skill',
+        name: 'dom-probe'
+      },
+      path: 'src/main.js',
+      line_range: '20,40p',
+      numbered: true
+    })
+  };
+  assert.deepEqual(buildVirtualFileSummaryParts(readRecord), {
+    action: '读取',
+    value: 'src/main.js L20-L40',
+    valueUrl: '',
+    meta: 'dom-probe',
+    locationAction: '',
+    locationValue: '',
+    locationUrl: ''
+  });
+  assert.equal(buildVirtualFilePrimaryText(readRecord), '读取 src/main.js L20-L40 dom-probe');
+
+  const searchRecord = {
+    type: 'function_call',
+    name: 'search_files',
+    arguments: JSON.stringify({
+      target: {
+        kind: 'skill',
+        name: 'dom-probe'
+      },
+      pattern: 'token',
+      glob: 'src/**/*.js',
+      before: 1,
+      after: 1
+    })
+  };
+  assert.deepEqual(buildVirtualFileSummaryParts(searchRecord), {
+    action: '搜索',
+    value: 'token',
+    valueUrl: '',
+    meta: 'dom-probe · src/**/*.js',
+    locationAction: '',
+    locationValue: '',
+    locationUrl: ''
+  });
+});
+
 test('顶层 apply_patch 在 skill target 下会显示首个文件与 diff 汇总', async () => {
   const {
     buildVirtualFileSummaryParts,

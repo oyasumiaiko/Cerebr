@@ -72,6 +72,8 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
   const {
     VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
     VIRTUAL_FILE_LIST_FILES_TOOL_NAME,
+    VIRTUAL_FILE_READ_FILE_TOOL_NAME,
+    VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME,
     normalizeVirtualFileToolArguments
   } = await loadConversationDocumentToolsModule();
 
@@ -102,6 +104,50 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
     }),
     /target.kind=skill 时 target.name 不能为空/
   );
+
+  const bashStyleRead = normalizeVirtualFileToolArguments(VIRTUAL_FILE_READ_FILE_TOOL_NAME, {
+    path: 'docs/spec.md',
+    line_range: '20,40p',
+    numbered: true
+  });
+  assert.deepEqual(bashStyleRead, {
+    action: 'read_file',
+    target: {
+      kind: 'conversation_document',
+      name: null
+    },
+    file_path: 'docs/spec.md',
+    include_line_numbers: true,
+    read_options: {
+      mode: undefined,
+      skip_chars: undefined,
+      max_chars: undefined,
+      start_line: 20,
+      end_line: 40
+    }
+  });
+
+  const bashStyleSearch = normalizeVirtualFileToolArguments(VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME, {
+    pattern: 'token',
+    glob: 'docs/**/*.md',
+    context: 2,
+    ignore_case: true,
+    limit: 10
+  });
+  assert.deepEqual(bashStyleSearch, {
+    action: 'search_files',
+    target: {
+      kind: 'conversation_document',
+      name: null
+    },
+    pattern: 'token',
+    regex: false,
+    case_mode: 'insensitive',
+    path_glob: 'docs/**/*.md',
+    context_before: 2,
+    context_after: 2,
+    max_results: 10
+  });
 });
 
 test('apply_patch 工具定义本身不重复承载对话文档展示提醒', async () => {
@@ -113,6 +159,29 @@ test('apply_patch 工具定义本身不重复承载对话文档展示提醒', as
   assert.match(applyPatchDefinition.description, /纯文本文件/);
   assert.match(applyPatchDefinition.description, /HTML/);
   assert.doesNotMatch(applyPatchDefinition.description, /最终回复中插入 Markdown 相对路径链接/);
+});
+
+test('read_file/search_files 工具定义优先暴露 bash 风格参数', async () => {
+  const {
+    buildVirtualFileReadFileFunctionToolDefinition,
+    buildVirtualFileSearchFilesFunctionToolDefinition
+  } = await loadConversationDocumentToolsModule();
+
+  const readDefinition = buildVirtualFileReadFileFunctionToolDefinition();
+  assert.match(readDefinition.description, /cat/);
+  assert.match(readDefinition.description, /sed -n/);
+  assert.ok(readDefinition.parameters.properties.path);
+  assert.ok(readDefinition.parameters.properties.line_range);
+  assert.ok(readDefinition.parameters.properties.numbered);
+  assert.equal(readDefinition.parameters.required, undefined);
+
+  const searchDefinition = buildVirtualFileSearchFilesFunctionToolDefinition();
+  assert.match(searchDefinition.description, /rg "pattern"/);
+  assert.ok(searchDefinition.parameters.properties.glob);
+  assert.ok(searchDefinition.parameters.properties.before);
+  assert.ok(searchDefinition.parameters.properties.after);
+  assert.ok(searchDefinition.parameters.properties.ignore_case);
+  assert.deepEqual(searchDefinition.parameters.required, ['pattern']);
 });
 
 test('apply_patch 遇到同名 Add File 时会按 Windows 语义追加 (2)', async () => {
