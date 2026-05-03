@@ -22,6 +22,8 @@ test('message_processor 会按设置对用户消息走 Markdown 渲染，且不�
   assert.match(source, /renderMarkdownSafe\(messageText \|\| '', \{/);
   assert.match(source, /renderUserMessageTextContent\(messageDiv, textContentDiv, messageText\)/);
   assert.match(source, /syncConversationDocumentAttachmentStrip\(messageDiv\)/);
+  assert.match(source, /syncUserContextualInputDebugView/);
+  assert.match(source, /contextual-input-debug/);
   assert.match(source, /subscribe\?\.\('renderMarkdownForUserMessages'/);
   assert.doesNotMatch(source, /user-message-text-content__toggle/);
   assert.doesNotMatch(source, /userMessageExpanded/);
@@ -32,6 +34,7 @@ test('sidebar.css 保留用户消息滚动容器样式，不再定义展开按�
   const source = await readWorkspaceFile('src/ui/styles/sidebar.css');
 
   assert.match(source, /\.user-message \.text-content\.user-message-text-content/);
+  assert.match(source, /\.user-message \.contextual-input-debug/);
   assert.match(source, /max-height: 50vh;/);
   assert.match(source, /overflow-y: auto;/);
   assert.doesNotMatch(source, /\.user-message \.user-message-text-content__footer/);

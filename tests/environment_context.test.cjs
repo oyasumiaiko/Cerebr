@@ -30,7 +30,8 @@ test('buildEnvironmentContextPayload 会生成 current_date 与 timezone', async
   assert.deepEqual(payload, {
     type: 'environment_context',
     current_date: '2026-04-07',
-    timezone: 'Asia/Shanghai'
+    timezone: 'Asia/Shanghai',
+    workspace_file_policy_version: 1
   });
 
   const items = buildEnvironmentContextInputItems(payload);
@@ -39,6 +40,9 @@ test('buildEnvironmentContextPayload 会生成 current_date 与 timezone', async
   assert.match(text, /<environment_context>/);
   assert.match(text, /<current_date>2026-04-07<\/current_date>/);
   assert.match(text, /<timezone>Asia\/Shanghai<\/timezone>/);
+  assert.match(text, /<workspace_file_policy>/);
+  assert.match(text, /workspace\/\.\.\. 是当前对话的可写虚拟文件区/);
+  assert.match(text, /final channel 里输出该文件的 Markdown 相对路径链接/);
 });
 
 test('formatEnvironmentCurrentDate 在默认 now=null 时使用当前时间而不是 Unix epoch', async () => {
@@ -86,6 +90,9 @@ test('resolveEnvironmentContextAttachment 在签名未变化时不重复追加',
   });
   assert.equal(unchanged.signature, null);
   assert.equal(unchanged.inputItems, null);
+  assert.equal(unchanged.currentSignature, signature);
+  assert.equal(unchanged.status, 'reused');
+  assert.equal(unchanged.reason, 'signature_unchanged');
 
   const changed = resolveEnvironmentContextAttachment({
     payload,
@@ -93,6 +100,9 @@ test('resolveEnvironmentContextAttachment 在签名未变化时不重复追加',
   });
   assert.equal(typeof changed.signature, 'string');
   assert.ok(Array.isArray(changed.inputItems));
+  assert.equal(changed.currentSignature, signature);
+  assert.equal(changed.status, 'injected');
+  assert.equal(changed.reason, 'initial');
 });
 
 test('buildEnvironmentContextInputItems 会在用户上传文件时附带文件处理与命名规范', async () => {

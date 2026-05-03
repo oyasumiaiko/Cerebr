@@ -3540,6 +3540,12 @@ export function createChatHistoryUI(appContext) {
           fallbackElement: messageElem
         });
       } catch (_) {}
+      try {
+        services.messageProcessor?.syncUserContextualInputDebugView?.(msg.id, {
+          node: msg,
+          fallbackElement: messageElem
+        });
+      } catch (_) {}
       // 兼容旧路径：若上面的统一 renderer 不可用，再回退到历史 footer 渲染函数。
       try {
         if (typeof services.messageProcessor?.syncAssistantMessageView !== 'function') {
@@ -12452,7 +12458,8 @@ export function createChatHistoryUI(appContext) {
     'response_tool_calls',
     'promptMeta',
     'pageMeta',
-    'contextual_input_items_before'
+    'contextual_input_items_before',
+    'contextualInputDebug'
   ];
   const TREND_METRIC_OPTIONS = [
     { value: 'totalBytes', label: '总数据量', type: 'bytes' },

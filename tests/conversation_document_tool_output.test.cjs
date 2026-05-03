@@ -168,7 +168,7 @@ test('copy_file/move_file/delete_file 的对话文档工具输出会压成单行
   const copyText = copyItems.map(item => item.text).join('\n');
   assert.doesNotMatch(copyText, /<copy_file_result/);
   assert.match(copyText, /copy local\/project\/src\/a\.js -> workspace\/project\/src\/a\.js/);
-  assert.match(copyText, /Reminder: /);
+  assert.doesNotMatch(copyText, /Reminder:/);
   assert.doesNotMatch(copyText, /"source_path"/);
 
   const moveItems = buildResponsesConversationDocumentToolOutputContentItems('move_file', {

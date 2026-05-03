@@ -492,6 +492,173 @@ export function createMessageProcessor(appContext) {
     return fallbackElement;
   }
 
+  function extractContextualInputText(item) {
+    if (!item || typeof item !== 'object') return '';
+    const content = Array.isArray(item.content) ? item.content : [];
+    return content
+      .map((part) => (part?.type === 'input_text' && typeof part.text === 'string' ? part.text : ''))
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  function findContextualInputTextByType(items, type) {
+    const normalizedType = (typeof type === 'string' && type.trim()) ? type.trim() : '';
+    if (!normalizedType || !Array.isArray(items)) return '';
+    const openTag = `<${normalizedType}`;
+    return items
+      .map((item) => extractContextualInputText(item))
+      .filter((text) => text.includes(openTag))
+      .join('\n\n');
+  }
+
+  function normalizeContextualInputDebugEntry(entry) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+    const type = (typeof entry.type === 'string' && entry.type.trim()) ? entry.type.trim() : '';
+    if (!type) return null;
+    const status = (typeof entry.status === 'string' && entry.status.trim()) ? entry.status.trim() : 'unknown';
+    const reason = (typeof entry.reason === 'string' && entry.reason.trim()) ? entry.reason.trim() : '';
+    const itemCount = Number.isFinite(Number(entry.itemCount)) ? Math.max(0, Math.trunc(Number(entry.itemCount))) : 0;
+    return {
+      type,
+      status,
+      ...(reason ? { reason } : {}),
+      itemCount
+    };
+  }
+
+  function getContextualInputStatusLabel(status) {
+    switch (status) {
+      case 'injected':
+        return '已注入';
+      case 'reused':
+        return '沿用上一条';
+      case 'empty':
+        return '未生成';
+      default:
+        return status || '未知';
+    }
+  }
+
+  function getContextualInputReasonText(entry) {
+    const reason = typeof entry?.reason === 'string' ? entry.reason : '';
+    switch (reason) {
+      case 'initial':
+        return '首次生成，已随本轮请求发送给模型。';
+      case 'signature_changed':
+        return '签名变化，已随本轮请求重新发送给模型。';
+      case 'signature_unchanged':
+        return '签名未变化，本轮没有重复发送，模型沿用上一条有效 environment_context。';
+      case 'empty_signature':
+        return '未生成有效签名。';
+      case 'empty_input':
+        return '未生成可发送的隐藏输入。';
+      default:
+        return reason ? `原因：${reason}` : '';
+    }
+  }
+
+  function buildUserContextualInputDebugEntries(node) {
+    const debugEntries = Array.isArray(node?.contextualInputDebug?.entries)
+      ? node.contextualInputDebug.entries.map(normalizeContextualInputDebugEntry).filter(Boolean)
+      : [];
+    const contextualItems = Array.isArray(node?.contextual_input_items_before)
+      ? node.contextual_input_items_before
+      : [];
+    const environmentText = findContextualInputTextByType(contextualItems, 'environment_context');
+    if (debugEntries.length <= 0) {
+      if (!environmentText && !node?.environmentContextSignature) return [];
+      return [{
+        type: 'environment_context',
+        status: environmentText ? 'injected' : 'reused',
+        reason: 'legacy_metadata',
+        itemCount: environmentText ? 1 : 0,
+        text: environmentText
+      }];
+    }
+    return debugEntries.map((entry) => ({
+      ...entry,
+      text: entry.status === 'injected'
+        ? findContextualInputTextByType(contextualItems, entry.type)
+        : ''
+    }));
+  }
+
+  function renderUserContextualInputDebug(messageElement, node) {
+    if (!messageElement || !node || String(node.role || '').trim().toLowerCase() !== 'user') return false;
+    const entries = buildUserContextualInputDebugEntries(node);
+    const existing = messageElement.querySelector(':scope > .contextual-input-debug');
+    if (entries.length <= 0) {
+      if (existing) existing.remove();
+      return false;
+    }
+
+    const details = existing || document.createElement('details');
+    details.className = 'contextual-input-debug';
+    details.textContent = '';
+
+    const summary = document.createElement('summary');
+    const first = entries[0];
+    const label = entries.length === 1
+      ? `${first.type} ${getContextualInputStatusLabel(first.status)}`
+      : `${entries.length} 条隐藏上下文`;
+    summary.textContent = `隐藏上下文 · ${label}`;
+    details.appendChild(summary);
+
+    entries.forEach((entry) => {
+      const section = document.createElement('div');
+      section.className = 'contextual-input-debug__entry';
+
+      const header = document.createElement('div');
+      header.className = 'contextual-input-debug__entry-header';
+      const parts = [
+        entry.type,
+        getContextualInputStatusLabel(entry.status)
+      ];
+      if (entry.itemCount > 0) parts.push(`${entry.itemCount} item`);
+      header.textContent = parts.join(' · ');
+      section.appendChild(header);
+
+      const reasonText = getContextualInputReasonText(entry);
+      if (reasonText) {
+        const reason = document.createElement('div');
+        reason.className = 'contextual-input-debug__reason';
+        reason.textContent = reasonText;
+        section.appendChild(reason);
+      }
+
+      if (entry.text) {
+        const pre = document.createElement('pre');
+        pre.className = 'contextual-input-debug__payload';
+        pre.textContent = entry.text;
+        section.appendChild(pre);
+      }
+
+      details.appendChild(section);
+    });
+
+    if (!existing) {
+      const textContent = messageElement.querySelector(':scope > .text-content');
+      if (textContent?.nextSibling) {
+        messageElement.insertBefore(details, textContent.nextSibling);
+      } else {
+        messageElement.appendChild(details);
+      }
+    }
+    return true;
+  }
+
+  function syncUserContextualInputDebugView(messageId, options = {}) {
+    const node = options?.node || chatHistoryManager?.chatHistory?.messages?.find((msg) => msg?.id === messageId) || null;
+    const messageElement = resolveLiveMessageElement(messageId, options?.fallbackElement || null);
+    if (!messageElement) return false;
+    const rendered = renderUserContextualInputDebug(messageElement, node);
+    const listContainer = resolveMessageListContainer(messageElement);
+    if (listContainer) {
+      messageVirtualizer.scheduleUpdate(listContainer);
+    }
+    return rendered;
+  }
+
   function resolveScrollContainerForMessage(messageElement) {
     if (!messageElement) return chatContainer;
     const threadContainer = dom?.threadContainer || null;
@@ -1526,6 +1693,11 @@ export function createMessageProcessor(appContext) {
             const apiFooter = document.createElement('div');
             apiFooter.className = 'api-footer';
             messageDiv.appendChild(apiFooter);
+          } else if (sender === 'user') {
+            syncUserContextualInputDebugView(node.id, {
+              node,
+              fallbackElement: messageDiv
+            });
           }
         }
       }
@@ -5173,6 +5345,7 @@ export function createMessageProcessor(appContext) {
     updateAIMessage,
     syncAssistantMessageView,
     syncAssistantMessageMetadata,
+    syncUserContextualInputDebugView,
     clearResponseActivityUiState,
     renderAssistantApiFooter,
     processMathAndMarkdown,

@@ -979,6 +979,11 @@ export async function getDatabaseStats() {
         size += bytes;
         addMetaSize('environmentContextSignature', bytes);
       }
+      if (msg.contextualInputDebug) {
+        const bytes = calcJsonBytes(msg.contextualInputDebug);
+        size += bytes;
+        addMetaSize('contextualInputDebug', bytes);
+      }
       if (msg.tool_calls) {
         const bytes = calcJsonBytes(msg.tool_calls);
         size += bytes;

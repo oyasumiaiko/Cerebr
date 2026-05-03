@@ -41,6 +41,7 @@ import { normalizeResponsesPromptCacheKey } from '../utils/responses_prompt_cach
  * @property {Array<any>|null} [contextual_input_items_before] - 仅供模型可见、位于该消息前面的隐藏 contextual input items（不参与 UI 渲染，可选）
  * @property {string|null} [pageRuntimeContextSignature] - 页面运行环境隐藏上下文的稳定签名；为空表示沿用更早一次已生效的上下文（可选）
  * @property {string|null} [environmentContextSignature] - 通用 environment_context 的稳定签名；为空表示沿用更早一次已生效的上下文（可选）
+ * @property {{entries:Array<{type:string,status:string,reason?:string,itemCount?:number}>,updatedAt:number|null}|null} [contextualInputDebug] - 隐藏上下文注入调试信息，仅供 UI 观察，不发送给模型（可选）
  * @property {{source:string,sourceAssistantMessageId:string|null,promptTokensBefore:number|null,compactedAt:number|null}|null} [contextCompactionMarker] - 本地 Responses compact marker（可选）
  * @property {{state:string,phase:string,attempt:number|null,totalAttempts:number|null,requestBytes:number|null,inputCount:number|null,toolCount:number|null,responseStatus:number|null,responseBytes:number|null,outputCount:number|null,errorMessage:string|null,updatedAt:number|null}|null} [responsesLocalCompactionStatus] - 本地 `/compact` UI 状态元信息，仅用于消息流展示与诊断（可选）
  */
@@ -113,6 +114,8 @@ function createMessageNode(role, content, parentId = null) {
     // 稳定签名用于“只有发生变化时才再写一条隐藏上下文”，避免每轮重复注入相同环境。
     pageRuntimeContextSignature: null,
     environmentContextSignature: null,
+    // 调试隐藏上下文是否注入/沿用。该字段只用于 UI 和历史复盘，不参与模型请求组装。
+    contextualInputDebug: null,
     // 本地 Responses compact 成功后会插入一条可见 marker；
     // 该字段用于让 composeMessages 只截取“最新 marker 及其之后”的模型可见历史。
     contextCompactionMarker: null,

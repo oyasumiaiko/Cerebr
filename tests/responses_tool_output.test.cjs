@@ -315,7 +315,7 @@ test('buildResponsesSkillRegistryToolOutputContentItems 会把文件管理操作
   assert.doesNotMatch(text, /"source_file_path"/);
 });
 
-test('buildResponsesConversationDocumentToolOutputContentItems 只在会话文件新增或修改时附单独 reminder 块，但不影响 skill 输出', async () => {
+test('buildResponsesConversationDocumentToolOutputContentItems 不再把 workspace 展示规则重复写进工具结果', async () => {
   const {
     buildResponsesConversationDocumentToolOutputContentItems,
     buildResponsesSkillRegistryToolOutputContentItems,
@@ -334,9 +334,8 @@ test('buildResponsesConversationDocumentToolOutputContentItems 只在会话文�
   const conversationText = formatResponsesToolOutputForDisplay(conversationItems);
   assert.match(conversationText, /Success\. Updated the following files:/);
   assert.match(conversationText, /A workspace\/plan\.md/);
-  assert.match(conversationText, /Reminder: /);
-  assert.match(conversationText, /Reminder: 这次创建或修改了一个 workspace 文件/);
-  assert.match(conversationText, /在 final channel 里输出该文件的 Markdown 相对路径链接/);
+  assert.doesNotMatch(conversationText, /Reminder:/);
+  assert.doesNotMatch(conversationText, /Markdown 相对路径链接/);
   assert.doesNotMatch(conversationText, /<apply_patch_result|<result>|<reminder>/);
 
   const deleteOnlyItems = buildResponsesConversationDocumentToolOutputContentItems('apply_patch', {

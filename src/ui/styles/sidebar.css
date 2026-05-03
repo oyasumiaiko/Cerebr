@@ -1971,6 +1971,48 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 .user-message .user-message-text-content__body--plain {
     white-space: pre-wrap;
 }
+
+.user-message .contextual-input-debug {
+    margin-top: 8px;
+    font-size: 11px;
+    line-height: 1.45;
+    color: color-mix(in srgb, var(--cerebr-text-color) 64%, transparent);
+}
+
+.user-message .contextual-input-debug > summary {
+    cursor: pointer;
+    user-select: none;
+    color: color-mix(in srgb, var(--cerebr-text-color) 64%, transparent);
+}
+
+.user-message .contextual-input-debug__entry {
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px solid color-mix(in srgb, var(--cerebr-border-color) 70%, transparent);
+}
+
+.user-message .contextual-input-debug__entry-header {
+    font-weight: 600;
+}
+
+.user-message .contextual-input-debug__reason {
+    margin-top: 3px;
+}
+
+.user-message .contextual-input-debug__payload {
+    margin: 6px 0 0;
+    max-height: 220px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 11px;
+    line-height: 1.45;
+    color: color-mix(in srgb, var(--cerebr-text-color) 68%, transparent);
+    background: color-mix(in srgb, var(--cerebr-bg-color) 72%, transparent);
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 72%, transparent);
+    border-radius: 6px;
+    padding: 8px;
+}
 /* 滚动条样式统一到全局 */
 
 /* 划词线程高亮 */

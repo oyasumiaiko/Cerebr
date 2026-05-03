@@ -753,16 +753,6 @@ function getResponsesFileSkillName(result, file = null) {
   return '';
 }
 
-function getResponsesFileTargetKind(result, file = null, fallback = 'workspace') {
-  if (getResponsesFileSkillName(result, file)) return 'skill';
-  const targetKind = typeof result?.target?.kind === 'string' ? result.target.kind.trim() : '';
-  const filePath = typeof file?.path === 'string'
-    ? file.path.trim()
-    : (typeof result?.file_path === 'string' ? result.file_path.trim() : '');
-  if (!targetKind && (filePath === 'local' || filePath.startsWith('local/'))) return 'local';
-  return targetKind || fallback || 'workspace';
-}
-
 function buildResponsesFileReadRangeAttribute(contentRead) {
   const normalized = isResponsesToolOutputPlainObject(contentRead) ? contentRead : {};
   const mode = typeof normalized.mode === 'string' ? normalized.mode.trim() : '';
@@ -1000,10 +990,6 @@ function buildResponsesFileOperationToolOutputText(rootTag, result, options = {}
     return 'file operation complete';
   })();
   const lines = [resultLine];
-  const targetKind = getResponsesFileTargetKind(normalized, normalized.file || null, options?.defaultTargetKind);
-  if (targetKind !== 'skill' && (action === 'copy_file' || action === 'move_file')) {
-    lines.push('Reminder: 这次创建或移动了一个 workspace 文件。如果需要被用户看到，请在 final channel 里输出该文件的 Markdown 相对路径链接，例如 [计划](workspace/plan.md)。仅创建或移动文件本身不会自动展示给用户。');
-  }
   if (normalized.error) {
     lines.push(`Error: ${formatResponsesJsRuntimeErrorText(normalized.error)}`);
   }
@@ -1736,19 +1722,16 @@ export function buildResponsesConversationDocumentToolOutputContentItems(toolNam
   if (normalized.ok === true && normalizedToolName === 'apply_patch') {
     const affected = (normalized?.affected_files && typeof normalized.affected_files === 'object') ? normalized.affected_files : {};
     const changedLines = [];
-    let hasCreatedOrModifiedConversationFile = false;
     for (const value of Array.isArray(affected.added) ? affected.added : []) {
       const path = typeof value === 'string' ? value.trim() : '';
       if (path) {
         changedLines.push(`A ${path}`);
-        hasCreatedOrModifiedConversationFile = true;
       }
     }
     for (const value of Array.isArray(affected.modified) ? affected.modified : []) {
       const path = typeof value === 'string' ? value.trim() : '';
       if (path) {
         changedLines.push(`M ${path}`);
-        hasCreatedOrModifiedConversationFile = true;
       }
     }
     for (const value of Array.isArray(affected.deleted) ? affected.deleted : []) {
@@ -1758,11 +1741,7 @@ export function buildResponsesConversationDocumentToolOutputContentItems(toolNam
     const summaryText = changedLines.length > 0
       ? `Success. Updated the following files:\n${changedLines.join('\n')}`
       : 'Patch applied successfully.';
-    const resultLines = [summaryText];
-    if (hasCreatedOrModifiedConversationFile) {
-      resultLines.push('Reminder: 这次创建或修改了一个 workspace 文件。如果需要被用户看到，请在 final channel 里输出该文件的 Markdown 相对路径链接，例如 [计划](workspace/plan.md)。仅创建或修改文件本身不会自动展示给用户。');
-    }
-    return buildResponsesXmlToolOutputContentItems(resultLines.join('\n'), options);
+    return buildResponsesXmlToolOutputContentItems(summaryText, options);
   }
   return buildResponsesGenericXmlToolOutputContentItems(rootTag, normalized, options);
 }

@@ -23,6 +23,13 @@ const LOCAL_FILE_MOUNT_POLICY_RULES = [
   '读取文件夹时优先用 list_files 或 search_files 缩小范围，不要假设整个文件夹内容已经在上下文中。'
 ];
 
+const WORKSPACE_FILE_POLICY_VERSION = 1;
+
+const WORKSPACE_FILE_POLICY_RULES = [
+  'workspace/... 是当前对话的可写虚拟文件区；文件创建、复制、移动或修改后不会自动展示给用户。',
+  '如果需要让用户看到 workspace 文件，请在 final channel 里输出该文件的 Markdown 相对路径链接，例如 [计划](workspace/plan.md)。'
+];
+
 /**
  * 规范化 IANA 时区名；若不可用则回退到 Etc/UTC。
  *
@@ -166,7 +173,7 @@ function normalizeLocalMounts(entries) {
  *   uploadedFiles?: Array<Object>|null,
  *   localMounts?: Array<Object>|null
  * }} [options]
- * @returns {{type:'environment_context', current_date:string, timezone:string, uploaded_files?:Array<Object>, local_mounts?:Array<Object>}}
+ * @returns {{type:'environment_context', current_date:string, timezone:string, workspace_file_policy_version:number, uploaded_files?:Array<Object>, local_mounts?:Array<Object>}}
  */
 export function buildEnvironmentContextPayload(options = {}) {
   const timezone = normalizeEnvironmentTimezone(options?.timezone || detectEnvironmentTimezone());
@@ -179,7 +186,8 @@ export function buildEnvironmentContextPayload(options = {}) {
   const payload = {
     type: 'environment_context',
     current_date: currentDate,
-    timezone
+    timezone,
+    workspace_file_policy_version: WORKSPACE_FILE_POLICY_VERSION
   };
   if (uploadedFiles.length > 0) {
     payload.uploaded_files = uploadedFiles;
@@ -224,6 +232,11 @@ export function buildEnvironmentContextInputItems(payload) {
     `  <current_date>${escapeXmlText(currentDate)}</current_date>`,
     `  <timezone>${escapeXmlText(timezone)}</timezone>`
   ];
+  lines.push('  <workspace_file_policy>');
+  WORKSPACE_FILE_POLICY_RULES.forEach((rule) => {
+    lines.push(`    <rule>${escapeXmlText(rule)}</rule>`);
+  });
+  lines.push('  </workspace_file_policy>');
   if (uploadedFiles.length > 0) {
     lines.push('  <user_uploaded_files>');
     uploadedFiles.forEach((file) => {
@@ -296,19 +309,28 @@ export function resolveEnvironmentContextAttachment(options = {}) {
   if (!signature || inputItems.length <= 0) {
     return {
       signature: null,
-      inputItems: null
+      inputItems: null,
+      currentSignature: signature || null,
+      status: 'empty',
+      reason: !signature ? 'empty_signature' : 'empty_input'
     };
   }
 
   if (previousEffectiveSignature && previousEffectiveSignature === signature) {
     return {
       signature: null,
-      inputItems: null
+      inputItems: null,
+      currentSignature: signature,
+      status: 'reused',
+      reason: 'signature_unchanged'
     };
   }
 
   return {
     signature,
-    inputItems
+    inputItems,
+    currentSignature: signature,
+    status: 'injected',
+    reason: previousEffectiveSignature ? 'signature_changed' : 'initial'
   };
 }

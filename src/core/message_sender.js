@@ -7525,6 +7525,34 @@ export function createMessageSender(appContext) {
     return '';
   }
 
+  function buildContextualInputDebugEntry(type, attachment) {
+    const normalizedType = (typeof type === 'string' && type.trim()) ? type.trim() : '';
+    if (!normalizedType) return null;
+    const inputItems = Array.isArray(attachment?.inputItems) ? attachment.inputItems : [];
+    const status = (typeof attachment?.status === 'string' && attachment.status.trim())
+      ? attachment.status.trim()
+      : (inputItems.length > 0 ? 'injected' : 'empty');
+    const reason = (typeof attachment?.reason === 'string' && attachment.reason.trim())
+      ? attachment.reason.trim()
+      : '';
+    return {
+      type: normalizedType,
+      status,
+      ...(reason ? { reason } : {}),
+      itemCount: inputItems.length
+    };
+  }
+
+  function buildContextualInputDebugState(entries) {
+    const normalizedEntries = (Array.isArray(entries) ? entries : [])
+      .filter((entry) => entry && typeof entry === 'object' && typeof entry.type === 'string' && entry.type.trim());
+    if (normalizedEntries.length <= 0) return null;
+    return {
+      entries: normalizedEntries,
+      updatedAt: Date.now()
+    };
+  }
+
   /**
    * 将“页面运行环境 / 通用环境”的隐藏 contextual items 写到目标 user 节点上。
    *
@@ -7606,6 +7634,9 @@ export function createMessageSender(appContext) {
     targetUserNode.pageRuntimeContextSignature = pageAttachment.signature || null;
     targetUserNode.environmentContextSignature = environmentAttachment.signature || null;
     targetUserNode.skillContextSignature = skillAttachment.signature || null;
+    targetUserNode.contextualInputDebug = buildContextualInputDebugState([
+      buildContextualInputDebugEntry('environment_context', environmentAttachment)
+    ]);
     return true;
   }
 
@@ -10446,6 +10477,12 @@ export function createMessageSender(appContext) {
               localMounts: localMountEnvironmentEntries
             })
           });
+          try {
+            messageProcessor?.syncUserContextualInputDebugView?.(currentUserMessageIdForContext, {
+              node: targetUserNodeForContext,
+              fallbackElement: userMessageDiv
+            });
+          } catch (_) {}
         }
       }
 
