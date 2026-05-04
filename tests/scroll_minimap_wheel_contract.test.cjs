@@ -27,6 +27,10 @@ test('滚动缩略图的按消息滚轮导航默认关闭，并保留普通滚�
     /function applyScrollMinimapWheelMessageStep\(enabled\)\s*\{[\s\S]*?--cerebr-scroll-minimap-wheel-message-step[\s\S]*?enabled \? '1' : '0'/s
   );
   assert.match(
+    settingsSource,
+    /document\.documentElement\.classList\.toggle\('scroll-minimap-wheel-message-step', !!enabled\);/
+  );
+  assert.match(
     sidebarCss,
     /--cerebr-scroll-minimap-wheel-message-step:\s*0;/
   );
@@ -35,11 +39,23 @@ test('滚动缩略图的按消息滚轮导航默认关闭，并保留普通滚�
     /function isMinimapWheelMessageStepEnabled\(\)\s*\{[\s\S]*?--cerebr-scroll-minimap-wheel-message-step[\s\S]*?0\) > 0\.5;/s
   );
   assert.match(
-    handlerSource,
-    /function scrollContainerByNativeWheelDelta\(state, event\)\s*\{[\s\S]*?container\.scrollTop = nextTop;[\s\S]*?return true;[\s\S]*?\}/s
+    sidebarCss,
+    /\.chat-scroll-minimap\.chat-scroll-minimap--active\s*\{[\s\S]*?pointer-events:\s*none;/s
+  );
+  assert.match(
+    sidebarCss,
+    /:root\.scroll-minimap-wheel-message-step \.chat-scroll-minimap\.chat-scroll-minimap--active\s*\{[\s\S]*?pointer-events:\s*auto;/s
   );
   assert.match(
     handlerSource,
-    /if \(!isMinimapWheelMessageStepEnabled\(\)\) \{[\s\S]*?scrollContainerByNativeWheelDelta\(state, event\)[\s\S]*?event\.preventDefault\(\);[\s\S]*?return;/s
+    /if \(!isMinimapWheelMessageStepEnabled\(\)\) return;\s*const deltaUnits = normalizeWheelDeltaToStepUnits\(event\);/s
+  );
+  assert.match(
+    handlerSource,
+    /关闭按消息滚动时，缩略图只做视觉提示[\s\S]*?resetMinimapWheelAccumulator\(state\);/s
+  );
+  assert.doesNotMatch(
+    handlerSource,
+    /scrollContainerByNativeWheelDelta|normalizeWheelDeltaToScrollPixels/
   );
 });

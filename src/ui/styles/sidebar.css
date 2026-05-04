@@ -970,9 +970,13 @@ html:not(.fullscreen-mode) #chat-container {
 }
 
 .chat-scroll-minimap.chat-scroll-minimap--active {
-    pointer-events: auto;
+    pointer-events: none;
     /* 保持轨道底色透明度稳定：激活态直接使用用户配置透明度。 */
     opacity: var(--cerebr-scroll-minimap-opacity, 0.94);
+}
+
+:root.scroll-minimap-wheel-message-step .chat-scroll-minimap.chat-scroll-minimap--active {
+    pointer-events: auto;
 }
 
 .chat-scroll-minimap.chat-scroll-minimap--active.chat-scroll-minimap--auto-hide {

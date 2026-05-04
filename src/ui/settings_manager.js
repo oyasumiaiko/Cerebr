@@ -3577,6 +3577,7 @@ export function createSettingsManager(appContext) {
   }
 
   function applyScrollMinimapWheelMessageStep(enabled) {
+    document.documentElement.classList.toggle('scroll-minimap-wheel-message-step', !!enabled);
     document.documentElement.style.setProperty(
       '--cerebr-scroll-minimap-wheel-message-step',
       enabled ? '1' : '0'

@@ -1087,41 +1087,6 @@
       return rawDelta / 100;
     }
 
-    function normalizeWheelDeltaToScrollPixels(state, event) {
-      const mode = Number(event?.deltaMode) || 0;
-      const rawDelta = Number(event?.deltaY) || 0;
-      if (!rawDelta) return 0;
-      if (mode === 1) {
-        // DOM_DELTA_LINE 没有浏览器暴露的真实行高；40px 接近主流滚轮一行体感，
-        // 只用于“缩略图忽略滚轮导航”时模拟落在聊天容器上的普通滚动。
-        return rawDelta * 40;
-      }
-      if (mode === 2) {
-        return rawDelta * Math.max(1, state?.container?.clientHeight || 0);
-      }
-      return rawDelta;
-    }
-
-    function scrollContainerByNativeWheelDelta(state, event) {
-      if (!state?.container) return false;
-      const deltaY = normalizeWheelDeltaToScrollPixels(state, event);
-      if (Math.abs(deltaY) < 0.001) return false;
-
-      const container = state.container;
-      const maxScroll = Math.max(0, (container.scrollHeight || 0) - (container.clientHeight || 0));
-      if (maxScroll <= 0) return false;
-
-      // 关闭“按消息滚动”时，缩略图区域仍是一个 overlay；这里显式把滚轮转交给
-      // 对应消息容器，避免事件落在 overlay 上后既不按消息跳转、也没有普通滚动反馈。
-      resetMinimapWheelAccumulator(state);
-      const currentTop = Math.max(0, container.scrollTop || 0);
-      const nextTop = clampNumber(currentTop + deltaY, 0, maxScroll);
-      container.scrollTop = nextTop;
-      if (state.key === 'chat') scheduleReadingAnchorCapture();
-      scheduleMinimapRender();
-      return true;
-    }
-
     function stopMinimapWheelAnimation(state) {
       if (!state) return;
       if (state.wheelAnimationRaf) {
@@ -1263,15 +1228,7 @@
 
     function handleMinimapWheel(state, event) {
       if (!state?.root || !state?.thumb || !state.root.classList.contains('chat-scroll-minimap--active')) return;
-      if (!isMinimapWheelMessageStepEnabled()) {
-        const handledAsNativeScroll = scrollContainerByNativeWheelDelta(state, event);
-        if (handledAsNativeScroll) {
-          event.preventDefault();
-          event.stopPropagation();
-        }
-        return;
-      }
-
+      if (!isMinimapWheelMessageStepEnabled()) return;
       const deltaUnits = normalizeWheelDeltaToStepUnits(event);
       if (Math.abs(deltaUnits) < 0.001) return;
 
@@ -1377,9 +1334,16 @@
       clearMinimapInteractionIfPointerOutside(state);
     }
 
-    function renderMinimapState(state, minimapWidth, featureEnabled, fullscreenEnabled, autoHideEnabled, messageDisplayMode) {
+    function renderMinimapState(state, minimapWidth, featureEnabled, fullscreenEnabled, autoHideEnabled, messageDisplayMode, wheelMessageStepEnabled) {
       if (!ensureMinimapElements(state)) return;
       state.root.classList.toggle('chat-scroll-minimap--auto-hide', !!autoHideEnabled);
+      if (!wheelMessageStepEnabled) {
+        // 关闭按消息滚动时，缩略图只做视觉提示；通过 CSS pointer-events 穿透，
+        // 让 wheel 一开始就命中下方聊天容器，保留浏览器原生滚动手感。
+        clearMinimapInteractionTimer(state);
+        state.root.classList.remove('chat-scroll-minimap--interacting');
+        resetMinimapWheelAccumulator(state);
+      }
       const container = state.container;
       const isThreadState = state.key === 'thread';
       const threadModeActive = isThreadModeActive();
@@ -1442,8 +1406,9 @@
       const minimapWidth = getConfiguredMinimapWidth();
       const autoHideEnabled = isMinimapAutoHideEnabled();
       const messageDisplayMode = getMinimapMessageDisplayMode();
+      const wheelMessageStepEnabled = isMinimapWheelMessageStepEnabled();
       for (const state of minimapStates) {
-        renderMinimapState(state, minimapWidth, featureEnabled, fullscreenEnabled, autoHideEnabled, messageDisplayMode);
+        renderMinimapState(state, minimapWidth, featureEnabled, fullscreenEnabled, autoHideEnabled, messageDisplayMode, wheelMessageStepEnabled);
       }
     }
 
