@@ -148,8 +148,11 @@ export function createSettingsManager(appContext) {
     // 全屏模式下当聊天区已有消息时，是否隐藏背景“原图层”，仅保留氛围层。
     fullscreenHideOriginalOnChat: false,
     backgroundOverallOpacity: 1,
-    // 全屏滚动缩略图（MiniMap）：显示开关、宽度与透明度
+    // 全屏滚动缩略图（MiniMap）：显示开关、滚轮行为、宽度与透明度
     enableScrollMinimap: true,
+    // 关闭时，鼠标悬停缩略图滚轮仍按聊天容器的原生像素滚动处理；
+    // 开启后才恢复“一格滚轮跳到上一条/下一条消息”的导航语义。
+    scrollMinimapWheelMessageStep: false,
     scrollMinimapWidth: 24,
     scrollMinimapOpacity: 0.94,
     scrollMinimapAutoHide: false,
@@ -1215,6 +1218,15 @@ export function createSettingsManager(appContext) {
       apply: (v) => applyScrollMinimapEnabled(v)
     },
     {
+      key: 'scrollMinimapWheelMessageStep',
+      type: 'toggle',
+      menu: 'quick',
+      group: 'layout',
+      label: '缩略图滚轮按消息滚动',
+      defaultValue: DEFAULT_SETTINGS.scrollMinimapWheelMessageStep,
+      apply: (v) => applyScrollMinimapWheelMessageStep(v)
+    },
+    {
       key: 'scrollMinimapWidth',
       type: 'range',
       menu: 'quick',
@@ -1473,6 +1485,9 @@ export function createSettingsManager(appContext) {
       return clamp01(value, DEFAULT_SETTINGS.scrollMinimapOpacity);
     }
     if (key === 'scrollMinimapAutoHide') {
+      return !!value;
+    }
+    if (key === 'scrollMinimapWheelMessageStep') {
       return !!value;
     }
     if (
@@ -3559,6 +3574,13 @@ export function createSettingsManager(appContext) {
   function applyScrollMinimapEnabled(enabled) {
     const useMinimap = !!enabled;
     document.documentElement.style.setProperty('--cerebr-scroll-minimap-enabled', useMinimap ? '1' : '0');
+  }
+
+  function applyScrollMinimapWheelMessageStep(enabled) {
+    document.documentElement.style.setProperty(
+      '--cerebr-scroll-minimap-wheel-message-step',
+      enabled ? '1' : '0'
+    );
   }
 
   function applyScrollMinimapWidth(value) {

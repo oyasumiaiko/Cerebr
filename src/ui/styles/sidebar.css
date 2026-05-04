@@ -77,6 +77,7 @@ button:focus-visible,
     --cerebr-scroll-minimap-idle-opacity: 0;
     --cerebr-scroll-minimap-autohide: 0;
     --cerebr-scroll-minimap-message-mode: proportional;
+    --cerebr-scroll-minimap-wheel-message-step: 0;
     /* 缩略图轨道颜色与主题色绑定，避免暗色下过亮、亮色下过淡。 */
     --cerebr-scroll-minimap-track-bg: color-mix(in srgb, var(--cerebr-bg-color) 82%, var(--cerebr-border-color) 18%);
     --cerebr-scroll-minimap-track-border: color-mix(in srgb, var(--cerebr-border-color) 52%, transparent);
