@@ -20,15 +20,31 @@ test('宿主页 Alt 状态会桥接到 iframe 侧栏滚动管理器', async () =
   );
   assert.match(
     contentSource,
-    /window\.addEventListener\('keydown', \(event\) => \{\s*if \(event\.key === 'Alt'\) \{\s*syncHostAltKeyState\(true\);/s
+    /syncHostAltKeyState\(isPressed\) \{\s*const nextPressed = !!isPressed;\s*if \(this\.isAltKeyPressed === nextPressed\) return;\s*this\.isAltKeyPressed = nextPressed;\s*this\.sidebars\.forEach\(\(item\) => item\.notifyIframeAltKeyState\(nextPressed\)\);/s
   );
   assert.match(
     contentSource,
-    /window\.addEventListener\('keyup', \(event\) => \{\s*if \(event\.key === 'Alt'\) \{\s*syncHostAltKeyState\(false\);/s
+    /window\.addEventListener\('keydown', \(event\) => \{\s*if \(event\.key === 'Alt'\) \{\s*this\.syncHostAltKeyState\(true\);\s*\}\s*\}, true\);/s
   );
   assert.match(
     contentSource,
-    /case 'REQUEST_ALT_KEY_STATE':\s*this\.notifyIframeAltKeyState\(this\.isAltKeyPressed\);/s
+    /window\.addEventListener\('keyup', \(event\) => \{\s*if \(event\.key === 'Alt'\) \{\s*this\.syncHostAltKeyState\(false\);\s*\}\s*\}, true\);/s
+  );
+  assert.match(
+    contentSource,
+    /window\.addEventListener\('blur', \(\) => \{\s*this\.syncHostAltKeyState\(false\);/s
+  );
+  assert.match(
+    contentSource,
+    /document\.addEventListener\('visibilitychange', \(\) => \{\s*if \(document\.visibilityState !== 'visible'\) \{\s*this\.syncHostAltKeyState\(false\);/s
+  );
+  assert.match(
+    contentSource,
+    /iframe\.addEventListener\('load', \(\) => \{[\s\S]*?this\.notifyIframeAltKeyState\(this\.isAltKeyPressed\);/s
+  );
+  assert.match(
+    contentSource,
+    /case 'REQUEST_ALT_KEY_STATE':\s*sourceSidebar\.notifyIframeAltKeyState\(this\.isAltKeyPressed\);/s
   );
   assert.match(
     contentSource,
