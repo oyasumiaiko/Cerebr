@@ -566,21 +566,23 @@ export function createMessageProcessor(appContext) {
       : [];
     const environmentText = findContextualInputTextByType(contextualItems, 'environment_context');
     if (debugEntries.length <= 0) {
-      if (!environmentText && !node?.environmentContextSignature) return [];
+      if (!environmentText) return [];
       return [{
         type: 'environment_context',
-        status: environmentText ? 'injected' : 'reused',
+        status: 'injected',
         reason: 'legacy_metadata',
         itemCount: environmentText ? 1 : 0,
         text: environmentText
       }];
     }
-    return debugEntries.map((entry) => ({
-      ...entry,
-      text: entry.status === 'injected'
-        ? findContextualInputTextByType(contextualItems, entry.type)
-        : ''
-    }));
+    return debugEntries
+      .map((entry) => ({
+        ...entry,
+        text: entry.status === 'injected'
+          ? findContextualInputTextByType(contextualItems, entry.type)
+          : ''
+      }))
+      .filter((entry) => entry.status === 'injected' && entry.text);
   }
 
   function renderUserContextualInputDebug(messageElement, node) {

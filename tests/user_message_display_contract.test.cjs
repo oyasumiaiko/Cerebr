@@ -24,6 +24,7 @@ test('message_processor 会按设置对用户消息走 Markdown 渲染，且不�
   assert.match(source, /syncConversationDocumentAttachmentStrip\(messageDiv\)/);
   assert.match(source, /syncUserContextualInputDebugView/);
   assert.match(source, /contextual-input-debug/);
+  assert.match(source, /entry\.status === 'injected' && entry\.text/);
   assert.match(source, /subscribe\?\.\('renderMarkdownForUserMessages'/);
   assert.doesNotMatch(source, /user-message-text-content__toggle/);
   assert.doesNotMatch(source, /userMessageExpanded/);

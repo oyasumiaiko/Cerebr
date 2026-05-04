@@ -249,7 +249,7 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
   assert.equal(deleteFile.file_path, 'workspace/spec.md');
 });
 
-test('apply_patch 工具定义本身不重复承载对话文档展示提醒', async () => {
+test('apply_patch 工具定义承载 workspace 文件交付提示', async () => {
   const {
     buildVirtualFileApplyPatchFunctionToolDefinition
   } = await loadConversationDocumentToolsModule();
@@ -257,7 +257,8 @@ test('apply_patch 工具定义本身不重复承载对话文档展示提醒', as
   const applyPatchDefinition = buildVirtualFileApplyPatchFunctionToolDefinition();
   assert.match(applyPatchDefinition.description, /纯文本文件/);
   assert.match(applyPatchDefinition.description, /HTML/);
-  assert.doesNotMatch(applyPatchDefinition.description, /最终回复中插入 Markdown 相对路径链接/);
+  assert.match(applyPatchDefinition.description, /最终回复应给出 Markdown 相对路径链接/);
+  assert.match(applyPatchDefinition.description, /\[计划\]\(workspace\/plan\.md\)/);
 });
 
 test('read_file/search_files 工具定义优先暴露 bash 风格参数', async () => {

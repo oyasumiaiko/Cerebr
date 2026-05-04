@@ -30,8 +30,7 @@ test('buildEnvironmentContextPayload 会生成 current_date 与 timezone', async
   assert.deepEqual(payload, {
     type: 'environment_context',
     current_date: '2026-04-07',
-    timezone: 'Asia/Shanghai',
-    workspace_file_policy_version: 1
+    timezone: 'Asia/Shanghai'
   });
 
   const items = buildEnvironmentContextInputItems(payload);
@@ -40,9 +39,7 @@ test('buildEnvironmentContextPayload 会生成 current_date 与 timezone', async
   assert.match(text, /<environment_context>/);
   assert.match(text, /<current_date>2026-04-07<\/current_date>/);
   assert.match(text, /<timezone>Asia\/Shanghai<\/timezone>/);
-  assert.match(text, /<workspace_file_policy>/);
-  assert.match(text, /workspace\/\.\.\. 是当前对话的可写虚拟文件区/);
-  assert.match(text, /final channel 里输出该文件的 Markdown 相对路径链接/);
+  assert.doesNotMatch(text, /<workspace_file_policy>/);
 });
 
 test('formatEnvironmentCurrentDate 在默认 now=null 时使用当前时间而不是 Unix epoch', async () => {
