@@ -51,7 +51,9 @@ import {
 } from '../utils/responses_prompt_cache.js';
 import {
   canReplaceRetryOrRegenerateInPlace,
-  shouldReuseTransientRegeneratePlaceholder
+  shouldReuseTransientRegeneratePlaceholder,
+  resolveCommittedUserMessageRetryId,
+  shouldRetainFailedConversationQueueJob
 } from '../utils/regenerate_retry_target.js';
 import {
   buildResponsesJsRuntimeToolOutputContentItems,
@@ -3840,6 +3842,7 @@ export function createMessageSender(appContext) {
     conversationQueueDrainLocks.add(normalizedQueueKey);
     refreshConversationQueueState(normalizedQueueKey);
     notifyStreamingConversationStateChanged();
+    let shouldAutoContinueQueue = true;
 
     try {
       let dispatchOptions = {
@@ -3871,7 +3874,12 @@ export function createMessageSender(appContext) {
 
       const result = await sendMessageCore(dispatchOptions);
       await applyPendingConversationMutationsIfIdle(normalizedQueueKey);
-      if (result?.ok !== true && !result?.retryScheduled && !result?.aborted) {
+      if (result?.ok !== true && result?.failureHandledByMessageUi === true) {
+        // 当前任务已经形成可见的“用户消息 + AI 错误气泡”闭环。
+        // 这时不要继续自动冲刷后续 queue，否则会在缺失本轮 assistant 回复的历史上继续发送下一条。
+        shouldAutoContinueQueue = false;
+      }
+      if (result?.ok !== true && shouldRetainFailedConversationQueueJob(result)) {
         upsertConversationQueuedTask(normalizedQueueKey, {
           ...nextTask,
           status: 'failed',
@@ -3899,7 +3907,14 @@ export function createMessageSender(appContext) {
       conversationQueueDrainLocks.delete(normalizedQueueKey);
       refreshConversationQueueState(normalizedQueueKey);
       notifyStreamingConversationStateChanged();
-      if (hasQueuedMessagesForConversation(normalizedQueueKey)) {
+      const shouldResumeQueuedRetryAfterHandledFailure = !shouldAutoContinueQueue
+        && getConversationSendQueue(normalizedQueueKey).some((task, index) => (
+          index === 0 && task?.resumeAfterHandledFailure === true
+        ));
+      if (
+        (shouldAutoContinueQueue || shouldResumeQueuedRetryAfterHandledFailure)
+        && hasQueuedMessagesForConversation(normalizedQueueKey)
+      ) {
         scheduleConversationQueueFlush(normalizedQueueKey);
       }
     }
@@ -10065,6 +10080,7 @@ export function createMessageSender(appContext) {
     };
 
     let attempt = null;
+    let committedUserMessageId = '';
 
     try {
       // 开始处理消息：为本次请求注册 attempt，并在必要时开启全局“正在处理”状态
@@ -10222,6 +10238,11 @@ export function createMessageSender(appContext) {
         captureAttemptConversationContext(attempt);
       }
       if (!regenerateMode && (userMessageDiv || detachedUserMessageNode)) {
+        committedUserMessageId = normalizeConversationId(
+          userMessageDiv?.getAttribute?.('data-message-id')
+          || detachedUserMessageNode?.id
+          || ''
+        );
         await persistAttemptConversationSnapshot(attempt, { force: true });
       }
 
@@ -10701,33 +10722,90 @@ export function createMessageSender(appContext) {
         resolvedApiConfig,
         api
       };
-      const retry = async (override = {}) => {
-        const mergedHint = { ...retryHint, ...override };
-        const retryBoundConversationId = normalizeConversationId(attempt?.boundConversationId)
-          || normalizeConversationId(currentConversationId)
-          || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
-        if (normalizedConversationJobId) {
-          removeConversationQueuedTask(normalizedConversationQueueKey || retryBoundConversationId, normalizedConversationJobId);
+
+      const retryCommittedUserMessageId = resolveCommittedUserMessageRetryId({
+        regenerateMode,
+        committedUserMessageId
+      });
+      const buildRetryPayload = (override = {}) => {
+        const mergedHint = { ...retryHint, ...(override && typeof override === 'object' ? override : {}) };
+        if (!retryCommittedUserMessageId) {
+          return mergedHint;
         }
-        const nextJob = normalizeConversationQueuedTask({
-          id: createQueuedConversationTaskId(),
+
+        // 用户消息一旦已经进入历史，重试就必须围绕这条 user 节点重新生成 assistant。
+        // 继续按 append_user_message 追加发送会制造重复用户消息，也是旧重试逻辑混乱的根因。
+        return {
+          ...mergedHint,
+          regenerateMode: true,
+          messageId: retryCommittedUserMessageId,
+          targetAiMessageId: normalizeConversationId(mergedHint.targetAiMessageId) || null,
+          __skipClearInputs: true
+        };
+      };
+      const resolveRetryConversationId = () => (
+        normalizeConversationId(attempt?.boundConversationId)
+        || normalizeConversationId(currentConversationId)
+        || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.())
+      );
+      const resolveRetryQueueKey = (conversationId = '') => {
+        const retryConversationId = normalizeConversationId(conversationId) || resolveRetryConversationId();
+        if (isDraftConversationQueueKey(normalizedConversationQueueKey)) {
+          return resolveConversationQueueKey(retryConversationId) || normalizedConversationQueueKey;
+        }
+        return normalizedConversationQueueKey || retryConversationId;
+      };
+      const resolveRetryConversationRevision = (conversationId) => normalizeConversationHistoryRevision(
+        attempt?.historyConversationRevision
+          ?? resolveConversationHistoryRevision(conversationId)
+      );
+      const buildRetryQueueTask = (payload, taskOptions = {}) => {
+        const normalizedTaskOptions = (taskOptions && typeof taskOptions === 'object') ? taskOptions : {};
+        const retryBoundConversationId = resolveRetryConversationId();
+        const retryAnchorMessageId = retryCommittedUserMessageId
+          || normalizeConversationId(payload?.messageId);
+        return normalizeConversationQueuedTask({
+          id: normalizedTaskOptions.id || createQueuedConversationTaskId(),
           kind: normalizedConversationJobKind,
-          status: 'queued',
-          paused: false,
+          status: normalizedTaskOptions.status || 'queued',
+          paused: normalizedTaskOptions.paused === true,
           conversationId: retryBoundConversationId,
-          conversationRevisionAtEnqueue: resolveConversationHistoryRevision(retryBoundConversationId),
-          anchorMessageId: normalizeConversationId(mergedHint.messageId),
-          targetAiMessageId: normalizeConversationId(mergedHint.targetAiMessageId),
+          conversationRevisionAtEnqueue: normalizedTaskOptions.conversationRevisionAtEnqueue ?? resolveRetryConversationRevision(retryBoundConversationId),
+          anchorMessageId: retryAnchorMessageId,
+          targetAiMessageId: normalizeConversationId(payload?.targetAiMessageId),
           retryPolicy: normalizedConversationRetryPolicy,
-          retryCount: 0,
-          payload: mergedHint
+          retryCount: Number.isFinite(Number(normalizedTaskOptions.retryCount))
+            ? Math.max(0, Math.floor(Number(normalizedTaskOptions.retryCount)))
+            : 0,
+          availableAt: Number.isFinite(Number(normalizedTaskOptions.availableAt))
+            ? Number(normalizedTaskOptions.availableAt)
+            : null,
+          resumeAfterHandledFailure: normalizedTaskOptions.resumeAfterHandledFailure === true,
+          failureMessage: (typeof normalizedTaskOptions.failureMessage === 'string' && normalizedTaskOptions.failureMessage.trim())
+            ? normalizedTaskOptions.failureMessage.trim()
+            : null,
+          payload
+        });
+      };
+
+      const retry = async (override = {}) => {
+        const mergedHint = buildRetryPayload(override);
+        const retryBoundConversationId = resolveRetryConversationId();
+        const retryQueueKey = resolveRetryQueueKey(retryBoundConversationId);
+        if (normalizedConversationJobId) {
+          removeConversationQueuedTask(retryQueueKey, normalizedConversationJobId);
+        }
+        const nextJob = buildRetryQueueTask(mergedHint, {
+          resumeAfterHandledFailure: true
         });
         return dispatchConversationJob(
-          normalizedConversationQueueKey || retryBoundConversationId,
-          nextJob
+          retryQueueKey,
+          nextJob,
+          { atFront: true, ignoreQueuedMessages: true }
         );
       };
       retry.__targetAiMessageId = effectiveTargetAiMessageId || '';
+      retry.__retryCommittedUserMessageId = retryCommittedUserMessageId || '';
 
       const canAutoRetry = (
         autoRetryEnabled
@@ -10754,28 +10832,23 @@ export function createMessageSender(appContext) {
             type: 'warning'
           });
         }
-        upsertConversationQueuedTask(normalizedConversationQueueKey, {
+        const delayedRetryPayload = buildRetryPayload({
+          __autoRetryAttempt: nextAttemptIndex
+        });
+        const delayedRetryTask = buildRetryQueueTask(delayedRetryPayload, {
           id: normalizedConversationJobId || createQueuedConversationTaskId(),
-          kind: normalizedConversationJobKind,
           status: 'delayed_retry',
-          paused: false,
-          conversationId: normalizeConversationId(attempt?.boundConversationId)
-            || normalizeConversationId(currentConversationId)
-            || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.()),
-          conversationRevisionAtEnqueue: normalizedConversationRevisionAtStart,
-          anchorMessageId: normalizeConversationId(messageId),
-          targetAiMessageId: effectiveTargetAiMessageId,
-          retryPolicy: normalizedConversationRetryPolicy,
           retryCount: nextAttemptIndex,
           availableAt: Date.now() + delayMs,
           failureMessage: (typeof error?.message === 'string' && error.message.trim())
             ? error.message.trim()
-            : '',
-          payload: {
-            ...retryHint,
-            __autoRetryAttempt: nextAttemptIndex
-          }
+            : ''
         });
+        const delayedRetryQueueKey = resolveRetryQueueKey(delayedRetryTask.conversationId);
+        if (delayedRetryTask.id) {
+          removeConversationQueuedTask(delayedRetryQueueKey, delayedRetryTask.id);
+        }
+        enqueueConversationSend(delayedRetryQueueKey, delayedRetryTask, { atFront: true });
         return { ok: false, error, retryScheduled: true };
       }
 
@@ -10868,7 +10941,15 @@ export function createMessageSender(appContext) {
       }
 
       await persistAttemptConversationSnapshot(attempt, { force: true });
-      return { ok: false, error, apiConfig: (effectiveApiConfig || resolvedApiConfig || preferredApiConfig || lockConfig || apiManager.getSelectedConfig()), retryHint, retry };
+      return {
+        ok: false,
+        error,
+        apiConfig: (effectiveApiConfig || resolvedApiConfig || preferredApiConfig || lockConfig || apiManager.getSelectedConfig()),
+        retryHint,
+        retry,
+        committedUserMessageId,
+        failureHandledByMessageUi: !!messageElement
+      };
     } finally {
       finalizeAttempt(attempt);
     }

@@ -61,3 +61,49 @@ test('shouldReuseTransientRegeneratePlaceholder 不会误复用已有正式 mess
     false
   );
 });
+
+test('resolveCommittedUserMessageRetryId 让已落库的普通用户消息改走 regenerate retry', async () => {
+  const { resolveCommittedUserMessageRetryId } = await loadModule();
+  assert.equal(
+    resolveCommittedUserMessageRetryId({
+      regenerateMode: false,
+      committedUserMessageId: ' user_msg_1 '
+    }),
+    'user_msg_1'
+  );
+});
+
+test('resolveCommittedUserMessageRetryId 不改写已有 regenerate 请求', async () => {
+  const { resolveCommittedUserMessageRetryId } = await loadModule();
+  assert.equal(
+    resolveCommittedUserMessageRetryId({
+      regenerateMode: true,
+      committedUserMessageId: 'user_msg_1'
+    }),
+    ''
+  );
+});
+
+test('shouldRetainFailedConversationQueueJob 在聊天区已有错误气泡时不再保留 failed queue 项', async () => {
+  const { shouldRetainFailedConversationQueueJob } = await loadModule();
+  assert.equal(
+    shouldRetainFailedConversationQueueJob({
+      failureHandledByMessageUi: true,
+      retryScheduled: false,
+      aborted: false
+    }),
+    false
+  );
+});
+
+test('shouldRetainFailedConversationQueueJob 对前置失败保留 queue 项供用户编辑处理', async () => {
+  const { shouldRetainFailedConversationQueueJob } = await loadModule();
+  assert.equal(
+    shouldRetainFailedConversationQueueJob({
+      failureHandledByMessageUi: false,
+      retryScheduled: false,
+      aborted: false
+    }),
+    true
+  );
+});

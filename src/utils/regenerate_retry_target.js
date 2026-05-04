@@ -60,3 +60,48 @@ export function shouldReuseTransientRegeneratePlaceholder(options = {}) {
     || normalizedOptions.hasRetryActions
   );
 }
+
+/**
+ * 判断一次 append_user_message 失败后，手动/自动重试是否应复用已经落库的用户消息。
+ *
+ * 规则刻意保持很窄：
+ * - 只有“非 regenerate 的追加用户消息”才需要改写成 regenerate retry；
+ * - 一旦用户消息已经拿到稳定 message-id，后续重试必须围绕这条历史节点继续生成，
+ *   不能再追加一条同文本 user message。
+ *
+ * @param {{
+ *   regenerateMode?: boolean,
+ *   committedUserMessageId?: string|null
+ * }} options
+ * @returns {string} 需要复用的用户消息 id；为空表示不启用该策略。
+ */
+export function resolveCommittedUserMessageRetryId(options = {}) {
+  const normalizedOptions = (options && typeof options === 'object') ? options : {};
+  if (normalizedOptions.regenerateMode === true) return '';
+  const committedUserMessageId = (typeof normalizedOptions.committedUserMessageId === 'string')
+    ? normalizedOptions.committedUserMessageId.trim()
+    : '';
+  return committedUserMessageId;
+}
+
+/**
+ * 判断队列任务失败后是否还应把任务放回 queue 里等待用户处理。
+ *
+ * 失败队列项只适合“还没有形成聊天区错误反馈”的前置失败，例如配置校验或后台快照缺失。
+ * 如果聊天区已经有明确的 AI 错误气泡和重试按钮，再把同一任务放回 queue 会造成两个重试入口，
+ * 也会让用户误以为同一条消息既已发送又仍待发送。
+ *
+ * @param {{
+ *   retryScheduled?: boolean,
+ *   aborted?: boolean,
+ *   failureHandledByMessageUi?: boolean
+ * }} options
+ * @returns {boolean}
+ */
+export function shouldRetainFailedConversationQueueJob(options = {}) {
+  const normalizedOptions = (options && typeof options === 'object') ? options : {};
+  if (normalizedOptions.retryScheduled === true) return false;
+  if (normalizedOptions.aborted === true) return false;
+  if (normalizedOptions.failureHandledByMessageUi === true) return false;
+  return true;
+}
