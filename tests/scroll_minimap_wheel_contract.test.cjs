@@ -54,6 +54,22 @@ test('滚动缩略图的按消息滚轮导航默认关闭，并保留普通滚�
     handlerSource,
     /关闭按消息滚动时，缩略图只做视觉提示[\s\S]*?resetMinimapWheelAccumulator\(state\);/s
   );
+  assert.match(
+    handlerSource,
+    /function resolvePassthroughMinimapStateAtPoint\(clientX, clientY\) \{[\s\S]*?if \(isMinimapWheelMessageStepEnabled\(\)\) return null;[\s\S]*?state\.root\.getBoundingClientRect\(\)/s
+  );
+  assert.match(
+    handlerSource,
+    /function handleMinimapPassthroughPointerDown\(event\) \{[\s\S]*?if \(event\.button !== 0\) return;[\s\S]*?scrollContainerByThumbTop\(state, rawTop\);/s
+  );
+  assert.match(
+    handlerSource,
+    /chatLayout\.addEventListener\('pointerdown', handleMinimapPassthroughPointerDown, true\);/
+  );
+  assert.match(
+    handlerSource,
+    /chatLayout\.addEventListener\('pointermove', handleMinimapPassthroughPointerMove, true\);/
+  );
   assert.doesNotMatch(
     handlerSource,
     /scrollContainerByNativeWheelDelta|normalizeWheelDeltaToScrollPixels/

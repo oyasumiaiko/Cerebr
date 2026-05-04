@@ -1259,6 +1259,92 @@
       scheduleMinimapRender();
     }
 
+    function isPointInsideRect(clientX, clientY, rect) {
+      return !!rect
+        && clientX >= rect.left
+        && clientX <= rect.right
+        && clientY >= rect.top
+        && clientY <= rect.bottom;
+    }
+
+    function resolvePassthroughMinimapStateAtPoint(clientX, clientY) {
+      if (isMinimapWheelMessageStepEnabled()) return null;
+      for (let i = minimapStates.length - 1; i >= 0; i -= 1) {
+        const state = minimapStates[i];
+        if (!state?.root || !state.root.classList.contains('chat-scroll-minimap--active')) continue;
+        if (isPointInsideRect(clientX, clientY, state.root.getBoundingClientRect())) {
+          return state;
+        }
+      }
+      return null;
+    }
+
+    function getMinimapPassthroughDragState() {
+      return minimapStates.find((state) => (
+        state?.dragSession && state.dragCaptureTarget === chatLayout
+      )) || null;
+    }
+
+    function syncMinimapPassthroughHoverState(activeState) {
+      if (isMinimapWheelMessageStepEnabled()) return;
+      for (const state of minimapStates) {
+        if (!state?.root || state.dragSession) continue;
+        if (state === activeState) {
+          setMinimapInteractionVisible(state, true);
+          scheduleMinimapInteractionAutoHide(state);
+          continue;
+        }
+        clearMinimapInteractionTimer(state);
+        state.root.classList.remove('chat-scroll-minimap--interacting');
+      }
+    }
+
+    function handleMinimapPassthroughPointerDown(event) {
+      if (event.button !== 0) return;
+      const state = resolvePassthroughMinimapStateAtPoint(event.clientX, event.clientY);
+      if (!state?.root || !state?.thumb) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      setMinimapInteractionVisible(state, true);
+      scheduleMinimapInteractionAutoHide(state);
+
+      const thumbRect = state.thumb.getBoundingClientRect();
+      if (isPointInsideRect(event.clientX, event.clientY, thumbRect)) {
+        stopMinimapWheelAnimation(state);
+        beginMinimapDrag(state, event.pointerId, event.clientY - thumbRect.top, { captureTarget: chatLayout });
+        return;
+      }
+
+      const rootRect = state.root.getBoundingClientRect();
+      const thumbHeight = Math.max(0, state.thumb?.offsetHeight || 0);
+      const dragOffset = thumbHeight > 0 ? (thumbHeight / 2) : 0;
+      beginMinimapDrag(state, event.pointerId, dragOffset, { captureTarget: chatLayout });
+      const rawTop = event.clientY - rootRect.top - dragOffset;
+      scrollContainerByThumbTop(state, rawTop);
+      if (state.key === 'chat') scheduleReadingAnchorCapture();
+      scheduleMinimapRender();
+    }
+
+    function handleMinimapPassthroughPointerMove(event) {
+      const dragState = getMinimapPassthroughDragState();
+      if (dragState) {
+        handleMinimapThumbPointerMove(dragState, event);
+        event.stopPropagation();
+        return;
+      }
+      syncMinimapPassthroughHoverState(
+        resolvePassthroughMinimapStateAtPoint(event.clientX, event.clientY)
+      );
+    }
+
+    function finishMinimapPassthroughDrag(event) {
+      const dragState = getMinimapPassthroughDragState();
+      if (!dragState) return;
+      finishMinimapThumbDrag(dragState, event);
+      event.stopPropagation();
+    }
+
     function handleMinimapPointerDown(state, event) {
       if (!state?.root || !state.root.classList.contains('chat-scroll-minimap--active')) return;
       if (event.button !== 0) return;
@@ -1668,6 +1754,11 @@
     if (threadContainer) {
       threadContainer.addEventListener('scroll', handleThreadScroll, { passive: true });
     }
+    chatLayout.addEventListener('pointerdown', handleMinimapPassthroughPointerDown, true);
+    chatLayout.addEventListener('pointermove', handleMinimapPassthroughPointerMove, true);
+    chatLayout.addEventListener('pointerup', finishMinimapPassthroughDrag, true);
+    chatLayout.addEventListener('pointercancel', finishMinimapPassthroughDrag, true);
+    chatLayout.addEventListener('lostpointercapture', finishMinimapPassthroughDrag, true);
 
     function handleWindowResize() {
       scheduleLayoutUpdate({ checkWrapWidth: true });
@@ -1791,6 +1882,11 @@
       }
       chatContainer.removeEventListener('load', handleContentLoad, true);
       chatContainer.removeEventListener('scroll', handleChatScroll);
+      chatLayout.removeEventListener('pointerdown', handleMinimapPassthroughPointerDown, true);
+      chatLayout.removeEventListener('pointermove', handleMinimapPassthroughPointerMove, true);
+      chatLayout.removeEventListener('pointerup', finishMinimapPassthroughDrag, true);
+      chatLayout.removeEventListener('pointercancel', finishMinimapPassthroughDrag, true);
+      chatLayout.removeEventListener('lostpointercapture', finishMinimapPassthroughDrag, true);
       if (threadContainer) {
         threadContainer.removeEventListener('load', handleContentLoad, true);
         threadContainer.removeEventListener('scroll', handleThreadScroll);
