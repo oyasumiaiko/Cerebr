@@ -54,13 +54,23 @@ test('文件创建面板支持导入本地文件，并为无文件名上传兜�
 
 test('文件创建面板支持添加只读 local 文件与文件夹映射', async () => {
   const composerSource = await readWorkspaceFile('src/ui/conversation_document_composer.js');
+  const pickerHtml = await readWorkspaceFile('src/ui/local_file_picker/local_file_picker.html');
+  const pickerScript = await readWorkspaceFile('src/ui/local_file_picker/local_file_picker.js');
   const contentScript = await readWorkspaceFile('src/extension/content.js');
 
   assert.match(composerSource, /showOpenFilePicker/);
   assert.match(composerSource, /showDirectoryPicker/);
+  assert.match(composerSource, /isEmbeddedExtensionFrame/);
+  assert.match(composerSource, /LOCAL_FILE_PICKER_MESSAGE_TYPE/);
+  assert.match(composerSource, /window\.open/);
   assert.match(composerSource, /添加本地文件/);
   assert.match(composerSource, /添加本地文件夹/);
   assert.match(composerSource, /putLocalFileMount/);
   assert.match(composerSource, /consumePendingLocalMountEnvironmentEntries/);
+  assert.match(pickerHtml, /local_file_picker\.js/);
+  assert.match(pickerScript, /window\.showOpenFilePicker/);
+  assert.match(pickerScript, /window\.showDirectoryPicker/);
+  assert.match(pickerScript, /window\.opener\.postMessage/);
+  assert.match(pickerScript, /CEREBR_LOCAL_FILE_PICKER_RESULT/);
   assert.match(contentScript, /file-system-access/);
 });

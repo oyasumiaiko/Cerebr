@@ -80,6 +80,10 @@ function buildUploadedFileEventId() {
   return `${buildTimestampSuffix()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+const LOCAL_FILE_PICKER_MESSAGE_TYPE = 'CEREBR_LOCAL_FILE_PICKER_RESULT';
+const LOCAL_FILE_PICKER_PAGE_PATH = 'src/ui/local_file_picker/local_file_picker.html';
+const LOCAL_FILE_PICKER_TIMEOUT_MS = 5 * 60 * 1000;
+
 function getComposerAccessoryMount(dom) {
   const host = dom?.composerAccessoryRegion || dom?.inputContainer || null;
   if (!host) return { host: null, anchor: null };
@@ -234,6 +238,152 @@ export function createConversationDocumentComposer(appContext) {
     services.uiManager?.updateSendButtonState?.();
   }
 
+  function isEmbeddedExtensionFrame() {
+    try {
+      return window.top !== window;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  function createPickerAbortError(message) {
+    try {
+      return new DOMException(message, 'AbortError');
+    } catch (_) {
+      const error = new Error(message);
+      error.name = 'AbortError';
+      return error;
+    }
+  }
+
+  function getExtensionOrigin() {
+    try {
+      if (typeof chrome !== 'undefined' && chrome.runtime?.getURL) {
+        return new URL(chrome.runtime.getURL('/')).origin;
+      }
+    } catch (_) {}
+    return window.location.origin;
+  }
+
+  function buildLocalPickerUrl(kind, requestId) {
+    if (typeof chrome === 'undefined' || !chrome.runtime?.getURL) {
+      throw new Error('当前扩展环境没有可用的 chrome.runtime.getURL，无法打开本地文件选择窗口。');
+    }
+    const url = new URL(chrome.runtime.getURL(LOCAL_FILE_PICKER_PAGE_PATH));
+    url.searchParams.set('kind', kind === 'directory' ? 'directory' : 'file');
+    url.searchParams.set('requestId', requestId);
+    return url.toString();
+  }
+
+  function pickLocalHandleInTopLevelPage(kind) {
+    const normalizedKind = kind === 'directory' ? 'directory' : 'file';
+    const requestId = buildUploadedFileEventId();
+    const pickerUrl = buildLocalPickerUrl(normalizedKind, requestId);
+    const extensionOrigin = getExtensionOrigin();
+
+    return new Promise((resolve, reject) => {
+      let popupWindow = null;
+      let closeTimer = null;
+      let timeoutTimer = null;
+      let settled = false;
+
+      const cleanup = () => {
+        window.removeEventListener('message', handlePickerMessage);
+        if (closeTimer != null) {
+          clearInterval(closeTimer);
+          closeTimer = null;
+        }
+        if (timeoutTimer != null) {
+          clearTimeout(timeoutTimer);
+          timeoutTimer = null;
+        }
+      };
+
+      const settle = (callback, value) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        callback(value);
+      };
+
+      function handlePickerMessage(event) {
+        if (!event || event.origin !== extensionOrigin) return;
+        if (popupWindow && event.source && event.source !== popupWindow) return;
+        const data = event.data || {};
+        if (data.type !== LOCAL_FILE_PICKER_MESSAGE_TYPE || data.requestId !== requestId) return;
+        if (data.status === 'selected' && data.handle) {
+          settle(resolve, data.handle);
+          return;
+        }
+        if (data.status === 'aborted') {
+          settle(reject, createPickerAbortError('用户取消了本地文件选择。'));
+          return;
+        }
+        const error = new Error(data.error?.message || '本地文件选择失败。');
+        error.name = data.error?.name || 'LocalFilePickerError';
+        settle(reject, error);
+      }
+
+      window.addEventListener('message', handlePickerMessage);
+      popupWindow = window.open(
+        pickerUrl,
+        `cerebr-local-file-picker-${requestId}`,
+        'popup,width=520,height=360'
+      );
+
+      if (!popupWindow) {
+        settle(reject, new Error('浏览器阻止了本地文件选择窗口。请允许弹窗后重试。'));
+        return;
+      }
+
+      closeTimer = setInterval(() => {
+        if (popupWindow?.closed) {
+          settle(reject, createPickerAbortError('本地文件选择窗口已关闭。'));
+        }
+      }, 500);
+      timeoutTimer = setTimeout(() => {
+        settle(reject, createPickerAbortError('本地文件选择超时。'));
+        try {
+          popupWindow?.close?.();
+        } catch (_) {}
+      }, LOCAL_FILE_PICKER_TIMEOUT_MS);
+      try {
+        popupWindow.focus?.();
+      } catch (_) {}
+    });
+  }
+
+  async function pickLocalFileHandleDirectly() {
+    if (typeof window.showOpenFilePicker !== 'function') {
+      throw new Error('当前浏览器环境不支持 File System Access API，无法添加本地文件映射。');
+    }
+    const handles = await window.showOpenFilePicker({
+      multiple: false
+    });
+    return Array.isArray(handles) ? handles[0] : null;
+  }
+
+  async function pickLocalDirectoryHandleDirectly() {
+    if (typeof window.showDirectoryPicker !== 'function') {
+      throw new Error('当前浏览器环境不支持 File System Access API，无法添加本地文件夹映射。');
+    }
+    return await window.showDirectoryPicker({
+      mode: 'read'
+    });
+  }
+
+  async function pickLocalHandle(kind) {
+    const normalizedKind = kind === 'directory' ? 'directory' : 'file';
+    // Chrome 不允许跨域 iframe 直接弹出 File System Access picker。
+    // 嵌入式 sidebar 因此必须委托给顶层 extension helper 页，再用 postMessage 结构化克隆 handle。
+    if (isEmbeddedExtensionFrame()) {
+      return await pickLocalHandleInTopLevelPage(normalizedKind);
+    }
+    return normalizedKind === 'directory'
+      ? await pickLocalDirectoryHandleDirectly()
+      : await pickLocalFileHandleDirectly();
+  }
+
   async function mountLocalHandle(handle, kind) {
     if (!handle || typeof handle !== 'object') {
       throw new Error('没有可用的本地文件句柄。');
@@ -264,23 +414,12 @@ export function createConversationDocumentComposer(appContext) {
   }
 
   async function mountLocalFile() {
-    if (typeof window.showOpenFilePicker !== 'function') {
-      throw new Error('当前浏览器环境不支持 File System Access API，无法添加本地文件映射。');
-    }
-    const handles = await window.showOpenFilePicker({
-      multiple: false
-    });
-    const handle = Array.isArray(handles) ? handles[0] : null;
+    const handle = await pickLocalHandle('file');
     return await mountLocalHandle(handle, 'file');
   }
 
   async function mountLocalDirectory() {
-    if (typeof window.showDirectoryPicker !== 'function') {
-      throw new Error('当前浏览器环境不支持 File System Access API，无法添加本地文件夹映射。');
-    }
-    const handle = await window.showDirectoryPicker({
-      mode: 'read'
-    });
+    const handle = await pickLocalHandle('directory');
     return await mountLocalHandle(handle, 'directory');
   }
 

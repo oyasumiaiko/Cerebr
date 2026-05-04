@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cerebr 本地文件选择</title>
+  <link rel="stylesheet" href="./local_file_picker.css">
+</head>
+<body>
+  <main class="picker-shell">
+    <section class="picker-panel" aria-live="polite">
+      <div class="picker-kicker">Cerebr</div>
+      <h1 id="picker-title">选择本地文件</h1>
+      <p id="picker-description" class="picker-description">
+        当前 sidebar 位于网页内嵌 iframe 中，需要在这个顶层扩展窗口里完成浏览器授权。
+      </p>
+      <div id="picker-status" class="picker-status">等待选择。</div>
+      <div class="picker-actions">
+        <button id="pick-button" type="button" class="primary-button">选择</button>
+        <button id="cancel-button" type="button" class="secondary-button">取消</button>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="./local_file_picker.js"></script>
+</body>
+</html>

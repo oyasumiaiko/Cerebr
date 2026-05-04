@@ -1,0 +1,98 @@
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #f6f7f9;
+  color: #20242a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    background: #1f232a;
+    color: #e6edf3;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 360px;
+  min-height: 260px;
+}
+
+.picker-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+}
+
+.picker-panel {
+  width: min(100%, 440px);
+  border: 1px solid color-mix(in srgb, currentColor 14%, transparent);
+  border-radius: 8px;
+  padding: 20px;
+  background: color-mix(in srgb, Canvas 92%, transparent);
+  box-shadow: 0 18px 50px rgb(0 0 0 / 16%);
+}
+
+.picker-kicker {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  color: color-mix(in srgb, currentColor 62%, transparent);
+}
+
+h1 {
+  margin: 6px 0 8px;
+  font-size: 20px;
+  line-height: 1.25;
+}
+
+.picker-description {
+  margin: 0;
+  color: color-mix(in srgb, currentColor 72%, transparent);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.picker-status {
+  margin-top: 14px;
+  min-height: 20px;
+  font-size: 13px;
+  color: color-mix(in srgb, currentColor 78%, transparent);
+}
+
+.picker-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+button {
+  min-width: 88px;
+  border: 1px solid color-mix(in srgb, currentColor 20%, transparent);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
+.primary-button {
+  color: #fff;
+  background: #2368d9;
+  border-color: #2368d9;
+}
+
+.secondary-button {
+  color: currentColor;
+  background: transparent;
+}
