@@ -188,9 +188,19 @@ async function main() {
     await secondFrame.locator('#message-input').fill('second sidebar draft');
     const firstDraftAfter = await firstFrame.locator('#message-input').textContent();
     const secondDraftAfter = await secondFrame.locator('#message-input').textContent();
-    const primaryButtonTitle = await firstFrame.locator('#add-sidebar-button').getAttribute('title');
-    const secondaryButtonTitle = await secondFrame.locator('#add-sidebar-button').getAttribute('title');
     const secondInstanceId = extractInstanceId(secondFrame.url());
+    const sidebarButtonTitles = await waitFor(async () => {
+      const primaryTitle = await firstFrame.locator('#add-sidebar-button').getAttribute('title');
+      const secondaryTitle = await secondFrame.locator('#add-sidebar-button').getAttribute('title');
+      return primaryTitle === '新建并行侧栏' && secondaryTitle === '关闭此侧栏'
+        ? { primaryButtonTitle: primaryTitle, secondaryButtonTitle: secondaryTitle }
+        : null;
+    }, {
+      timeoutMs: 20_000,
+      intervalMs: 250,
+      label: 'primary and secondary sidebar button roles'
+    });
+    const { primaryButtonTitle, secondaryButtonTitle } = sidebarButtonTitles;
     result.draftIsolation = {
       firstDraftBefore,
       secondDraftBefore,
@@ -204,9 +214,6 @@ async function main() {
     }
     if ((secondDraftBefore || '') !== '' || secondDraftAfter !== 'second sidebar draft') {
       throw new Error('Second sidebar draft is not isolated from the primary sidebar.');
-    }
-    if (primaryButtonTitle !== '新建并行侧栏' || secondaryButtonTitle !== '关闭此侧栏') {
-      throw new Error(`Unexpected sidebar button titles: ${JSON.stringify({ primaryButtonTitle, secondaryButtonTitle })}`);
     }
     result.steps.push('draft_isolation_verified');
     result.steps.push('secondary_close_button_verified');
@@ -283,6 +290,49 @@ async function main() {
     });
     result.fullscreenAfterCloseDebugState = fullscreenAfterCloseDebugState;
     result.steps.push('fullscreen_sidebar_destroyed_and_resplit');
+
+    const sortedFullscreenStatesBeforeSplitResize = (fullscreenAfterCloseDebugState.instances || [])
+      .filter((item) => item?.isActuallyVisible && item?.isFullscreen && item?.rect)
+      .sort((a, b) => a.rect.x - b.rect.x);
+    const leftSplitBeforeResize = sortedFullscreenStatesBeforeSplitResize[0] || null;
+    const rightSplitBeforeResize = sortedFullscreenStatesBeforeSplitResize[1] || null;
+    if (!leftSplitBeforeResize || !rightSplitBeforeResize || !leftSplitBeforeResize.hasFullscreenDivider) {
+      throw new Error('Cannot find fullscreen split divider before resizing.');
+    }
+    const viewportWidthForSplitResize = Number(page.viewportSize()?.width) || 1920;
+    const splitResizeDelta = Math.min(220, Math.max(120, viewportWidthForSplitResize * 0.14));
+    await page.mouse.move(
+      leftSplitBeforeResize.rect.x + leftSplitBeforeResize.rect.width - 4,
+      leftSplitBeforeResize.rect.y + Math.round(leftSplitBeforeResize.rect.height / 2)
+    );
+    await page.mouse.down();
+    await page.mouse.move(
+      leftSplitBeforeResize.rect.x + leftSplitBeforeResize.rect.width + splitResizeDelta,
+      leftSplitBeforeResize.rect.y + Math.round(leftSplitBeforeResize.rect.height / 2),
+      { steps: 14 }
+    );
+    await page.mouse.up();
+
+    const fullscreenSplitResizeDebugState = await waitFor(async () => {
+      const payload = await extensionWorker.evaluate(
+        buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
+      );
+      const state = payload?.response?.debugState || null;
+      const leftState = findInstanceState(state, leftSplitBeforeResize.instanceId);
+      const rightState = findInstanceState(state, rightSplitBeforeResize.instanceId);
+      return leftState?.rect?.width > leftSplitBeforeResize.rect.width + 60
+        && rightState?.rect?.width < rightSplitBeforeResize.rect.width - 60
+        && leftState?.hasFullscreenDivider === true
+        && rightState?.hasFullscreenDivider === false
+        ? state
+        : null;
+    }, {
+      timeoutMs: 20_000,
+      intervalMs: 250,
+      label: 'fullscreen split divider resizes pane ratios'
+    });
+    result.fullscreenSplitResizeDebugState = fullscreenSplitResizeDebugState;
+    result.steps.push('fullscreen_split_divider_ratio_resize_verified');
 
     const exitFullscreenResponse = await extensionWorker.evaluate(
       buildSendContentMessageExpression(JSON.stringify({ type: 'TOGGLE_FULLSCREEN_FROM_BACKGROUND' }))

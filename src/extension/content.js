@@ -501,6 +501,13 @@ class CerebrSidebar {
       sidebarPosition: this.sidebarPosition || 'right',
       stackOffsetPx: this.stackOffsetPx,
       sidebarWidth: Math.round(Number(this.sidebarWidth) || 0),
+      fullscreenSplitIndex: Number.isFinite(Number(this.sidebar.dataset.cerebrFullscreenSplitIndex))
+        ? Number(this.sidebar.dataset.cerebrFullscreenSplitIndex)
+        : null,
+      fullscreenSplitRatio: Number.isFinite(Number(this.sidebar.dataset.cerebrFullscreenSplitRatio))
+        ? Number(this.sidebar.dataset.cerebrFullscreenSplitRatio)
+        : null,
+      hasFullscreenDivider: this.sidebar.classList.contains('has-fullscreen-divider'),
       hasVisibleClass,
       hasIframe,
       inlineDisplay,
@@ -616,6 +623,10 @@ class CerebrSidebar {
           transition: none !important;
         }
 
+        .cerebr-sidebar.fullscreen-split-resizing {
+          transition: none !important;
+        }
+
         .cerebr-sidebar__header {
           position: absolute;
           top: 0;
@@ -719,6 +730,39 @@ class CerebrSidebar {
           opacity: 1;
         }
 
+        .cerebr-sidebar__fullscreen-divider {
+          position: absolute;
+          top: 0;
+          right: 0;
+          bottom: 0;
+          width: 14px;
+          z-index: 4;
+          display: none;
+          cursor: col-resize;
+          pointer-events: auto;
+          opacity: 0;
+          transition: opacity 0.16s ease;
+        }
+
+        .cerebr-sidebar__fullscreen-divider::before {
+          content: '';
+          position: absolute;
+          top: 0;
+          bottom: 0;
+          right: 5px;
+          width: 2px;
+          background: rgba(120, 120, 120, 0.42);
+        }
+
+        .cerebr-sidebar.fullscreen.fullscreen-split.has-fullscreen-divider .cerebr-sidebar__fullscreen-divider {
+          display: block;
+        }
+
+        .cerebr-sidebar.fullscreen.fullscreen-split.has-fullscreen-divider .cerebr-sidebar__fullscreen-divider:hover,
+        .cerebr-sidebar.fullscreen.fullscreen-split-resizing .cerebr-sidebar__fullscreen-divider {
+          opacity: 1;
+        }
+
         .cerebr-sidebar.fullscreen {
           transition: all 0s !important;
 
@@ -786,6 +830,9 @@ class CerebrSidebar {
       const resizer = document.createElement('div');
       resizer.className = 'cerebr-sidebar__resizer';
 
+      const fullscreenDivider = document.createElement('div');
+      fullscreenDivider.className = 'cerebr-sidebar__fullscreen-divider';
+
       const content = document.createElement('div');
       content.className = 'cerebr-sidebar__content';
 
@@ -826,6 +873,7 @@ class CerebrSidebar {
       content.appendChild(iframe);
       this.sidebar.appendChild(header);
       this.sidebar.appendChild(resizer);
+      this.sidebar.appendChild(fullscreenDivider);
       this.sidebar.appendChild(content);
 
       // 添加侧边栏到DOM
@@ -888,7 +936,7 @@ class CerebrSidebar {
 
       // console.log('侧边栏已添加到文档');
 
-      this.setupEventListeners(header, resizer);
+      this.setupEventListeners(header, resizer, fullscreenDivider);
 
       // 使用 requestAnimationFrame 确保状态已经应用
       requestAnimationFrame(() => {
@@ -915,7 +963,7 @@ class CerebrSidebar {
     }
   }
 
-  setupEventListeners(header, resizer) {
+  setupEventListeners(header, resizer, fullscreenDivider) {
     let startX, startWidth;
 
     resizer.addEventListener('mousedown', (e) => {
@@ -961,6 +1009,13 @@ class CerebrSidebar {
       event.preventDefault();
       event.stopPropagation();
       this.manager?.startSidebarDrag?.(this, event);
+    });
+
+    fullscreenDivider?.addEventListener('mousedown', (event) => {
+      if (!this.isFullscreen) return;
+      event.preventDefault();
+      event.stopPropagation();
+      this.manager?.startFullscreenSplitResize?.(this, event);
     });
 
   }
@@ -1143,22 +1198,37 @@ class CerebrSidebar {
     this.manager?.layoutSidebars?.();
   }
 
-  applyFullscreenSplitLayout(index, total) {
+  applyFullscreenSplitLayout(index, total, layout = null) {
     if (!this.sidebar || !this.isFullscreen) return;
     const safeTotal = Math.max(1, Number(total) || 1);
     const safeIndex = Math.min(Math.max(0, Number(index) || 0), safeTotal - 1);
-    const widthExpression = `calc(100vw / ${safeTotal})`;
-    const leftExpression = `calc(100vw * ${safeIndex} / ${safeTotal})`;
+    const layoutLeftRatio = Number(layout?.leftRatio);
+    const layoutWidthRatio = Number(layout?.widthRatio);
+    const leftRatio = Number.isFinite(layoutLeftRatio)
+      ? Math.max(0, layoutLeftRatio)
+      : safeIndex / safeTotal;
+    const widthRatio = Number.isFinite(layoutWidthRatio) && layoutWidthRatio > 0
+      ? layoutWidthRatio
+      : 1 / safeTotal;
+    const widthExpression = `${(widthRatio * 100).toFixed(6)}vw`;
+    const leftExpression = `${(leftRatio * 100).toFixed(6)}vw`;
     this.sidebar.classList.add('fullscreen-split');
+    this.sidebar.classList.toggle('has-fullscreen-divider', layout?.hasDivider === true);
     this.sidebar.style.setProperty('--cerebr-fullscreen-left', leftExpression);
     this.sidebar.style.setProperty('--cerebr-fullscreen-width', widthExpression);
+    this.sidebar.dataset.cerebrFullscreenSplitIndex = String(safeIndex);
+    this.sidebar.dataset.cerebrFullscreenSplitRatio = widthRatio.toFixed(8);
   }
 
   clearFullscreenSplitLayout() {
     if (!this.sidebar) return;
     this.sidebar.classList.remove('fullscreen-split');
+    this.sidebar.classList.remove('has-fullscreen-divider');
+    this.sidebar.classList.remove('fullscreen-split-resizing');
     this.sidebar.style.removeProperty('--cerebr-fullscreen-left');
     this.sidebar.style.removeProperty('--cerebr-fullscreen-width');
+    delete this.sidebar.dataset.cerebrFullscreenSplitIndex;
+    delete this.sidebar.dataset.cerebrFullscreenSplitRatio;
   }
   
   // 通知iframe全屏状态变化
@@ -1254,6 +1324,9 @@ class CerebrSidebarManager {
     this.isAltKeyPressed = false;
     this.nextInstanceSeq = 1;
     this.multiFullscreenRestoreStateById = null;
+    // 全屏分栏比例只服务当前页面当前生命周期，不写入 chrome.storage；
+    // 这样用户可以临时拖出适合本次阅读/对话的比例，刷新页面后自然回到默认平分。
+    this.fullscreenSplitRatioById = new Map();
     this.createSidebar({ show: false, isPrimary: true });
     this.setupUrlChangeListener();
     this.setupHostEventListeners();
@@ -1343,6 +1416,7 @@ class CerebrSidebarManager {
     this.sidebars.splice(index, 1);
     this.sidebarById.delete(sidebarInstance.instanceId);
     this.multiFullscreenRestoreStateById?.delete?.(sidebarInstance.instanceId);
+    this.fullscreenSplitRatioById?.delete?.(sidebarInstance.instanceId);
     sidebarInstance.dispose();
 
     if (this.activeSidebarId === sidebarInstance.instanceId) {
@@ -1353,6 +1427,7 @@ class CerebrSidebarManager {
 
     if (this.sidebars.length <= 1) {
       this.multiFullscreenRestoreStateById = null;
+      this.fullscreenSplitRatioById.clear();
     }
     this.layoutSidebars();
   }
@@ -1414,6 +1489,128 @@ class CerebrSidebarManager {
       && this.sidebars.some((item) => item?.isFullscreen);
   }
 
+  getFullscreenLayoutSidebars() {
+    return this.sidebars.filter((item) => (
+      item?.isVisible
+      && item?.isFullscreen
+      && item?.sidebar
+    ));
+  }
+
+  getViewportWidth() {
+    return Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1);
+  }
+
+  getFullscreenSplitMinRatio(count, viewportWidth = this.getViewportWidth()) {
+    const safeCount = Math.max(1, Number(count) || 1);
+    const safeViewportWidth = Math.max(1, Number(viewportWidth) || 1);
+    const averagePaneWidth = safeViewportWidth / safeCount;
+    const minPaneWidth = Math.min(320, Math.max(80, averagePaneWidth * 0.8));
+    return Math.min(0.45, minPaneWidth / safeViewportWidth);
+  }
+
+  normalizeRatiosWithMinimum(ratios, minRatio) {
+    const safeRatios = Array.isArray(ratios) ? ratios : [];
+    const count = safeRatios.length;
+    if (count <= 0) return [];
+
+    const equalRatio = 1 / count;
+    const safeMinRatio = Math.min(Math.max(0, Number(minRatio) || 0), equalRatio * 0.9);
+    const positiveRatios = safeRatios.map((value) => {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) && numeric > 0 ? numeric : 0;
+    });
+    const total = positiveRatios.reduce((sum, value) => sum + value, 0);
+    const normalizedRatios = total > 0
+      ? positiveRatios.map((value) => value / total)
+      : safeRatios.map(() => equalRatio);
+    const minimumTotal = safeMinRatio * count;
+    if (minimumTotal <= 0) return normalizedRatios;
+    if (minimumTotal >= 1) return safeRatios.map(() => equalRatio);
+
+    const excessRatios = normalizedRatios.map((value) => Math.max(0, value - safeMinRatio));
+    const excessTotal = excessRatios.reduce((sum, value) => sum + value, 0);
+    if (excessTotal <= 0) return safeRatios.map(() => equalRatio);
+
+    const adjustableTotal = 1 - minimumTotal;
+    return excessRatios.map((value) => safeMinRatio + (value / excessTotal) * adjustableTotal);
+  }
+
+  ensureFullscreenSplitRatios(fullscreenSidebars) {
+    const sidebars = Array.isArray(fullscreenSidebars) ? fullscreenSidebars : [];
+    const count = sidebars.length;
+    if (count <= 0) return [];
+
+    const activeIds = new Set(sidebars.map((item) => item.instanceId));
+    for (const instanceId of Array.from(this.fullscreenSplitRatioById.keys())) {
+      if (!activeIds.has(instanceId)) {
+        this.fullscreenSplitRatioById.delete(instanceId);
+      }
+    }
+
+    const equalRatio = 1 / count;
+    const rawRatios = sidebars.map((item) => {
+      const ratio = Number(this.fullscreenSplitRatioById.get(item.instanceId));
+      return Number.isFinite(ratio) && ratio > 0 ? ratio : null;
+    });
+    const knownRatios = rawRatios.filter((value) => value !== null);
+    let nextRatios;
+
+    if (knownRatios.length === 0) {
+      nextRatios = sidebars.map(() => equalRatio);
+    } else {
+      const knownTotal = knownRatios.reduce((sum, value) => sum + value, 0);
+      const missingCount = count - knownRatios.length;
+      if (knownTotal <= 0) {
+        nextRatios = sidebars.map(() => equalRatio);
+      } else if (missingCount > 0) {
+        const missingTotal = equalRatio * missingCount;
+        const knownTargetTotal = Math.max(0, 1 - missingTotal);
+        nextRatios = rawRatios.map((value) => (
+          value === null
+            ? equalRatio
+            : (value / knownTotal) * knownTargetTotal
+        ));
+      } else {
+        nextRatios = rawRatios.map((value) => value / knownTotal);
+      }
+    }
+
+    const minRatio = this.getFullscreenSplitMinRatio(count);
+    const normalizedRatios = this.normalizeRatiosWithMinimum(nextRatios, minRatio);
+    this.setFullscreenSplitRatios(sidebars, normalizedRatios);
+    return normalizedRatios;
+  }
+
+  setFullscreenSplitRatios(fullscreenSidebars, ratios) {
+    const sidebars = Array.isArray(fullscreenSidebars) ? fullscreenSidebars : [];
+    const normalizedRatios = this.normalizeRatiosWithMinimum(
+      Array.isArray(ratios) ? ratios : [],
+      this.getFullscreenSplitMinRatio(sidebars.length)
+    );
+    sidebars.forEach((item, index) => {
+      const ratio = normalizedRatios[index];
+      if (Number.isFinite(ratio) && ratio > 0) {
+        this.fullscreenSplitRatioById.set(item.instanceId, ratio);
+      }
+    });
+    return normalizedRatios;
+  }
+
+  buildFullscreenSplitLayouts(fullscreenSidebars) {
+    const ratios = this.ensureFullscreenSplitRatios(fullscreenSidebars);
+    let leftRatio = 0;
+    return ratios.map((widthRatio, index) => {
+      const layout = {
+        leftRatio,
+        widthRatio,
+        hasDivider: index < ratios.length - 1
+      };
+      leftRatio += widthRatio;
+      return layout;
+    });
+  }
+
   buildMultiFullscreenRestoreState() {
     const restoreStateById = new Map();
     this.sidebars.forEach((item) => {
@@ -1431,8 +1628,12 @@ class CerebrSidebarManager {
       return;
     }
 
+    const wasMultiFullscreenActive = this.isMultiSidebarFullscreenActive();
     if (!this.multiFullscreenRestoreStateById) {
       this.multiFullscreenRestoreStateById = this.buildMultiFullscreenRestoreState();
+    }
+    if (!wasMultiFullscreenActive) {
+      this.fullscreenSplitRatioById.clear();
     }
 
     // 多侧栏全屏是一个页面级布局状态：所有实例一起进入全屏并平分视口。
@@ -1463,6 +1664,7 @@ class CerebrSidebarManager {
     }
 
     this.multiFullscreenRestoreStateById = null;
+    this.fullscreenSplitRatioById.clear();
     document.documentElement.style.overflow = '';
     this.layoutSidebars();
   }
@@ -1559,17 +1761,70 @@ class CerebrSidebarManager {
     this.reorderSidebarFromPointer(sidebarInstance, startEvent.clientX);
   }
 
+  startFullscreenSplitResize(leftSidebar, startEvent) {
+    if (!leftSidebar?.isFullscreen || !leftSidebar?.sidebar) return;
+    const fullscreenSidebars = this.getFullscreenLayoutSidebars();
+    const dividerIndex = fullscreenSidebars.indexOf(leftSidebar);
+    if (dividerIndex < 0 || dividerIndex >= fullscreenSidebars.length - 1) return;
+
+    const rightSidebar = fullscreenSidebars[dividerIndex + 1];
+    const viewportWidth = this.getViewportWidth();
+    const startX = Number(startEvent?.clientX);
+    if (!Number.isFinite(startX)) return;
+
+    const startRatios = this.ensureFullscreenSplitRatios(fullscreenSidebars);
+    const pairTotal = startRatios[dividerIndex] + startRatios[dividerIndex + 1];
+    const minRatio = Math.min(
+      this.getFullscreenSplitMinRatio(fullscreenSidebars.length, viewportWidth),
+      pairTotal / 2
+    );
+    const interactionOverlay = this.createInteractionOverlay('col-resize');
+
+    leftSidebar.sidebar.classList.add('fullscreen-split-resizing');
+    rightSidebar?.sidebar?.classList.add('fullscreen-split-resizing');
+
+    const applyPointerX = (clientX) => {
+      const nextClientX = Number(clientX);
+      if (!Number.isFinite(nextClientX)) return;
+      const deltaRatio = (nextClientX - startX) / viewportWidth;
+      const unclampedLeftRatio = startRatios[dividerIndex] + deltaRatio;
+      const nextLeftRatio = Math.min(
+        Math.max(unclampedLeftRatio, minRatio),
+        pairTotal - minRatio
+      );
+      const nextRatios = startRatios.slice();
+      nextRatios[dividerIndex] = nextLeftRatio;
+      nextRatios[dividerIndex + 1] = pairTotal - nextLeftRatio;
+      this.setFullscreenSplitRatios(fullscreenSidebars, nextRatios);
+      this.layoutSidebars();
+    };
+
+    const handleMouseMove = (event) => {
+      applyPointerX(event.clientX);
+    };
+    const cleanupResize = (event) => {
+      applyPointerX(event?.clientX);
+      leftSidebar.sidebar?.classList.remove('fullscreen-split-resizing');
+      rightSidebar?.sidebar?.classList.remove('fullscreen-split-resizing');
+      interactionOverlay.removeEventListener('mousemove', handleMouseMove, true);
+      interactionOverlay.removeEventListener('mouseup', cleanupResize, true);
+      window.removeEventListener('blur', cleanupResize, true);
+      interactionOverlay.remove();
+    };
+
+    interactionOverlay.addEventListener('mousemove', handleMouseMove, true);
+    interactionOverlay.addEventListener('mouseup', cleanupResize, true);
+    window.addEventListener('blur', cleanupResize, true);
+  }
+
   layoutSidebars() {
     const gapPx = 12;
-    const fullscreenSidebars = this.sidebars.filter((item) => (
-      item?.isVisible
-      && item?.isFullscreen
-      && item?.sidebar
-    ));
+    const fullscreenSidebars = this.getFullscreenLayoutSidebars();
     if (fullscreenSidebars.length > 1) {
+      const layouts = this.buildFullscreenSplitLayouts(fullscreenSidebars);
       fullscreenSidebars.forEach((item, index) => {
         item.setStackOffsetPx(0);
-        item.applyFullscreenSplitLayout(index, fullscreenSidebars.length);
+        item.applyFullscreenSplitLayout(index, fullscreenSidebars.length, layouts[index]);
       });
       this.sidebars.forEach((item) => {
         if (!fullscreenSidebars.includes(item)) item.clearFullscreenSplitLayout();

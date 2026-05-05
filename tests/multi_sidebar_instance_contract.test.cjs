@@ -97,14 +97,27 @@ test('multi-sidebar fullscreen is coordinated by manager and split across viewpo
   assert.match(source, /toggleFullscreenForSidebar\(sidebarInstance\)/);
   assert.match(source, /enterMultiSidebarFullscreen\(sourceSidebar\)/);
   assert.match(source, /exitMultiSidebarFullscreen\(\)/);
-  assert.match(source, /applyFullscreenSplitLayout\(index, total\)/);
+  assert.match(source, /applyFullscreenSplitLayout\(index, total, layout = null\)/);
   assert.match(source, /--cerebr-fullscreen-left/);
   assert.match(source, /--cerebr-fullscreen-width/);
-  assert.match(source, /widthExpression = `calc\(100vw \/ \$\{safeTotal\}\)`/);
+  assert.match(source, /buildFullscreenSplitLayouts\(fullscreenSidebars\)/);
   assert.match(source, /case 'TOGGLE_FULLSCREEN_FROM_IFRAME':[\s\S]*this\.toggleFullscreenForSidebar\(sourceSidebar\)/);
   assert.match(source, /case 'TOGGLE_FULLSCREEN_FROM_BACKGROUND':[\s\S]*sidebarManager\?\.toggleFullscreenForSidebar\?\.\(targetSidebar\)/);
   assert.match(source, /case 'CLOSE_SIDEBAR':[\s\S]*this\.destroySidebar\(sourceSidebar\)/);
   assert.match(source, /this\.multiFullscreenRestoreStateById\.set\(sidebarInstance\.instanceId,[\s\S]*wasVisible: true/);
+});
+
+test('multi-sidebar fullscreen split dividers support temporary ratio resizing', async () => {
+  const source = await readRepoFile('src/extension/content.js');
+
+  assert.match(source, /fullscreenSplitRatioById = new Map\(\)/);
+  assert.match(source, /cerebr-sidebar__fullscreen-divider/);
+  assert.match(source, /startFullscreenSplitResize\(leftSidebar, startEvent\)/);
+  assert.match(source, /getFullscreenSplitMinRatio\(count, viewportWidth = this\.getViewportWidth\(\)\)/);
+  assert.match(source, /setFullscreenSplitRatios\(fullscreenSidebars, ratios\)/);
+  assert.match(source, /this\.fullscreenSplitRatioById\.clear\(\)/);
+  assert.match(source, /hasFullscreenDivider: this\.sidebar\.classList\.contains\('has-fullscreen-divider'\)/);
+  assert.doesNotMatch(source, /queueSyncSet\(\{\s*fullscreenSplit/);
 });
 
 test('host page tool requests carry sidebarInstanceId through sender and background relay', async () => {
