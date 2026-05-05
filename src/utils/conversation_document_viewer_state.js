@@ -1,6 +1,7 @@
 export const CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN = 'plain';
 export const CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN = 'markdown';
 export const CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT = 'code-highlight';
+export const CONVERSATION_DOCUMENT_VIEW_MODE_HTML_PREVIEW = 'html-preview';
 
 export const DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD = 'documentRenderMarkdownForMd';
 export const DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT = 'documentRenderMarkdownForTxt';
@@ -9,6 +10,7 @@ export const DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES = 'documentViewModeOverrides
 export const DOCUMENT_VIEWER_SETTING_FONT_SIZE_PERCENT = 'documentFontSizePercent';
 
 const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown']);
+const HTML_PREVIEW_EXTENSIONS = new Set(['html', 'htm']);
 const CODE_LANGUAGE_BY_EXTENSION = Object.freeze({
   js: 'javascript',
   cjs: 'javascript',
@@ -77,6 +79,7 @@ export function normalizeConversationDocumentViewMode(mode, fallback = CONVERSAT
     normalized === CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN
     || normalized === CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN
     || normalized === CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT
+    || normalized === CONVERSATION_DOCUMENT_VIEW_MODE_HTML_PREVIEW
   ) {
     return normalized;
   }
@@ -110,6 +113,10 @@ export function resolveConversationDocumentCodeLanguage(path) {
   return CODE_LANGUAGE_BY_EXTENSION[extension] || '';
 }
 
+export function isConversationDocumentHtmlPreviewPath(path) {
+  return HTML_PREVIEW_EXTENSIONS.has(getConversationDocumentFileExtension(path));
+}
+
 function normalizeConversationDocumentViewerSettings(settings = {}) {
   const safeSettings = (settings && typeof settings === 'object') ? settings : {};
   return {
@@ -136,7 +143,15 @@ export function resolveConversationDocumentRenderState(path, settings = {}) {
   let allowedModes = [CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN];
   let defaultMode = CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN;
 
-  if (MARKDOWN_EXTENSIONS.has(extension)) {
+  // HTML 文件默认作为可视化交付物预览，同时保留源码高亮与纯文本路径，方便用户检查模型生成的真实源码。
+  if (HTML_PREVIEW_EXTENSIONS.has(extension)) {
+    allowedModes = [
+      CONVERSATION_DOCUMENT_VIEW_MODE_HTML_PREVIEW,
+      CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT,
+      CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN
+    ];
+    defaultMode = CONVERSATION_DOCUMENT_VIEW_MODE_HTML_PREVIEW;
+  } else if (MARKDOWN_EXTENSIONS.has(extension)) {
     allowedModes = [
       CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN,
       CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN
@@ -172,6 +187,7 @@ export function resolveConversationDocumentRenderState(path, settings = {}) {
     defaultMode,
     mode,
     allowedModes,
+    allowHtmlPreviewToggle: allowedModes.includes(CONVERSATION_DOCUMENT_VIEW_MODE_HTML_PREVIEW),
     allowMarkdownToggle: allowedModes.includes(CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN),
     allowCodeHighlightToggle: allowedModes.includes(CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT)
   };

@@ -23,13 +23,37 @@ const {
 const MD_DOC_PATH = 'workspace/随笔-关于学习与判断.md';
 const TXT_DOC_PATH = 'workspace/文本文档.txt';
 const CODE_DOC_PATH = 'snippets/example.js';
+const HTML_DOC_PATH = 'workspace/preview.html';
 const PATCH_CALL_ID = 'call_conversation_document_apply_patch_1';
 const EXPECTED_FINAL_MARKER = 'CONVERSATION_DOCUMENT_TOOL_OK_20260413';
 const INITIAL_MD_DOC_CONTENT = '# 随笔\n\n第一版内容。\n';
 const INITIAL_TXT_DOC_CONTENT = '# 文本标题\n\n这是一段可以切换为 Markdown 渲染的 txt 内容。\n';
 const INITIAL_CODE_DOC_CONTENT = 'const answer = 42;\nconsole.log(answer);\n';
+const INITIAL_HTML_DOC_CONTENT = [
+  '<!doctype html>',
+  '<html lang="zh-CN">',
+  '  <head>',
+  '    <meta charset="utf-8" />',
+  '    <title>HTML Preview Regression</title>',
+  '    <style>',
+  '      body { margin: 0; font-family: system-ui, sans-serif; background: #f7fbff; color: #14213d; }',
+  '      main { min-height: 180px; display: grid; place-items: center; padding: 32px; }',
+  '      h1 { margin: 0; font-size: 28px; }',
+  '      p { margin: 8px 0 0; }',
+  '    </style>',
+  '  </head>',
+  '  <body>',
+  '    <main>',
+  '      <section>',
+  '        <h1 id="html-preview-title">HTML preview rendered</h1>',
+  '        <p>Created by the virtual file tool and rendered inside the document card.</p>',
+  '      </section>',
+  '    </main>',
+  '  </body>',
+  '</html>'
+].join('\n');
 const EDITED_MD_DOC_CONTENT = '# 随笔\n\n第二版内容。\n';
-const EXPECTED_DOWNLOAD_NAME = 'docs__随笔-关于学习与判断.md';
+const EXPECTED_DOWNLOAD_NAME = 'workspace__随笔-关于学习与判断.md';
 
 const [rawRepoRoot, outputDir, rawArg3 = '', rawArg4 = ''] = process.argv.slice(2);
 const repoRoot = rawRepoRoot ? path.resolve(rawRepoRoot) : '';
@@ -57,6 +81,8 @@ function createApplyPatchPayload() {
       ...INITIAL_TXT_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
       `*** Add File: ${CODE_DOC_PATH}`,
       ...INITIAL_CODE_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
+      `*** Add File: ${HTML_DOC_PATH}`,
+      ...INITIAL_HTML_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
       '*** End Patch'
     ].join('\n')
   };
@@ -313,7 +339,8 @@ async function runMockResponsesServer() {
             '',
             `[Markdown 文档](${MD_DOC_PATH})`,
             `[文本说明](${TXT_DOC_PATH})`,
-            `[代码示例](${CODE_DOC_PATH})`
+            `[代码示例](${CODE_DOC_PATH})`,
+            `[HTML 预览](${HTML_DOC_PATH})`
           ].join('\n');
           const messageItem = createMessageItem('msg_2', finalText);
           writeSseEvent(res, { type: 'response.created', response: { id: 'resp_2' } });
@@ -540,7 +567,7 @@ async function main() {
         throw new Error(`first request missing tool ${toolName}: ${JSON.stringify(result.firstRequestToolNames)}`);
       }
     }
-    for (const requiredPath of [MD_DOC_PATH, TXT_DOC_PATH, CODE_DOC_PATH]) {
+    for (const requiredPath of [MD_DOC_PATH, TXT_DOC_PATH, CODE_DOC_PATH, HTML_DOC_PATH]) {
       if (!result.functionCallOutputText.includes(requiredPath)) {
         throw new Error(`apply_patch follow-up output missing ${requiredPath}: ${result.functionCallOutputText}`);
       }
@@ -615,7 +642,7 @@ async function main() {
           text: (tile.textContent || '').trim(),
           title: tile.getAttribute('title') || ''
         }));
-        if (tiles.length < 3) return null;
+        if (tiles.length < 4) return null;
         return { tileCount: tiles.length, tiles };
       }).catch(() => null);
     }, {
@@ -628,6 +655,7 @@ async function main() {
     const mdCardRoot = sidebarFrame.locator(`.message.ai-message:last-child .conversation-document-card[data-document-path="${MD_DOC_PATH}"]`);
     const txtCardRoot = sidebarFrame.locator(`.message.ai-message:last-child .conversation-document-card[data-document-path="${TXT_DOC_PATH}"]`);
     const codeCardRoot = sidebarFrame.locator(`.message.ai-message:last-child .conversation-document-card[data-document-path="${CODE_DOC_PATH}"]`);
+    const htmlCardRoot = sidebarFrame.locator(`.message.ai-message:last-child .conversation-document-card[data-document-path="${HTML_DOC_PATH}"]`);
 
     await sidebarFrame.locator(`.message.ai-message:last-child .conversation-document-attachments__tile[title="${MD_DOC_PATH}"]`).click();
     result.initialCardContent = await waitFor(async () => {
@@ -785,6 +813,66 @@ async function main() {
       timeoutMs: 30_000,
       intervalMs: 250,
       label: 'code toggled to plain'
+    });
+
+    await htmlCardRoot.locator('summary').click();
+    result.htmlPreviewState = await waitFor(async () => {
+      return await htmlCardRoot.evaluate((card) => {
+        const content = card.querySelector('.conversation-document-card__content');
+        const frame = card.querySelector('iframe.conversation-document-card__html-frame');
+        if (!content || !frame) return null;
+        const isHtmlPreview = content.classList.contains('conversation-document-card__content--html-preview');
+        const sandbox = frame.getAttribute('sandbox') || '';
+        const srcdoc = frame.getAttribute('srcdoc') || '';
+        if (!isHtmlPreview || !srcdoc.includes('HTML preview rendered')) return null;
+        return {
+          modeClass: Array.from(content.classList),
+          sandbox,
+          srcdocLength: srcdoc.length
+        };
+      }).catch(() => null);
+    }, {
+      timeoutMs: 30_000,
+      intervalMs: 250,
+      label: 'html document iframe preview'
+    });
+    if (result.htmlPreviewState.sandbox.includes('allow-same-origin')) {
+      throw new Error(`HTML preview iframe must not allow same-origin: ${result.htmlPreviewState.sandbox}`);
+    }
+
+    const htmlFrameHandle = await htmlCardRoot.locator('iframe.conversation-document-card__html-frame').elementHandle();
+    const htmlPreviewFrame = htmlFrameHandle ? await htmlFrameHandle.contentFrame() : null;
+    if (!htmlPreviewFrame) {
+      throw new Error('HTML preview iframe content frame unavailable');
+    }
+    result.htmlPreviewFrameText = await waitFor(async () => {
+      const text = await htmlPreviewFrame.locator('#html-preview-title').textContent().catch(() => null);
+      return text && text.includes('HTML preview rendered') ? text : null;
+    }, {
+      timeoutMs: 30_000,
+      intervalMs: 250,
+      label: 'html preview rendered DOM'
+    });
+
+    await htmlCardRoot.locator('.conversation-document-card__tool-button--mode').click();
+    result.htmlSourceState = await waitFor(async () => {
+      return await htmlCardRoot.evaluate((card) => {
+        const content = card.querySelector('.conversation-document-card__content');
+        const code = card.querySelector('.conversation-document-card__content code');
+        if (!content || !code) return null;
+        const isCode = content.classList.contains('conversation-document-card__content--code');
+        const text = code.textContent || '';
+        if (!isCode || !text.includes('<!doctype html>')) return null;
+        return {
+          modeClass: Array.from(content.classList),
+          codeClass: Array.from(code.classList),
+          textPrefix: text.slice(0, 80)
+        };
+      }).catch(() => null);
+    }, {
+      timeoutMs: 30_000,
+      intervalMs: 250,
+      label: 'html toggled to highlighted source'
     });
     result.steps.push('document_loaded');
 

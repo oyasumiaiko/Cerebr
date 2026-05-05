@@ -3,6 +3,7 @@ import {
   clampConversationDocumentFontSizePercent,
   buildNextConversationDocumentRenderMode,
   CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT,
+  CONVERSATION_DOCUMENT_VIEW_MODE_HTML_PREVIEW,
   CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN,
   CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN,
   DOCUMENT_VIEWER_SETTING_FONT_SIZE_PERCENT,
@@ -10,6 +11,9 @@ import {
   DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES,
   DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD,
   DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT,
+  getConversationDocumentFileExtension,
+  isConversationDocumentHtmlPreviewPath,
+  resolveConversationDocumentCodeLanguage,
   resolveConversationDocumentRenderState
 } from './conversation_document_viewer_state.js';
 import {
@@ -29,6 +33,39 @@ function buildConversationDocumentDownloadName(path) {
   const normalized = normalizeViewerString(path);
   if (!normalized) return 'document.txt';
   return normalized.replace(/[\\/]+/g, '__');
+}
+
+function resolveConversationDocumentDownloadMimeType(path) {
+  return isConversationDocumentHtmlPreviewPath(path)
+    ? 'text/html;charset=utf-8'
+    : 'text/plain;charset=utf-8';
+}
+
+function resolveConversationDocumentFileIconClass(path) {
+  const extension = getConversationDocumentFileExtension(path);
+  if (extension === 'html' || extension === 'htm') return 'fa-brands fa-html5';
+  if (extension === 'md' || extension === 'markdown') return 'fa-brands fa-markdown';
+  if (resolveConversationDocumentCodeLanguage(path)) return 'fa-solid fa-code';
+  return 'fa-solid fa-file-lines';
+}
+
+function buildHtmlPreviewModeDescriptor(mode) {
+  if (mode === CONVERSATION_DOCUMENT_VIEW_MODE_HTML_PREVIEW) {
+    return {
+      iconClass: 'fa-brands fa-html5',
+      label: 'HTML 渲染预览'
+    };
+  }
+  if (mode === CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT) {
+    return {
+      iconClass: 'fa-solid fa-code',
+      label: '源码高亮'
+    };
+  }
+  return {
+    iconClass: 'fa-solid fa-file-lines',
+    label: '纯文本'
+  };
 }
 
 function createDocumentActionIconButton({
@@ -208,10 +245,27 @@ export function createConversationDocumentViewer(options = {}) {
     if (!button) return;
 
     const renderState = resolveCardRenderState(card);
-    const hasToggle = renderState.allowMarkdownToggle || renderState.allowCodeHighlightToggle;
+    const hasToggle = renderState.allowHtmlPreviewToggle || renderState.allowMarkdownToggle || renderState.allowCodeHighlightToggle;
     button.hidden = !hasToggle;
     button.disabled = !hasToggle;
     if (!hasToggle) {
+      return;
+    }
+
+    if (renderState.allowHtmlPreviewToggle) {
+      const currentDescriptor = buildHtmlPreviewModeDescriptor(renderState.mode);
+      const nextMode = buildNextConversationDocumentRenderMode(
+        card?.dataset?.documentPath || '',
+        renderState.mode,
+        getViewerSettingsSnapshot()
+      );
+      const nextDescriptor = buildHtmlPreviewModeDescriptor(nextMode);
+      applyToolButtonVisualState(button, {
+        iconClass: currentDescriptor.iconClass,
+        active: renderState.mode === CONVERSATION_DOCUMENT_VIEW_MODE_HTML_PREVIEW,
+        title: `当前为 ${currentDescriptor.label}，点击切换为 ${nextDescriptor.label}`,
+        ariaLabel: `切换为${nextDescriptor.label}`
+      });
       return;
     }
 
@@ -251,6 +305,22 @@ export function createConversationDocumentViewer(options = {}) {
       allowDetails: true,
       enableDollarMath
     });
+    return container;
+  }
+
+  function renderHtmlPreviewContent(content, path) {
+    const container = document.createElement('div');
+    container.className = 'conversation-document-card__content conversation-document-card__content--html-preview';
+    container.tabIndex = 0;
+
+    // HTML 文件可能由模型生成，必须放进独立 sandbox iframe；不授予同源能力，避免预览脚本触达扩展页面能力。
+    const frame = document.createElement('iframe');
+    frame.className = 'conversation-document-card__html-frame';
+    frame.title = `${path || 'HTML 文件'} 预览`;
+    frame.setAttribute('sandbox', 'allow-scripts');
+    frame.setAttribute('referrerpolicy', 'no-referrer');
+    frame.srcdoc = content || '';
+    container.appendChild(frame);
     return container;
   }
 
@@ -320,7 +390,9 @@ export function createConversationDocumentViewer(options = {}) {
     const renderState = resolveCardRenderState(card);
     const enableDollarMath = settingsManager?.getSetting?.('enableDollarMath') !== false;
     let contentNode = null;
-    if (renderState.mode === CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN) {
+    if (renderState.mode === CONVERSATION_DOCUMENT_VIEW_MODE_HTML_PREVIEW) {
+      contentNode = renderHtmlPreviewContent(file.content || '', file.path || card.dataset.documentPath || '');
+    } else if (renderState.mode === CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN) {
       contentNode = renderMarkdownContent(file.content || '', enableDollarMath);
     } else if (renderState.mode === CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT) {
       contentNode = renderCodeContent(file.content || '', renderState.language);
@@ -503,7 +575,9 @@ export function createConversationDocumentViewer(options = {}) {
   async function downloadConversationDocumentCard(card) {
     const result = await loadConversationDocumentCard(card);
     if (result?.ok !== true || !result.file) return;
-    const blob = new Blob([result.file.content || ''], { type: 'text/plain;charset=utf-8' });
+    const blob = new Blob([result.file.content || ''], {
+      type: resolveConversationDocumentDownloadMimeType(result.file.path || '')
+    });
     const url = URL.createObjectURL(blob);
     try {
       const link = document.createElement('a');
@@ -625,7 +699,7 @@ export function createConversationDocumentViewer(options = {}) {
     button.title = path;
 
     const icon = document.createElement('i');
-    icon.className = 'fa-solid fa-file-lines conversation-document-attachments__tile-icon';
+    icon.className = `${resolveConversationDocumentFileIconClass(path)} conversation-document-attachments__tile-icon`;
     icon.setAttribute('aria-hidden', 'true');
     button.appendChild(icon);
 

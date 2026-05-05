@@ -257,8 +257,11 @@ test('apply_patch 工具定义承载 workspace 文件交付提示', async () => 
   const applyPatchDefinition = buildVirtualFileApplyPatchFunctionToolDefinition();
   assert.match(applyPatchDefinition.description, /纯文本文件/);
   assert.match(applyPatchDefinition.description, /HTML/);
+  assert.match(applyPatchDefinition.description, /workspace\/\*\.html/);
+  assert.match(applyPatchDefinition.description, /sandbox iframe/);
   assert.match(applyPatchDefinition.description, /最终回复应给出 Markdown 相对路径链接/);
   assert.match(applyPatchDefinition.description, /\[计划\]\(workspace\/plan\.md\)/);
+  assert.match(applyPatchDefinition.description, /\[预览页面\]\(workspace\/preview\.html\)/);
 });
 
 test('read_file/search_files 工具定义优先暴露 bash 风格参数', async () => {

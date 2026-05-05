@@ -11172,6 +11172,24 @@ body.chat-empty .empty-state-content {
     margin-bottom: 0;
   }
 
+  .conversation-document-card__content--html-preview {
+    padding: 0;
+    background: #ffffff;
+    color: #111111;
+    font-family: inherit;
+    white-space: normal;
+    overflow: hidden;
+  }
+
+  .conversation-document-card__html-frame {
+    display: block;
+    width: 100%;
+    height: min(70vh, 620px);
+    min-height: 320px;
+    border: 0;
+    background: #ffffff;
+  }
+
   .conversation-document-card__content--code {
     white-space: pre;
     overflow-x: auto;

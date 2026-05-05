@@ -45,7 +45,23 @@ test('conversation_document_viewer 使用无边框图标按钮承载基础文档
   assert.match(source, /fa-regular fa-copy/);
   assert.match(source, /fa-solid fa-download/);
   assert.match(source, /fa-brands fa-markdown/);
+  assert.match(source, /fa-brands fa-html5/);
   assert.match(source, /fa-solid fa-code/);
+});
+
+test('conversation_document_viewer 会用 sandbox iframe 渲染 HTML 文件预览', async () => {
+  const source = await readWorkspaceFile('src/utils/conversation_document_viewer.js');
+  const stateSource = await readWorkspaceFile('src/utils/conversation_document_viewer_state.js');
+  const sidebarCssSource = await readWorkspaceFile('src/ui/styles/sidebar.css');
+
+  assert.match(stateSource, /CONVERSATION_DOCUMENT_VIEW_MODE_HTML_PREVIEW/);
+  assert.match(stateSource, /HTML_PREVIEW_EXTENSIONS/);
+  assert.match(source, /renderHtmlPreviewContent/);
+  assert.match(source, /conversation-document-card__content--html-preview/);
+  assert.match(source, /frame\.setAttribute\('sandbox', 'allow-scripts'\)/);
+  assert.doesNotMatch(source, /allow-same-origin/);
+  assert.match(source, /frame\.srcdoc = content \|\| ''/);
+  assert.match(sidebarCssSource, /\.conversation-document-card__html-frame/);
 });
 
 test('settings_manager 已注册文档渲染默认值偏好', async () => {
