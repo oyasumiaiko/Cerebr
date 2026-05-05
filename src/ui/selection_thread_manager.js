@@ -2,6 +2,55 @@ import { normalizeStoredMessageContent, splitStoredMessageContent } from '../uti
 import { queueStorageSet } from '../utils/storage_write_queue_bridge.js';
 import { buildApiFooterRenderData } from '../utils/api_footer_template.js';
 
+function normalizeComposerQuoteSourceText(value) {
+  return String(value ?? '')
+    .replace(/\u00a0/g, ' ')
+    .replace(/\r\n?/g, '\n')
+    .trim();
+}
+
+/**
+ * 把划词内容转换成输入框里的 Markdown 引用前缀。
+ *
+ * 说明：
+ * - 每一行都显式加 `> `，避免多行划词只有首行被引用；
+ * - 只裁掉选区整体首尾空白，不改写行内缩进，便于引用代码片段或表格文本；
+ * - 返回空字符串表示没有可插入内容，调用方应保持输入框不变。
+ *
+ * @param {string} selectionText
+ * @returns {string}
+ */
+export function buildSelectionComposerQuote(selectionText) {
+  const normalizedSelection = normalizeComposerQuoteSourceText(selectionText);
+  if (!normalizedSelection) return '';
+  return normalizedSelection
+    .split('\n')
+    .map((line) => `> ${line}`)
+    .join('\n');
+}
+
+/**
+ * 把划词引用插入到输入框开头。
+ *
+ * 用户预期的发送形态是：
+ * > 选中并引用的内容
+ * 用户继续输入的内容
+ *
+ * 因此这里不用额外的引用预览 UI，也不把引用做成隐藏元数据，而是直接写入 composer 文本。
+ *
+ * @param {string} currentText
+ * @param {string} selectionText
+ * @returns {string}
+ */
+export function prependSelectionQuoteToComposerText(currentText, selectionText) {
+  const quoteText = buildSelectionComposerQuote(selectionText);
+  if (!quoteText) return String(currentText ?? '');
+  const normalizedCurrentText = String(currentText ?? '')
+    .replace(/\r\n?/g, '\n')
+    .trimStart();
+  return normalizedCurrentText ? `${quoteText}\n${normalizedCurrentText}` : `${quoteText}\n`;
+}
+
 /**
  * 划词线程管理器
  *
@@ -1910,6 +1959,36 @@ export function createSelectionThreadManager(appContext) {
     return created;
   }
 
+  function prependSelectionQuoteToComposer(selectionText) {
+    const inputController = services.inputController;
+    if (
+      !inputController
+      || typeof inputController.getInputText !== 'function'
+      || typeof inputController.setInputText !== 'function'
+    ) {
+      showNotification?.({ message: '输入框未就绪，暂时无法引用划词内容', type: 'warning' });
+      return false;
+    }
+
+    const quoteText = buildSelectionComposerQuote(selectionText);
+    if (!quoteText) {
+      showNotification?.({ message: '选中内容为空，无法引用到输入框', type: 'warning' });
+      return false;
+    }
+
+    const currentText = inputController.getInputText();
+    const nextText = prependSelectionQuoteToComposerText(currentText, selectionText);
+    inputController.setInputText(nextText);
+    try {
+      dom.messageInput?.dispatchEvent?.(new Event('input', { bubbles: true }));
+    } catch (_) {}
+    inputController.focusToEnd?.();
+    services.uiManager?.resetInputHeight?.();
+    services.uiManager?.updateSendButtonState?.();
+    showNotification?.({ message: '已引用到输入框', type: 'success', duration: 1400 });
+    return true;
+  }
+
   function cloneMessageValue(value) {
     if (value == null) return value;
     try {
@@ -2246,6 +2325,17 @@ export function createSelectionThreadManager(appContext) {
           }
         },
         {
+          iconClass: 'fa-solid fa-quote-left',
+          title: '引用到输入框',
+          onClick: () => {
+            clearSelectionRanges();
+            const inserted = prependSelectionQuoteToComposer(selectionInfo.selectionText);
+            if (inserted) {
+              hideBubble(true);
+            }
+          }
+        },
+        {
           iconClass: 'fa-solid fa-plus',
           title: '新建划词对话',
           onClick: () => {
@@ -2331,6 +2421,18 @@ export function createSelectionThreadManager(appContext) {
             if (didSend) {
               hideBubble(true);
               clearSelectionRanges();
+            }
+          }
+        },
+        {
+          iconClass: 'fa-solid fa-quote-left',
+          title: '引用到输入框',
+          onClick: () => {
+            if (!selectionInfo.selectionText) return;
+            clearSelectionRanges();
+            const inserted = prependSelectionQuoteToComposer(selectionInfo.selectionText);
+            if (inserted) {
+              hideBubble(true);
             }
           }
         },
