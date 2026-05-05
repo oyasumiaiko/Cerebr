@@ -35,11 +35,11 @@ test('prependSelectionQuoteToComposerText 会把引用插入到已有输入开�
   );
 });
 
-test('prependSelectionQuoteToComposerText 在空输入时保留尾部换行用于继续输入', async () => {
+test('prependSelectionQuoteToComposerText 在空输入时保留可继续输入的新行锚点', async () => {
   const { prependSelectionQuoteToComposerText } = await loadSelectionThreadManagerModule();
 
   assert.equal(
     prependSelectionQuoteToComposerText('', '选中的内容'),
-    '> 选中的内容\n'
+    '> 选中的内容\n\n'
   );
 });

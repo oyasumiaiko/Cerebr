@@ -48,7 +48,9 @@ export function prependSelectionQuoteToComposerText(currentText, selectionText) 
   const normalizedCurrentText = String(currentText ?? '')
     .replace(/\r\n?/g, '\n')
     .trimStart();
-  return normalizedCurrentText ? `${quoteText}\n${normalizedCurrentText}` : `${quoteText}\n`;
+  // Chrome contenteditable 在 `textContent` 末尾只有一个 `\n` 时，会把随后输入的文字插回同一行。
+  // 空 composer 需要写入两个尾随换行：第一个是最终发送文本里的换行，第二个只负责把光标稳定锚到下一行。
+  return normalizedCurrentText ? `${quoteText}\n${normalizedCurrentText}` : `${quoteText}\n\n`;
 }
 
 /**
@@ -2325,17 +2327,6 @@ export function createSelectionThreadManager(appContext) {
           }
         },
         {
-          iconClass: 'fa-solid fa-quote-left',
-          title: '引用到输入框',
-          onClick: () => {
-            clearSelectionRanges();
-            const inserted = prependSelectionQuoteToComposer(selectionInfo.selectionText);
-            if (inserted) {
-              hideBubble(true);
-            }
-          }
-        },
-        {
           iconClass: 'fa-solid fa-plus',
           title: '新建划词对话',
           onClick: () => {
@@ -2343,6 +2334,17 @@ export function createSelectionThreadManager(appContext) {
             if (created) {
               hideBubble(true);
               clearSelectionRanges();
+            }
+          }
+        },
+        {
+          iconClass: 'fa-solid fa-quote-left',
+          title: '引用到输入框',
+          onClick: () => {
+            clearSelectionRanges();
+            const inserted = prependSelectionQuoteToComposer(selectionInfo.selectionText);
+            if (inserted) {
+              hideBubble(true);
             }
           }
         }
@@ -2425,18 +2427,6 @@ export function createSelectionThreadManager(appContext) {
           }
         },
         {
-          iconClass: 'fa-solid fa-quote-left',
-          title: '引用到输入框',
-          onClick: () => {
-            if (!selectionInfo.selectionText) return;
-            clearSelectionRanges();
-            const inserted = prependSelectionQuoteToComposer(selectionInfo.selectionText);
-            if (inserted) {
-              hideBubble(true);
-            }
-          }
-        },
-        {
           iconClass: 'fa-solid fa-plus',
           title: '新建划词对话',
           onClick: () => {
@@ -2445,6 +2435,18 @@ export function createSelectionThreadManager(appContext) {
             if (created) {
               hideBubble(true);
               clearSelectionRanges();
+            }
+          }
+        },
+        {
+          iconClass: 'fa-solid fa-quote-left',
+          title: '引用到输入框',
+          onClick: () => {
+            if (!selectionInfo.selectionText) return;
+            clearSelectionRanges();
+            const inserted = prependSelectionQuoteToComposer(selectionInfo.selectionText);
+            if (inserted) {
+              hideBubble(true);
             }
           }
         }
