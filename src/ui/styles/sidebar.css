@@ -38,7 +38,8 @@ button:focus-visible,
     --cerebr-thread-splitter-center-offset: -7.5px;
     /* 默认隐藏拖拽把手，仅在 hover / 拖动时显示。 */
     --cerebr-resize-handle-idle-opacity: 0;
-    --cerebr-resize-handle-hover-opacity: 0.9;
+    --cerebr-resize-handle-hover-opacity: 0.32;
+    --cerebr-resize-handle-active-opacity: 0.72;
     --cerebr-font-size: 14px; /* 消息内容字体 */
     --cerebr-ui-font-size: 15px; /* UI 默认字体（不影响消息内容） */
     --cerebr-document-font-size-scale: 1;
@@ -1134,7 +1135,7 @@ body.thread-mode-active #thread-panel {
 .fullscreen-mode body.thread-mode-active #thread-resize-edge-left,
 .fullscreen-mode body.thread-mode-active #thread-resize-edge-right {
     display: block;
-    pointer-events: auto;
+    pointer-events: none;
 }
 
 .fullscreen-mode body.thread-mode-active #thread-splitter {
@@ -1169,13 +1170,19 @@ body.thread-mode-active #thread-panel {
     );
 }
 
-.fullscreen-mode body.thread-mode-active #thread-splitter:hover,
-.fullscreen-mode body.thread-mode-active #thread-resize-edge-left:hover,
-.fullscreen-mode body.thread-mode-active #thread-resize-edge-right:hover,
+.fullscreen-mode body.thread-mode-active #thread-splitter.resize-hit-hover,
+.fullscreen-mode body.thread-mode-active #thread-resize-edge-left.resize-hit-hover,
+.fullscreen-mode body.thread-mode-active #thread-resize-edge-right.resize-hit-hover,
 body.thread-resize-active #thread-splitter,
 body.thread-resize-active #thread-resize-edge-left,
 body.thread-resize-active #thread-resize-edge-right {
-    opacity: var(--cerebr-resize-handle-hover-opacity, 0.9);
+    opacity: var(--cerebr-resize-handle-hover-opacity, 0.32);
+}
+
+body.thread-resize-active #thread-splitter,
+body.thread-resize-active #thread-resize-edge-left,
+body.thread-resize-active #thread-resize-edge-right {
+    opacity: var(--cerebr-resize-handle-active-opacity, 0.72);
 }
 
 /* 全屏非线程模式：沿用边缘拖拽手势调整全屏内容宽度（左右对称） */
@@ -1187,7 +1194,7 @@ body.thread-resize-active #thread-resize-edge-right {
 .fullscreen-mode body:not(.thread-mode-active) #thread-resize-edge-left,
 .fullscreen-mode body:not(.thread-mode-active) #thread-resize-edge-right {
     display: block;
-    pointer-events: auto;
+    pointer-events: none;
     opacity: var(--cerebr-resize-handle-idle-opacity, 0);
 }
 
@@ -1199,16 +1206,26 @@ body.thread-resize-active #thread-resize-edge-right {
     left: calc(50% + (var(--cerebr-fullscreen-width) / 2) + var(--cerebr-fullscreen-width-resize-edge-offset, 6px));
 }
 
-.fullscreen-mode body:not(.thread-mode-active) #thread-resize-edge-left:hover,
-.fullscreen-mode body:not(.thread-mode-active) #thread-resize-edge-right:hover,
+.fullscreen-mode body:not(.thread-mode-active) #thread-resize-edge-left.resize-hit-hover,
+.fullscreen-mode body:not(.thread-mode-active) #thread-resize-edge-right.resize-hit-hover,
 body.fullscreen-width-resize-active #thread-resize-edge-left,
 body.fullscreen-width-resize-active #thread-resize-edge-right {
-    opacity: var(--cerebr-resize-handle-hover-opacity, 0.9);
+    opacity: var(--cerebr-resize-handle-hover-opacity, 0.32);
 }
 
-.fullscreen-mode #thread-splitter:hover::before,
-.fullscreen-mode #thread-resize-edge-left:hover::before,
-.fullscreen-mode #thread-resize-edge-right:hover::before,
+body.fullscreen-width-resize-active #thread-resize-edge-left,
+body.fullscreen-width-resize-active #thread-resize-edge-right {
+    opacity: var(--cerebr-resize-handle-active-opacity, 0.72);
+}
+
+.fullscreen-mode #thread-splitter.resize-hit-hover::before,
+.fullscreen-mode #thread-resize-edge-left.resize-hit-hover::before,
+.fullscreen-mode #thread-resize-edge-right.resize-hit-hover::before {
+    opacity: 0.72;
+    background: color-mix(in srgb, var(--cerebr-border-color) 68%, var(--cerebr-highlight) 32%);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--cerebr-highlight) 14%, transparent);
+}
+
 body.thread-resize-active #thread-splitter::before,
 body.thread-resize-active #thread-resize-edge-left::before,
 body.thread-resize-active #thread-resize-edge-right::before,
@@ -1223,6 +1240,12 @@ body.thread-resize-active,
 body.fullscreen-width-resize-active {
     cursor: col-resize;
     user-select: none;
+}
+
+body.resize-hit-hover,
+body.resize-hit-hover #chat-layout,
+body.resize-hit-hover #chat-layout * {
+    cursor: col-resize !important;
 }
 
 body.thread-resize-active *,

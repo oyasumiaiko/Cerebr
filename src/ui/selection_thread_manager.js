@@ -103,6 +103,11 @@ export function createSelectionThreadManager(appContext) {
     currentWidth: 0,
     pointerScale: 1
   };
+  const resizeHandleElements = [
+    threadSplitter,
+    threadResizeEdgeLeft,
+    threadResizeEdgeRight
+  ].filter(Boolean);
 
   function clearThreadBannerPeekTimer() {
     if (!threadBannerPeekTimer) return;
@@ -2950,6 +2955,7 @@ export function createSelectionThreadManager(appContext) {
     document.removeEventListener('mousemove', handleFullscreenWidthResizeMove);
     document.removeEventListener('mouseup', stopFullscreenWidthResize);
     window.removeEventListener('blur', stopFullscreenWidthResize);
+    clearResizeHandleHover();
     commitFullscreenWidth(finalWidth);
   }
 
@@ -3004,6 +3010,7 @@ export function createSelectionThreadManager(appContext) {
     document.removeEventListener('mousemove', handleThreadResizeMove);
     document.removeEventListener('mouseup', stopThreadResize);
     window.removeEventListener('blur', stopThreadResize);
+    clearResizeHandleHover();
     persistThreadLayoutPrefs();
   }
 
@@ -3028,6 +3035,77 @@ export function createSelectionThreadManager(appContext) {
     window.addEventListener('blur', stopThreadResize);
   }
 
+  function isPointInRect(clientX, clientY, rect) {
+    return !!rect
+      && rect.width > 0
+      && rect.height > 0
+      && clientX >= rect.left
+      && clientX <= rect.right
+      && clientY >= rect.top
+      && clientY <= rect.bottom;
+  }
+
+  function clearResizeHandleHover() {
+    resizeHandleElements.forEach((el) => el.classList.remove('resize-hit-hover'));
+    document.body?.classList?.remove('resize-hit-hover');
+  }
+
+  function resolveResizeHandleHit(clientX, clientY) {
+    if (!isFullscreenLayout()) return null;
+
+    if (isThreadResizeEnabled()) {
+      const candidates = [
+        { element: threadSplitter, kind: 'thread', mode: 'split' },
+        { element: threadResizeEdgeLeft, kind: 'thread', mode: 'edge-left' },
+        { element: threadResizeEdgeRight, kind: 'thread', mode: 'edge-right' }
+      ];
+      return candidates.find((item) => (
+        item.element && isPointInRect(clientX, clientY, item.element.getBoundingClientRect())
+      )) || null;
+    }
+
+    if (isFullscreenWidthResizeEnabled()) {
+      const candidates = [
+        { element: threadResizeEdgeLeft, kind: 'fullscreen', mode: 'edge-left' },
+        { element: threadResizeEdgeRight, kind: 'fullscreen', mode: 'edge-right' }
+      ];
+      return candidates.find((item) => (
+        item.element && isPointInRect(clientX, clientY, item.element.getBoundingClientRect())
+      )) || null;
+    }
+
+    return null;
+  }
+
+  function updateResizeHandleHoverFromPoint(clientX, clientY) {
+    if (threadResizeState.active || fullscreenResizeState.active) return;
+    const hit = resolveResizeHandleHit(clientX, clientY);
+    resizeHandleElements.forEach((el) => {
+      el.classList.toggle('resize-hit-hover', !!hit && el === hit.element);
+    });
+    document.body?.classList?.toggle('resize-hit-hover', !!hit);
+  }
+
+  function handleResizeHandleMouseMove(event) {
+    updateResizeHandleHoverFromPoint(event.clientX, event.clientY);
+  }
+
+  function handleResizeHandleMouseDown(event) {
+    if (event.button !== 0) return;
+    const hit = resolveResizeHandleHit(event.clientX, event.clientY);
+    if (!hit) return;
+    clearResizeHandleHover();
+    if (hit.kind === 'thread') {
+      startThreadResize(event, hit.mode);
+      return;
+    }
+    startFullscreenWidthResize(event, hit.mode);
+  }
+
+  function handleResizeHandleMouseLeave() {
+    clearResizeHandleHover();
+  }
+
   function bindThreadResizeHandles() {
     if (!threadSplitter || !threadResizeEdgeLeft || !threadResizeEdgeRight) return;
     threadSplitter.addEventListener('mousedown', (event) => {
@@ -3048,6 +3126,9 @@ export function createSelectionThreadManager(appContext) {
       }
       startFullscreenWidthResize(event, 'edge-right');
     });
+    document.addEventListener('mousemove', handleResizeHandleMouseMove, true);
+    document.addEventListener('mousedown', handleResizeHandleMouseDown, true);
+    document.addEventListener('mouseleave', handleResizeHandleMouseLeave, true);
   }
 
   function handleThreadResizeViewportChange() {
@@ -3215,6 +3296,9 @@ export function createSelectionThreadManager(appContext) {
         // 仅在“全屏状态”变化时重排线程布局，避免主题等无关 class 变更触发滚动回顶。
         if (currentFullscreenLayoutState === lastFullscreenLayoutState) return;
         lastFullscreenLayoutState = currentFullscreenLayoutState;
+        if (!currentFullscreenLayoutState) {
+          clearResizeHandleHover();
+        }
         if (state.activeThreadId) {
           applyThreadLayout();
         }
