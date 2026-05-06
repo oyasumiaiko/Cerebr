@@ -8,6 +8,11 @@ async function loadResponsesStreamStatusModule() {
   return import(pathToFileURL(filePath).href);
 }
 
+async function loadAssistantPreResponseStatusModule() {
+  const filePath = path.resolve(__dirname, '../src/utils/assistant_pre_response_status.js');
+  return import(pathToFileURL(filePath).href);
+}
+
 test('response.created 会映射为服务器已开始处理的状态文案', async () => {
   const { deriveResponsesSseLoadingStatus } = await loadResponsesStreamStatusModule();
   const status = deriveResponsesSseLoadingStatus('response.created', {});
@@ -43,4 +48,14 @@ test('普通 message output item 会映射为正在生成回复', async () => {
   });
   assert.equal(status.text, '模型正在生成回复...');
   assert.equal(status.meta.stage, 'responses_message_item');
+});
+
+test('Responses retry wait 本地阶段会展示重试计数', async () => {
+  const { deriveAssistantPreResponseStatusFromLocalStage } = await loadAssistantPreResponseStatusModule();
+  const status = deriveAssistantPreResponseStatusFromLocalStage('responses_retry_wait', {
+    retryAttempt: 2,
+    maxRetries: 5
+  });
+  assert.equal(status.text, '连接异常，正在重试（2/5）...');
+  assert.equal(status.stage, 'responses_retry_wait');
 });

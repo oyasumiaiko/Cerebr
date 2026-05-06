@@ -73,6 +73,19 @@ export function deriveAssistantPreResponseStatusFromLocalStage(stage, data = {})
     return createAssistantPreResponseStatus('正在发送请求...', normalizedStage);
   }
 
+  if (normalizedStage === 'responses_retry_wait') {
+    const retryAttempt = Number(data?.retryAttempt);
+    const maxRetries = Number(data?.maxRetries);
+    const suffix = Number.isFinite(retryAttempt) && Number.isFinite(maxRetries)
+      ? `（${retryAttempt}/${maxRetries}）`
+      : '';
+    return createAssistantPreResponseStatus(
+      `连接异常，正在重试${suffix}...`,
+      normalizedStage,
+      { note: '当前 Responses 请求会按原请求体重新发送。' }
+    );
+  }
+
   if (
     normalizedStage === 'http_request_sent'
     || normalizedStage === 'http_response_headers_received'
