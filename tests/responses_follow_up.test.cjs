@@ -139,7 +139,7 @@ test('sanitizeResponsesReplayItem 会移除不兼容 replay 的 item_id 运行�
   });
 });
 
-test('sanitizeResponsesReplayItem 会剥离 image_generation_call 的 result 大字段', async () => {
+test('sanitizeResponsesReplayItem 会剥离 image_generation_call 的 result 大字段但保留本地化引用', async () => {
   const { sanitizeResponsesReplayItem } = await loadResponsesInputItemsModule();
   const sanitized = sanitizeResponsesReplayItem({
     type: 'image_generation_call',
@@ -152,6 +152,7 @@ test('sanitizeResponsesReplayItem 会剥离 image_generation_call 的 result 大
 
   assert.deepEqual(sanitized, {
     type: 'image_generation_call',
-    revised_prompt: '把这张图改成蓝底'
+    revised_prompt: '把这张图改成蓝底',
+    result_image_url: 'file:///C:/Users/test/Downloads/Cerebr/Images/ig_1.png'
   });
 });

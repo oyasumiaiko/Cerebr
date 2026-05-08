@@ -188,3 +188,41 @@ test('buildRequest 仍会保留已闭环的 function_call 与 function_call_outp
     true
   );
 });
+
+test('buildRequest 会在原 image_generation_call item 上水合本地化生图结果', async (t) => {
+  const apiManager = await createApiManagerForTest(t);
+
+  const requestBody = await apiManager.buildRequest({
+    config: {
+      modelName: 'gpt-5.4',
+      baseUrl: 'https://api.openai.com/v1/responses',
+      connectionType: 'openai_responses',
+      useStreaming: false
+    },
+    messages: [
+      { role: 'user', content: 'generate an image' },
+      {
+        role: 'assistant',
+        response_input_items: [
+          {
+            type: 'image_generation_call',
+            revised_prompt: 'blue pen on white paper',
+            result_image_url: 'data:image/png;base64,QUJDRA=='
+          }
+        ]
+      },
+      { role: 'user', content: 'make it brighter' }
+    ]
+  });
+
+  const responseInput = Array.isArray(requestBody?.input) ? requestBody.input : [];
+  const imageItems = responseInput.filter((item) => item?.type === 'image_generation_call');
+  assert.equal(imageItems.length, 1);
+  assert.equal(imageItems[0].result, 'QUJDRA==');
+  assert.equal(Object.prototype.hasOwnProperty.call(imageItems[0], 'result_image_url'), false);
+  assert.equal(
+    responseInput.some((item) => item?.type === 'message' && Array.isArray(item?.content)
+      && item.content.some((part) => part?.type === 'input_image')),
+    false
+  );
+});

@@ -5093,6 +5093,44 @@ export function createApiManager(appContext) {
     return null;
   }
 
+  function extractBase64PayloadFromImageDataUrl(dataUrl) {
+    const text = (typeof dataUrl === 'string') ? dataUrl.trim() : '';
+    const match = text.match(/^data:image\/[a-z0-9.+-]+;base64,([\s\S]+)$/i);
+    return match ? String(match[1] || '').trim() : '';
+  }
+
+  async function hydrateResponsesImageGenerationReplayItem(item) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return item;
+    if (String(item.type || '').trim().toLowerCase() !== 'image_generation_call') {
+      return item;
+    }
+
+    const next = { ...item };
+    const localImageUrl = (typeof next.result_image_url === 'string' && next.result_image_url.trim())
+      ? next.result_image_url.trim()
+      : '';
+    delete next.result_image_url;
+
+    if (!next.result && localImageUrl) {
+      const dataUrl = await normalizeImageUrlForOpenAI(localImageUrl);
+      const base64Payload = extractBase64PayloadFromImageDataUrl(dataUrl);
+      if (base64Payload) {
+        next.result = base64Payload;
+      }
+    }
+
+    return next;
+  }
+
+  async function hydrateResponsesReplayItemsForRequest(items) {
+    const source = Array.isArray(items) ? items : [];
+    const hydrated = [];
+    for (const item of source) {
+      hydrated.push(await hydrateResponsesImageGenerationReplayItem(item));
+    }
+    return hydrated;
+  }
+
   function getOpenAIEndpointPath(baseUrl) {
     const raw = (typeof baseUrl === 'string') ? baseUrl.trim() : '';
     if (!raw) return '';
@@ -5368,7 +5406,7 @@ export function createApiManager(appContext) {
         // 这些 item 继续带入下一轮 `/responses.input` 会触发上游 400。
         const replayItems = filterIncompleteResponsesToolCallReplayItems(msg.response_input_items);
         if (replayItems.length > 0) {
-          result.push(...replayItems);
+          result.push(...(await hydrateResponsesReplayItemsForRequest(replayItems)));
           continue;
         }
       }
