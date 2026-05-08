@@ -142,6 +142,25 @@ test('formatResponsesToolOutputForDisplay 会把 image_generation_call 压成可
   assert.equal(images[0].approxBytes > 0, true);
 });
 
+test('image_generation_call 支持本地化后的 result_image_url 预览且不估算为 base64 字节', async () => {
+  const { extractResponsesToolOutputInputImages, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const payload = {
+    type: 'image_generation_call',
+    status: 'completed',
+    revised_prompt: '本地图片',
+    result_image_url: 'file:///C:/Users/test/Downloads/Cerebr/Images/cerebr.png'
+  };
+  const text = formatResponsesToolOutputForDisplay(payload);
+  assert.match(text, /\[image_generation_call #1\]/);
+  assert.match(text, /result: image\/png/);
+  assert.doesNotMatch(text, /file:\/\/\/C:\/Users\/test/);
+
+  const images = extractResponsesToolOutputInputImages(payload);
+  assert.equal(images.length, 1);
+  assert.equal(images[0].imageUrl, payload.result_image_url);
+  assert.equal(images[0].approxBytes, 0);
+});
+
 test('buildResponsesJsRuntimeToolOutputText 使用 XML 分块且避免大 JSON 包裹主输出', async () => {
   const { buildResponsesJsRuntimeToolOutputText } = await loadResponsesToolOutputModule();
   const text = buildResponsesJsRuntimeToolOutputText({

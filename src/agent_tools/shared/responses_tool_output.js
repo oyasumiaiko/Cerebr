@@ -1784,6 +1784,7 @@ function extractDataUrlMimeType(value) {
 
 function estimateDataUrlBytes(value) {
   if (typeof value !== 'string') return 0;
+  if (!/^data:/i.test(value)) return 0;
   const commaIndex = value.indexOf(',');
   const base64 = commaIndex >= 0 ? value.slice(commaIndex + 1) : value;
   if (!base64) return 0;
@@ -1817,13 +1818,15 @@ function isResponsesImageGenerationCallItem(item) {
 function normalizeResponsesImageGenerationResultImageUrl(result) {
   const text = (typeof result === 'string') ? result.trim() : '';
   if (!text) return '';
-  if (/^data:image\//i.test(text)) return text;
+  if (/^(data:image\/|file:\/\/|https?:\/\/|blob:)/i.test(text)) return text;
   return `data:image/png;base64,${text}`;
 }
 
 function normalizeResponsesImageGenerationOutputItem(item, index = 0) {
   if (!isResponsesImageGenerationCallItem(item)) return null;
-  const imageUrl = normalizeResponsesImageGenerationResultImageUrl(item.result);
+  const imageUrl = normalizeResponsesImageGenerationResultImageUrl(
+    item.result_image_url || item.image_url || item.result
+  );
   if (!imageUrl) return null;
   const mimeType = extractDataUrlMimeType(imageUrl) || 'image/png';
   return {

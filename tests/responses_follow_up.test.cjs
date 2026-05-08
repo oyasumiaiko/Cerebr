@@ -146,7 +146,8 @@ test('sanitizeResponsesReplayItem 会剥离 image_generation_call 的 result 大
     id: 'ig_1',
     status: 'completed',
     revised_prompt: '把这张图改成蓝底',
-    result: 'QUJDRA=='
+    result: 'QUJDRA==',
+    result_image_url: 'file:///C:/Users/test/Downloads/Cerebr/Images/ig_1.png'
   });
 
   assert.deepEqual(sanitized, {

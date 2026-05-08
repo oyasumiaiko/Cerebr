@@ -410,6 +410,68 @@ export function createMessageSender(appContext) {
     }
   }
 
+  /**
+   * 解析 Responses 生图工具返回的图片载荷。
+   *
+   * 说明：
+   * - OpenAI Responses 的 `image_generation_call.result` 当前返回裸 Base64；
+   * - 这里同时兼容 data URL，便于测试与未来上游协议细节变化；
+   * - 返回值只用于立即落盘，不写入 IndexedDB。
+   *
+   * @param {string} result
+   * @returns {{mimeType:string, base64Data:string}|null}
+   */
+  function parseResponsesImageGenerationResultPayload(result) {
+    const text = (typeof result === 'string') ? result.trim() : '';
+    if (!text) return null;
+
+    const dataUrlMatch = text.match(/^data:(image\/[a-z0-9.+-]+);base64,([\s\S]+)$/i);
+    if (dataUrlMatch) {
+      return {
+        mimeType: dataUrlMatch[1].toLowerCase(),
+        base64Data: String(dataUrlMatch[2] || '').trim()
+      };
+    }
+
+    return {
+      mimeType: 'image/png',
+      base64Data: text
+    };
+  }
+
+  /**
+   * 将 Responses 生图结果从 raw Base64 转成本地文件引用。
+   *
+   * 设计约束：
+   * - 历史和 response_activity 只保留 `result_image_url`，避免把大 Base64 写入 IndexedDB；
+   * - 即使保存失败，也会删除 `result`，防止下一轮 replay 或备份继续携带图片字节；
+   * - 函数原地修改 payload，因为调用点随后会进入同步的 Responses output 提取逻辑。
+   *
+   * @param {any} payload
+   * @returns {Promise<any>}
+   */
+  async function localizeResponsesImageGenerationResults(payload) {
+    const outputItems = Array.isArray(payload?.output) ? payload.output : [];
+    if (outputItems.length <= 0) return payload;
+
+    for (const item of outputItems) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+      const type = String(item.type || '').trim().toLowerCase();
+      if (type !== 'image_generation_call') continue;
+
+      const parsed = parseResponsesImageGenerationResultPayload(item.result);
+      if (parsed?.mimeType && parsed.base64Data) {
+        const fileUrl = await saveInlineImageToLocalFile(parsed.mimeType, parsed.base64Data);
+        if (fileUrl) {
+          item.result_image_url = fileUrl;
+        }
+      }
+      delete item.result;
+    }
+
+    return payload;
+  }
+
   // 私有状态
   let isProcessingMessage = false;
   let shouldAutoScroll = true;
@@ -1489,7 +1551,7 @@ export function createMessageSender(appContext) {
         id,
         status,
         revised_prompt: typeof item.revised_prompt === 'string' ? item.revised_prompt : '',
-        result: typeof item.result === 'string' ? item.result : ''
+        result_image_url: typeof item.result_image_url === 'string' ? item.result_image_url : ''
       });
       return (normalized && typeof normalized === 'object' && !Array.isArray(normalized)) ? normalized : null;
     }
@@ -1879,6 +1941,7 @@ export function createMessageSender(appContext) {
         name: entry.name,
         arguments: entry.arguments,
         revised_prompt: entry.revised_prompt,
+        result_image_url: entry.result_image_url,
         sources: entry.sources
       }))
       .filter(entry => entry && typeof entry === 'object' && !Array.isArray(entry));
@@ -12837,6 +12900,7 @@ export function createMessageSender(appContext) {
                 [outputItem]
               );
             }
+            await localizeResponsesImageGenerationResults({ output: [outputItem] });
             const extractedItem = extractOpenAIResponsesOutput({ output: [outputItem] });
             if (!shouldRebuildResponsesVisibleAnswer && typeof extractedItem.answer === 'string' && extractedItem.answer) {
               currentEventAnswerDelta = extractedItem.answer;
@@ -12882,6 +12946,7 @@ export function createMessageSender(appContext) {
             completedPayload,
             { status: 'completed' }
           ) || shouldRebuildResponsesVisibleAnswer;
+          await localizeResponsesImageGenerationResults(completedPayload);
           const extracted = extractOpenAIResponsesOutput(completedPayload);
           if (Array.isArray(extracted.responseOutputItems) && extracted.responseOutputItems.length > 0) {
             latestResponsesOutputItems = mergeResponsesReplayOutputItems(
@@ -12921,6 +12986,7 @@ export function createMessageSender(appContext) {
             data,
             { status: 'completed' }
           ) || shouldRebuildResponsesVisibleAnswer;
+          await localizeResponsesImageGenerationResults(data);
           const extracted = extractOpenAIResponsesOutput(data);
           if (Array.isArray(extracted.responseOutputItems) && extracted.responseOutputItems.length > 0) {
             latestResponsesOutputItems = mergeResponsesReplayOutputItems(
@@ -13290,6 +13356,7 @@ export function createMessageSender(appContext) {
       }
     } else if (isResponsesApi) {
       // OpenAI Responses API 非流式
+      await localizeResponsesImageGenerationResults(json);
       const extracted = extractOpenAIResponsesOutput(json);
       if (typeof extracted.answer === 'string') {
         answer = extracted.answer;
