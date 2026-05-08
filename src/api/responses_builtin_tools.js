@@ -238,6 +238,29 @@ export const RESPONSES_BUILTIN_TOOL_SPECS = Object.freeze([
     }
   }),
   createBuiltinToolSpec({
+    id: 'image_generation',
+    title: '图像生成工具',
+    description: '这里单独管理 Responses API 的 image_generation hosted tool；开启后会自动附加 Codex 同款的 `{ type: "image_generation", output_format: "png" }`。',
+    sectionToggleSpec: {
+      path: ['builtin_tools', 'image_generation', 'enabled'],
+      key: 'builtin_tools.image_generation.enabled',
+      label: '启用图像生成',
+      help: '启用后自动在 /responses 的 tools 中附加 { type: "image_generation", output_format: "png" }，由 OpenAI Responses 服务端生成 PNG 图片。'
+    },
+    advancedSpecs: [],
+    buildRequestOverride(toolSettings, helpers = {}) {
+      if (!toolSettings || toolSettings.enabled !== true) return null;
+      const compactValue = (typeof helpers.compactValue === 'function') ? helpers.compactValue : defaultCompactValue;
+      return {
+        tool: compactValue({
+          type: 'image_generation',
+          output_format: 'png'
+        }),
+        include: []
+      };
+    }
+  }),
+  createBuiltinToolSpec({
     id: 'tool_search',
     title: '工具搜索',
     description: '这里单独管理 Responses API 的 hosted tool_search；开启后会自动附加 `{ type: "tool_search" }`。Cerebr 内置的大多数本地 function tools 会在发送时自动补成 `defer_loading`；若你手写额外工具 JSON，仍需自行声明其 defer_loading / namespace。',

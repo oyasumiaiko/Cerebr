@@ -120,6 +120,28 @@ test('formatResponsesToolOutputForDisplay 处理 JSON 字符串态 input_image �
   assert.doesNotMatch(text, /QUJDRA==/);
 });
 
+test('formatResponsesToolOutputForDisplay 会把 image_generation_call 压成可读摘要并提取 PNG 预览', async () => {
+  const { extractResponsesToolOutputInputImages, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+  const payload = {
+    type: 'image_generation_call',
+    status: 'completed',
+    revised_prompt: '将一只蓝色钢笔放在白纸上',
+    result: 'QUJDRA=='
+  };
+  const text = formatResponsesToolOutputForDisplay(payload);
+  assert.match(text, /\[image_generation_call #1\]/);
+  assert.match(text, /status: completed/);
+  assert.match(text, /revised_prompt: 将一只蓝色钢笔放在白纸上/);
+  assert.match(text, /result: image\/png/);
+  assert.doesNotMatch(text, /QUJDRA==/);
+
+  const images = extractResponsesToolOutputInputImages(payload);
+  assert.equal(images.length, 1);
+  assert.equal(images[0].imageUrl, 'data:image/png;base64,QUJDRA==');
+  assert.equal(images[0].mimeType, 'image/png');
+  assert.equal(images[0].approxBytes > 0, true);
+});
+
 test('buildResponsesJsRuntimeToolOutputText 使用 XML 分块且避免大 JSON 包裹主输出', async () => {
   const { buildResponsesJsRuntimeToolOutputText } = await loadResponsesToolOutputModule();
   const text = buildResponsesJsRuntimeToolOutputText({

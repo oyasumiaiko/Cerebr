@@ -1483,6 +1483,17 @@ export function createMessageSender(appContext) {
       return (normalized && typeof normalized === 'object' && !Array.isArray(normalized)) ? normalized : null;
     }
 
+    if (type === 'image_generation_call') {
+      const normalized = compactResponsesMetaValue({
+        type,
+        id,
+        status,
+        revised_prompt: typeof item.revised_prompt === 'string' ? item.revised_prompt : '',
+        result: typeof item.result === 'string' ? item.result : ''
+      });
+      return (normalized && typeof normalized === 'object' && !Array.isArray(normalized)) ? normalized : null;
+    }
+
     const normalized = compactResponsesMetaValue({
       type,
       id,
@@ -1867,6 +1878,7 @@ export function createMessageSender(appContext) {
         pattern: entry.pattern,
         name: entry.name,
         arguments: entry.arguments,
+        revised_prompt: entry.revised_prompt,
         sources: entry.sources
       }))
       .filter(entry => entry && typeof entry === 'object' && !Array.isArray(entry));

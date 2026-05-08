@@ -1805,6 +1805,38 @@ function normalizeResponsesInputImageItem(item, index = 0) {
   };
 }
 
+function isResponsesImageGenerationCallItem(item) {
+  return !!(
+    item
+    && typeof item === 'object'
+    && !Array.isArray(item)
+    && String(item.type || '').trim().toLowerCase() === 'image_generation_call'
+  );
+}
+
+function normalizeResponsesImageGenerationResultImageUrl(result) {
+  const text = (typeof result === 'string') ? result.trim() : '';
+  if (!text) return '';
+  if (/^data:image\//i.test(text)) return text;
+  return `data:image/png;base64,${text}`;
+}
+
+function normalizeResponsesImageGenerationOutputItem(item, index = 0) {
+  if (!isResponsesImageGenerationCallItem(item)) return null;
+  const imageUrl = normalizeResponsesImageGenerationResultImageUrl(item.result);
+  if (!imageUrl) return null;
+  const mimeType = extractDataUrlMimeType(imageUrl) || 'image/png';
+  return {
+    index,
+    imageUrl,
+    detail: '',
+    mimeType,
+    approxBytes: estimateDataUrlBytes(imageUrl),
+    status: typeof item.status === 'string' ? item.status.trim() : '',
+    revisedPrompt: typeof item.revised_prompt === 'string' ? item.revised_prompt.trim() : ''
+  };
+}
+
 function buildResponsesInputImageSignature(value) {
   const text = (typeof value === 'string') ? value : '';
   if (!text) return '0:0:0:0';
@@ -1832,12 +1864,16 @@ function buildResponsesInputImageSignature(value) {
 
 function normalizeResponsesToolOutputBodyForInspection(body) {
   if (Array.isArray(body)) return body;
+  if (body && typeof body === 'object' && !Array.isArray(body)) {
+    return isResponsesImageGenerationCallItem(body) ? [body] : null;
+  }
   if (typeof body !== 'string') return null;
   const text = body.trim();
   if (!text) return null;
   try {
     const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? parsed : null;
+    if (Array.isArray(parsed)) return parsed;
+    return isResponsesImageGenerationCallItem(parsed) ? [parsed] : null;
   } catch (_) {
     return null;
   }
@@ -1850,10 +1886,12 @@ export function extractResponsesToolOutputInputImages(body) {
   const images = [];
   for (let index = 0; index < items.length; index += 1) {
     const normalized = normalizeResponsesInputImageItem(items[index], index);
-    if (!normalized) continue;
+    const generated = normalized ? null : normalizeResponsesImageGenerationOutputItem(items[index], index);
+    const image = normalized || generated;
+    if (!image) continue;
     images.push({
-      ...normalized,
-      signature: `${normalized.detail || 'default'}:${normalized.mimeType}:${normalized.approxBytes}:${buildResponsesInputImageSignature(normalized.imageUrl)}`
+      ...image,
+      signature: `${image.detail || 'default'}:${image.mimeType}:${image.approxBytes}:${buildResponsesInputImageSignature(image.imageUrl)}`
     });
   }
   return images;
@@ -1867,6 +1905,25 @@ function formatResponsesInputImageItemForDisplay(item, index = 0) {
     `mime_type: ${normalized.mimeType}`,
     `detail: ${normalized.detail || 'default'}`
   ];
+  if (normalized.approxBytes > 0) {
+    lines.push(`approx_bytes: ${normalized.approxBytes}`);
+  }
+  return lines.join('\n');
+}
+
+function formatResponsesImageGenerationCallItemForDisplay(item, index = 0) {
+  const normalized = normalizeResponsesImageGenerationOutputItem(item, index);
+  if (!normalized) return '';
+  const lines = [
+    `[image_generation_call #${normalized.index + 1}]`
+  ];
+  if (normalized.status) {
+    lines.push(`status: ${normalized.status}`);
+  }
+  if (normalized.revisedPrompt) {
+    lines.push(`revised_prompt: ${normalized.revisedPrompt}`);
+  }
+  lines.push(`result: ${normalized.mimeType}`);
   if (normalized.approxBytes > 0) {
     lines.push(`approx_bytes: ${normalized.approxBytes}`);
   }
@@ -1891,6 +1948,12 @@ function formatResponsesContentItemArrayForDisplay(body) {
     }
     if (item.type === 'input_image' && typeof item.image_url === 'string') {
       blocks.push(formatResponsesInputImageItemForDisplay(item, index));
+      continue;
+    }
+    if (isResponsesImageGenerationCallItem(item)) {
+      const formatted = formatResponsesImageGenerationCallItemForDisplay(item, index);
+      if (!formatted) return '';
+      blocks.push(formatted);
       continue;
     }
     return '';
@@ -1923,6 +1986,9 @@ export function formatResponsesToolOutputForDisplay(body) {
         if (contentItemText) {
           return contentItemText;
         }
+      }
+      if (isResponsesImageGenerationCallItem(parsed)) {
+        return formatResponsesImageGenerationCallItemForDisplay(parsed);
       }
       return stringifyResponsesToolOutputValue(parsed);
     } catch (_) {
@@ -1958,6 +2024,9 @@ export function formatResponsesToolOutputForDisplay(body) {
   }
 
   if (typeof body === 'object') {
+    if (isResponsesImageGenerationCallItem(body)) {
+      return formatResponsesImageGenerationCallItemForDisplay(body);
+    }
     return stringifyResponsesToolOutputValue(body);
   }
 

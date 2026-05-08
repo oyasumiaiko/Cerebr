@@ -102,6 +102,11 @@ export function sanitizeResponsesReplayItem(item) {
   delete cloned.status;
 
   const type = String(cloned.type || '').trim().toLowerCase();
+  if (type === 'image_generation_call') {
+    // 生图结果本身是很大的 base64 PNG；历史重放只需要保留调用事实与 revised_prompt，
+    // 不应把整张图再次塞回下一轮 `/responses.input`。
+    delete cloned.result;
+  }
   if (type === 'reasoning') {
     const hasSummary = Array.isArray(cloned.summary)
       && cloned.summary.some(part => typeof part?.text === 'string' && part.text.trim());

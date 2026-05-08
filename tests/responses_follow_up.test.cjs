@@ -138,3 +138,19 @@ test('sanitizeResponsesReplayItem 会移除不兼容 replay 的 item_id 运行�
     arguments: '{"max_chars":5000}'
   });
 });
+
+test('sanitizeResponsesReplayItem 会剥离 image_generation_call 的 result 大字段', async () => {
+  const { sanitizeResponsesReplayItem } = await loadResponsesInputItemsModule();
+  const sanitized = sanitizeResponsesReplayItem({
+    type: 'image_generation_call',
+    id: 'ig_1',
+    status: 'completed',
+    revised_prompt: '把这张图改成蓝底',
+    result: 'QUJDRA=='
+  });
+
+  assert.deepEqual(sanitized, {
+    type: 'image_generation_call',
+    revised_prompt: '把这张图改成蓝底'
+  });
+});

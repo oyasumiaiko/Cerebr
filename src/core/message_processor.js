@@ -1860,6 +1860,28 @@ export function createMessageProcessor(appContext) {
     return extractResponsesToolOutputInputImages(rawOutput);
   }
 
+  function resolveResponseActivityToolOutputSource(entry) {
+    if (!entry || typeof entry !== 'object') return null;
+    if (String(entry.type || '').toLowerCase() === 'image_generation_call') {
+      return entry;
+    }
+    return entry.output || null;
+  }
+
+  function normalizeResponseActivityInlineText(value) {
+    return String(value || '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  function truncateResponseActivityInlineText(value, maxChars = 72) {
+    const text = normalizeResponseActivityInlineText(value);
+    const limit = Math.max(0, Math.trunc(Number(maxChars) || 0));
+    if (!text || text.length <= limit) return text;
+    if (limit <= 1) return text.slice(0, limit);
+    return `${text.slice(0, limit - 1)}…`;
+  }
+
   function normalizeResponseActivityToolOutputImages(outputImages) {
     return Array.isArray(outputImages)
       ? outputImages.filter(image => image && typeof image.imageUrl === 'string' && image.imageUrl.trim())
@@ -2200,10 +2222,11 @@ export function createMessageProcessor(appContext) {
       toolBodyInner.appendChild(pre);
     }
 
-    const formattedOutput = snapshot?.outputText || formatResponseToolCallOutput(entry.output);
+    const outputSource = resolveResponseActivityToolOutputSource(entry);
+    const formattedOutput = snapshot?.outputText || formatResponseToolCallOutput(outputSource);
     const outputImages = Array.isArray(snapshot?.outputImages)
       ? snapshot.outputImages
-      : extractResponseToolCallOutputImages(entry.output);
+      : extractResponseToolCallOutputImages(outputSource);
     appendResponseActivityToolOutput(toolBodyInner, formattedOutput, outputImages, {
       suppressImages: options?.suppressOutputImages === true
     });
@@ -2244,6 +2267,7 @@ export function createMessageProcessor(appContext) {
 
   function getResponseToolCallTypeLabel(record) {
     const type = String(record?.type || '').toLowerCase();
+    if (type === 'image_generation_call') return '生图';
     if (type === 'web_search_call') return '搜索';
     if (type === 'code_interpreter_call') return '代码';
     if (isResponseActivityJsRuntimeEntry(record)) return 'JS';
@@ -2289,6 +2313,10 @@ export function createMessageProcessor(appContext) {
       }
       const subject = query || title || pattern || url;
       return subject ? `${actionLabel} ${subject}` : actionLabel;
+    }
+    if (type === 'image_generation_call') {
+      const prompt = truncateResponseActivityInlineText(record.revised_prompt, 72);
+      return prompt ? `生成 图片 ${prompt}` : '生成 图片';
     }
     if (isResponseActivityJsRuntimeEntry(record)) {
       const parts = buildResponseActivityJsRuntimeSummaryParts(record, options);
@@ -2350,6 +2378,15 @@ export function createMessageProcessor(appContext) {
         action: actionLabel,
         value: title || url || query || pattern || '',
         valueUrl: url
+      };
+    }
+    if (type === 'image_generation_call') {
+      const prompt = truncateResponseActivityInlineText(record.revised_prompt, 72);
+      return {
+        action: '生成',
+        value: '图片',
+        valueUrl: '',
+        meta: prompt
       };
     }
     if (isResponseActivityJsRuntimeEntry(record)) {
@@ -3036,9 +3073,10 @@ export function createMessageProcessor(appContext) {
 
   function hasResponseActivityToolDetails(entry) {
     if (!entry || typeof entry !== 'object') return false;
+    const outputSource = resolveResponseActivityToolOutputSource(entry);
     if (isResponseActivityJsRuntimeEntry(entry)) {
       const meta = getResponseActivityJsRuntimeMeta(entry);
-      return !!((typeof meta.code === 'string' && meta.code.trim()) || hasResponsesToolOutputBody(entry.output));
+      return !!((typeof meta.code === 'string' && meta.code.trim()) || hasResponsesToolOutputBody(outputSource));
     }
     if (String(entry?.action_type || '').toLowerCase() === 'find_in_page') {
       return false;
@@ -3048,7 +3086,7 @@ export function createMessageProcessor(appContext) {
     }
     if (getResponseActivityToolSecondaryLines(entry).length > 0) return true;
     if (typeof entry.arguments === 'string' && entry.arguments.trim()) return true;
-    if (hasResponsesToolOutputBody(entry.output)) return true;
+    if (hasResponsesToolOutputBody(outputSource)) return true;
     if (Array.isArray(entry.sources) && entry.sources.length > 0) return true;
     return false;
   }
@@ -3059,7 +3097,8 @@ export function createMessageProcessor(appContext) {
     const searchQueryLines = renderSearchQueriesInline ? getResponseActivityToolQueryLines(entry) : [];
     const hasDetails = hasResponseActivityToolDetails(entry);
     const isInProgress = isThinkingRuntimeActive && isResponseActivityEntryInProgress(entry);
-    const hasOutput = hasResponsesToolOutputBody(entry?.output);
+    const outputSource = resolveResponseActivityToolOutputSource(entry);
+    const hasOutput = hasResponsesToolOutputBody(outputSource);
     const shouldAutoRemainExpanded = isInProgress || (!hasOutput && isThinkingRuntimeActive);
     const primaryParts = renderSearchQueriesInline
       ? null
@@ -3068,8 +3107,8 @@ export function createMessageProcessor(appContext) {
     const argumentsText = (typeof entry.arguments === 'string' && entry.arguments.trim())
       ? formatResponseToolCallArguments(entry.arguments)
       : '';
-    const outputText = formatResponseToolCallOutput(entry.output) || '';
-    const outputImages = extractResponseToolCallOutputImages(entry.output);
+    const outputText = formatResponseToolCallOutput(outputSource) || '';
+    const outputImages = extractResponseToolCallOutputImages(outputSource);
     const prefersInlineImagePreview = shouldPreferResponseActivityToolInlineImagePreview(entry, outputImages);
     const statusLabel = getResponseActivityStatusLabel(entry.status);
     const jsMeta = isResponseActivityJsRuntimeEntry(entry) ? getResponseActivityJsRuntimeMeta(entry) : null;

@@ -15,7 +15,7 @@ test('RESPONSES_BUILTIN_TOOL_SPECS 以稳定顺序集中声明 Responses 内置�
 
   assert.deepEqual(
     RESPONSES_BUILTIN_TOOL_SPECS.map(spec => spec.id),
-    ['web_search', 'code_interpreter', 'tool_search']
+    ['web_search', 'code_interpreter', 'image_generation', 'tool_search']
   );
 });
 
@@ -81,6 +81,27 @@ test('buildResponsesBuiltinToolOverrides 会生成 code_interpreter 与 tool_sea
         },
         {
           type: 'tool_search'
+        }
+      ],
+      include: []
+    }
+  );
+});
+
+test('buildResponsesBuiltinToolOverrides 会生成 image_generation 的稳定工具定义', async () => {
+  const { buildResponsesBuiltinToolOverrides } = await loadResponsesBuiltinToolsModule();
+
+  assert.deepEqual(
+    buildResponsesBuiltinToolOverrides({
+      builtin_tools: {
+        image_generation: { enabled: true }
+      }
+    }),
+    {
+      tools: [
+        {
+          type: 'image_generation',
+          output_format: 'png'
         }
       ],
       include: []
