@@ -12574,7 +12574,7 @@ export function createMessageSender(appContext) {
       if (isGeminiApi) {
         await handleGeminiEvent(jsonData);
       } else {
-        handleOpenAIEvent(jsonData);
+        await handleOpenAIEvent(jsonData);
       }
     }
 
@@ -12777,7 +12777,7 @@ export function createMessageSender(appContext) {
       return nextCalls;
     }
 
-    function handleOpenAIEvent(data) {
+    async function handleOpenAIEvent(data) {
       const eventType = (typeof data?.type === 'string') ? data.type : '';
 
       // Responses API SSE 事件分支
@@ -12900,7 +12900,6 @@ export function createMessageSender(appContext) {
                 [outputItem]
               );
             }
-            await localizeResponsesImageGenerationResults({ output: [outputItem] });
             const extractedItem = extractOpenAIResponsesOutput({ output: [outputItem] });
             if (!shouldRebuildResponsesVisibleAnswer && typeof extractedItem.answer === 'string' && extractedItem.answer) {
               currentEventAnswerDelta = extractedItem.answer;
