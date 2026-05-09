@@ -6027,7 +6027,7 @@ input[type="range"].temperature::-webkit-slider-thumb:active {
     cursor: default;
 }
 
-/* 收起按钮样式 */
+/* 边缘布局控件：保留原有视觉；侧栏模式下点击切换全屏，拖动调整侧栏宽度。 */
 #collapse-button {
     position: fixed;
     left: 5px;
@@ -9403,7 +9403,7 @@ body.chat-history-panel-resizing {
 /* 当侧边栏位置为左（即添加了 .position-left 类）时，让 collapse-button 出现在右边 */
 #collapse-button.position-left {
     left: auto;
-    right: 5px;
+    right: 0;
 }
 
 /* 通知样式 */

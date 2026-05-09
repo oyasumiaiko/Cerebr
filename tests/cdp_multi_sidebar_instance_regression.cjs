@@ -108,17 +108,22 @@ async function main() {
     result.openSidebarResponse = openSidebarResponse;
     result.steps.push('primary_sidebar_open_requested');
 
-    await waitFor(async () => {
+    const primaryVisibleDebugState = await waitFor(async () => {
       const payload = await extensionWorker.evaluate(
         buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
       );
       const state = payload?.response?.debugState || null;
-      return state?.sidebarCount === 1 && state?.active?.isActuallyVisible ? state : null;
+      return state?.sidebarCount === 1
+        && state?.active?.isActuallyVisible
+        && state?.active?.hasLegacyResizer === false
+        ? state
+        : null;
     }, {
       timeoutMs: 20_000,
       intervalMs: 250,
       label: 'primary sidebar visible'
     });
+    result.primaryVisibleDebugState = primaryVisibleDebugState;
     result.steps.push('primary_sidebar_visible');
 
     const firstFrame = await waitFor(async () => {
@@ -510,14 +515,34 @@ async function main() {
     if (!secondBeforeResize?.rect || !Number.isFinite(Number(secondBeforeResize.sidebarWidth))) {
       throw new Error('Cannot find second sidebar debug state before resize.');
     }
+    const edgeControlBox = await waitFor(async () => {
+      const box = await recreatedSecondFrame.locator('#collapse-button').boundingBox().catch(() => null);
+      return box && box.width > 0 && box.height > 0 ? box : null;
+    }, {
+      timeoutMs: 10_000,
+      intervalMs: 250,
+      label: 'sidebar edge control visible before resize'
+    });
+    const edgeControlStyle = await recreatedSecondFrame.locator('#collapse-button').evaluate((el) => {
+      const style = window.getComputedStyle(el);
+      return {
+        width: style.width,
+        height: style.height,
+        opacity: style.opacity
+      };
+    });
+    result.edgeControlStyleBeforeResize = edgeControlStyle;
+    if (edgeControlStyle.width !== '5px' || edgeControlStyle.height !== '200px' || edgeControlStyle.opacity !== '0') {
+      throw new Error(`Sidebar edge control style changed unexpectedly: ${JSON.stringify(edgeControlStyle)}`);
+    }
     await page.mouse.move(
-      secondBeforeResize.rect.x + secondBeforeResize.rect.width - 6,
-      secondBeforeResize.rect.y + Math.round(secondBeforeResize.rect.height / 2)
+      edgeControlBox.x + Math.round(edgeControlBox.width / 2),
+      edgeControlBox.y + Math.round(edgeControlBox.height / 2)
     );
     await page.mouse.down();
     await page.mouse.move(
-      secondBeforeResize.rect.x + secondBeforeResize.rect.width + 140,
-      secondBeforeResize.rect.y + Math.round(secondBeforeResize.rect.height / 2),
+      edgeControlBox.x + Math.round(edgeControlBox.width / 2) + 140,
+      edgeControlBox.y + Math.round(edgeControlBox.height / 2),
       { steps: 10 }
     );
     await page.mouse.up();

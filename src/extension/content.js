@@ -329,6 +329,22 @@ class CerebrSidebar {
     this.updateDockLayout();
   }
 
+  getSidebarResizeScale() {
+    const dpr = Number(window.devicePixelRatio);
+    const safeDpr = (Number.isFinite(dpr) && dpr > 0) ? dpr : 1;
+    const scale = this.scaleFactor / safeDpr;
+    return (Number.isFinite(scale) && scale > 0) ? scale : 1;
+  }
+
+  resolveSidebarWidthFromPointerDelta(startWidth, pointerDelta) {
+    const numericStartWidth = Number(startWidth);
+    const safeStartWidth = Number.isFinite(numericStartWidth) ? numericStartWidth : this.sidebarWidth;
+    const numericDelta = Number(pointerDelta);
+    const safeDelta = Number.isFinite(numericDelta) ? numericDelta : 0;
+    const nextWidth = safeStartWidth + safeDelta / this.getSidebarResizeScale();
+    return Math.min(Math.max(500, nextWidth), 2000);
+  }
+
   // 添加更新侧边栏位置的方法
   updatePosition(position, options = {}) {
     const shouldPersist = options?.persist !== false;
@@ -508,6 +524,7 @@ class CerebrSidebar {
         ? Number(this.sidebar.dataset.cerebrFullscreenSplitRatio)
         : null,
       hasFullscreenDivider: this.sidebar.classList.contains('has-fullscreen-divider'),
+      hasLegacyResizer: !!this.sidebar.querySelector('.cerebr-sidebar__resizer'),
       hasVisibleClass,
       hasIframe,
       inlineDisplay,
@@ -694,42 +711,6 @@ class CerebrSidebar {
           border-radius: 0;
         }
 
-        .cerebr-sidebar__resizer {
-          position: absolute;
-          top: 0;
-          bottom: 0;
-          width: 12px;
-          z-index: 3;
-          cursor: col-resize;
-          pointer-events: auto;
-          opacity: 0;
-          transition: opacity 0.16s ease;
-        }
-
-        .cerebr-sidebar__resizer::before {
-          content: '';
-          position: absolute;
-          top: 16px;
-          bottom: 16px;
-          left: 5px;
-          width: 2px;
-          border-radius: 999px;
-          background: rgba(120, 120, 120, 0.5);
-        }
-
-        .cerebr-sidebar.position-right .cerebr-sidebar__resizer {
-          left: 0;
-        }
-
-        .cerebr-sidebar.position-left .cerebr-sidebar__resizer {
-          right: 0;
-        }
-
-        .cerebr-sidebar__resizer:hover,
-        .cerebr-sidebar.resizing .cerebr-sidebar__resizer {
-          opacity: 1;
-        }
-
         .cerebr-sidebar__fullscreen-divider {
           position: absolute;
           top: 0;
@@ -785,8 +766,7 @@ class CerebrSidebar {
           transform: translateX(0) !important;
           box-shadow: none !important;
         }
-        .cerebr-sidebar.fullscreen .cerebr-sidebar__header,
-        .cerebr-sidebar.fullscreen .cerebr-sidebar__resizer {
+        .cerebr-sidebar.fullscreen .cerebr-sidebar__header {
           display: none;
         }
         .cerebr-sidebar.fullscreen .cerebr-sidebar__content {
@@ -826,9 +806,6 @@ class CerebrSidebar {
 
       const header = document.createElement('div');
       header.className = 'cerebr-sidebar__header';
-
-      const resizer = document.createElement('div');
-      resizer.className = 'cerebr-sidebar__resizer';
 
       const fullscreenDivider = document.createElement('div');
       fullscreenDivider.className = 'cerebr-sidebar__fullscreen-divider';
@@ -872,7 +849,6 @@ class CerebrSidebar {
 
       content.appendChild(iframe);
       this.sidebar.appendChild(header);
-      this.sidebar.appendChild(resizer);
       this.sidebar.appendChild(fullscreenDivider);
       this.sidebar.appendChild(content);
 
@@ -936,7 +912,7 @@ class CerebrSidebar {
 
       // console.log('侧边栏已添加到文档');
 
-      this.setupEventListeners(header, resizer, fullscreenDivider);
+      this.setupEventListeners(header, fullscreenDivider);
 
       // 使用 requestAnimationFrame 确保状态已经应用
       requestAnimationFrame(() => {
@@ -963,47 +939,7 @@ class CerebrSidebar {
     }
   }
 
-  setupEventListeners(header, resizer, fullscreenDivider) {
-    let startX, startWidth;
-
-    resizer.addEventListener('mousedown', (e) => {
-      // 如果是全屏模式，不允许调整大小
-      if (this.isFullscreen) return;
-
-      e.preventDefault();
-      e.stopPropagation();
-      startX = e.clientX;
-      startWidth = this.sidebarWidth;
-      this.manager?.setActiveSidebar?.(this);
-      this.sidebar?.classList.add('resizing');
-      const interactionOverlay = this.manager?.createInteractionOverlay?.('col-resize') || null;
-
-      const handleMouseMove = (e) => {
-        // 如果是全屏模式，不允许调整大小
-        if (this.isFullscreen) return;
-
-        const scale = this.scaleFactor / window.devicePixelRatio;
-        const dragDelta = this.sidebarPosition === 'left'
-          ? e.clientX - startX
-          : startX - e.clientX;
-        const newWidth = Math.min(Math.max(500, startWidth + dragDelta / scale), 2000);
-        this.updateWidth(newWidth);
-        this.manager?.layoutSidebars?.();
-      };
-
-      const cleanupResize = () => {
-        this.sidebar?.classList.remove('resizing');
-        interactionOverlay?.removeEventListener?.('mousemove', handleMouseMove, true);
-        interactionOverlay?.removeEventListener?.('mouseup', cleanupResize, true);
-        window.removeEventListener('blur', cleanupResize, true);
-        interactionOverlay?.remove?.();
-      };
-
-      interactionOverlay?.addEventListener?.('mousemove', handleMouseMove, true);
-      interactionOverlay?.addEventListener?.('mouseup', cleanupResize, true);
-      window.addEventListener('blur', cleanupResize, true);
-    });
-
+  setupEventListeners(header, fullscreenDivider) {
     header?.addEventListener('mousedown', (event) => {
       if (this.isFullscreen || this.isDocked) return;
       event.preventDefault();
@@ -1761,6 +1697,100 @@ class CerebrSidebarManager {
     this.reorderSidebarFromPointer(sidebarInstance, startEvent.clientX);
   }
 
+  resolveEdgeControlPointerX(sidebarInstance, payload = {}) {
+    const screenX = Number(payload?.screenX);
+    if (Number.isFinite(screenX)) return screenX;
+
+    const clientX = Number(payload?.clientX);
+    if (!Number.isFinite(clientX)) return NaN;
+
+    // iframe 发来的 clientX 是 iframe 视口坐标；只有 screenX 不可用时才退回到
+    // “iframe 外框位置 + iframe 内坐标”的换算，避免跨层坐标混用导致拖拽跳变。
+    const iframe = sidebarInstance?.getIframe?.();
+    const rect = iframe?.getBoundingClientRect?.();
+    if (!rect) return clientX;
+
+    const scale = sidebarInstance?.getIframeEmbedScale?.();
+    const safeScale = (Number.isFinite(Number(scale)) && Number(scale) > 0) ? Number(scale) : 1;
+    return rect.left + clientX * safeScale;
+  }
+
+  getMouseEventPointerX(event, fallback = NaN) {
+    const screenX = Number(event?.screenX);
+    if (Number.isFinite(screenX)) return screenX;
+    const clientX = Number(event?.clientX);
+    return Number.isFinite(clientX) ? clientX : fallback;
+  }
+
+  startSidebarEdgeControlInteraction(sidebarInstance, payload = {}) {
+    if (!sidebarInstance?.sidebar) return;
+    if (Number(payload?.button || 0) !== 0) return;
+
+    this.setActiveSidebar(sidebarInstance);
+    if (sidebarInstance.isFullscreen) {
+      this.toggleFullscreenForSidebar(sidebarInstance);
+      return;
+    }
+
+    const startPointerX = this.resolveEdgeControlPointerX(sidebarInstance, payload);
+    if (!Number.isFinite(startPointerX)) {
+      this.toggleFullscreenForSidebar(sidebarInstance);
+      return;
+    }
+
+    const startWidth = sidebarInstance.sidebarWidth;
+    const startPosition = sidebarInstance.sidebarPosition === 'left' ? 'left' : 'right';
+    const interactionOverlay = this.createInteractionOverlay('col-resize');
+    const dragThresholdPx = 4;
+    let hasResized = false;
+
+    const applyPointerX = (pointerX) => {
+      const nextPointerX = Number(pointerX);
+      if (!Number.isFinite(nextPointerX)) return;
+
+      const pointerDelta = startPosition === 'left'
+        ? nextPointerX - startPointerX
+        : startPointerX - nextPointerX;
+
+      if (!hasResized && Math.abs(pointerDelta) < dragThresholdPx) return;
+
+      if (!hasResized) {
+        hasResized = true;
+        sidebarInstance.sidebar?.classList.add('resizing');
+      }
+
+      sidebarInstance.updateWidth(
+        sidebarInstance.resolveSidebarWidthFromPointerDelta(startWidth, pointerDelta)
+      );
+      this.layoutSidebars();
+    };
+
+    const handleMouseMove = (event) => {
+      applyPointerX(this.getMouseEventPointerX(event));
+    };
+
+    const cleanupInteraction = (event, options = {}) => {
+      const allowClickToggle = options?.allowClickToggle !== false;
+      if (hasResized) {
+        applyPointerX(this.getMouseEventPointerX(event, startPointerX));
+      } else if (allowClickToggle) {
+        this.toggleFullscreenForSidebar(sidebarInstance);
+      }
+
+      sidebarInstance.sidebar?.classList.remove('resizing');
+      interactionOverlay.removeEventListener('mousemove', handleMouseMove, true);
+      interactionOverlay.removeEventListener('mouseup', cleanupInteraction, true);
+      window.removeEventListener('blur', handleBlur, true);
+      interactionOverlay.remove();
+    };
+
+    const handleBlur = () => cleanupInteraction(null, { allowClickToggle: false });
+
+    interactionOverlay.addEventListener('mousemove', handleMouseMove, true);
+    interactionOverlay.addEventListener('mouseup', cleanupInteraction, true);
+    window.addEventListener('blur', handleBlur, true);
+  }
+
   startFullscreenSplitResize(leftSidebar, startEvent) {
     if (!leftSidebar?.isFullscreen || !leftSidebar?.sidebar) return;
     const fullscreenSidebars = this.getFullscreenLayoutSidebars();
@@ -2065,6 +2095,9 @@ class CerebrSidebarManager {
         break;
       case 'SIDEBAR_POSITION_CHANGE':
         this.applyPositionToAll(data.position);
+        break;
+      case 'SIDEBAR_EDGE_CONTROL_POINTER_DOWN':
+        this.startSidebarEdgeControlInteraction(sourceSidebar, data);
         break;
       case 'TOGGLE_DOCK_MODE_FROM_IFRAME':
         {

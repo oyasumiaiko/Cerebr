@@ -76,14 +76,26 @@ test('global sidebar visibility commands operate on all instances', async () => 
 
 test('embedded sidebar manager supports drag reorder and per-instance resize', async () => {
   const source = await readRepoFile('src/extension/content.js');
+  const sidebarEventsSource = await readRepoFile('src/ui/sidebar/sidebar_events.js');
+  const sidebarCssSource = await readRepoFile('src/ui/styles/sidebar.css');
 
   assert.match(source, /startSidebarDrag\(sidebarInstance, startEvent\)/);
   assert.match(source, /reorderSidebarFromPointer\(sidebarInstance, clientX\)/);
   assert.match(source, /moveSidebarBefore\(sidebarInstance, beforeSidebar\)/);
+  assert.match(source, /startSidebarEdgeControlInteraction\(sidebarInstance, payload = \{\}\)/);
+  assert.match(source, /resolveSidebarWidthFromPointerDelta\(startWidth, pointerDelta\)/);
+  assert.match(source, /case 'SIDEBAR_EDGE_CONTROL_POINTER_DOWN':[\s\S]*this\.startSidebarEdgeControlInteraction\(sourceSidebar, data\)/);
   assert.match(source, /classList\.add\('dragging'\)/);
   assert.match(source, /classList\.add\('resizing'\)/);
   assert.match(source, /stackOffsetPx: this\.stackOffsetPx/);
   assert.match(source, /sidebarWidth: Math\.round\(Number\(this\.sidebarWidth\) \|\| 0\)/);
+  assert.match(sidebarEventsSource, /requestSidebarEdgeControlPointerDown\(appContext, event\)/);
+  assert.match(sidebarEventsSource, /type: 'SIDEBAR_EDGE_CONTROL_POINTER_DOWN'/);
+  assert.match(sidebarEventsSource, /suppressNextClick = requestSidebarEdgeControlPointerDown\(appContext, event\)/);
+  assert.match(source, /hasLegacyResizer: !!this\.sidebar\.querySelector\('\.cerebr-sidebar__resizer'\)/);
+  assert.match(sidebarCssSource, /#collapse-button \{[\s\S]*?width:\s*5px;[\s\S]*?height:\s*200px;[\s\S]*?opacity:\s*0;/);
+  assert.match(sidebarCssSource, /#collapse-button:hover \{[\s\S]*?opacity:\s*0\.6;/);
+  assert.doesNotMatch(source, /className\s*=\s*'cerebr-sidebar__resizer'/);
 });
 
 test('multi-sidebar fullscreen is coordinated by manager and split across viewport', async () => {

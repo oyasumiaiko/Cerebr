@@ -978,7 +978,7 @@ function updateFullscreenToggleHints(appContext) {
 
   const collapseButton = appContext.dom.collapseButton;
   if (collapseButton) {
-    const label = isFullscreen ? '退出全屏（侧栏模式）' : '切换全屏（沉浸模式）';
+    const label = isFullscreen ? '退出全屏（侧栏模式）' : '点击切换全屏，拖动调整侧栏宽度';
     collapseButton.title = label;
     collapseButton.setAttribute('aria-label', label);
   }
@@ -1012,6 +1012,21 @@ function requestToggleFullscreen(appContext) {
   window.parent.postMessage({ type: 'TOGGLE_FULLSCREEN_FROM_IFRAME' }, '*');
 }
 
+function requestSidebarEdgeControlPointerDown(appContext, event) {
+  if (!event || event.button !== 0) return false;
+  if (appContext.state.isStandalone || appContext.state.isFullscreen) return false;
+
+  event.preventDefault();
+  event.stopPropagation();
+  window.parent.postMessage({
+    type: 'SIDEBAR_EDGE_CONTROL_POINTER_DOWN',
+    button: event.button,
+    clientX: event.clientX,
+    screenX: event.screenX
+  }, '*');
+  return true;
+}
+
 function requestToggleDockMode(appContext) {
   if (appContext.state.isStandalone) {
     appContext.utils.showNotification('独立聊天页面不支持停靠模式');
@@ -1035,7 +1050,35 @@ function setupFullscreenToggle(appContext) {
 
   // 左侧（或左侧布局时出现在右侧）的细长把手：改为切换「全屏/侧栏」布局
   if (appContext.dom.collapseButton) {
-    appContext.dom.collapseButton.addEventListener('click', () => requestToggleFullscreen(appContext));
+    let suppressNextClick = false;
+    let suppressNextClickTimer = null;
+    appContext.dom.collapseButton.addEventListener('mousedown', (event) => {
+      // 侧栏模式下，把同一个边缘控件交给父页面判断“拖动还是点击”：
+      // - 鼠标移动超过阈值时父页面调整侧栏宽度；
+      // - 未超过阈值松开时父页面按一次点击切换全屏。
+      // 这里不在 iframe 内直接改宽，避免拖出 iframe 边界后丢失 mousemove/mouseup。
+      suppressNextClick = requestSidebarEdgeControlPointerDown(appContext, event);
+      if (suppressNextClick) {
+        if (suppressNextClickTimer) clearTimeout(suppressNextClickTimer);
+        suppressNextClickTimer = setTimeout(() => {
+          suppressNextClick = false;
+          suppressNextClickTimer = null;
+        }, 500);
+      }
+    });
+    appContext.dom.collapseButton.addEventListener('click', (event) => {
+      if (suppressNextClick) {
+        suppressNextClick = false;
+        if (suppressNextClickTimer) {
+          clearTimeout(suppressNextClickTimer);
+          suppressNextClickTimer = null;
+        }
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      requestToggleFullscreen(appContext);
+    });
     appContext.dom.collapseButton.addEventListener('keydown', (e) => {
       if (e.key !== 'Enter' && e.key !== ' ') return;
       e.preventDefault();
