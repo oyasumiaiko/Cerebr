@@ -822,18 +822,6 @@ export function createSelectionThreadManager(appContext) {
     return rawUrl || rawPath || '';
   }
 
-  function extractInlineImgSrcs(html) {
-    const set = new Set();
-    if (typeof html !== 'string' || !html.includes('<img')) return set;
-    const re = /<img\b[^>]*\bsrc\s*=\s*(['"])(.*?)\1/gi;
-    let m = null;
-    while ((m = re.exec(html)) !== null) {
-      const src = m[2] || '';
-      if (src) set.add(src);
-    }
-    return set;
-  }
-
   function renderApiFooterForNode(messageElem, node) {
     if (!messageElem || !node || node.role !== 'assistant') return;
     const footer = messageElem.querySelector('.api-footer') || (() => {
@@ -1224,15 +1212,8 @@ export function createSelectionThreadManager(appContext) {
 
         const uniqueDisplayUrls = Array.from(new Set(displayUrls));
         if (role === 'ai') {
-          const existingSrcs = extractInlineImgSrcs(combinedContent);
-          const inlineHtml = uniqueDisplayUrls
-            .filter((u) => u && !existingSrcs.has(u))
-            .map((u) => {
-              const safeUrl = String(u).replace(/"/g, '&quot;');
-              return `\n<img class="ai-inline-image" src="${safeUrl}" alt="加载的图片" />\n`;
-            })
-            .join('');
-          combinedContent = combinedContent + inlineHtml;
+          // AI 图片保持为结构化 content part，由统一的 assistant renderer
+          // 投影到正文区域，避免污染 answer 文本和后续 Responses replay。
           messageElem = messageProcessor.appendMessage(
             combinedContent,
             role,
@@ -1281,6 +1262,12 @@ export function createSelectionThreadManager(appContext) {
         messageElem.classList.remove('batch-load');
         messageElem.classList.add('thread-jump-skip-animation');
         messageElem.setAttribute('data-message-id', node.id);
+        try {
+          messageProcessor.syncAssistantMessageView?.(node.id, {
+            node,
+            fallbackElement: messageElem
+          });
+        } catch (_) {}
         renderApiFooterForNode(messageElem, node);
       }
     }

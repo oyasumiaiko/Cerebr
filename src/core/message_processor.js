@@ -64,6 +64,10 @@ import {
   computeStableScrollAnchor,
   computeStableScrollCompensation
 } from '../utils/scroll_anchor.js';
+import {
+  normalizeStoredMessageContent,
+  splitStoredMessageContent
+} from '../utils/message_content.js';
 
 /**
  * 纯函数：从 pageInfo 中提取“可持久化的页面元数据快照”（仅 url/title）。
@@ -1387,6 +1391,93 @@ export function createMessageProcessor(appContext) {
     return nextSnapshot;
   }
 
+  function normalizeAssistantImageDisplayUrl(imageUrlObject) {
+    if (!imageUrlObject) return '';
+    if (typeof imageUrlObject === 'string') return imageUrlObject.trim();
+    if (typeof imageUrlObject !== 'object' || Array.isArray(imageUrlObject)) return '';
+    return String(imageUrlObject.url || imageUrlObject.path || '').trim();
+  }
+
+  function normalizeAssistantImageAlt(imageUrlObject, index) {
+    if (!imageUrlObject || typeof imageUrlObject !== 'object' || Array.isArray(imageUrlObject)) {
+      return `生成图片 ${index + 1}`;
+    }
+    const prompt = String(imageUrlObject.revised_prompt || imageUrlObject.alt || '').trim();
+    return prompt || `生成图片 ${index + 1}`;
+  }
+
+  function findAssistantStructuredImageContainer(messageWrapperDiv) {
+    if (!messageWrapperDiv?.children) return null;
+    return Array.from(messageWrapperDiv.children).find((child) => (
+      child?.classList?.contains('assistant-structured-image-content')
+    )) || null;
+  }
+
+  /**
+   * 将 assistant 节点中的结构化图片 part 投影到正文 DOM。
+   *
+   * 设计说明：
+   * - 这里不解析 answer 字符串里的 HTML，因此不会把生图结果与模型文本混在一起；
+   * - 图片只来自 `node.content` 的 `image_url` part，和后续 Responses replay metadata 分离；
+   * - 容器使用独立 class 标记，避免误删用户输入图片或工具历史里的预览图片。
+   */
+  function syncAssistantStructuredImages(messageWrapperDiv, node, textContentDiv = null) {
+    if (!messageWrapperDiv || !node) return false;
+
+    const { images } = splitStoredMessageContent(node.content);
+    const displayImages = images
+      .map((image, index) => ({
+        url: normalizeAssistantImageDisplayUrl(image),
+        alt: normalizeAssistantImageAlt(image, index)
+      }))
+      .filter((image) => !!image.url);
+
+    let imageContentDiv = findAssistantStructuredImageContainer(messageWrapperDiv);
+    if (displayImages.length <= 0) {
+      if (imageContentDiv) {
+        imageContentDiv.remove();
+        return true;
+      }
+      return false;
+    }
+
+    const signature = JSON.stringify(displayImages);
+    if (!imageContentDiv) {
+      imageContentDiv = document.createElement('div');
+      imageContentDiv.className = 'image-content assistant-structured-image-content';
+    }
+
+    if (imageContentDiv.dataset.imageSignature !== signature) {
+      imageContentDiv.dataset.imageSignature = signature;
+      imageContentDiv.replaceChildren();
+      displayImages.forEach((image) => {
+        const img = document.createElement('img');
+        img.className = 'ai-inline-image assistant-generated-image';
+        img.src = image.url;
+        img.alt = image.alt;
+        img.loading = 'lazy';
+        img.decoding = 'async';
+        imageContentDiv.appendChild(img);
+      });
+      bindInlineImagePreviews(imageContentDiv);
+    }
+
+    const anchor = textContentDiv || messageWrapperDiv.querySelector('.text-content');
+    if (anchor && imageContentDiv.parentNode !== messageWrapperDiv) {
+      messageWrapperDiv.insertBefore(imageContentDiv, anchor);
+      return true;
+    }
+    if (!anchor && imageContentDiv.parentNode !== messageWrapperDiv) {
+      messageWrapperDiv.appendChild(imageContentDiv);
+      return true;
+    }
+    if (anchor && imageContentDiv.nextSibling !== anchor) {
+      messageWrapperDiv.insertBefore(imageContentDiv, anchor);
+      return true;
+    }
+    return false;
+  }
+
   function setupThoughtsDisplay(messageWrapperDiv, rawThoughts, processMathAndMarkdownFn) {
     let thoughtsContentDiv = messageWrapperDiv.querySelector('.thoughts-content');
     const surfaceSnapshots = getAssistantSurfaceSnapshots(messageWrapperDiv);
@@ -1764,6 +1855,8 @@ export function createMessageProcessor(appContext) {
         messageDiv.appendChild(textContentDiv);
       }
     }
+
+    syncAssistantStructuredImages(messageDiv, node, textContentDiv);
 
     surfaceSnapshots.text = reconcileMarkdownSurfaceContainer(
       textContentDiv,
@@ -4707,6 +4800,7 @@ export function createMessageProcessor(appContext) {
 
     let syncedAny = false;
     if (messageWrapperDiv && node) {
+      syncedAny = syncAssistantStructuredImages(messageWrapperDiv, node) || syncedAny;
       syncedAny = syncAssistantMessageMetadata(messageId, node, {
         fallbackElement: messageWrapperDiv,
         runtimeSnapshot
@@ -4736,8 +4830,16 @@ export function createMessageProcessor(appContext) {
 
     messageVirtualizer.ensureMessageVisible(messageDiv);
 
-    // 统一拆分 <think> 思考段落，保证思考摘要独立存储与展示
-    let safeAnswerContent = newAnswerContent;
+    // 统一拆分 <think> 思考段落，保证思考摘要独立存储与展示。
+    // 当调用方传入结构化 content（例如 Responses 生图正文图片）时，正文文本从
+    // content.text part 读取，图片 part 原样保存在 node.content 中，避免退回到
+    // “把 <img> 拼进 answer 字符串”的旧路径。
+    const incomingStructuredContent = Array.isArray(newAnswerContent)
+      ? normalizeStoredMessageContent(newAnswerContent)
+      : null;
+    let safeAnswerContent = Array.isArray(incomingStructuredContent)
+      ? splitStoredMessageContent(incomingStructuredContent).text
+      : (typeof incomingStructuredContent === 'string' ? incomingStructuredContent : newAnswerContent);
     let resolvedThoughts = newThoughtsRaw;
     let shouldUpdateThoughts = (newThoughtsRaw !== undefined);
     if (typeof safeAnswerContent === 'string') {
@@ -4747,6 +4849,8 @@ export function createMessageProcessor(appContext) {
         resolvedThoughts = mergeThoughts(resolvedThoughts, thinkExtraction.thoughtText);
         shouldUpdateThoughts = true;
       }
+    } else {
+      safeAnswerContent = '';
     }
 
     if (!node) {
@@ -4758,12 +4862,16 @@ export function createMessageProcessor(appContext) {
 
     // --- 同步历史记录中的内容结构（支持图片 + 文本的混合内容） ---
     try {
-      // 提取当前消息中已有的图片 HTML（如果存在）
-      const imageContentDiv = messageDiv ? messageDiv.querySelector('.image-content') : null;
-      const imagesHTML = imageContentDiv ? imageContentDiv.innerHTML : null;
-      // 使用与 appendMessage 相同的逻辑，将文本和图片转换为统一的消息内容格式
-      const processedContent = imageHandler.processImageTags(safeAnswerContent, imagesHTML || '');
-      node.content = processedContent;
+      if (Array.isArray(incomingStructuredContent)) {
+        node.content = incomingStructuredContent;
+      } else {
+        // 提取当前消息中已有的图片 HTML（如果存在）
+        const imageContentDiv = messageDiv ? messageDiv.querySelector('.image-content') : null;
+        const imagesHTML = imageContentDiv ? imageContentDiv.innerHTML : null;
+        // 使用与 appendMessage 相同的逻辑，将文本和图片转换为统一的消息内容格式
+        const processedContent = imageHandler.processImageTags(safeAnswerContent, imagesHTML || '');
+        node.content = processedContent;
+      }
     } catch (e) {
       console.warn('updateAIMessage: 处理图片标签失败，回退为纯文本内容:', e);
       node.content = safeAnswerContent;

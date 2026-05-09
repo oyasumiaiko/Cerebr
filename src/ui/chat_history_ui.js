@@ -3460,17 +3460,6 @@ export function createChatHistoryUI(appContext) {
     try { await loadDownloadRoot(); } catch (_) {}
     const fragment = document.createDocumentFragment();
 
-    const extractInlineImgSrcs = (html) => {
-      const set = new Set();
-      if (typeof html !== 'string' || !html.includes('<img')) return set;
-      const re = /<img\b[^>]*\bsrc\s*=\s*(['"])(.*?)\1/gi;
-      let m = null;
-      while ((m = re.exec(html)) !== null) {
-        const src = m[2] || '';
-        if (src) set.add(src);
-      }
-      return set;
-    };
     const footerTemplate = settingsManager?.getSetting?.('aiFooterTemplate');
     const footerTooltipTemplate = settingsManager?.getSetting?.('aiFooterTooltipTemplate');
     const apiConfigsSnapshot = services.apiManager.getAllConfigs?.() || [];
@@ -3502,15 +3491,8 @@ export function createChatHistoryUI(appContext) {
         const uniqueDisplayUrls = Array.from(new Set(displayUrls));
 
         if (role === 'ai') {
-          const existingSrcs = extractInlineImgSrcs(combinedContent);
-          const inlineHtml = uniqueDisplayUrls
-            .filter((u) => u && !existingSrcs.has(u))
-            .map((u) => {
-              const safeUrl = String(u).replace(/"/g, '&quot;');
-              return `\n<img class="ai-inline-image" src="${safeUrl}" alt="加载的图片" />\n`;
-            })
-            .join('');
-          combinedContent = combinedContent + inlineHtml;
+          // AI 图片已经是结构化 content part，正文重建时交给 messageProcessor
+          // 从 msg.content 统一投影，避免再次把 <img> HTML 拼回 answer 字符串。
           messageElem = appendMessage(combinedContent, role, true, fragment, null, thoughtsToDisplay);
         } else {
           const legacyImagesContainer = document.createElement('div');

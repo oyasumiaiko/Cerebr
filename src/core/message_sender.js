@@ -85,6 +85,11 @@ import {
   ensureResponsesReplayOutputItemsIncludeFunctionCalls
 } from '../utils/responses_follow_up.js';
 import {
+  buildAssistantContentWithGeneratedImages,
+  extractResponsesImageGenerationAnswerImages,
+  mergeResponsesImageGenerationAnswerImages
+} from '../utils/responses_image_generation_answer.js';
+import {
   JS_RUNTIME_EXECUTE_TOOL_NAME,
   buildJsRuntimeExecuteFunctionToolDefinition,
   normalizeJsRuntimeExecuteToolArguments
@@ -2097,10 +2102,12 @@ export function createMessageSender(appContext) {
     const answerFromOutput = answerParts.join('');
     const answerFromField = readResponsesOutputTextField(payload);
     const answer = answerFromOutput || answerFromField || '';
+    const responseAnswerImages = extractResponsesImageGenerationAnswerImages(outputItems);
     return {
       answer,
       responseId,
       responseOutputItems: outputItems.length > 0 ? cloneResponsesReplayOutputItems(outputItems) : null,
+      responseAnswerImages: responseAnswerImages.length > 0 ? responseAnswerImages : null,
       responseActivityTimeline: responseActivityTimeline.length > 0 ? responseActivityTimeline : null,
       reasoningSummary: getResponsesReasoningSummaryFromTimeline(responseActivityTimeline),
       responseToolCalls: getResponsesToolCallsFromTimeline(responseActivityTimeline),
@@ -5233,7 +5240,9 @@ export function createMessageSender(appContext) {
     const targetMessages = Array.isArray(historyMessagesRef) ? historyMessagesRef : null;
     if (!targetMessages) return null;
 
-    const processedContent = imageHandler.processImageTags(content || '', null);
+    const processedContent = Array.isArray(content)
+      ? content
+      : imageHandler.processImageTags(content || '', null);
     const node = {
       id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`,
       role: 'assistant',
@@ -5994,7 +6003,9 @@ export function createMessageSender(appContext) {
       });
     }
 
-    const processedContent = imageHandler.processImageTags(content || '', null);
+    const processedContent = Array.isArray(content)
+      ? content
+      : imageHandler.processImageTags(content || '', null);
     const addWithOptions = typeof chatHistoryManager.addMessageToTreeWithOptions === 'function';
     const node = addWithOptions
       ? chatHistoryManager.addMessageToTreeWithOptions(
@@ -11841,7 +11852,8 @@ export function createMessageSender(appContext) {
       }
     }
 
-    function promoteLoadingMessageToAi({ answer, thoughts }) {
+    function promoteLoadingMessageToAi(payload = {}) {
+      const { answer, thoughts, content } = payload || {};
       if (!loadingMessage || !loadingMessage.parentNode) return null;
       const shouldRenderDom = !!getUiContainer();
       // 线程 UI 不可见时，不做 DOM 升级，交由“仅历史节点”分支处理，避免无意义渲染。
@@ -11876,11 +11888,14 @@ export function createMessageSender(appContext) {
       try { loadingMessage.classList.add('ai-message'); } catch (_) {}
       loadingMessage.textContent = '';
       loadingMessage.removeAttribute('title');
+      const contentForView = Object.prototype.hasOwnProperty.call(payload || {}, 'content')
+        ? content
+        : (answer || '');
       syncAttemptAssistantView(node.id, {
         attemptState,
         node,
         fallbackElement: loadingMessage,
-        content: answer || '',
+        content: contentForView,
         thoughtsRaw: thoughts || '',
         suppressMissingNodeWarning: true
       });
@@ -11997,6 +12012,7 @@ export function createMessageSender(appContext) {
       let latestResponsesResponseId = attemptState?.responsesToolLoopLastResponseId || null;
       let latestResponsesInputItems = cloneResponsesReplayOutputItems(previousResponsesInputItems);
       let latestResponsesOutputItems = [];
+      let latestResponsesAnswerImages = [];
       let hasOpenAIResponsesTerminalEvent = false;
       const latestResponsesOutputItemPhaseById = new Map();
       // Responses API：记录“正文可见文本”的分片状态，避免 delta/done/full item 多次到来时重复拼接。
@@ -12012,6 +12028,12 @@ export function createMessageSender(appContext) {
         }
 		    // 重新生成（原地替换）：只在“首次写回”时清一次，避免后续 token 更新中重复清空
 		    let hasClearedBoundSignatureForRegenerate = false;
+
+      const buildCurrentStreamingAnswerContent = () => (
+        isOpenAIResponsesStream
+          ? buildAssistantContentWithGeneratedImages(aiResponse || '', latestResponsesAnswerImages)
+          : (aiResponse || '')
+      );
 
 	    // 自适应 UI 更新节流器：将多个 token 的高频更新合并为较低频的 DOM 刷新，缓解长消息渲染导致的卡顿。
 	    // 说明：这里不改 messageProcessor.updateAIMessage 的“全量重渲染”策略，而是通过“掉帧合并”降低调用频率。
@@ -12043,7 +12065,9 @@ export function createMessageSender(appContext) {
           syncAttemptAssistantView(payload.messageId, {
             attemptState,
             node: boundNode || attemptState?.aiMessageNode || null,
-            content: payload.answer || '',
+            content: Object.prototype.hasOwnProperty.call(payload, 'content')
+              ? payload.content
+              : (payload.answer || ''),
             thoughtsRaw: payload.thoughts ?? null,
             suppressMissingNodeWarning: true
           });
@@ -12155,7 +12179,7 @@ export function createMessageSender(appContext) {
           syncAttemptAssistantView(currentAiMessageId, {
             attemptState,
             node: boundNode || attemptState?.aiMessageNode || null,
-            content: aiResponse,
+            content: buildCurrentStreamingAnswerContent(),
             thoughtsRaw: isOpenAIResponsesStream ? null : aiThoughtsRaw,
             suppressMissingNodeWarning: true
           });
@@ -12190,7 +12214,8 @@ export function createMessageSender(appContext) {
         if (loadingMessage && loadingMessage.parentNode && getUiContainer()) {
           promotedId = promoteLoadingMessageToAi({
             answer: aiResponse,
-            thoughts: isOpenAIResponsesStream ? null : aiThoughtsRaw
+            thoughts: isOpenAIResponsesStream ? null : aiThoughtsRaw,
+            content: buildCurrentStreamingAnswerContent()
           });
         }
         if (promotedId) {
@@ -12230,7 +12255,7 @@ export function createMessageSender(appContext) {
         const shouldRenderDom = !!uiContainer;
         if (!shouldRenderDom) {
           const createdNode = createThreadAiMessageHistoryOnly({
-            content: aiResponse,
+            content: buildCurrentStreamingAnswerContent(),
             thoughts: isOpenAIResponsesStream ? null : aiThoughtsRaw,
             historyParentId,
             historyPatch: threadHistoryPatch,
@@ -12293,7 +12318,9 @@ export function createMessageSender(appContext) {
                 syncAttemptAssistantView(currentAiMessageId, {
                   attemptState,
                   node: createdNode,
-                  fallbackElement: newAiMessageDiv
+                  fallbackElement: newAiMessageDiv,
+                  content: buildCurrentStreamingAnswerContent(),
+                  thoughtsRaw: null
                 });
               }
             }
@@ -12318,7 +12345,8 @@ export function createMessageSender(appContext) {
         hasDelta,
         hasStartedResponse: streamRenderState.hasStartedResponse,
         hasMessageId: !!currentAiMessageId,
-        hasAnswerContent: (typeof aiResponse === 'string') && aiResponse.trim() !== '',
+        hasAnswerContent: ((typeof aiResponse === 'string') && aiResponse.trim() !== '')
+          || (isOpenAIResponsesStream && latestResponsesAnswerImages.length > 0),
         hasEverShownAnswerContent: streamRenderState.hasEverShownAnswerContent
       });
 
@@ -12368,6 +12396,7 @@ export function createMessageSender(appContext) {
           {
             messageId: currentAiMessageId,
             answer: aiResponse,
+            content: buildCurrentStreamingAnswerContent(),
             thoughts: isOpenAIResponsesStream ? null : aiThoughtsRaw,
             responsesActivityTimeline: isOpenAIResponsesStream
               ? cloneResponsesActivityTimeline(latestResponsesActivityTimeline)
@@ -12497,6 +12526,25 @@ export function createMessageSender(appContext) {
 	        console.warn('记录 AI 元信息失败（流式）:', e);
 	      }
 	    }
+
+      if (isOpenAIResponsesStream && currentAiMessageId) {
+        try {
+          const node = resolveAttemptAiNode(attemptState, currentAiMessageId);
+          if (node) {
+            attemptState.aiMessageNode = node;
+            const finalContent = buildCurrentStreamingAnswerContent();
+            syncAttemptAssistantView(currentAiMessageId, {
+              attemptState,
+              node,
+              content: finalContent,
+              thoughtsRaw: null,
+              suppressMissingNodeWarning: true
+            });
+          }
+        } catch (e) {
+          console.warn('渲染 Responses 生图正文图片失败（流式）:', e);
+        }
+      }
 
       if (isOpenAIResponsesStream && attemptState) {
         syncAttemptResponsesRuntimeState(attemptState, {
@@ -12907,6 +12955,12 @@ export function createMessageSender(appContext) {
             if (typeof extractedItem.assistantPhase === 'string' && extractedItem.assistantPhase) {
               latestResponsesAssistantPhase = extractedItem.assistantPhase;
             }
+            if (Array.isArray(extractedItem.responseAnswerImages) && extractedItem.responseAnswerImages.length > 0) {
+              latestResponsesAnswerImages = mergeResponsesImageGenerationAnswerImages(
+                latestResponsesAnswerImages,
+                extractedItem.responseAnswerImages
+              );
+            }
             if (Array.isArray(extractedItem.responseActivityTimeline) && extractedItem.responseActivityTimeline.length > 0) {
               latestResponsesActivityTimeline = mergeResponsesActivityTimeline(
                 latestResponsesActivityTimeline,
@@ -12966,6 +13020,12 @@ export function createMessageSender(appContext) {
           if (typeof extracted.assistantPhase === 'string' && extracted.assistantPhase) {
             latestResponsesAssistantPhase = extracted.assistantPhase;
           }
+          if (Array.isArray(extracted.responseAnswerImages) && extracted.responseAnswerImages.length > 0) {
+            latestResponsesAnswerImages = mergeResponsesImageGenerationAnswerImages(
+              latestResponsesAnswerImages,
+              extracted.responseAnswerImages
+            );
+          }
           if (Array.isArray(extracted.responseActivityTimeline) && extracted.responseActivityTimeline.length > 0) {
             latestResponsesActivityTimeline = mergeResponsesActivityTimeline(
               latestResponsesActivityTimeline,
@@ -13005,6 +13065,12 @@ export function createMessageSender(appContext) {
           }
           if (typeof extracted.assistantPhase === 'string' && extracted.assistantPhase) {
             latestResponsesAssistantPhase = extracted.assistantPhase;
+          }
+          if (Array.isArray(extracted.responseAnswerImages) && extracted.responseAnswerImages.length > 0) {
+            latestResponsesAnswerImages = mergeResponsesImageGenerationAnswerImages(
+              latestResponsesAnswerImages,
+              extracted.responseAnswerImages
+            );
           }
           if (Array.isArray(extracted.responseActivityTimeline) && extracted.responseActivityTimeline.length > 0) {
             latestResponsesActivityTimeline = mergeResponsesActivityTimeline(
@@ -13196,6 +13262,7 @@ export function createMessageSender(appContext) {
       : null;
     let responsesInputItems = cloneResponsesReplayOutputItems(previousResponsesInputItems);
     let responsesOutputItems = null;
+    let responsesAnswerImages = [];
     let json = null;
     try {
       json = await response.json();
@@ -13214,6 +13281,11 @@ export function createMessageSender(appContext) {
     const isGeminiApi = isGeminiApiResponse(response, usedApiConfig);
     const isResponsesApi = !isGeminiApi
       && (isOpenAIResponsesApiResponse(response, usedApiConfig) || isOpenAIResponsesPayload(json));
+    const buildCurrentNonStreamAnswerContent = () => (
+      isResponsesApi
+        ? buildAssistantContentWithGeneratedImages(answer || '', responsesAnswerImages)
+        : (answer || '')
+    );
     const markNonStreamCompletion = (messageId, messageDiv = null) => {
       if (!messageId) return;
       const completedAtMs = Date.now();
@@ -13367,6 +13439,12 @@ export function createMessageSender(appContext) {
           extracted.responseOutputItems
         );
       }
+      if (Array.isArray(extracted.responseAnswerImages) && extracted.responseAnswerImages.length > 0) {
+        responsesAnswerImages = mergeResponsesImageGenerationAnswerImages(
+          responsesAnswerImages,
+          extracted.responseAnswerImages
+        );
+      }
       if (typeof extracted.responseId === 'string' && extracted.responseId) {
         responsesResponseId = extracted.responseId;
       }
@@ -13453,7 +13531,7 @@ export function createMessageSender(appContext) {
               attemptState,
               node: existingNode,
               fallbackElement: existingEl,
-              content: answer || '',
+              content: buildCurrentNonStreamAnswerContent(),
               thoughtsRaw: displayThoughts,
               suppressMissingNodeWarning: true
             });
@@ -13524,7 +13602,11 @@ export function createMessageSender(appContext) {
 
     let promotedId = null;
     if (loadingMessage && loadingMessage.parentNode) {
-      promotedId = promoteLoadingMessageToAi({ answer, thoughts: displayThoughts });
+      promotedId = promoteLoadingMessageToAi({
+        answer,
+        thoughts: displayThoughts,
+        content: buildCurrentNonStreamAnswerContent()
+      });
     }
     if (promotedId) {
       bindAttemptAiMessage(attemptState, promotedId);
@@ -13576,7 +13658,7 @@ export function createMessageSender(appContext) {
       : isAttemptMainConversationActive(attemptState);
     if (!shouldRenderDom) {
       const createdNode = createThreadAiMessageHistoryOnly({
-        content: answer || '',
+        content: buildCurrentNonStreamAnswerContent(),
         thoughts: displayThoughts,
         historyParentId,
         historyPatch: threadHistoryPatch,
@@ -13691,7 +13773,9 @@ export function createMessageSender(appContext) {
                 syncAttemptAssistantView(messageId, {
                   attemptState,
                   node,
-                  fallbackElement: newAiMessageDiv
+                  fallbackElement: newAiMessageDiv,
+                  content: buildCurrentNonStreamAnswerContent(),
+                  thoughtsRaw: displayThoughts
                 });
 	          }
 	        } catch (e) {

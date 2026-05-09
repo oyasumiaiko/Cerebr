@@ -90,7 +90,7 @@ function extractImageUrlsFromImagesHTML(imagesHTML) {
   const container = document.createElement('div');
   container.innerHTML = html;
 
-  // 只抽取 .image-tag（避免把其内部 <img> 缩略图当成另一张图片重复抽取）。
+  // 先抽取 .image-tag（避免把其内部 <img> 缩略图当成另一张图片重复抽取）。
   const tags = Array.from(container.querySelectorAll('.image-tag'));
   const urls = [];
   for (const tag of tags) {
@@ -101,6 +101,16 @@ function extractImageUrlsFromImagesHTML(imagesHTML) {
       url = img?.getAttribute('src') || '';
     }
     url = safeTrimString(url);
+    if (url) urls.push(url);
+  }
+
+  // assistant 结构化图片会渲染成独立的 img.ai-inline-image，而不是可编辑输入框里的
+  // .image-tag。这里补充抽取这类图片，避免后续 updateAIMessage 只更新文本时把
+  // 已经显示在正文里的生成图片从历史 content 中抹掉。
+  const inlineImgs = Array.from(container.querySelectorAll('img.ai-inline-image'));
+  for (const img of inlineImgs) {
+    if (!img || img.closest('.image-tag')) continue;
+    const url = safeTrimString(img.getAttribute('src') || '');
     if (url) urls.push(url);
   }
   return urls;
@@ -242,4 +252,3 @@ export function splitStoredMessageContent(content) {
 
   return { text, images };
 }
-

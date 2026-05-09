@@ -2485,6 +2485,31 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     padding: 0px;
 }
 
+.message.ai-message .assistant-structured-image-content {
+    margin: 0 0 8px 0;
+    padding: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    overflow: visible;
+}
+
+.message.ai-message .assistant-structured-image-content:empty {
+    display: none;
+}
+
+.message.ai-message .assistant-structured-image-content img.assistant-generated-image {
+    display: block;
+    max-width: min(100%, 720px);
+    max-height: 520px;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    border-radius: 6px;
+    cursor: zoom-in;
+    background: rgba(255, 255, 255, 0.04);
+}
+
 #message-input {
     flex: 1;
     padding: 12px;
