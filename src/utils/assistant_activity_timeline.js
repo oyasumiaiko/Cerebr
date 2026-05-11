@@ -78,3 +78,28 @@ export function getAssistantActivityTimeline(node) {
     ? timeline.filter(entry => String(entry?.kind || '').toLowerCase() !== 'reasoning_summary')
     : timeline;
 }
+
+/**
+ * 判定 UI 是否应该使用 response_activity 面板渲染 assistant 附加信息。
+ *
+ * 注意：`thoughtsRaw` 仍会被 getAssistantActivityTimeline() 映射为 commentary，
+ * 这是给历史/统一数据读取层使用的能力；但 UI 渲染层不能仅因为普通 Google/Gemini
+ * 流式思考写入了 `thoughtsRaw` 就切到 response_activity 面板。否则流式刷新时会把
+ * legacy thoughts 面板先创建、再删除并重建成 activity 面板，表现为思考内容闪现后被刷掉。
+ *
+ * @param {Object|null} node
+ * @returns {boolean}
+ */
+export function shouldRenderAssistantActivityTimeline(node) {
+  if (!node || typeof node !== 'object') return false;
+  if (Array.isArray(node.response_activity_timeline) && node.response_activity_timeline.length > 0) {
+    return true;
+  }
+  if (normalizeText(node.response_reasoning_summary)) {
+    return true;
+  }
+  if (Array.isArray(node.response_tool_calls) && node.response_tool_calls.length > 0) {
+    return true;
+  }
+  return false;
+}

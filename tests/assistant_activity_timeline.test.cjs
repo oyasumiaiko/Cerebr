@@ -91,3 +91,29 @@ test('response_activity_timeline 中的 steer entry 会被原样保留', async (
     { kind: 'reasoning_summary', id: 'reasoning_1', status: 'completed', text: 'summary text' }
   ]);
 });
+
+test('纯 thoughtsRaw 不会要求 UI 切换到 response_activity 面板', async () => {
+  const { shouldRenderAssistantActivityTimeline } = await loadModule();
+
+  assert.equal(shouldRenderAssistantActivityTimeline({
+    thoughtsRaw: '普通 Google 流式思考'
+  }), false);
+});
+
+test('显式 Responses timeline 与 legacy reasoning/tool 字段会要求 UI 使用 activity 面板', async () => {
+  const { shouldRenderAssistantActivityTimeline } = await loadModule();
+
+  assert.equal(shouldRenderAssistantActivityTimeline({
+    response_activity_timeline: [
+      { kind: 'commentary', id: 'resp_commentary', status: 'streaming', text: 'responses commentary' }
+    ]
+  }), true);
+  assert.equal(shouldRenderAssistantActivityTimeline({
+    response_reasoning_summary: 'summary text'
+  }), true);
+  assert.equal(shouldRenderAssistantActivityTimeline({
+    response_tool_calls: [
+      { id: 'tool_1', type: 'function_call', name: 'foo', status: 'completed' }
+    ]
+  }), true);
+});

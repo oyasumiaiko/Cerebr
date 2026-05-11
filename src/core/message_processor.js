@@ -17,7 +17,10 @@ import { extractThinkingFromText, mergeThoughts } from '../utils/thoughts_parser
 import { normalizeResponsesReasoningText } from '../utils/responses_activity_reasoning.js';
 import { buildApiFooterRenderData } from '../utils/api_footer_template.js';
 import { resolveThoughtsPanelLifecycleState } from '../utils/thoughts_panel_lifecycle.js';
-import { getAssistantActivityTimeline } from '../utils/assistant_activity_timeline.js';
+import {
+  getAssistantActivityTimeline,
+  shouldRenderAssistantActivityTimeline
+} from '../utils/assistant_activity_timeline.js';
 import { resolveResponseActivityPanelModeState } from '../utils/response_activity_panel_mode.js';
 import { resolveResponseActivityPanelStatusState } from '../utils/response_activity_panel_status.js';
 import { resolveResponseActivityToolExpansionState } from '../utils/response_activity_tool_auto_collapse.js';
@@ -4695,7 +4698,14 @@ export function createMessageProcessor(appContext) {
     if (!isAssistantLike) return false;
     try { messageWrapperDiv.removeAttribute('title'); } catch (_) {}
     const hasPreResponseStatus = syncAssistantPreResponseStatus(messageId, messageWrapperDiv, runtimeSnapshot);
-    const responseTimeline = node ? getAssistantActivityTimeline(node) : [];
+    const shouldUseActivityTimeline = node ? shouldRenderAssistantActivityTimeline(node) : false;
+    const legacyThoughtsRaw = (!shouldUseActivityTimeline && typeof node?.thoughtsRaw === 'string')
+      ? node.thoughtsRaw
+      : null;
+    const hasLegacyThoughtsDisplay = !!(legacyThoughtsRaw && legacyThoughtsRaw.trim());
+    const responseTimeline = (node && shouldUseActivityTimeline)
+      ? getAssistantActivityTimeline(node)
+      : [];
 
     if (!node) {
       if (hasPreResponseStatus) {
@@ -4704,7 +4714,7 @@ export function createMessageProcessor(appContext) {
       return hasPreResponseStatus;
     }
 
-    if (hasPreResponseStatus && responseTimeline.length === 0) {
+    if (hasPreResponseStatus && responseTimeline.length === 0 && !hasLegacyThoughtsDisplay) {
       removeResponseActivityTimelineDisplay(messageWrapperDiv, {
         preserveAutoCollapseSchedules: true
       });
@@ -4713,6 +4723,11 @@ export function createMessageProcessor(appContext) {
       syncResponsesLocalCompactionDisplay(messageWrapperDiv, null);
       messageVirtualizer.scheduleUpdate(resolveMessageListContainer(messageWrapperDiv));
       return true;
+    }
+    if (hasPreResponseStatus && hasLegacyThoughtsDisplay) {
+      // 普通 Google/Gemini 的推理内容已经可见时，清掉正文前状态条，避免它在
+      // 后续 metadata 同步里继续抢占附加展示区域并造成 thoughts 面板闪烁。
+      removeAssistantPreResponseStatusSurface(messageWrapperDiv);
     }
 
     if (responseTimeline.length > 0) {
@@ -4748,7 +4763,7 @@ export function createMessageProcessor(appContext) {
           isResponseActivityTurnRuntimeActive(messageWrapperDiv)
           || !!messageWrapperDiv.querySelector('.response-activity-timeline')
       });
-      setupThoughtsDisplay(messageWrapperDiv, null, processMathAndMarkdown);
+      setupThoughtsDisplay(messageWrapperDiv, legacyThoughtsRaw, processMathAndMarkdown);
       setupResponseToolCallsDisplay(messageWrapperDiv, null);
     }
     // metadata 同步阶段只允许刷新 assistant 自身附加展示，
