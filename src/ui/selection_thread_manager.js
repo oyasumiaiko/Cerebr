@@ -1,4 +1,8 @@
-import { normalizeStoredMessageContent, splitStoredMessageContent } from '../utils/message_content.js';
+import {
+  buildStoredMessageContentFromParts,
+  normalizeStoredMessageContent,
+  splitStoredMessageContent
+} from '../utils/message_content.js';
 import { queueStorageSet } from '../utils/storage_write_queue_bridge.js';
 import { buildApiFooterRenderData } from '../utils/api_footer_template.js';
 
@@ -1197,20 +1201,24 @@ export function createSelectionThreadManager(appContext) {
       const normalizedContent = normalizeStoredMessageContent(node.content);
       const thoughtsToDisplay = node.thoughtsRaw || null;
       let messageElem = null;
+      let displayImages = [];
 
       if (Array.isArray(normalizedContent)) {
         const { text, images } = splitStoredMessageContent(normalizedContent);
         let combinedContent = text || '';
-        const displayUrls = [];
 
         for (const imageUrlObj of images) {
           const resolved = await resolveImageUrlForDisplay(imageUrlObj);
           const fallback = imageUrlObj?.url || imageUrlObj?.path || '';
           const url = (resolved || fallback || '').trim();
-          if (url) displayUrls.push(url);
+          if (url) {
+            displayImages.push({
+              ...(imageUrlObj && typeof imageUrlObj === 'object' ? imageUrlObj : {}),
+              url
+            });
+          }
         }
 
-        const uniqueDisplayUrls = Array.from(new Set(displayUrls));
         if (role === 'ai') {
           // AI 图片保持为结构化 content part，由统一的 assistant renderer
           // 投影到正文区域，避免污染 answer 文本和后续 Responses replay。
@@ -1227,6 +1235,7 @@ export function createSelectionThreadManager(appContext) {
           );
         } else {
           const legacyImagesContainer = document.createElement('div');
+          const uniqueDisplayUrls = Array.from(new Set(displayImages.map((image) => image.url).filter(Boolean)));
           uniqueDisplayUrls.forEach((u) => {
             const imageTag = imageHandler?.createImageTag ? imageHandler.createImageTag(u, null) : null;
             if (imageTag) legacyImagesContainer.appendChild(imageTag);
@@ -1263,10 +1272,21 @@ export function createSelectionThreadManager(appContext) {
         messageElem.classList.add('thread-jump-skip-animation');
         messageElem.setAttribute('data-message-id', node.id);
         try {
-          messageProcessor.syncAssistantMessageView?.(node.id, {
-            node,
-            fallbackElement: messageElem
-          });
+          if (role === 'ai') {
+            const renderNode = Array.isArray(normalizedContent)
+              ? {
+                  ...node,
+                  content: buildStoredMessageContentFromParts(
+                    splitStoredMessageContent(normalizedContent).text,
+                    displayImages
+                  )
+                }
+              : node;
+            messageProcessor.syncAssistantMessageView?.(node.id, {
+              node: renderNode,
+              fallbackElement: messageElem
+            });
+          }
         } catch (_) {}
         renderApiFooterForNode(messageElem, node);
       }

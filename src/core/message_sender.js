@@ -314,7 +314,9 @@ export function createMessageSender(appContext) {
         ext = safeMime.split('/')[1] || 'png';
       }
 
-      // 统一存放到下载目录下的 Cerebr/Images 子目录，便于用户管理
+      // 统一存放到下载目录下的 Cerebr/Images/AI 日期目录。
+      // 用户上传图片已经按 Images/User/yyyy/mm/dd 归档；AI 生成图也使用同级
+      // Images/AI/yyyy/mm/dd，避免新旧历史混在 Images 根目录下难以管理。
       const now = new Date();
       const pad2 = (n) => String(n).padStart(2, '0');
       const timestamp = [
@@ -327,7 +329,15 @@ export function createMessageSender(appContext) {
       ].join('');
       const random = Math.random().toString(36).slice(2, 8);
       const baseName = `cerebr_${timestamp}_${random}`;
-      const filename = `Cerebr/Images/${baseName}.${ext}`;
+      const filename = [
+        'Cerebr',
+        'Images',
+        'AI',
+        String(now.getFullYear()),
+        pad2(now.getMonth() + 1),
+        pad2(now.getDate()),
+        `${baseName}.${ext}`
+      ].join('/');
 
       const dataUrl = `data:${safeMime};base64,${base64Data}`;
 

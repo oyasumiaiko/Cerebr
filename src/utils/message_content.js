@@ -192,6 +192,30 @@ export function buildStoredMessageContent(text, imagesHTML) {
 }
 
 /**
+ * 从已经结构化的图片对象构造 content。
+ *
+ * 典型用途：
+ * - 历史恢复时，持久化数据里可能只保留 `Images/...` 相对路径；
+ * - UI 层先把它解析成可显示的 `file://...`，再用本函数构造“仅供本次渲染”的
+ *   content 节点，避免把相对路径直接写进 DOM src。
+ *
+ * @param {string} text
+ * @param {Array<any>} imageUrlObjects
+ * @returns {string|MessagePart[]}
+ */
+export function buildStoredMessageContentFromParts(text, imageUrlObjects) {
+  const inputText = (typeof text === 'string') ? text : '';
+  const images = dedupeImageUrlObjects(imageUrlObjects);
+  if (images.length === 0) return inputText;
+
+  const parts = images.map((img) => ({ type: 'image_url', image_url: img }));
+  if (inputText.trim()) {
+    parts.push({ type: 'text', text: inputText });
+  }
+  return parts;
+}
+
+/**
  * 规范化（去重/修形）已存储的消息 content。
  * - 若数组结构中不包含任何图片，则回退为 string（避免 fork/渲染时被当作多模态而触发错误逻辑）。
  * @param {any} content

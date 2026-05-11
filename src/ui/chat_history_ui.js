@@ -20,7 +20,11 @@ import { queueStorageSet } from '../utils/storage_write_queue_bridge.js';
 import { extractThinkingFromText, mergeThoughts } from '../utils/thoughts_parser.js';
 import { generateCandidateUrls } from '../utils/url_candidates.js';
 import { buildConversationSummaryFromMessages } from '../utils/conversation_title.js';
-import { normalizeStoredMessageContent, splitStoredMessageContent } from '../utils/message_content.js';
+import {
+  buildStoredMessageContentFromParts,
+  normalizeStoredMessageContent,
+  splitStoredMessageContent
+} from '../utils/message_content.js';
 import { buildApiFooterRenderData } from '../utils/api_footer_template.js';
 import { normalizeResponsesPromptCacheKey } from '../utils/responses_prompt_cache.js';
 import { findPendingRequestUserInputFromConversationMessages } from '../utils/request_user_input_resume.js';
@@ -3473,22 +3477,25 @@ export function createChatHistoryUI(appContext) {
       const role = msg.role.toLowerCase() === 'assistant' ? 'ai' : msg.role;
       let messageElem = null;
       const thoughtsToDisplay = msg.thoughtsRaw || null; // 获取思考过程文本
+      let displayImages = [];
 
       msg.content = normalizeStoredMessageContent(msg.content);
 
       if (Array.isArray(msg.content)) {
         const { text, images } = splitStoredMessageContent(msg.content);
         let combinedContent = text || '';
-        const displayUrls = [];
 
         for (const imageUrlObj of images) {
           const resolved = await resolveImageUrlForDisplay(imageUrlObj);
           const fallback = imageUrlObj?.url || imageUrlObj?.path || '';
           const url = (resolved || fallback || '').trim();
-          if (url) displayUrls.push(url);
+          if (url) {
+            displayImages.push({
+              ...(imageUrlObj && typeof imageUrlObj === 'object' ? imageUrlObj : {}),
+              url
+            });
+          }
         }
-
-        const uniqueDisplayUrls = Array.from(new Set(displayUrls));
 
         if (role === 'ai') {
           // AI 图片已经是结构化 content part，正文重建时交给 messageProcessor
@@ -3496,6 +3503,7 @@ export function createChatHistoryUI(appContext) {
           messageElem = appendMessage(combinedContent, role, true, fragment, null, thoughtsToDisplay);
         } else {
           const legacyImagesContainer = document.createElement('div');
+          const uniqueDisplayUrls = Array.from(new Set(displayImages.map((image) => image.url).filter(Boolean)));
           uniqueDisplayUrls.forEach((u) => {
             const imageTag = createImageTag(u, null);
             legacyImagesContainer.appendChild(imageTag);
@@ -3517,10 +3525,21 @@ export function createChatHistoryUI(appContext) {
       }
       messageElem.setAttribute('data-message-id', msg.id);
       try {
-        services.messageProcessor?.syncAssistantMessageView?.(msg.id, {
-          node: msg,
-          fallbackElement: messageElem
-        });
+        if (role === 'ai') {
+          const renderNode = Array.isArray(msg.content)
+            ? {
+                ...msg,
+                content: buildStoredMessageContentFromParts(
+                  splitStoredMessageContent(msg.content).text,
+                  displayImages
+                )
+              }
+            : msg;
+          services.messageProcessor?.syncAssistantMessageView?.(msg.id, {
+            node: renderNode,
+            fallbackElement: messageElem
+          });
+        }
       } catch (_) {}
       try {
         services.messageProcessor?.syncUserContextualInputDebugView?.(msg.id, {

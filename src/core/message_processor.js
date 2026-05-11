@@ -1413,6 +1413,12 @@ export function createMessageProcessor(appContext) {
     )) || null;
   }
 
+  function isAssistantStructuredImageTarget(messageWrapperDiv, node) {
+    const role = String(node?.role || '').trim().toLowerCase();
+    if (role === 'assistant' || role === 'ai') return true;
+    return !role && !!messageWrapperDiv?.classList?.contains('ai-message');
+  }
+
   /**
    * 将 assistant 节点中的结构化图片 part 投影到正文 DOM。
    *
@@ -1423,6 +1429,16 @@ export function createMessageProcessor(appContext) {
    */
   function syncAssistantStructuredImages(messageWrapperDiv, node, textContentDiv = null) {
     if (!messageWrapperDiv || !node) return false;
+    if (!isAssistantStructuredImageTarget(messageWrapperDiv, node)) {
+      // 该入口会被历史恢复的通用 sync 调用。用户消息同样可能包含 image_url
+      // content，但它们必须继续由用户图片容器渲染，不能投影成 assistant 正文图。
+      const staleContainer = findAssistantStructuredImageContainer(messageWrapperDiv);
+      if (staleContainer) {
+        staleContainer.remove();
+        return true;
+      }
+      return false;
+    }
 
     const { images } = splitStoredMessageContent(node.content);
     const displayImages = images
