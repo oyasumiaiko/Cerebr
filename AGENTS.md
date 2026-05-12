@@ -71,6 +71,8 @@
 
 ## Commit & Pull Requests
 - Commits: short, imperative, and scoped (project history uses Chinese, e.g., “修复…”, “添加…”). Link issues when relevant.
+- For multi-step work, create checkpoint commits proactively by functional unit or major progress milestone. Do not wait for the user to manually request a commit when a coherent, verified checkpoint is ready.
+- Checkpoint commits should only include files related to the current functional unit; verify the staged file list before committing when the worktree also contains unrelated changes.
 - PRs must include:
   - Description of change and rationale
   - Testing steps and expected results
