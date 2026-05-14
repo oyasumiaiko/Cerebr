@@ -167,7 +167,7 @@ async function runMockServer() {
               status: 'failed',
               error: {
                 code: 'server_overloaded',
-                message: 'Selected model is at capacity. Please try again in 0.01s.'
+                message: 'Selected model is at capacity. Please try again in 60s.'
               }
             }
           });

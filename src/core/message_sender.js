@@ -1183,9 +1183,6 @@ export function createMessageSender(appContext) {
     error.name = 'ResponsesApiRecoverableError';
     error.isResponsesApiRecoverable = true;
     error.responsesRetryReason = options?.reason || 'recoverable';
-    if (Number.isFinite(Number(options?.retryAfterMs))) {
-      error.responsesRetryAfterMs = Math.max(0, Math.round(Number(options.retryAfterMs)));
-    }
     if (options?.cause) {
       try { error.cause = options.cause; } catch (_) {}
     }
@@ -1208,8 +1205,7 @@ export function createMessageSender(appContext) {
     const classification = classifyResponsesApiErrorPayload(payload, options);
     if (classification.retryable) {
       return createResponsesRecoverableError(message, {
-        reason: classification.reason,
-        retryAfterMs: classification.retryAfterMs
+        reason: classification.reason
       });
     }
     if (classification.fatal) {
@@ -9753,14 +9749,12 @@ export function createMessageSender(appContext) {
           payload = JSON.parse(error);
         } catch (_) {}
         const classification = classifyResponsesApiErrorPayload(payload, {
-          httpStatus: response.status,
-          retryAfterHeader: response.headers?.get?.('retry-after') || ''
+          httpStatus: response.status
         });
         const message = `API错误 (${response.status}): ${error}`;
         if (classification.retryable) {
           throw createResponsesRecoverableError(message, {
-            reason: classification.reason,
-            retryAfterMs: classification.retryAfterMs
+            reason: classification.reason
           });
         }
         if (classification.fatal) {
@@ -9858,9 +9852,7 @@ export function createMessageSender(appContext) {
 
           responsesRetryCount += 1;
           restoreResponsesRetryBaseline(attemptState, responsesRetryBaseline);
-          const retryDelayMs = buildResponsesRetryDelayMs(responsesRetryCount, {
-            retryAfterMs: error?.responsesRetryAfterMs
-          });
+          const retryDelayMs = buildResponsesRetryDelayMs(responsesRetryCount);
           console.warn(
             `Responses API 流程错误，准备重试 ${responsesRetryCount}/${responsesMaxRetries}，等待 ${retryDelayMs}ms：`,
             error

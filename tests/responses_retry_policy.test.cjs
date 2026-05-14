@@ -22,6 +22,13 @@ test('Responses API 默认重试策略是 5 次、200ms 起步指数退避并带
   assert.equal(buildResponsesRetryDelayMs(1, { random: () => 1 }), 220);
 });
 
+test('Responses API 退避不接受服务端或代理提示的长延迟', async () => {
+  const { buildResponsesRetryDelayMs } = await loadResponsesRetryPolicyModule();
+
+  assert.equal(buildResponsesRetryDelayMs(1, { retryAfterMs: 60_000, random: () => 0.5 }), 200);
+  assert.equal(buildResponsesRetryDelayMs(2, { retryAfterMs: 60_000, random: () => 0.5 }), 400);
+});
+
 test('Responses API 可恢复错误包括 5xx、429、response.failed 和连接类错误', async () => {
   const {
     classifyResponsesApiErrorPayload,

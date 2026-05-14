@@ -22,8 +22,13 @@ test('Responses API lifecycle 在发送和流式消费外层有默认 5 次恢�
   );
   assert.match(
     source,
-    /buildResponsesRetryDelayMs\(responsesRetryCount,[\s\S]*?retryAfterMs: error\?\.responsesRetryAfterMs/,
-    '每次重试应使用 Responses 退避策略，并尊重服务端 retry-after'
+    /const retryDelayMs = buildResponsesRetryDelayMs\(responsesRetryCount\);/,
+    '每次重试只能使用本地小幅退避策略，不接受服务端或代理提示延迟'
+  );
+  assert.doesNotMatch(
+    source,
+    /responsesRetryAfterMs|retryAfterHeader/,
+    'Responses lifecycle 不应把 Retry-After 或错误消息里的延迟带入重试等待'
   );
 });
 

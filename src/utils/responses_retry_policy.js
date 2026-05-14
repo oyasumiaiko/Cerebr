@@ -126,78 +126,14 @@ function isFatalHttpStatus(status) {
   return FATAL_HTTP_STATUSES.has(numericStatus);
 }
 
-export function normalizeResponsesRetryAfterMs(value) {
+function normalizeDelayMs(value) {
   const numericValue = toFiniteNumber(value);
   if (numericValue == null || numericValue < 0) return null;
   return Math.round(numericValue);
 }
 
-export function parseResponsesRetryAfterMs(value) {
-  if (value == null) return null;
-  const raw = String(value).trim();
-  if (!raw) return null;
-
-  const asNumber = Number(raw);
-  if (Number.isFinite(asNumber) && asNumber >= 0) {
-    return Math.round(asNumber * 1000);
-  }
-
-  const dateMs = Date.parse(raw);
-  if (Number.isFinite(dateMs)) {
-    return Math.max(0, dateMs - Date.now());
-  }
-
-  return null;
-}
-
-export function parseRetryDelayFromResponsesMessage(message) {
-  const text = normalizeString(message);
-  if (!text) return null;
-
-  const match = text.match(/(?:try again|retry)\s+in\s+([0-9]+(?:\.[0-9]+)?)\s*(ms|millisecond|milliseconds|s|sec|secs|second|seconds|m|min|mins|minute|minutes)?/i);
-  if (!match) return null;
-
-  const value = Number(match[1]);
-  if (!Number.isFinite(value) || value < 0) return null;
-  const unit = String(match[2] || 's').toLowerCase();
-  if (unit === 'ms' || unit.startsWith('millisecond')) return Math.round(value);
-  if (unit === 'm' || unit.startsWith('min')) return Math.round(value * 60_000);
-  return Math.round(value * 1000);
-}
-
-export function resolveResponsesRetryAfterMs(payload, options = {}) {
-  const explicitDelay = normalizeResponsesRetryAfterMs(options?.retryAfterMs);
-  if (explicitDelay != null) return explicitDelay;
-
-  const headerDelay = parseResponsesRetryAfterMs(options?.retryAfterHeader);
-  if (headerDelay != null) return headerDelay;
-
-  const normalized = normalizeErrorPayload(payload);
-  if (normalized && typeof normalized === 'object') {
-    for (const key of ['retry_after_ms', 'retryAfterMs', 'delay_ms', 'delayMs']) {
-      const delay = normalizeResponsesRetryAfterMs(normalized[key]);
-      if (delay != null) return delay;
-    }
-    for (const key of ['retry_after', 'retryAfter']) {
-      const delay = parseResponsesRetryAfterMs(normalized[key]);
-      if (delay != null) return delay;
-    }
-    const messageDelay = parseRetryDelayFromResponsesMessage(normalized.message);
-    if (messageDelay != null) return messageDelay;
-  }
-
-  if (typeof payload === 'string') {
-    return parseRetryDelayFromResponsesMessage(payload);
-  }
-
-  return null;
-}
-
 export function buildResponsesRetryDelayMs(retryNumber, options = {}) {
-  const requestedDelayMs = normalizeResponsesRetryAfterMs(options?.retryAfterMs);
-  if (requestedDelayMs != null) return requestedDelayMs;
-
-  const baseDelayMs = normalizeResponsesRetryAfterMs(options?.baseDelayMs)
+  const baseDelayMs = normalizeDelayMs(options?.baseDelayMs)
     ?? DEFAULT_RESPONSES_API_RETRY_BASE_DELAY_MS;
   const normalizedRetryNumber = Math.max(1, Math.floor(Number(retryNumber) || 1));
   const exponent = Math.max(0, normalizedRetryNumber - 1);
@@ -213,7 +149,6 @@ export function buildResponsesRetryDelayMs(retryNumber, options = {}) {
 export function classifyResponsesApiErrorPayload(payload, options = {}) {
   const httpStatus = toFiniteNumber(options?.httpStatus);
   const eventType = normalizeString(options?.eventType).toLowerCase();
-  const retryAfterMs = resolveResponsesRetryAfterMs(payload, options);
   const text = collectErrorTextParts(payload).join(' ').toLowerCase();
 
   if (httpStatus != null) {
@@ -221,16 +156,14 @@ export function classifyResponsesApiErrorPayload(payload, options = {}) {
       return {
         retryable: true,
         fatal: false,
-        reason: `http_${httpStatus}`,
-        retryAfterMs
+        reason: `http_${httpStatus}`
       };
     }
     if (isFatalHttpStatus(httpStatus)) {
       return {
         retryable: false,
         fatal: true,
-        reason: `http_${httpStatus}`,
-        retryAfterMs: null
+        reason: `http_${httpStatus}`
       };
     }
   }
@@ -239,8 +172,7 @@ export function classifyResponsesApiErrorPayload(payload, options = {}) {
     return {
       retryable: false,
       fatal: true,
-      reason: 'fatal_payload',
-      retryAfterMs: null
+      reason: 'fatal_payload'
     };
   }
 
@@ -248,8 +180,7 @@ export function classifyResponsesApiErrorPayload(payload, options = {}) {
     return {
       retryable: true,
       fatal: false,
-      reason: 'retryable_payload',
-      retryAfterMs
+      reason: 'retryable_payload'
     };
   }
 
@@ -257,16 +188,14 @@ export function classifyResponsesApiErrorPayload(payload, options = {}) {
     return {
       retryable: true,
       fatal: false,
-      reason: eventType,
-      retryAfterMs
+      reason: eventType
     };
   }
 
   return {
     retryable: false,
     fatal: false,
-    reason: 'unknown',
-    retryAfterMs
+    reason: 'unknown'
   };
 }
 
