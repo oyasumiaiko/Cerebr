@@ -64,6 +64,22 @@ test('parallel sidebar button closes non-primary sidebars', async () => {
   assert.match(source, /button\.title = isPrimarySidebar \? '新建并行侧栏' : '关闭此侧栏'/);
 });
 
+test('standalone chat keeps the parallel chat button visible and routes it through the standalone opener', async () => {
+  const [eventsSource, cssSource] = await Promise.all([
+    readRepoFile('src/ui/sidebar/sidebar_events.js'),
+    readRepoFile('src/ui/styles/sidebar.css')
+  ]);
+
+  assert.match(
+    eventsSource,
+    /if \(appContext\.state\.isStandalone\) \{[\s\S]*?button\.style\.display = 'flex';[\s\S]*?button\.title = '新建并行独立聊天页';[\s\S]*?await requestOpenStandaloneChatPage\(\);/s
+  );
+  assert.doesNotMatch(
+    cssSource,
+    /body\.standalone-mode #add-sidebar-button,[\s\S]*?\{\s*display:\s*none !important;[\s\S]*?\}/
+  );
+});
+
 test('global sidebar visibility commands operate on all instances', async () => {
   const source = await readRepoFile('src/extension/content.js');
 

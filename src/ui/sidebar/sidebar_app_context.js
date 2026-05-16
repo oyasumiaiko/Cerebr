@@ -22,6 +22,10 @@ import {
   normalizeVirtualFileResultFromSkillRegistryAction,
   normalizeVirtualFileToolArguments
 } from '../../agent_tools/virtual_file_io/index.js';
+import {
+  getDocumentZoomFactor,
+  toLayoutPixels
+} from '../../utils/coordinate_space.js';
 
 const JS_RUNTIME_STATUS_TIMEOUT_MS = 5000;
 const JS_RUNTIME_FRAME_SNAPSHOT_TIMEOUT_MS = 5000;
@@ -242,23 +246,6 @@ export function registerSidebarUtilities(appContext) {
   }
 
   appContext.utils.resolveBoundSidebarTargetTabId = resolveBoundSidebarTargetTabId;
-
-  const getDocumentZoomFactor = () => {
-    const root = document.documentElement;
-    if (!root) return 1;
-    const inlineZoom = Number.parseFloat(root.style.zoom || '');
-    if (Number.isFinite(inlineZoom) && inlineZoom > 0) return inlineZoom;
-    const computedZoom = Number.parseFloat(window.getComputedStyle(root).zoom || '');
-    if (Number.isFinite(computedZoom) && computedZoom > 0) return computedZoom;
-    return 1;
-  };
-
-  const toLayoutPixels = (value, zoomFactor = getDocumentZoomFactor()) => {
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric)) return 0;
-    if (!Number.isFinite(zoomFactor) || zoomFactor <= 0) return numeric;
-    return numeric / zoomFactor;
-  };
 
   function updateInputContainerHeightVar() {
     const input = appContext.dom.inputContainer || document.getElementById('input-container');

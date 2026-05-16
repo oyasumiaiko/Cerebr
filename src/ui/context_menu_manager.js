@@ -1,4 +1,12 @@
 import { serializeSelectionTextWithMath } from '../utils/math_selection_text.js';
+import {
+  getDocumentZoomFactor,
+  getElementLayoutRect,
+  getElementLayoutSize,
+  getLayoutViewportSize,
+  resolveFixedOverlayPositionFromClientPoint,
+  toLayoutPixels
+} from '../utils/coordinate_space.js';
 
 /**
  * 上下文菜单管理模块
@@ -652,20 +660,25 @@ export function createContextMenuManager(appContext) {
    * - anchorAlign: 'center' | 'top'，控制锚点与主菜单项的对齐方式。
    */
   function resolveSubmenuPlacement(menuItem, submenu, placementOptions = null) {
-    const menuItemRect = menuItem.getBoundingClientRect();
-    const submenuRect = submenu.getBoundingClientRect();
-    const submenuWidth = Math.max(180, Math.round(submenuRect.width || submenu.offsetWidth || 180));
-    const submenuHeight = Math.max(0, Math.round(submenuRect.height || submenu.offsetHeight || 0));
-    const viewportWidth = Math.max(document.documentElement?.clientWidth || 0, window.innerWidth || 0);
-    const viewportHeight = Math.max(document.documentElement?.clientHeight || 0, window.innerHeight || 0);
+    const zoomFactor = getDocumentZoomFactor();
+    const menuItemRect = getElementLayoutRect(menuItem, { zoomFactor });
+    const submenuRect = getElementLayoutRect(submenu, { zoomFactor });
+    const submenuSize = getElementLayoutSize(submenu, { zoomFactor });
+    const submenuWidth = Math.max(180, Math.round(submenuSize.width || submenuRect.width || 180));
+    const submenuHeight = Math.max(0, Math.round(submenuSize.height || submenuRect.height || 0));
+    const viewport = getLayoutViewportSize({ zoomFactor });
+    const viewportWidth = viewport.width;
+    const viewportHeight = viewport.height;
+    const edgeGap = toLayoutPixels(SUBMENU_EDGE_GAP_PX, zoomFactor);
+    const viewportMargin = toLayoutPixels(SUBMENU_VIEWPORT_MARGIN_PX, zoomFactor);
 
-    const spaceRight = viewportWidth - menuItemRect.right - SUBMENU_EDGE_GAP_PX;
-    const spaceLeft = menuItemRect.left - SUBMENU_EDGE_GAP_PX;
+    const spaceRight = viewportWidth - menuItemRect.right - edgeGap;
+    const spaceLeft = menuItemRect.left - edgeGap;
     const openLeft = spaceRight < submenuWidth && spaceLeft >= submenuWidth;
 
     let left = openLeft
-      ? (menuItemRect.left - submenuWidth - SUBMENU_EDGE_GAP_PX)
-      : (menuItemRect.right + SUBMENU_EDGE_GAP_PX);
+      ? (menuItemRect.left - submenuWidth - edgeGap)
+      : (menuItemRect.right + edgeGap);
     let top = menuItemRect.top;
     const anchorSelector = (typeof placementOptions?.anchorSelector === 'string')
       ? placementOptions.anchorSelector.trim()
@@ -673,7 +686,7 @@ export function createContextMenuManager(appContext) {
     if (anchorSelector) {
       const anchorNode = submenu.querySelector(anchorSelector);
       if (anchorNode instanceof HTMLElement) {
-        const anchorRect = anchorNode.getBoundingClientRect();
+        const anchorRect = getElementLayoutRect(anchorNode, { zoomFactor });
         const alignMode = placementOptions?.anchorAlign === 'top' ? 'top' : 'center';
         const menuAnchorY = alignMode === 'top'
           ? menuItemRect.top
@@ -685,10 +698,10 @@ export function createContextMenuManager(appContext) {
       }
     }
 
-    const maxLeft = Math.max(SUBMENU_VIEWPORT_MARGIN_PX, viewportWidth - submenuWidth - SUBMENU_VIEWPORT_MARGIN_PX);
-    const maxTop = Math.max(SUBMENU_VIEWPORT_MARGIN_PX, viewportHeight - submenuHeight - SUBMENU_VIEWPORT_MARGIN_PX);
-    left = Math.min(maxLeft, Math.max(SUBMENU_VIEWPORT_MARGIN_PX, left));
-    top = Math.min(maxTop, Math.max(SUBMENU_VIEWPORT_MARGIN_PX, top));
+    const maxLeft = Math.max(viewportMargin, viewportWidth - submenuWidth - viewportMargin);
+    const maxTop = Math.max(viewportMargin, viewportHeight - submenuHeight - viewportMargin);
+    left = Math.min(maxLeft, Math.max(viewportMargin, left));
+    top = Math.min(maxTop, Math.max(viewportMargin, top));
 
     return { openLeft, left, top };
   }
@@ -796,20 +809,6 @@ export function createContextMenuManager(appContext) {
       currentCodeBlock = null;
     }
 
-    // 调整菜单位置，确保菜单不超出视口
-    const menuWidth = contextMenu.offsetWidth;
-    const menuHeight = contextMenu.offsetHeight;
-    let x = e.clientX;
-    let y = e.clientY;
-    if (x + menuWidth > window.innerWidth) {
-      x = window.innerWidth - menuWidth;
-    }
-    if (y + menuHeight > window.innerHeight) {
-      y = window.innerHeight - menuHeight;
-    }
-    contextMenu.style.left = x + 'px';
-    contextMenu.style.top = y + 'px';
-
     // “重新生成”支持任意消息：根据当前消息解析目标是否可重生成
     const regenTarget = resolveRegenerateTarget(messageElement);
     regenerateButton.style.display = regenTarget ? 'flex' : 'none';
@@ -896,6 +895,12 @@ export function createContextMenuManager(appContext) {
     } else {
       closeContextSubmenu(forkConversationSubmenu, forkConversationButton);
     }
+
+    // 右键菜单的最终尺寸取决于上方各菜单项是否显示，因此必须在可见性全部更新后再定位。
+    // 独立页会对 html 设置 zoom；这里统一走布局坐标，避免 clientX/clientY 直接写入 left/top 后偏移。
+    const menuPlacement = resolveFixedOverlayPositionFromClientPoint(e, contextMenu);
+    contextMenu.style.left = `${Math.round(menuPlacement.left)}px`;
+    contextMenu.style.top = `${Math.round(menuPlacement.top)}px`;
   }
 
   /**

@@ -38,6 +38,27 @@ export function registerSidebarEventHandlers(appContext) {
   scheduleInitialRequests(appContext);
 }
 
+function requestOpenStandaloneChatPage() {
+  return new Promise((resolve, reject) => {
+    try {
+      chrome.runtime.sendMessage({ type: 'OPEN_STANDALONE_CHAT' }, (response) => {
+        const runtimeError = chrome.runtime.lastError;
+        if (runtimeError) {
+          reject(new Error(runtimeError.message));
+          return;
+        }
+        if (response?.status === 'error') {
+          reject(new Error(response.message || 'unknown error'));
+          return;
+        }
+        resolve(response);
+      });
+    } catch (err) {
+      reject(err);
+    }
+  });
+}
+
 /**
  * 处理“打开独立页面”入口按钮。
  * @param {ReturnType<import('./sidebar_app_context.js').createSidebarAppContext>} appContext
@@ -46,24 +67,7 @@ function setupOpenStandaloneHandler(appContext) {
   if (appContext.dom.openStandalonePage && !appContext.state.isStandalone) {
     appContext.dom.openStandalonePage.addEventListener('click', async () => {
       try {
-        await new Promise((resolve, reject) => {
-          try {
-            chrome.runtime.sendMessage({ type: 'OPEN_STANDALONE_CHAT' }, (response) => {
-              const runtimeError = chrome.runtime.lastError;
-              if (runtimeError) {
-                reject(new Error(runtimeError.message));
-                return;
-              }
-              if (response?.status === 'error') {
-                reject(new Error(response.message || 'unknown error'));
-                return;
-              }
-              resolve(response);
-            });
-          } catch (err) {
-            reject(err);
-          }
-        });
+        await requestOpenStandaloneChatPage();
         appContext.utils.showNotification('已在新标签页打开独立聊天');
       } catch (error) {
         console.error('打开独立聊天页面失败:', error);
@@ -1102,11 +1106,25 @@ function setupScreenshotButton(appContext) {
 function setupAddSidebarButton(appContext) {
   const button = appContext.dom.addSidebarButton;
   if (!button) return;
+  const icon = button.querySelector('i');
   if (appContext.state.isStandalone) {
-    button.style.display = 'none';
+    button.style.display = 'flex';
+    button.title = '新建并行独立聊天页';
+    button.setAttribute('aria-label', button.title);
+    if (icon) {
+      icon.className = 'far fa-window-restore';
+    }
+    button.addEventListener('click', async () => {
+      try {
+        await requestOpenStandaloneChatPage();
+        appContext.utils.showNotification?.('已在新标签页打开独立聊天');
+      } catch (error) {
+        console.error('请求新建并行独立聊天页失败:', error);
+        appContext.utils.showNotification?.({ message: '新建独立聊天页失败', type: 'error' });
+      }
+    });
     return;
   }
-  const icon = button.querySelector('i');
   const isPrimarySidebar = appContext.state.isPrimarySidebar === true;
   button.title = isPrimarySidebar ? '新建并行侧栏' : '关闭此侧栏';
   button.setAttribute('aria-label', button.title);

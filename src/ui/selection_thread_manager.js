@@ -5,6 +5,13 @@ import {
 } from '../utils/message_content.js';
 import { queueStorageSet } from '../utils/storage_write_queue_bridge.js';
 import { buildApiFooterRenderData } from '../utils/api_footer_template.js';
+import {
+  getDocumentZoomFactor,
+  getElementLayoutRect,
+  getElementLayoutSize,
+  toLayoutPixels,
+  toLayoutRect
+} from '../utils/coordinate_space.js';
 
 function normalizeComposerQuoteSourceText(value) {
   return String(value ?? '')
@@ -573,33 +580,35 @@ export function createSelectionThreadManager(appContext) {
 
   function positionBubble(rect) {
     if (!bubbleEl || !rect) return;
-    const padding = 12;
+    const zoomFactor = getDocumentZoomFactor();
+    const padding = toLayoutPixels(12, zoomFactor);
     // 说明：把 viewport 坐标换算为滚动容器的内容坐标（包含 scrollTop/Left），
-    // 这样气泡定位随内容滚动，不再“固定在屏幕上”。
+    // 这样气泡定位随内容滚动，不再“固定在屏幕上”；独立页 zoom 下必须先把视觉 rect 转为布局 rect。
     const host = chatContainer || document.body;
-    const hostRect = host.getBoundingClientRect ? host.getBoundingClientRect() : { left: 0, top: 0 };
+    const anchorRect = toLayoutRect(rect, { zoomFactor });
+    const hostRect = host.getBoundingClientRect ? getElementLayoutRect(host, { zoomFactor }) : { left: 0, top: 0 };
     const scrollLeft = Number.isFinite(host.scrollLeft) ? host.scrollLeft : 0;
     const scrollTop = Number.isFinite(host.scrollTop) ? host.scrollTop : 0;
-    const hostWidth = Number.isFinite(host.clientWidth) ? host.clientWidth : window.innerWidth;
-    const hostHeight = Number.isFinite(host.clientHeight) ? host.clientHeight : window.innerHeight;
+    const hostWidth = Number.isFinite(host.clientWidth) ? host.clientWidth : toLayoutPixels(window.innerWidth, zoomFactor);
+    const hostHeight = Number.isFinite(host.clientHeight) ? host.clientHeight : toLayoutPixels(window.innerHeight, zoomFactor);
 
-    const bubbleRect = bubbleEl.getBoundingClientRect();
-    const anchorCenterX = rect.left - hostRect.left + scrollLeft + rect.width / 2;
-    const anchorTop = rect.top - hostRect.top + scrollTop;
-    const anchorBottom = rect.bottom - hostRect.top + scrollTop;
-    let left = anchorCenterX - bubbleRect.width / 2;
-    let top = anchorTop - bubbleRect.height - 10;
+    const bubbleSize = getElementLayoutSize(bubbleEl, { zoomFactor });
+    const anchorCenterX = anchorRect.left - hostRect.left + scrollLeft + anchorRect.width / 2;
+    const anchorTop = anchorRect.top - hostRect.top + scrollTop;
+    const anchorBottom = anchorRect.bottom - hostRect.top + scrollTop;
+    let left = anchorCenterX - bubbleSize.width / 2;
+    let top = anchorTop - bubbleSize.height - toLayoutPixels(10, zoomFactor);
     let placement = 'top';
 
     const visibleTop = scrollTop + padding;
     const visibleBottom = scrollTop + hostHeight - padding;
     if (top < visibleTop) {
-      top = anchorBottom + 10;
+      top = anchorBottom + toLayoutPixels(10, zoomFactor);
       placement = 'bottom';
     }
 
     const minLeft = scrollLeft + padding;
-    const maxLeft = scrollLeft + hostWidth - bubbleRect.width - padding;
+    const maxLeft = scrollLeft + hostWidth - bubbleSize.width - padding;
     if (Number.isFinite(minLeft) && Number.isFinite(maxLeft)) {
       left = Math.max(minLeft, Math.min(left, maxLeft));
     }
