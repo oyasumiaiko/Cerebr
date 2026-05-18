@@ -31,6 +31,7 @@ import {
  * @param {Object} appContext.services.chatHistoryManager.chatHistory - 聊天历史数据对象
  * @param {HTMLElement} appContext.dom.forkConversationButton - 创建分支对话按钮
  * @param {Function} appContext.services.chatHistoryUI.createForkConversation - 创建分支对话函数
+ * @param {HTMLElement} appContext.dom.screenshotMenu - 截图子菜单入口按钮
  * @param {HTMLElement} appContext.dom.selectForImageButton - 将消息加入长截图选择的按钮
  * @returns {Object} 上下文菜单管理器实例
  */
@@ -54,6 +55,7 @@ export function createContextMenuManager(appContext) {
   const threadContainer = dom.threadContainer;
   const forkConversationButton = dom.forkConversationButton;
   const forkConversationArrow = forkConversationButton?.querySelector('.context-menu-item__arrow');
+  const screenshotMenu = dom.screenshotMenu || document.getElementById('message-screenshot-menu');
   const copyAsImageButton = dom.copyAsImageButton; // Assuming it's in dom
   const selectForImageButton = dom.selectForImageButton || document.getElementById('select-for-image');
   const editMessageButton = document.getElementById('edit-message');
@@ -62,6 +64,7 @@ export function createContextMenuManager(appContext) {
   const insertMessageSubmenuList = insertMessageSubmenu?.querySelector('.context-menu-submenu-list');
   const forkConversationSubmenu = forkConversationButton?.querySelector('.context-menu-submenu');
   const forkConversationSubmenuList = forkConversationSubmenu?.querySelector('.context-menu-submenu-list');
+  const screenshotSubmenu = screenshotMenu?.querySelector('.context-menu-submenu');
   const regenerateSubmenu = regenerateButton?.querySelector('.context-menu-submenu');
   const regenerateSubmenuList = regenerateSubmenu?.querySelector('.context-menu-submenu-list');
   const regenerateApiHint = document.getElementById('regenerate-message-api-hint');
@@ -276,7 +279,7 @@ export function createContextMenuManager(appContext) {
       setContextMenuItemLabel(copyAsImageButton, 'far fa-images', `复制已选 ${selectedCount} 条为图片`);
       return;
     }
-    setContextMenuItemLabel(copyAsImageButton, 'far fa-image', '复制为图片');
+    setContextMenuItemLabel(copyAsImageButton, 'far fa-image', '复制当前消息截图');
   }
 
   function updateMessageScreenshotSelectionToolbar() {
@@ -1037,6 +1040,7 @@ export function createContextMenuManager(appContext) {
     if (regenerateSubmenu && regenerateSubmenu.contains(target)) return true;
     if (insertMessageSubmenu && insertMessageSubmenu.contains(target)) return true;
     if (forkConversationSubmenu && forkConversationSubmenu.contains(target)) return true;
+    if (screenshotSubmenu && screenshotSubmenu.contains(target)) return true;
     return false;
   }
 
@@ -1056,6 +1060,7 @@ export function createContextMenuManager(appContext) {
     ensureSubmenuPortal(regenerateSubmenu);
     ensureSubmenuPortal(insertMessageSubmenu);
     ensureSubmenuPortal(forkConversationSubmenu);
+    ensureSubmenuPortal(screenshotSubmenu);
 
     // 设置菜单位置
     contextMenu.style.display = 'block';
@@ -1136,6 +1141,10 @@ export function createContextMenuManager(appContext) {
       }
     }
     syncCopyAsImageMenuLabel();
+    if (screenshotMenu) {
+      screenshotMenu.style.display = 'flex';
+      updateSubmenuDirection(screenshotMenu, screenshotSubmenu, null);
+    }
     const selectionThreadManager = services.selectionThreadManager;
     let canFork = false;
     if (activeContainer === threadContainer) {
@@ -1201,6 +1210,7 @@ export function createContextMenuManager(appContext) {
     closeContextSubmenu(regenerateSubmenu, regenerateButton);
     closeContextSubmenu(insertMessageSubmenu, insertMessageMenu);
     closeContextSubmenu(forkConversationSubmenu, forkConversationButton);
+    closeContextSubmenu(screenshotSubmenu, screenshotMenu);
     currentMessageElement = null;
     currentMessageContainer = null;
   }
@@ -2163,7 +2173,7 @@ export function createContextMenuManager(appContext) {
       event.preventDefault();
     };
 
-    [contextMenu, regenerateSubmenu, insertMessageSubmenu, forkConversationSubmenu].forEach((menuLikeEl) => {
+    [contextMenu, regenerateSubmenu, insertMessageSubmenu, forkConversationSubmenu, screenshotSubmenu].forEach((menuLikeEl) => {
       if (!menuLikeEl) return;
       menuLikeEl.addEventListener('pointerup', dispatchMenuActivateOnRelease);
       menuLikeEl.addEventListener('click', preventNativeClickOnActionable, true);
@@ -2216,9 +2226,11 @@ export function createContextMenuManager(appContext) {
     ensureSubmenuPortal(regenerateSubmenu);
     ensureSubmenuPortal(insertMessageSubmenu);
     ensureSubmenuPortal(forkConversationSubmenu);
+    ensureSubmenuPortal(screenshotSubmenu);
     bindPortalSubmenuHover(regenerateButton, regenerateSubmenu);
     bindPortalSubmenuHover(insertMessageMenu, insertMessageSubmenu, INSERT_SUBMENU_PLACEMENT_OPTIONS);
     bindPortalSubmenuHover(forkConversationButton, forkConversationSubmenu);
+    bindPortalSubmenuHover(screenshotMenu, screenshotSubmenu);
 
     window.addEventListener('resize', () => {
       if (contextMenu.style.display !== 'block') return;

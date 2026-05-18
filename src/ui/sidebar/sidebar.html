@@ -77,13 +77,24 @@
             <i class="far fa-copy"></i>
             复制消息
         </div>
-        <div class="context-menu-item" id="copy-as-image">
-            <i class="far fa-image"></i>
-            <span>复制为图片</span>
-        </div>
-        <div class="context-menu-item" id="select-for-image">
-            <i class="far fa-square-check"></i>
-            <span>选择长截图</span>
+        <div class="context-menu-item context-menu-item--has-submenu" id="message-screenshot-menu">
+            <div class="context-menu-item__label">
+                <i class="far fa-camera"></i>
+                <span>截图</span>
+            </div>
+            <i class="far fa-chevron-right context-menu-item__arrow"></i>
+            <div class="context-menu-submenu">
+                <div class="context-menu-submenu-list">
+                    <div class="context-menu-submenu-item context-menu-submenu-item--icon" id="copy-as-image">
+                        <i class="far fa-image"></i>
+                        <span>复制当前消息截图</span>
+                    </div>
+                    <div class="context-menu-submenu-item context-menu-submenu-item--icon" id="select-for-image">
+                        <i class="far fa-square-check"></i>
+                        <span>选择长截图</span>
+                    </div>
+                </div>
+            </div>
         </div>
         <div class="context-menu-item" id="edit-message">
             <i class="far fa-pen-to-square"></i>

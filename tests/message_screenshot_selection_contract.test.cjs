@@ -22,7 +22,11 @@ test('多消息长截图选择入口与导出管线保持同一套复制为图�
 
   assert.match(
     sidebarHtml,
-    /id="select-for-image"[\s\S]*?选择长截图/
+    /id="message-screenshot-menu"[\s\S]*?截图[\s\S]*?id="copy-as-image"[\s\S]*?复制当前消息截图[\s\S]*?id="select-for-image"[\s\S]*?选择长截图/
+  );
+  assert.match(
+    sidebarAppContextSource,
+    /screenshotMenu:\s*document\.getElementById\('message-screenshot-menu'\)/
   );
   assert.match(
     sidebarAppContextSource,
@@ -64,6 +68,10 @@ test('多消息长截图选择入口与导出管线保持同一套复制为图�
   );
   assert.match(
     contextMenuSource,
+    /const screenshotSubmenu = screenshotMenu\?\.querySelector\('\.context-menu-submenu'\);[\s\S]*?ensureSubmenuPortal\(screenshotSubmenu\);[\s\S]*?bindPortalSubmenuHover\(screenshotMenu, screenshotSubmenu\);/
+  );
+  assert.match(
+    contextMenuSource,
     /copyAsImageButton\.addEventListener\(MENU_ACTIVATE_EVENT, copyMessageAsImage\);[\s\S]*?selectForImageButton\.addEventListener\(MENU_ACTIVATE_EVENT/
   );
 
@@ -71,5 +79,6 @@ test('多消息长截图选择入口与导出管线保持同一套复制为图�
   assert.match(sidebarCss, /\.message\.message-screenshot-selected/);
   assert.match(sidebarCss, /\.message-screenshot-selection-toolbar/);
   assert.match(sidebarCss, /\.message-screenshot-selection-toolbar__button\.is-busy/);
+  assert.match(sidebarCss, /\.context-menu-submenu-item--icon/);
   assert.match(sidebarCss, /\.message-screenshot-transcript \.ai-message/);
 });

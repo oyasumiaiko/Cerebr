@@ -195,6 +195,8 @@ async function main() {
 
     await sidebarFrame.locator('.message[data-message-id="probe-user-1"]').click({ button: 'right' });
     await sidebarFrame.locator('#context-menu').waitFor({ state: 'visible', timeout: 10_000 });
+    await sidebarFrame.locator('#message-screenshot-menu').hover();
+    await sidebarFrame.locator('#select-for-image').waitFor({ state: 'visible', timeout: 10_000 });
     await sidebarFrame.locator('#select-for-image').click();
     await sidebarFrame.locator('.message[data-message-id="probe-ai-1"]').click();
     await sidebarFrame.locator('.message[data-message-id="probe-user-2"]').click();

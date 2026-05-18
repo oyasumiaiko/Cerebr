@@ -5300,6 +5300,16 @@ input:checked + .slider::before {
     transition: background-color 0.2s ease;
 }
 
+.context-menu-submenu-item--icon {
+    gap: 8px;
+}
+
+.context-menu-submenu-item--icon i {
+    width: 14px;
+    flex-shrink: 0;
+    text-align: center;
+}
+
 .context-menu-submenu-item:hover {
     background-color: var(--cerebr-ui-hover-bg);
 }
@@ -10242,12 +10252,12 @@ body.chat-empty .empty-state-content {
     user-select: none;
 }
 
-.context-menu-item#copy-as-image {
+#copy-as-image {
     position: relative;
     overflow: hidden;
 }
 
-.context-menu-item#copy-as-image .fa-spinner {
+#copy-as-image .fa-spinner {
     animation: rotate 1s linear infinite;
 }
 

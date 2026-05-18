@@ -143,6 +143,7 @@ export function createSidebarAppContext(isStandalone) {
     addSidebarButton: document.getElementById('add-sidebar-button'),
     sidebarPositionSwitch: document.getElementById('sidebar-position-switch'),
     forkConversationButton: document.getElementById('fork-conversation'),
+    screenshotMenu: document.getElementById('message-screenshot-menu'),
     copyAsImageButton: document.getElementById('copy-as-image'),
     selectForImageButton: document.getElementById('select-for-image'),
     emptyStateHistory: document.getElementById('empty-state-history'),
