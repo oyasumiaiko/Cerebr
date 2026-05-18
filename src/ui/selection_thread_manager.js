@@ -859,10 +859,15 @@ export function createSelectionThreadManager(appContext) {
   }
 
   function collectThreadChain(annotation) {
-    // 通过 parentId 从最后一条回溯到 root，保证线程消息顺序可控
-    if (!annotation?.rootMessageId) return [];
-    const rootId = annotation.rootMessageId;
-    const lastId = annotation.lastMessageId || rootId;
+    // 通过 parentId 从最后一条回溯到 root，保证线程消息顺序可控。
+    // 历史数据中可能存在已删除/取消中的占位消息 ID 残留在 annotation.lastMessageId 上；
+    // 每次读取前按 threadId 做一次定向修复，避免同一段划词的其它线程被误合并。
+    const repairedAnnotation = annotation?.id
+      ? (repairThreadAnnotation(annotation.id) || annotation)
+      : annotation;
+    if (!repairedAnnotation?.rootMessageId) return [];
+    const rootId = repairedAnnotation.rootMessageId;
+    const lastId = repairedAnnotation.lastMessageId || rootId;
     const chain = [];
     let currentId = lastId;
 
@@ -957,12 +962,15 @@ export function createSelectionThreadManager(appContext) {
 
   function getThreadActivityTimestamp(annotation) {
     if (!annotation) return 0;
-    const candidateId = annotation.lastMessageId || annotation.rootMessageId || '';
+    const repairedAnnotation = annotation?.id
+      ? (repairThreadAnnotation(annotation.id) || annotation)
+      : annotation;
+    const candidateId = repairedAnnotation.lastMessageId || repairedAnnotation.rootMessageId || '';
     const node = chatHistoryManager?.chatHistory?.messages?.find(m => m.id === candidateId);
     if (node && Number.isFinite(node.timestamp)) {
       return node.timestamp;
     }
-    return Number(annotation.createdAt || 0) || 0;
+    return Number(repairedAnnotation.createdAt || 0) || 0;
   }
 
   function sortThreadsByActivity(threads) {

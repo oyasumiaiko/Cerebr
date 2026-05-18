@@ -5016,14 +5016,14 @@ export function createMessageSender(appContext) {
         if (!deleted) {
           throw new Error('未找到待删除的消息节点');
         }
+        if (context.isActive && threadId) {
+          services.selectionThreadManager?.repairThreadAnnotation?.(threadId);
+        }
         context.chatHistory.conversationRevision = normalizeConversationHistoryRevision(context.chatHistory.conversationRevision) + 1;
         markConversationQueuedJobsStale(effectiveQueueKey, context.chatHistory.conversationRevision);
         await saveConversationMutationContext(context);
         if (context.isActive) {
           findVisibleMessageElementById(normalizedMessageId)?.remove();
-          if (threadId) {
-            services.selectionThreadManager?.repairThreadAnnotation?.(threadId);
-          }
         }
       }
     };
