@@ -83,6 +83,25 @@ async function installHostAltRecorder(page) {
   });
 }
 
+async function installSidebarAltRecorder(sidebarFrame) {
+  await sidebarFrame.evaluate(() => {
+    window.__cerebrAltSidebarEvents = [];
+    const record = (type, event) => {
+      if (event.key !== 'Alt') return;
+      window.__cerebrAltSidebarEvents.push({
+        type,
+        defaultPrevented: event.defaultPrevented,
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
+        shiftKey: event.shiftKey
+      });
+    };
+    window.addEventListener('keydown', (event) => record('keydown', event), true);
+    window.addEventListener('keyup', (event) => record('keyup', event), true);
+  });
+}
+
 async function focusHostPage(page) {
   const body = page.locator('body');
   await body.click({ position: { x: 24, y: 24 } });
@@ -118,6 +137,23 @@ async function readSidebarScrollState(sidebarFrame) {
       scrollHeight: container.scrollHeight,
       clientHeight: container.clientHeight
     };
+  });
+}
+
+async function waitForSidebarRuntimeReady(sidebarFrame) {
+  return await waitFor(async () => {
+    return await sidebarFrame.evaluate(() => {
+      const hasRuntimeDebugApi = !!window.cerebr?.debug?.messageSender;
+      const chatContainer = document.getElementById('chat-container');
+      return hasRuntimeDebugApi && !!chatContainer ? {
+        hasRuntimeDebugApi,
+        chatContainerVisible: !!chatContainer.offsetParent || chatContainer.getClientRects().length > 0
+      } : null;
+    });
+  }, {
+    timeoutMs: 20_000,
+    intervalMs: 150,
+    label: 'sidebar runtime ready'
   });
 }
 
@@ -159,6 +195,38 @@ async function measureWheelScroll({ page, sidebarFrame, useHostAlt }) {
     before,
     after,
     delta: after.scrollTop - before.scrollTop
+  };
+}
+
+async function measureSidebarAltKeySuppression({ page, sidebarFrame }) {
+  await sidebarFrame.locator('#chat-container').click({ position: { x: 36, y: 36 } });
+  const focusBefore = await sidebarFrame.evaluate(() => ({
+    documentHasFocus: document.hasFocus(),
+    activeTag: document.activeElement?.tagName || null,
+    activeId: document.activeElement?.id || ''
+  }));
+  const hostEventCountBefore = await page.evaluate(() => (window.__cerebrAltHostEvents || []).length);
+
+  await page.keyboard.down('Alt');
+  await sleep(80);
+  await page.keyboard.up('Alt');
+  await sleep(120);
+
+  const hostEventCountAfter = await page.evaluate(() => (window.__cerebrAltHostEvents || []).length);
+  const sidebarAltEvents = await sidebarFrame.evaluate(() => window.__cerebrAltSidebarEvents || []);
+  const focusAfter = await sidebarFrame.evaluate(() => ({
+    documentHasFocus: document.hasFocus(),
+    activeTag: document.activeElement?.tagName || null,
+    activeId: document.activeElement?.id || ''
+  }));
+
+  return {
+    focusBefore,
+    focusAfter,
+    hostEventCountBefore,
+    hostEventCountAfter,
+    hostEventDelta: hostEventCountAfter - hostEventCountBefore,
+    sidebarAltEvents
   };
 }
 
@@ -224,6 +292,10 @@ async function main() {
     await sidebarFrame.locator('#chat-container').waitFor({ state: 'visible', timeout: 30_000 });
     result.sidebarFrameUrl = sidebarFrame.url();
     result.steps.push('sidebar_frame_ready');
+    result.sidebarRuntimeReady = await waitForSidebarRuntimeReady(sidebarFrame);
+    result.steps.push('sidebar_runtime_ready');
+    await installSidebarAltRecorder(sidebarFrame);
+    result.steps.push('sidebar_alt_recorder_ready');
 
     result.scrollableSeedState = await prepareScrollableSidebar(sidebarFrame);
     result.steps.push('scrollable_content_ready');
@@ -234,6 +306,12 @@ async function main() {
       useHostAlt: false
     });
     result.steps.push('normal_wheel_measured');
+
+    result.sidebarAltSuppression = await measureSidebarAltKeySuppression({
+      page,
+      sidebarFrame
+    });
+    result.steps.push('sidebar_alt_suppression_measured');
 
     result.hostAltWheel = await measureWheelScroll({
       page,
@@ -253,6 +331,24 @@ async function main() {
     assert.ok(
       result.normalWheel.delta > 0,
       `Expected normal wheel to move the sidebar, got delta=${result.normalWheel.delta}`
+    );
+    assert.equal(
+      result.sidebarAltSuppression.focusBefore.documentHasFocus,
+      true,
+      'Expected sidebar iframe to have focus before sidebar Alt suppression check'
+    );
+    assert.equal(
+      result.sidebarAltSuppression.hostEventDelta,
+      0,
+      'Expected sidebar-focused Alt key events not to reach the host page'
+    );
+    assert.ok(
+      result.sidebarAltSuppression.sidebarAltEvents.some((event) => event.type === 'keydown' && event.defaultPrevented),
+      'Expected sidebar Alt keydown to prevent the browser menu default action'
+    );
+    assert.ok(
+      result.sidebarAltSuppression.sidebarAltEvents.some((event) => event.type === 'keyup' && event.defaultPrevented),
+      'Expected sidebar Alt keyup to prevent the browser menu default action'
     );
     assert.ok(
       result.hostAltWheel.delta > result.normalWheel.delta * 2.5,

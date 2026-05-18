@@ -73,3 +73,28 @@ test('宿主页 Alt 状态会桥接到 iframe 侧栏滚动管理器', async () =
     /setExternalAltKeyPressed\(isPressed\) \{\s*for \(const updateState of externalAltWheelStateUpdaters\) \{\s*updateState\(isPressed\);/s
   );
 });
+
+test('侧栏焦点内裸 Alt 会阻止浏览器菜单栏默认行为', async () => {
+  const sidebarSource = await readWorkspaceFile('src/ui/sidebar/sidebar.js');
+
+  assert.match(
+    sidebarSource,
+    /installAltKeyBrowserMenuGuard\(\);/
+  );
+  assert.match(
+    sidebarSource,
+    /function shouldSuppressBrowserMenuAltKeyEvent\(event\) \{\s*if \(!event \|\| event\.key !== 'Alt'\) return false;\s*const isAltGraph = typeof event\.getModifierState === 'function' && event\.getModifierState\('AltGraph'\);\s*return !isAltGraph;\s*\}/s
+  );
+  assert.match(
+    sidebarSource,
+    /function suppressBrowserMenuAltKeyEvent\(event\) \{\s*if \(!shouldSuppressBrowserMenuAltKeyEvent\(event\)\) return;\s*if \(event\.cancelable !== false\) \{\s*event\.preventDefault\(\);\s*\}\s*\}/s
+  );
+  assert.match(
+    sidebarSource,
+    /window\.addEventListener\('keydown', suppressBrowserMenuAltKeyEvent, \{ capture: true \}\);/
+  );
+  assert.match(
+    sidebarSource,
+    /window\.addEventListener\('keyup', suppressBrowserMenuAltKeyEvent, \{ capture: true \}\);/
+  );
+});

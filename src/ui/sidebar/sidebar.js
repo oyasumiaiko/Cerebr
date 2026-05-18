@@ -3,6 +3,39 @@ import { initializeSidebarServices } from './sidebar_bootstrap.js';
 import { registerSidebarEventHandlers } from './sidebar_events.js';
 import { serializeSelectionTextWithMath } from '../../utils/math_selection_text.js';
 
+installAltKeyBrowserMenuGuard();
+
+/**
+ * 判断是否需要屏蔽浏览器菜单栏的裸 Alt 默认行为。
+ *
+ * 说明：
+ * - Chrome/Edge 在页面或 iframe 获得焦点时，按下再松开 Alt 会把焦点转移到浏览器菜单栏；
+ * - Cerebr 里 Alt 是滚轮加速的按住型修饰键，用户只是按住 Alt 滚动时不应触发外层浏览器 UI；
+ * - 这里只匹配 Alt 键本身的 keydown/keyup，不拦截 Alt+Enter 等组合键里的 Enter 事件；
+ * - AltGraph 是输入法/键盘布局层面的字符输入修饰键，不能按普通 Alt 处理。
+ *
+ * @param {KeyboardEvent} event - 键盘事件。
+ * @returns {boolean} 是否应阻止浏览器默认菜单栏行为。
+ */
+function shouldSuppressBrowserMenuAltKeyEvent(event) {
+  if (!event || event.key !== 'Alt') return false;
+  const isAltGraph = typeof event.getModifierState === 'function' && event.getModifierState('AltGraph');
+  return !isAltGraph;
+}
+
+function suppressBrowserMenuAltKeyEvent(event) {
+  if (!shouldSuppressBrowserMenuAltKeyEvent(event)) return;
+  if (event.cancelable !== false) {
+    event.preventDefault();
+  }
+}
+
+function installAltKeyBrowserMenuGuard() {
+  // 在模块加载阶段尽早注册，覆盖侧栏服务初始化完成前的极短窗口；不停止传播，保留内部 Alt 状态同步。
+  window.addEventListener('keydown', suppressBrowserMenuAltKeyEvent, { capture: true });
+  window.addEventListener('keyup', suppressBrowserMenuAltKeyEvent, { capture: true });
+}
+
 /**
  * 页面 DOM 就绪后执行整体启动流程：检测模式 -> 构建上下文 -> 初始化服务 -> 注册事件。
  */
