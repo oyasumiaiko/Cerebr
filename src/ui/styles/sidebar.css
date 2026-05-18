@@ -1709,6 +1709,149 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); */
 }
 
+/* 多消息长截图选择态：仅在选择模式中出现，不参与导出的快照内容。 */
+.message.message-screenshot-selectable {
+    cursor: pointer;
+    outline: 1px solid color-mix(in srgb, var(--cerebr-highlight) 28%, transparent);
+    outline-offset: 2px;
+}
+
+.message.message-screenshot-selectable::before {
+    content: '';
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    width: 18px;
+    height: 18px;
+    border-radius: 5px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-highlight) 58%, var(--cerebr-border-color));
+    background: color-mix(in srgb, var(--cerebr-bg-color) 86%, transparent);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+    z-index: 2;
+    pointer-events: none;
+}
+
+.message.message-screenshot-selected {
+    outline: 2px solid color-mix(in srgb, var(--cerebr-highlight) 72%, transparent);
+    outline-offset: 2px;
+}
+
+.message.message-screenshot-selected::before {
+    content: '\2713';
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    background: var(--cerebr-highlight);
+    border-color: var(--cerebr-highlight);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.message-screenshot-selection-toolbar {
+    position: fixed;
+    top: 12px;
+    left: 50%;
+    z-index: 9000;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: calc(100vw - 24px);
+    padding: 7px 8px 7px 10px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 62%, transparent);
+    background: color-mix(in srgb, var(--cerebr-bg-color) 90%, transparent);
+    color: var(--cerebr-text-color);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16);
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
+    -webkit-backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
+    transform: translateX(-50%);
+    font-size: 12px;
+    line-height: 1;
+}
+
+.message-screenshot-selection-toolbar[hidden] {
+    display: none !important;
+}
+
+.message-screenshot-selection-toolbar__count {
+    min-width: 56px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    opacity: 0.78;
+}
+
+.message-screenshot-selection-toolbar__button {
+    appearance: none;
+    border: none;
+    background: transparent;
+    color: var(--cerebr-text-color);
+    min-width: 28px;
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 7px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    cursor: pointer;
+    font: inherit;
+    opacity: 0.82;
+    transition: background-color 0.16s ease, opacity 0.16s ease, transform 0.16s ease;
+}
+
+.message-screenshot-selection-toolbar__button:hover:not(:disabled),
+.message-screenshot-selection-toolbar__button:focus-visible {
+    background: var(--cerebr-ui-hover-bg);
+    opacity: 1;
+    outline: none;
+}
+
+.message-screenshot-selection-toolbar__button:active:not(:disabled) {
+    transform: scale(0.96);
+}
+
+.message-screenshot-selection-toolbar__button:disabled {
+    opacity: 0.38;
+    cursor: default;
+}
+
+.message-screenshot-selection-toolbar__button--primary {
+    color: #fff;
+    background: var(--cerebr-highlight);
+    opacity: 0.95;
+}
+
+.message-screenshot-selection-toolbar__button--primary:hover:not(:disabled),
+.message-screenshot-selection-toolbar__button--primary:focus-visible {
+    background: color-mix(in srgb, var(--cerebr-highlight) 88%, #ffffff 12%);
+}
+
+.message-screenshot-transcript {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    box-sizing: border-box;
+}
+
+.message-screenshot-transcript .message {
+    animation: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+}
+
+.message-screenshot-transcript .ai-message {
+    width: auto;
+    max-width: 100%;
+    align-self: stretch;
+}
+
+.message-screenshot-transcript .user-message {
+    width: fit-content;
+    max-width: 100%;
+    align-self: flex-end;
+}
+
 .user-message {
     background-color: var(--cerebr-message-user-bg);
     margin-left: auto;

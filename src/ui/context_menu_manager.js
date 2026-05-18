@@ -31,6 +31,7 @@ import {
  * @param {Object} appContext.services.chatHistoryManager.chatHistory - 聊天历史数据对象
  * @param {HTMLElement} appContext.dom.forkConversationButton - 创建分支对话按钮
  * @param {Function} appContext.services.chatHistoryUI.createForkConversation - 创建分支对话函数
+ * @param {HTMLElement} appContext.dom.selectForImageButton - 将消息加入长截图选择的按钮
  * @returns {Object} 上下文菜单管理器实例
  */
 export function createContextMenuManager(appContext) {
@@ -54,6 +55,7 @@ export function createContextMenuManager(appContext) {
   const forkConversationButton = dom.forkConversationButton;
   const forkConversationArrow = forkConversationButton?.querySelector('.context-menu-item__arrow');
   const copyAsImageButton = dom.copyAsImageButton; // Assuming it's in dom
+  const selectForImageButton = dom.selectForImageButton || document.getElementById('select-for-image');
   const editMessageButton = document.getElementById('edit-message');
   const insertMessageMenu = document.getElementById('insert-message-menu');
   const insertMessageSubmenu = insertMessageMenu?.querySelector('.context-menu-submenu');
@@ -102,6 +104,16 @@ export function createContextMenuManager(appContext) {
     'system-sans': '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif',
     serif: '"Noto Serif SC", "Source Han Serif SC", "Songti SC", "Times New Roman", serif',
     monospace: '"JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace'
+  };
+  const MESSAGE_SCREENSHOT_SELECTION_MODE_CLASS = 'message-screenshot-selection-mode';
+  const MESSAGE_SCREENSHOT_SELECTABLE_CLASS = 'message-screenshot-selectable';
+  const MESSAGE_SCREENSHOT_SELECTED_CLASS = 'message-screenshot-selected';
+  const MESSAGE_SCREENSHOT_VIRTUAL_PIN_MARKER = 'messageScreenshotSelectionVirtualPin';
+  const messageScreenshotSelection = {
+    active: false,
+    container: null,
+    selectedIds: new Set(),
+    toolbar: null
   };
 
   function clampNumberInRange(value, min, max, fallback, step = 0) {
@@ -171,6 +183,203 @@ export function createContextMenuManager(appContext) {
     if (threadContainer && threadContainer.contains(messageElement)) return threadContainer;
     if (chatContainer && chatContainer.contains(messageElement)) return chatContainer;
     return chatContainer;
+  }
+
+  function getScreenshotSelectionContainers() {
+    return [chatContainer, threadContainer].filter((container, index, list) => (
+      container && list.indexOf(container) === index
+    ));
+  }
+
+  function resolveScreenshotMessageId(messageElement) {
+    if (!(messageElement instanceof HTMLElement)) return '';
+    if (!messageElement.classList.contains('message')) return '';
+    if (messageElement.classList.contains('loading-message')) return '';
+    return (messageElement.getAttribute('data-message-id') || '').trim();
+  }
+
+  function setContextMenuItemLabel(item, iconClass, label) {
+    if (!(item instanceof HTMLElement)) return;
+    item.innerHTML = '';
+    const icon = document.createElement('i');
+    icon.className = iconClass;
+    const text = document.createElement('span');
+    text.textContent = label;
+    item.appendChild(icon);
+    item.appendChild(text);
+  }
+
+  function getActiveScreenshotSelectionContainer(referenceElement = null) {
+    if (messageScreenshotSelection.container instanceof HTMLElement) {
+      return messageScreenshotSelection.container;
+    }
+    const referenceContainer = resolveMessageContainer(referenceElement);
+    return referenceContainer || chatContainer || threadContainer || null;
+  }
+
+  function getOrderedScreenshotSelectionMessageElements(referenceElement = null) {
+    const container = getActiveScreenshotSelectionContainer(referenceElement);
+    if (!container || messageScreenshotSelection.selectedIds.size === 0) return [];
+    return Array.from(container.querySelectorAll('.message[data-message-id]'))
+      .filter((messageElement) => {
+        const messageId = resolveScreenshotMessageId(messageElement);
+        return messageId && messageScreenshotSelection.selectedIds.has(messageId);
+      });
+  }
+
+  function ensureMessageScreenshotSelectionToolbar() {
+    if (messageScreenshotSelection.toolbar instanceof HTMLElement) {
+      return messageScreenshotSelection.toolbar;
+    }
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'message-screenshot-selection-toolbar';
+    toolbar.innerHTML = `
+      <span class="message-screenshot-selection-toolbar__count">已选 0 条</span>
+      <button class="message-screenshot-selection-toolbar__button message-screenshot-selection-toolbar__button--primary" type="button" data-action="copy" title="复制长截图" aria-label="复制长截图">
+        <i class="far fa-images" aria-hidden="true"></i>
+        <span>复制</span>
+      </button>
+      <button class="message-screenshot-selection-toolbar__button" type="button" data-action="clear" title="清空选择" aria-label="清空选择">
+        <i class="far fa-eraser" aria-hidden="true"></i>
+      </button>
+      <button class="message-screenshot-selection-toolbar__button" type="button" data-action="exit" title="退出选择" aria-label="退出选择">
+        <i class="far fa-times" aria-hidden="true"></i>
+      </button>
+    `;
+    toolbar.addEventListener('click', (event) => {
+      const target = event.target instanceof Element
+        ? event.target.closest('[data-action]')
+        : null;
+      if (!target) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const action = target.getAttribute('data-action');
+      if (action === 'copy') {
+        copyMessageAsImage();
+      } else if (action === 'clear') {
+        clearMessageScreenshotSelection({ keepMode: true });
+      } else if (action === 'exit') {
+        exitMessageScreenshotSelectionMode({ clear: true });
+      }
+    });
+    document.body.appendChild(toolbar);
+    messageScreenshotSelection.toolbar = toolbar;
+    return toolbar;
+  }
+
+  function syncCopyAsImageMenuLabel() {
+    if (!copyAsImageButton) return;
+    const selectedCount = messageScreenshotSelection.selectedIds.size;
+    if (selectedCount > 0) {
+      setContextMenuItemLabel(copyAsImageButton, 'far fa-images', `复制已选 ${selectedCount} 条为图片`);
+      return;
+    }
+    setContextMenuItemLabel(copyAsImageButton, 'far fa-image', '复制为图片');
+  }
+
+  function updateMessageScreenshotSelectionToolbar() {
+    const toolbar = ensureMessageScreenshotSelectionToolbar();
+    const count = messageScreenshotSelection.selectedIds.size;
+    toolbar.hidden = !messageScreenshotSelection.active;
+    toolbar.querySelector('.message-screenshot-selection-toolbar__count').textContent = `已选 ${count} 条`;
+    const copyButton = toolbar.querySelector('[data-action="copy"]');
+    if (copyButton instanceof HTMLButtonElement) {
+      copyButton.disabled = count === 0;
+    }
+  }
+
+  function syncMessageScreenshotSelectionDecorations() {
+    const activeContainer = messageScreenshotSelection.container;
+    getScreenshotSelectionContainers().forEach((container) => {
+      const isActiveContainer = messageScreenshotSelection.active && (!activeContainer || activeContainer === container);
+      container.querySelectorAll('.message[data-message-id]').forEach((messageElement) => {
+        const messageId = resolveScreenshotMessageId(messageElement);
+        const selected = !!(messageId && messageScreenshotSelection.selectedIds.has(messageId));
+        messageElement.classList.toggle(MESSAGE_SCREENSHOT_SELECTABLE_CLASS, isActiveContainer);
+        messageElement.classList.toggle(MESSAGE_SCREENSHOT_SELECTED_CLASS, selected);
+        if (selected) {
+          if (messageElement.dataset.virtualPin !== '1') {
+            messageElement.dataset[MESSAGE_SCREENSHOT_VIRTUAL_PIN_MARKER] = '1';
+          }
+          messageElement.dataset.virtualPin = '1';
+          messageElement.setAttribute('aria-selected', 'true');
+        } else {
+          if (messageElement.dataset[MESSAGE_SCREENSHOT_VIRTUAL_PIN_MARKER] === '1') {
+            delete messageElement.dataset.virtualPin;
+            delete messageElement.dataset[MESSAGE_SCREENSHOT_VIRTUAL_PIN_MARKER];
+          }
+          messageElement.removeAttribute('aria-selected');
+        }
+      });
+    });
+    document.body.classList.toggle(MESSAGE_SCREENSHOT_SELECTION_MODE_CLASS, messageScreenshotSelection.active);
+    updateMessageScreenshotSelectionToolbar();
+    syncCopyAsImageMenuLabel();
+  }
+
+  function enterMessageScreenshotSelectionMode(container, seedMessageElement = null) {
+    const nextContainer = container || resolveMessageContainer(seedMessageElement) || chatContainer;
+    if (messageScreenshotSelection.container && messageScreenshotSelection.container !== nextContainer) {
+      messageScreenshotSelection.selectedIds.clear();
+    }
+    messageScreenshotSelection.active = true;
+    messageScreenshotSelection.container = nextContainer;
+
+    const seedId = resolveScreenshotMessageId(seedMessageElement);
+    if (seedId) {
+      messageScreenshotSelection.selectedIds.add(seedId);
+    }
+    syncMessageScreenshotSelectionDecorations();
+  }
+
+  function exitMessageScreenshotSelectionMode(options = {}) {
+    const shouldClear = options?.clear !== false;
+    messageScreenshotSelection.active = false;
+    if (shouldClear) {
+      messageScreenshotSelection.selectedIds.clear();
+      messageScreenshotSelection.container = null;
+    }
+    syncMessageScreenshotSelectionDecorations();
+  }
+
+  function clearMessageScreenshotSelection(options = {}) {
+    messageScreenshotSelection.selectedIds.clear();
+    if (!options?.keepMode) {
+      messageScreenshotSelection.active = false;
+      messageScreenshotSelection.container = null;
+    }
+    syncMessageScreenshotSelectionDecorations();
+  }
+
+  function toggleMessageScreenshotSelection(messageElement) {
+    const messageId = resolveScreenshotMessageId(messageElement);
+    if (!messageId) return;
+    const container = resolveMessageContainer(messageElement);
+    if (!messageScreenshotSelection.active || messageScreenshotSelection.container !== container) {
+      enterMessageScreenshotSelectionMode(container, null);
+    }
+    if (messageScreenshotSelection.selectedIds.has(messageId)) {
+      messageScreenshotSelection.selectedIds.delete(messageId);
+    } else {
+      messageScreenshotSelection.selectedIds.add(messageId);
+    }
+    syncMessageScreenshotSelectionDecorations();
+  }
+
+  function handleMessageScreenshotSelectionClick(event, container) {
+    if (!messageScreenshotSelection.active) return;
+    if (!container || messageScreenshotSelection.container !== container) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+    if (target.closest('a, button, input, textarea, select, [contenteditable="true"], [contenteditable="plaintext-only"], .context-menu-submenu, #context-menu, .message-screenshot-selection-toolbar')) {
+      return;
+    }
+    const messageElement = target.closest('.message');
+    if (!messageElement || !container.contains(messageElement)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    toggleMessageScreenshotSelection(messageElement);
   }
 
   function findAdjacentMessageElement(baseElement, direction = 'next') {
@@ -848,6 +1057,19 @@ export function createContextMenuManager(appContext) {
     }
     const messageId = messageElement?.getAttribute?.('data-message-id') || '';
     const isLoadingMessage = !!messageElement?.classList?.contains?.('loading-message');
+    if (selectForImageButton) {
+      const canSelectForImage = !!(messageId && !isLoadingMessage);
+      selectForImageButton.style.display = canSelectForImage ? 'flex' : 'none';
+      if (canSelectForImage) {
+        const isSelected = messageScreenshotSelection.selectedIds.has(messageId);
+        setContextMenuItemLabel(
+          selectForImageButton,
+          isSelected ? 'far fa-square-minus' : 'far fa-square-check',
+          isSelected ? '移出长截图' : '选择长截图'
+        );
+      }
+    }
+    syncCopyAsImageMenuLabel();
     const selectionThreadManager = services.selectionThreadManager;
     let canFork = false;
     if (activeContainer === threadContainer) {
@@ -1424,6 +1646,66 @@ export function createContextMenuManager(appContext) {
     hideContextMenu();
   }
 
+  function removeMessageScreenshotSelectionArtifacts(rootNode) {
+    if (!(rootNode instanceof HTMLElement)) return;
+    const messageNodes = rootNode.matches?.('.message')
+      ? [rootNode, ...Array.from(rootNode.querySelectorAll('.message'))]
+      : Array.from(rootNode.querySelectorAll('.message'));
+    messageNodes.forEach((messageNode) => {
+      messageNode.classList.remove(MESSAGE_SCREENSHOT_SELECTABLE_CLASS);
+      messageNode.classList.remove(MESSAGE_SCREENSHOT_SELECTED_CLASS);
+      messageNode.removeAttribute('aria-selected');
+      delete messageNode.dataset[MESSAGE_SCREENSHOT_VIRTUAL_PIN_MARKER];
+    });
+  }
+
+  function staticizeMessageScreenshotCloneTree(rootNode) {
+    if (!(rootNode instanceof HTMLElement)) return;
+    const animatedNodes = rootNode.matches?.('.message')
+      ? [rootNode, ...Array.from(rootNode.querySelectorAll('.message'))]
+      : Array.from(rootNode.querySelectorAll('.message'));
+    animatedNodes.forEach((node) => {
+      node.classList.remove('message-offscreen-blur-disabled');
+      node.style.animation = 'none';
+      node.style.transition = 'none';
+      node.style.transform = 'none';
+      node.style.opacity = '1';
+      if (node.dataset?.virtualized === '1') {
+        node.classList.remove('message-virtualized');
+        delete node.dataset.virtualized;
+        delete node.dataset.virtualHeight;
+        node.style.height = 'auto';
+        node.style.minHeight = '';
+        node.style.overflow = 'visible';
+      }
+    });
+  }
+
+  function expandUserMessageScreenshotContent(rootNode) {
+    if (!(rootNode instanceof HTMLElement)) return;
+    const userMessages = rootNode.matches?.('.user-message')
+      ? [rootNode, ...Array.from(rootNode.querySelectorAll('.user-message'))]
+      : Array.from(rootNode.querySelectorAll('.user-message'));
+    userMessages.forEach((messageNode) => {
+      messageNode.querySelectorAll('.text-content').forEach((node) => {
+        if (!(node instanceof HTMLElement)) return;
+        node.style.maxHeight = 'none';
+        node.style.height = 'auto';
+        node.style.overflow = 'visible';
+        node.style.overflowY = 'visible';
+      });
+    });
+  }
+
+  function prepareMessageScreenshotCloneTree(rootNode) {
+    if (!(rootNode instanceof HTMLElement)) return;
+    removeMessageScreenshotSelectionArtifacts(rootNode);
+    staticizeMessageScreenshotCloneTree(rootNode);
+    // 截图快照只保留最终对话正文，思考块会造成长图底部大量非对话内容。
+    rootNode.querySelectorAll('.thoughts-content').forEach((node) => node.remove());
+    expandUserMessageScreenshotContent(rootNode);
+  }
+
   /**
    * 创建“消息截图专用快照”：
    * - 在离屏容器中克隆当前消息，避免直接改动可见 DOM 产生闪烁；
@@ -1483,21 +1765,7 @@ export function createContextMenuManager(appContext) {
       snapshotNode.style.fontFamily = options.fontFamilyCss;
     }
 
-    // 根本修复：直接在快照树移除思考块，而不是在导出时做 filter。
-    snapshotNode.querySelectorAll('.thoughts-content').forEach((node) => node.remove());
-
-    // 长用户消息在常规 UI 下会限制 text-content 高度并启用内部滚动；
-    // 截图场景需要完整内容，因此在快照里解除该限制，让高度自然展开。
-    if (snapshotNode.classList.contains('user-message')) {
-      const textContentNodes = snapshotNode.querySelectorAll('.text-content');
-      textContentNodes.forEach((node) => {
-        if (!(node instanceof HTMLElement)) return;
-        node.style.maxHeight = 'none';
-        node.style.height = 'auto';
-        node.style.overflow = 'visible';
-        node.style.overflowY = 'visible';
-      });
-    }
+    prepareMessageScreenshotCloneTree(snapshotNode);
 
     stagingHost.appendChild(snapshotNode);
     document.body.appendChild(stagingHost);
@@ -1520,100 +1788,227 @@ export function createContextMenuManager(appContext) {
     };
   }
 
+  function resolveContainerContentWidth(container) {
+    if (!(container instanceof HTMLElement)) return 1;
+    const style = window.getComputedStyle(container);
+    const paddingLeft = Number.parseFloat(style.paddingLeft) || 0;
+    const paddingRight = Number.parseFloat(style.paddingRight) || 0;
+    const fallbackWidth = container.getBoundingClientRect?.().width || container.clientWidth || 1;
+    const contentWidth = (container.clientWidth || fallbackWidth) - paddingLeft - paddingRight;
+    return Math.max(1, Math.ceil(contentWidth || fallbackWidth || 1));
+  }
+
+  function createMessagesScreenshotSnapshot(messageElements, options = {}) {
+    const sourceMessages = Array.isArray(messageElements)
+      ? messageElements.filter((node) => node instanceof HTMLElement)
+      : [];
+    if (!sourceMessages.length) {
+      throw new Error('消息截图快照创建失败：没有可截图的消息');
+    }
+
+    const activeContainer = getActiveScreenshotSelectionContainer(sourceMessages[0]);
+    const fallbackWidth = resolveContainerContentWidth(activeContainer);
+    const requestedWidth = Number(options?.widthPx);
+    const targetWidth = Number.isFinite(requestedWidth) && requestedWidth > 0
+      ? Math.max(1, Math.round(requestedWidth))
+      : fallbackWidth;
+
+    const stagingHost = document.createElement('div');
+    stagingHost.style.position = 'fixed';
+    stagingHost.style.left = '-100000px';
+    stagingHost.style.top = '0';
+    stagingHost.style.pointerEvents = 'none';
+    stagingHost.style.opacity = '0';
+    stagingHost.style.zIndex = '-1';
+    stagingHost.style.contain = 'layout style paint';
+    stagingHost.style.width = `${targetWidth}px`;
+
+    const transcriptNode = document.createElement('div');
+    transcriptNode.className = 'message-screenshot-transcript';
+    transcriptNode.style.boxSizing = 'border-box';
+    transcriptNode.style.width = `${targetWidth}px`;
+    transcriptNode.style.maxWidth = `${targetWidth}px`;
+    transcriptNode.style.minWidth = `${targetWidth}px`;
+    if (Number.isFinite(Number(options?.fontSizePx)) && Number(options.fontSizePx) > 0) {
+      transcriptNode.style.fontSize = `${Math.round(Number(options.fontSizePx))}px`;
+    }
+    if (typeof options?.fontFamilyCss === 'string' && options.fontFamilyCss.trim()) {
+      transcriptNode.style.fontFamily = options.fontFamilyCss;
+    }
+
+    const containerStyle = activeContainer instanceof HTMLElement
+      ? window.getComputedStyle(activeContainer)
+      : null;
+    const gap = containerStyle?.gap || containerStyle?.rowGap || '';
+    if (gap && gap !== 'normal') {
+      transcriptNode.style.gap = gap;
+    }
+
+    sourceMessages.forEach((messageElement) => {
+      const snapshotNode = messageElement.cloneNode(true);
+      if (!(snapshotNode instanceof HTMLElement)) return;
+      snapshotNode.style.boxSizing = 'border-box';
+      snapshotNode.style.maxWidth = '100%';
+      prepareMessageScreenshotCloneTree(snapshotNode);
+      transcriptNode.appendChild(snapshotNode);
+    });
+
+    stagingHost.appendChild(transcriptNode);
+    document.body.appendChild(stagingHost);
+
+    const rect = transcriptNode.getBoundingClientRect();
+    const width = Math.max(1, Math.ceil(Math.max(rect.width || 0, transcriptNode.scrollWidth || 0, targetWidth)));
+    const height = Math.max(1, Math.ceil(Math.max(rect.height || 0, transcriptNode.scrollHeight || 0)));
+
+    const cleanup = () => {
+      if (stagingHost.parentNode) {
+        stagingHost.parentNode.removeChild(stagingHost);
+      }
+    };
+
+    return {
+      node: transcriptNode,
+      width,
+      height,
+      cleanup
+    };
+  }
+
+  function isTransparentBackgroundColor(colorText) {
+    const color = String(colorText || '').trim().toLowerCase();
+    if (!color || color === 'transparent') return true;
+    if (color === 'rgba(0, 0, 0, 0)') return true;
+    return /^rgba\([^)]*,\s*0(?:\.0+)?\)$/.test(color);
+  }
+
+  function resolveMessageImageCanvasBackgroundColor(referenceElement) {
+    const candidates = [];
+    let cursor = referenceElement instanceof HTMLElement ? referenceElement : null;
+    while (cursor) {
+      candidates.push(cursor);
+      cursor = cursor.parentElement;
+    }
+    candidates.push(document.body, document.documentElement);
+
+    for (const candidate of candidates) {
+      if (!(candidate instanceof HTMLElement)) continue;
+      const backgroundColor = window.getComputedStyle(candidate).backgroundColor;
+      if (!isTransparentBackgroundColor(backgroundColor)) {
+        return backgroundColor;
+      }
+    }
+
+    const rootBg = window.getComputedStyle(document.documentElement)
+      .getPropertyValue('--cerebr-bg-color')
+      .trim();
+    return rootBg || '#ffffff';
+  }
+
+  function canvasToPngBlob(canvas) {
+    return new Promise((resolve, reject) => {
+      if (!canvas || typeof canvas.toBlob !== 'function') {
+        reject(new Error('当前环境不支持将 Canvas 转换为图片'));
+        return;
+      }
+      canvas.toBlob((blob) => {
+        if (blob) {
+          resolve(blob);
+        } else {
+          reject(new Error('Canvas 转换为图片失败'));
+        }
+      }, 'image/png');
+    });
+  }
+
+  async function renderMessageScreenshotSnapshotToBlob(snapshot, exportOptions, backgroundReferenceElement) {
+    const originalCanvas = await domtoimage.toCanvas(snapshot.node, {
+      width: snapshot.width,
+      height: snapshot.height,
+      scale: exportOptions.resolutionScale
+    });
+
+    const padding = Math.max(0, Math.round(exportOptions.paddingPx * exportOptions.resolutionScale));
+    const newWidth = originalCanvas.width + 2 * padding;
+    const newHeight = originalCanvas.height + 2 * padding;
+
+    const newCanvas = document.createElement('canvas');
+    newCanvas.width = newWidth;
+    newCanvas.height = newHeight;
+    const ctx = newCanvas.getContext('2d');
+    if (!ctx) {
+      throw new Error('Canvas 上下文创建失败');
+    }
+
+    ctx.fillStyle = resolveMessageImageCanvasBackgroundColor(backgroundReferenceElement);
+    ctx.fillRect(0, 0, newWidth, newHeight);
+    ctx.drawImage(originalCanvas, padding, padding);
+
+    const imageData = ctx.getImageData(0, 0, newWidth, newHeight);
+    const data = imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+      data[i + 3] = 255;
+    }
+    ctx.putImageData(imageData, 0, 0);
+
+    return canvasToPngBlob(newCanvas);
+  }
+
+  async function writeScreenshotBlobToClipboardOrDownload(blob, filenamePrefix = '消息截图') {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'image/png': blob
+        })
+      ]);
+    } catch (err) {
+      console.error('复制图片到剪贴板失败:', err);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${filenamePrefix}_${new Date().toISOString().replace(/:/g, '-')}.png`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+  }
+
   /**
    * 将消息元素复制为图片并复制到剪贴板
    */
   async function copyMessageAsImage() {
     const messageElement = currentMessageElement;
-    if (messageElement) {
-      let snapshot = null;
-      const originalText = copyAsImageButton.innerHTML;
-      hideContextMenu();
-      try {
-        const exportOptions = resolveMessageImageExportOptions();
+    const selectedMessageElements = getOrderedScreenshotSelectionMessageElements(messageElement);
+    const messageElements = selectedMessageElements.length > 0
+      ? selectedMessageElements
+      : (messageElement ? [messageElement] : []);
+    if (!messageElements.length) return;
 
-        // --- 1. 构建离屏快照（移除思考块）并生成原始 Canvas ---
-        snapshot = createMessageScreenshotSnapshot(messageElement, exportOptions);
-        const originalCanvas = await domtoimage.toCanvas(snapshot.node, {
-          width: snapshot.width,
-          height: snapshot.height,
-          scale: exportOptions.resolutionScale
-        });
-
-        // --- 2. 创建带边距的新 Canvas ---
-        const padding = Math.max(0, Math.round(exportOptions.paddingPx * exportOptions.resolutionScale));
-        const newWidth = originalCanvas.width + 2 * padding;
-        const newHeight = originalCanvas.height + 2 * padding;
-
-        const newCanvas = document.createElement('canvas');
-        newCanvas.width = newWidth;
-        newCanvas.height = newHeight;
-        const ctx = newCanvas.getContext('2d');
-
-        // --- 3. 填充新 Canvas 背景色 ---
-        // 尝试获取元素的计算背景色，如果透明或无效，则默认为白色
-        let bgColor = window.getComputedStyle(messageElement).backgroundColor;
-        if (!bgColor || bgColor === 'rgba(0, 0, 0, 0)' || bgColor === 'transparent') {
-          bgColor = '#ffffff'; // 默认白色背景
-        }
-        ctx.fillStyle = bgColor;
-        ctx.fillRect(0, 0, newWidth, newHeight);
-
-        // --- 4. 将原始 Canvas 绘制到新 Canvas 中央 ---
-        ctx.drawImage(originalCanvas, padding, padding);
-
-        // --- 4.5. 强制去除 Alpha 通道 ---
-        const imageData = ctx.getImageData(0, 0, newWidth, newHeight);
-        const data = imageData.data; // Uint8ClampedArray [R, G, B, A, ...]
-        for (let i = 0; i < data.length; i += 4) {
-          data[i + 3] = 255; // 设置 Alpha 为 255 (完全不透明)
-        }
-        ctx.putImageData(imageData, 0, 0);
-        // --- Alpha 处理结束 ---
-
-        // --- 5. 将新 Canvas 转换为 Blob ---
-        newCanvas.toBlob(async (blob) => {
-          if (!blob) {
-             console.error('Failed to convert canvas to Blob.');
-             copyAsImageButton.innerHTML = originalText;
-             return;
-          }
-          // --- 6. 后续处理 Blob --- 
-          try {
-            // 使用Clipboard API复制图片
-            await navigator.clipboard.write([
-              new ClipboardItem({
-                'image/png': blob
-              })
-            ]);
-            
-            // 显示成功提示
-            copyAsImageButton.innerHTML = originalText;
-          } catch (err) {
-            console.error('复制图片到剪贴板失败:', err);
-            // 如果复制失败，提供下载选项
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `消息截图_${new Date().toISOString().replace(/:/g, '-')}.png`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-            
-            copyAsImageButton.innerHTML = originalText;
-          }
-          // --- Blob 处理结束 ---
-        }, 'image/png'); // 指定输出格式
-
-      } catch (err) {
-        console.error('生成图片过程中出错:', err); 
-        copyAsImageButton.innerHTML = originalText;
-      } finally {
-        if (snapshot?.cleanup) {
-          snapshot.cleanup();
-        }
+    let snapshot = null;
+    const originalText = copyAsImageButton.innerHTML;
+    hideContextMenu();
+    try {
+      const exportOptions = resolveMessageImageExportOptions();
+      const isMultiMessageExport = messageElements.length > 1;
+      snapshot = isMultiMessageExport
+        ? createMessagesScreenshotSnapshot(messageElements, exportOptions)
+        : createMessageScreenshotSnapshot(messageElements[0], exportOptions);
+      const backgroundReference = isMultiMessageExport
+        ? getActiveScreenshotSelectionContainer(messageElements[0])
+        : messageElements[0];
+      const blob = await renderMessageScreenshotSnapshotToBlob(snapshot, exportOptions, backgroundReference);
+      await writeScreenshotBlobToClipboardOrDownload(
+        blob,
+        isMultiMessageExport ? '对话长截图' : '消息截图'
+      );
+    } catch (err) {
+      console.error('生成图片过程中出错:', err);
+    } finally {
+      if (snapshot?.cleanup) {
+        snapshot.cleanup();
       }
+      copyAsImageButton.innerHTML = originalText;
+      syncCopyAsImageMenuLabel();
     }
   }
 
@@ -1712,6 +2107,11 @@ export function createContextMenuManager(appContext) {
           showContextMenu(e, messageElement);
         }
       });
+
+      // 长截图选择模式下，点击消息本身即切换选中状态；链接和按钮仍保留原交互。
+      container.addEventListener('click', (e) => {
+        handleMessageScreenshotSelectionClick(e, container);
+      }, true);
 
       // 滚动时隐藏菜单
       container.addEventListener('scroll', hideContextMenu);
@@ -1844,6 +2244,13 @@ export function createContextMenuManager(appContext) {
     
     // 添加复制为图片按钮点击事件
     copyAsImageButton.addEventListener(MENU_ACTIVATE_EVENT, copyMessageAsImage);
+    if (selectForImageButton) {
+      selectForImageButton.addEventListener(MENU_ACTIVATE_EVENT, () => {
+        const messageElement = currentMessageElement;
+        hideContextMenu();
+        toggleMessageScreenshotSelection(messageElement);
+      });
+    }
 
     // 添加创建分支对话按钮点击事件
     if (forkConversationButton) {
@@ -2109,6 +2516,9 @@ export function createContextMenuManager(appContext) {
     copyMessageContent,
     copyCodeContent,
     copyMessageAsImage,
+    enterMessageScreenshotSelectionMode,
+    exitMessageScreenshotSelectionMode,
+    clearMessageScreenshotSelection,
     regenerateMessage,
     forkConversation,
     getCurrentMessage: () => currentMessageElement
