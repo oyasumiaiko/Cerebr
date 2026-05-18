@@ -52,11 +52,24 @@ test('多消息长截图选择入口与导出管线保持同一套复制为图�
   );
   assert.match(
     contextMenuSource,
+    /function showMessageScreenshotExportNotification\(messageElements\) \{[\s\S]*?正在生成长截图[\s\S]*?progressMode: 'indeterminate'/
+  );
+  assert.match(
+    contextMenuSource,
+    /function updateMessageScreenshotExportNotification\(toast, state, detail = \{\}\) \{[\s\S]*?截图完成，已复制到剪贴板[\s\S]*?截图完成，已下载图片/
+  );
+  assert.match(
+    contextMenuSource,
+    /function setMessageScreenshotExporting\(isExporting\) \{[\s\S]*?updateMessageScreenshotSelectionToolbar\(\);[\s\S]*?\}/
+  );
+  assert.match(
+    contextMenuSource,
     /copyAsImageButton\.addEventListener\(MENU_ACTIVATE_EVENT, copyMessageAsImage\);[\s\S]*?selectForImageButton\.addEventListener\(MENU_ACTIVATE_EVENT/
   );
 
   assert.match(sidebarCss, /\.message\.message-screenshot-selectable/);
   assert.match(sidebarCss, /\.message\.message-screenshot-selected/);
   assert.match(sidebarCss, /\.message-screenshot-selection-toolbar/);
+  assert.match(sidebarCss, /\.message-screenshot-selection-toolbar__button\.is-busy/);
   assert.match(sidebarCss, /\.message-screenshot-transcript \.ai-message/);
 });

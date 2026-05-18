@@ -104,7 +104,8 @@ async function installScreenshotExportProbe(sidebarFrame) {
       canvasCalls: 0,
       clipboardWrites: 0,
       lastCanvas: null,
-      lastClipboardItemCount: 0
+      lastClipboardItemCount: 0,
+      canvasDelayMs: 350
     };
 
     Object.defineProperty(window, 'ClipboardItem', {
@@ -139,6 +140,9 @@ async function installScreenshotExportProbe(sidebarFrame) {
         height: options?.height || 0,
         scale: options?.scale || 0
       };
+      await new Promise((resolve) => {
+        setTimeout(resolve, window.__messageScreenshotSelectionProbe.canvasDelayMs);
+      });
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(options?.width || 1));
       canvas.height = Math.max(1, Math.round(options?.height || 1));
@@ -212,6 +216,24 @@ async function main() {
     result.steps.push('messages_selected');
 
     await sidebarFrame.locator('.message-screenshot-selection-toolbar [data-action="copy"]').click();
+    result.exportingState = await waitFor(async () => {
+      const state = await sidebarFrame.evaluate(() => {
+        const copyButton = document.querySelector('.message-screenshot-selection-toolbar [data-action="copy"]');
+        return {
+          canvasCalls: window.__messageScreenshotSelectionProbe?.canvasCalls || 0,
+          copyButtonText: copyButton?.textContent || '',
+          copyButtonBusy: copyButton?.classList?.contains('is-busy') || false,
+          copyButtonDisabled: !!copyButton?.disabled,
+          notificationTexts: Array.from(document.querySelectorAll('.notification'))
+            .map((node) => node.textContent || '')
+        };
+      });
+      return state.canvasCalls === 1 && state.copyButtonBusy ? state : null;
+    }, {
+      timeoutMs: 10_000,
+      intervalMs: 50,
+      label: 'screenshot exporting feedback'
+    });
     result.copyProbe = await waitFor(async () => {
       const probe = await sidebarFrame.evaluate(() => window.__messageScreenshotSelectionProbe || null);
       return probe?.clipboardWrites === 1 ? probe : null;
@@ -238,6 +260,26 @@ async function main() {
     if (result.copyProbe.lastClipboardItemCount !== 1) {
       throw new Error(`unexpected clipboard item count: ${result.copyProbe.lastClipboardItemCount}`);
     }
+    if (!result.exportingState.copyButtonText.includes('正在截图')) {
+      throw new Error(`missing exporting button label: ${result.exportingState.copyButtonText}`);
+    }
+    if (!result.exportingState.copyButtonDisabled) {
+      throw new Error('copy button was not disabled while exporting');
+    }
+    if (!result.exportingState.notificationTexts.some((text) => text.includes('正在生成长截图'))) {
+      throw new Error(`missing exporting notification: ${JSON.stringify(result.exportingState.notificationTexts)}`);
+    }
+
+    result.completedNotifications = await waitFor(async () => {
+      const texts = await sidebarFrame.evaluate(() => (
+        Array.from(document.querySelectorAll('.notification')).map((node) => node.textContent || '')
+      ));
+      return texts.some((text) => text.includes('截图完成')) ? texts : null;
+    }, {
+      timeoutMs: 10_000,
+      intervalMs: 100,
+      label: 'screenshot completed notification'
+    });
 
     await sidebarFrame.locator('body').screenshot({
       path: path.join(outputDir, 'sidebar-selection.png')

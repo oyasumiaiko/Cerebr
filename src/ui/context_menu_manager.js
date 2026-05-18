@@ -115,6 +115,7 @@ export function createContextMenuManager(appContext) {
     selectedIds: new Set(),
     toolbar: null
   };
+  let isMessageScreenshotExporting = false;
 
   function clampNumberInRange(value, min, max, fallback, step = 0) {
     const numeric = Number(value);
@@ -285,7 +286,72 @@ export function createContextMenuManager(appContext) {
     toolbar.querySelector('.message-screenshot-selection-toolbar__count').textContent = `已选 ${count} 条`;
     const copyButton = toolbar.querySelector('[data-action="copy"]');
     if (copyButton instanceof HTMLButtonElement) {
-      copyButton.disabled = count === 0;
+      copyButton.disabled = count === 0 || isMessageScreenshotExporting;
+      copyButton.classList.toggle('is-busy', isMessageScreenshotExporting);
+      copyButton.setAttribute('aria-busy', isMessageScreenshotExporting ? 'true' : 'false');
+      const icon = copyButton.querySelector('i');
+      if (icon) {
+        icon.className = isMessageScreenshotExporting ? 'far fa-spinner' : 'far fa-images';
+      }
+      const label = copyButton.querySelector('span');
+      if (label) {
+        label.textContent = isMessageScreenshotExporting ? '正在截图...' : '复制';
+      }
+    }
+  }
+
+  function setMessageScreenshotExporting(isExporting) {
+    isMessageScreenshotExporting = !!isExporting;
+    updateMessageScreenshotSelectionToolbar();
+  }
+
+  function showMessageScreenshotExportNotification(messageElements) {
+    const count = Array.isArray(messageElements) ? messageElements.length : 0;
+    const isLongScreenshot = count > 1;
+    const message = isLongScreenshot
+      ? `正在生成长截图（${count} 条消息）...`
+      : '正在生成截图...';
+    try {
+      return utils?.showNotification?.({
+        message,
+        type: 'info',
+        autoClose: false,
+        showProgress: true,
+        progressMode: 'indeterminate',
+        progress: 0
+      }) || null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function updateMessageScreenshotExportNotification(toast, state, detail = {}) {
+    if (!toast || typeof toast.update !== 'function') return;
+    const count = Number(detail?.count) || 0;
+    const isLongScreenshot = count > 1;
+    if (state === 'success') {
+      const copiedToClipboard = detail?.target === 'clipboard';
+      toast.update({
+        message: copiedToClipboard ? '截图完成，已复制到剪贴板' : '截图完成，已下载图片',
+        description: isLongScreenshot ? `已处理 ${count} 条消息` : '',
+        type: 'success',
+        showProgress: false,
+        progress: null,
+        autoClose: true,
+        duration: 1800
+      });
+      return;
+    }
+    if (state === 'error') {
+      toast.update({
+        message: '截图失败',
+        description: String(detail?.error?.message || detail?.error || ''),
+        type: 'error',
+        showProgress: false,
+        progress: null,
+        autoClose: true,
+        duration: 2600
+      });
     }
   }
 
@@ -1960,6 +2026,7 @@ export function createContextMenuManager(appContext) {
           'image/png': blob
         })
       ]);
+      return 'clipboard';
     } catch (err) {
       console.error('复制图片到剪贴板失败:', err);
       const url = URL.createObjectURL(blob);
@@ -1970,6 +2037,7 @@ export function createContextMenuManager(appContext) {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+      return 'download';
     }
   }
 
@@ -1978,6 +2046,10 @@ export function createContextMenuManager(appContext) {
    */
   async function copyMessageAsImage() {
     const messageElement = currentMessageElement;
+    if (isMessageScreenshotExporting) {
+      utils?.showNotification?.({ message: '截图正在生成中', type: 'info', duration: 1400 });
+      return;
+    }
     const selectedMessageElements = getOrderedScreenshotSelectionMessageElements(messageElement);
     const messageElements = selectedMessageElements.length > 0
       ? selectedMessageElements
@@ -1985,8 +2057,11 @@ export function createContextMenuManager(appContext) {
     if (!messageElements.length) return;
 
     let snapshot = null;
+    let progressToast = null;
     const originalText = copyAsImageButton.innerHTML;
     hideContextMenu();
+    setMessageScreenshotExporting(true);
+    progressToast = showMessageScreenshotExportNotification(messageElements);
     try {
       const exportOptions = resolveMessageImageExportOptions();
       const isMultiMessageExport = messageElements.length > 1;
@@ -1997,16 +2072,25 @@ export function createContextMenuManager(appContext) {
         ? getActiveScreenshotSelectionContainer(messageElements[0])
         : messageElements[0];
       const blob = await renderMessageScreenshotSnapshotToBlob(snapshot, exportOptions, backgroundReference);
-      await writeScreenshotBlobToClipboardOrDownload(
+      const target = await writeScreenshotBlobToClipboardOrDownload(
         blob,
         isMultiMessageExport ? '对话长截图' : '消息截图'
       );
+      updateMessageScreenshotExportNotification(progressToast, 'success', {
+        target,
+        count: messageElements.length
+      });
     } catch (err) {
       console.error('生成图片过程中出错:', err);
+      updateMessageScreenshotExportNotification(progressToast, 'error', {
+        error: err,
+        count: messageElements.length
+      });
     } finally {
       if (snapshot?.cleanup) {
         snapshot.cleanup();
       }
+      setMessageScreenshotExporting(false);
       copyAsImageButton.innerHTML = originalText;
       syncCopyAsImageMenuLabel();
     }

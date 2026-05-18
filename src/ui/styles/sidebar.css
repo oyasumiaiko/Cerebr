@@ -1816,6 +1816,15 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     cursor: default;
 }
 
+.message-screenshot-selection-toolbar__button.is-busy {
+    opacity: 0.9;
+    cursor: progress;
+}
+
+.message-screenshot-selection-toolbar__button.is-busy .fa-spinner {
+    animation: rotate 1s linear infinite;
+}
+
 .message-screenshot-selection-toolbar__button--primary {
     color: #fff;
     background: var(--cerebr-highlight);
