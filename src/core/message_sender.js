@@ -2423,6 +2423,35 @@ export function createMessageSender(appContext) {
   }
 
   /**
+   * 将“只读的线程状态”补全为可写入消息历史和 DOM 的运行时上下文。
+   *
+   * 说明：
+   * - resolveActiveThreadContext 只负责确认当前确实处于有效线程；
+   * - 真正追加用户消息、AI 消息或 compact 状态节点前，必须带上 threadContainer，
+   *   否则 messageProcessor.appendMessage 会回落到主聊天容器；
+   * - 删除、取消 compact 或历史迁移后，annotation.lastMessageId 可能指向已不存在的节点，
+   *   这里统一修复，避免新的线程消息挂到断裂父节点下面。
+   *
+   * @param {Object|null} threadContext
+   * @returns {Object|null}
+   */
+  function prepareActiveThreadContextForAppend(threadContext) {
+    if (!threadContext || !threadContainer) return null;
+
+    const preparedContext = {
+      ...threadContext,
+      container: threadContainer
+    };
+    const repairedAnnotation = services.selectionThreadManager?.repairThreadAnnotation?.(preparedContext.threadId);
+    if (repairedAnnotation) {
+      preparedContext.annotation = repairedAnnotation;
+    }
+    preparedContext.rootMessageId = preparedContext.annotation?.rootMessageId || null;
+    preparedContext.lastMessageId = preparedContext.annotation?.lastMessageId || null;
+    return preparedContext;
+  }
+
+  /**
    * 线程消息的历史补丁字段（用于标记“该消息属于某条划词线程”）。
    * @param {Object|null} threadContext
    * @returns {Object|null}
@@ -5791,7 +5820,7 @@ export function createMessageSender(appContext) {
       throw new Error('当前配置不是 Responses API，无法执行 /compact。');
     }
 
-    const activeThreadContext = resolveActiveThreadContext();
+    const activeThreadContext = prepareActiveThreadContextForAppend(resolveActiveThreadContext());
     const conversationChain = resolveConversationChainForAttempt({
       attemptState: null,
       conversationSnapshot: null,
@@ -6561,7 +6590,7 @@ export function createMessageSender(appContext) {
           return { ok: false, keepInput: true };
         }
 
-        const activeThreadContext = resolveActiveThreadContext();
+        const activeThreadContext = prepareActiveThreadContextForAppend(resolveActiveThreadContext());
         const pendingMarkerResult = appendResponsesLocalCompactionMarker({
           text: RESPONSES_LOCAL_COMPACTION_PENDING_TEXT,
           historyPatch: buildResponsesLocalCompactionStatusHistoryPatch({
@@ -10172,8 +10201,8 @@ export function createMessageSender(appContext) {
     const isEffectivelyEmpty = isEmptyMessageRaw && !templateHasContent;
     if (isEffectivelyEmpty && !regenerateMode && !forceSendFullHistory) return;
 
-    const threadContextCandidate = resolveActiveThreadContext();
-    if (threadContextCandidate && threadContainer) {
+    const threadContextCandidate = prepareActiveThreadContextForAppend(resolveActiveThreadContext());
+    if (threadContextCandidate) {
       // 重新生成时，仅当目标消息属于当前线程才启用线程上下文
       let shouldUseThreadContext = true;
       if (regenerateMode) {
@@ -10188,14 +10217,6 @@ export function createMessageSender(appContext) {
 
       if (shouldUseThreadContext) {
         activeThreadContext = threadContextCandidate;
-        activeThreadContext.container = threadContainer;
-        // 线程内删除/重生成可能导致 lastMessageId 失效，发送前先修复注解链路。
-        const repairedAnnotation = services.selectionThreadManager?.repairThreadAnnotation?.(activeThreadContext.threadId);
-        if (repairedAnnotation) {
-          activeThreadContext.annotation = repairedAnnotation;
-        }
-        activeThreadContext.rootMessageId = activeThreadContext.annotation?.rootMessageId || null;
-        activeThreadContext.lastMessageId = activeThreadContext.annotation?.lastMessageId || null;
       }
     }
 

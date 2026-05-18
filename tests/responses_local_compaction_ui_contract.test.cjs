@@ -42,3 +42,24 @@ test('compact 成功态使用响应 usage 里的精确前后 token，非成功�
     /const attemptLabel = status\?\.totalAttempts\s*\? `第 \$\{status\.attempt\}\/\$\{status\.totalAttempts\} 次`\s*: `第 \$\{status\.attempt\} 次`;/ 
   );
 });
+
+test('/compact 在线程模式下写入线程容器并修复线程尾指针', async () => {
+  const messageSenderSource = await readWorkspaceFile('src/core/message_sender.js');
+
+  assert.match(
+    messageSenderSource,
+    /function prepareActiveThreadContextForAppend\(threadContext\) \{[\s\S]*container:\s*threadContainer[\s\S]*repairThreadAnnotation\?\.\(preparedContext\.threadId\)[\s\S]*preparedContext\.lastMessageId = preparedContext\.annotation\?\.lastMessageId \|\| null;/
+  );
+  assert.match(
+    messageSenderSource,
+    /const activeThreadContext = prepareActiveThreadContextForAppend\(resolveActiveThreadContext\(\)\);\s*const pendingMarkerResult = appendResponsesLocalCompactionMarker\(/
+  );
+  assert.match(
+    messageSenderSource,
+    /function resolveResponsesLocalCompactionInvocationContext\(\) \{[\s\S]*const activeThreadContext = prepareActiveThreadContextForAppend\(resolveActiveThreadContext\(\)\);[\s\S]*conversationChain = resolveConversationChainForAttempt\(/
+  );
+  assert.match(
+    messageSenderSource,
+    /container:\s*activeThreadContext\.container,\s*historyParentId,\s*preserveCurrentNode:\s*true,\s*historyPatch:\s*mergedHistoryPatch/
+  );
+});
