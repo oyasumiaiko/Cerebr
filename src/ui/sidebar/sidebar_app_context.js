@@ -938,9 +938,32 @@ export function registerSidebarUtilities(appContext) {
 
     const contextMenuManager = appContext.services.contextMenuManager;
     const messageSender = appContext.services.messageSender;
+    const chatHistoryManager = appContext.services.chatHistoryManager;
+    const historyNode = messageId
+      ? (chatHistoryManager?.chatHistory?.messages || []).find((node) => node?.id === messageId) || null
+      : null;
+    const isResponsesLocalCompactionMessage = !!(
+      messageElement.classList.contains('context-compaction-message')
+      || historyNode?.contextCompactionMarker
+      || historyNode?.responsesLocalCompactionStatus
+    );
+    const compactionState = String(
+      historyNode?.responsesLocalCompactionStatus?.state
+      || messageElement.dataset?.compactionState
+      || ''
+    ).trim().toLowerCase();
     const isPreResponseMessage = messageElement.classList.contains('assistant-pre-response')
       || messageElement.classList.contains('loading-message');
     const hasAbortableRequest = !!messageSender?.hasAbortableRequest?.(messageElement);
+
+    if (isResponsesLocalCompactionMessage && compactionState === 'pending' && messageId) {
+      // 删除一个正在运行的 compact marker 必须先中止对应请求。
+      // 否则请求完成后会因为目标节点已不存在而重新追加一个 compact marker，
+      // 用户看到的效果就不再是“这次压缩当作没发生”。
+      await messageSender?.cancelResponsesLocalCompaction?.(messageId);
+      contextMenuManager?.hideContextMenu();
+      return;
+    }
 
     if (isPreResponseMessage && hasAbortableRequest) {
       messageSender.abortCurrentRequest?.(messageElement);

@@ -189,6 +189,60 @@ export function createContextMenuManager(appContext) {
     return chatContainer;
   }
 
+  function isResponsesLocalCompactionNode(node) {
+    return !!(
+      node
+      && typeof node === 'object'
+      && (
+        node.contextCompactionMarker
+        || node.responsesLocalCompactionStatus
+      )
+    );
+  }
+
+  function resolveResponsesLocalCompactionMenuState(messageElement) {
+    if (!(messageElement instanceof HTMLElement)) {
+      return {
+        isCompaction: false,
+        state: '',
+        messageId: '',
+        node: null
+      };
+    }
+    const messageId = (messageElement.getAttribute('data-message-id') || '').trim();
+    const node = messageId ? findHistoryMessageById(messageId) : null;
+    const isCompaction = !!(
+      messageElement.classList.contains('context-compaction-message')
+      || isResponsesLocalCompactionNode(node)
+    );
+    if (!isCompaction) {
+      return {
+        isCompaction: false,
+        state: '',
+        messageId,
+        node
+      };
+    }
+
+    const statusState = typeof node?.responsesLocalCompactionStatus?.state === 'string'
+      ? node.responsesLocalCompactionStatus.state.trim().toLowerCase()
+      : '';
+    const elementState = typeof messageElement.dataset?.compactionState === 'string'
+      ? messageElement.dataset.compactionState.trim().toLowerCase()
+      : '';
+    const state = statusState || elementState || (node?.contextCompactionMarker ? 'success' : '');
+    return {
+      isCompaction: true,
+      state,
+      messageId,
+      node
+    };
+  }
+
+  function isResponsesLocalCompactionMessageElement(messageElement) {
+    return resolveResponsesLocalCompactionMenuState(messageElement).isCompaction;
+  }
+
   function getScreenshotSelectionContainers() {
     return [chatContainer, threadContainer].filter((container, index, list) => (
       container && list.indexOf(container) === index
@@ -199,6 +253,7 @@ export function createContextMenuManager(appContext) {
     if (!(messageElement instanceof HTMLElement)) return '';
     if (!messageElement.classList.contains('message')) return '';
     if (messageElement.classList.contains('loading-message')) return '';
+    if (isResponsesLocalCompactionMessageElement(messageElement)) return '';
     return (messageElement.getAttribute('data-message-id') || '').trim();
   }
 
@@ -211,6 +266,55 @@ export function createContextMenuManager(appContext) {
     text.textContent = label;
     item.appendChild(icon);
     item.appendChild(text);
+  }
+
+  function closeAndHideContextSubmenu(menuItem, submenu) {
+    if (menuItem instanceof HTMLElement) {
+      menuItem.style.display = 'none';
+    }
+    closeContextSubmenu(submenu, menuItem);
+  }
+
+  function applyResponsesLocalCompactionContextMenu(compactionMenuState) {
+    if (!compactionMenuState?.isCompaction) return false;
+
+    // compact marker 是一个历史边界，不是可复制/编辑/截图/分支的普通对话内容。
+    // 右键菜单只保留能改变该边界自身生命周期的动作，避免把状态分隔线误当成正文消息。
+    copyCodeButton.style.display = 'none';
+    currentCodeBlock = null;
+    copyMessageButton.style.display = 'none';
+    if (screenshotMenu) {
+      closeAndHideContextSubmenu(screenshotMenu, screenshotSubmenu);
+    }
+    if (editMessageButton) {
+      editMessageButton.style.display = 'none';
+    }
+    if (regenerateButton) {
+      closeAndHideContextSubmenu(regenerateButton, regenerateSubmenu);
+    }
+    if (insertMessageMenu) {
+      closeAndHideContextSubmenu(insertMessageMenu, insertMessageSubmenu);
+    }
+    if (forkConversationButton) {
+      forkConversationButton.classList.remove('disabled');
+      closeAndHideContextSubmenu(forkConversationButton, forkConversationSubmenu);
+    }
+    if (selectForImageButton) {
+      selectForImageButton.style.display = 'none';
+    }
+    if (copyAsImageButton) {
+      copyAsImageButton.style.display = 'none';
+    }
+
+    const isPending = compactionMenuState.state === 'pending';
+    stopUpdateButton.style.display = isPending ? 'flex' : 'none';
+    if (isPending) {
+      setContextMenuItemLabel(stopUpdateButton, 'far fa-stop', '取消压缩');
+    }
+    if (deleteMessageButton) {
+      deleteMessageButton.style.display = 'flex';
+    }
+    return true;
   }
 
   function getActiveScreenshotSelectionContainer(referenceElement = null) {
@@ -1064,15 +1168,21 @@ export function createContextMenuManager(appContext) {
 
     // 设置菜单位置
     contextMenu.style.display = 'block';
+    copyMessageButton.style.display = 'flex';
+    if (editMessageButton) editMessageButton.style.display = 'flex';
+    if (deleteMessageButton) deleteMessageButton.style.display = 'flex';
+    if (copyAsImageButton) copyAsImageButton.style.display = 'flex';
 
     // 获取点击的代码块元素
     const codeBlock = e.target.closest('pre code');
+    const compactionMenuState = resolveResponsesLocalCompactionMenuState(messageElement);
 
     // 根据消息状态显示或隐藏停止更新按钮
     // 除了当前消息为 updating 外，只要有任意 AI 消息处于 updating（包括“正在等待回复”的占位消息），也显示“停止更新”
     const hasUpdating = (container) => !!container?.querySelector?.('.ai-message.updating, .loading-message.updating');
     const anyUpdating = hasUpdating(chatContainer) || hasUpdating(threadContainer);
     const hasAbortableRequest = !!messageSender?.hasAbortableRequest?.(messageElement);
+    setContextMenuItemLabel(stopUpdateButton, 'far fa-stop', '停止更新');
     if (messageElement.classList.contains('updating') || anyUpdating || hasAbortableRequest) {
       stopUpdateButton.style.display = 'flex';
     } else {
@@ -1192,6 +1302,8 @@ export function createContextMenuManager(appContext) {
     } else {
       closeContextSubmenu(forkConversationSubmenu, forkConversationButton);
     }
+
+    applyResponsesLocalCompactionContextMenu(compactionMenuState);
 
     // 右键菜单的最终尺寸取决于上方各菜单项是否显示，因此必须在可见性全部更新后再定位。
     // 独立页会对 html 设置 zoom；这里统一走布局坐标，避免 clientX/clientY 直接写入 left/top 后偏移。
@@ -2253,7 +2365,12 @@ export function createContextMenuManager(appContext) {
     });
     // 修复：使用 messageSender.abortCurrentRequest()，避免未定义的 abortCurrentRequest 引发错误
     stopUpdateButton.addEventListener(MENU_ACTIVATE_EVENT, () => {
-      if (messageSender) messageSender.abortCurrentRequest(currentMessageElement);
+      const compactionMenuState = resolveResponsesLocalCompactionMenuState(currentMessageElement);
+      if (compactionMenuState.isCompaction && compactionMenuState.state === 'pending' && compactionMenuState.messageId) {
+        void messageSender?.cancelResponsesLocalCompaction?.(compactionMenuState.messageId);
+      } else if (messageSender) {
+        messageSender.abortCurrentRequest(currentMessageElement);
+      }
       hideContextMenu();
     });
     deleteMessageButton.addEventListener(MENU_ACTIVATE_EVENT, () => {

@@ -63,3 +63,33 @@ test('/compact 在线程模式下写入线程容器并修复线程尾指针', as
     /container:\s*activeThreadContext\.container,\s*historyParentId,\s*preserveCurrentNode:\s*true,\s*historyPatch:\s*mergedHistoryPatch/
   );
 });
+
+test('compact marker 右键菜单只保留生命周期动作，删除 pending marker 会取消请求', async () => {
+  const contextMenuSource = await readWorkspaceFile('src/ui/context_menu_manager.js');
+  const sidebarAppContextSource = await readWorkspaceFile('src/ui/sidebar/sidebar_app_context.js');
+
+  assert.match(
+    contextMenuSource,
+    /function resolveResponsesLocalCompactionMenuState\(messageElement\) \{[\s\S]*context-compaction-message[\s\S]*isResponsesLocalCompactionNode\(node\)[\s\S]*state/
+  );
+  assert.match(
+    contextMenuSource,
+    /function applyResponsesLocalCompactionContextMenu\(compactionMenuState\) \{[\s\S]*copyMessageButton\.style\.display = 'none';[\s\S]*closeAndHideContextSubmenu\(screenshotMenu, screenshotSubmenu\);[\s\S]*closeAndHideContextSubmenu\(regenerateButton, regenerateSubmenu\);[\s\S]*closeAndHideContextSubmenu\(insertMessageMenu, insertMessageSubmenu\);[\s\S]*closeAndHideContextSubmenu\(forkConversationButton, forkConversationSubmenu\);/
+  );
+  assert.match(
+    contextMenuSource,
+    /const isPending = compactionMenuState\.state === 'pending';[\s\S]*stopUpdateButton\.style\.display = isPending \? 'flex' : 'none';[\s\S]*setContextMenuItemLabel\(stopUpdateButton, 'far fa-stop', '取消压缩'\);/
+  );
+  assert.match(
+    contextMenuSource,
+    /if \(isResponsesLocalCompactionMessageElement\(messageElement\)\) return '';/
+  );
+  assert.match(
+    contextMenuSource,
+    /const compactionMenuState = resolveResponsesLocalCompactionMenuState\(currentMessageElement\);[\s\S]*messageSender\?\.cancelResponsesLocalCompaction\?\.\(compactionMenuState\.messageId\);/
+  );
+  assert.match(
+    sidebarAppContextSource,
+    /isResponsesLocalCompactionMessage[\s\S]*historyNode\?\.contextCompactionMarker[\s\S]*historyNode\?\.responsesLocalCompactionStatus[\s\S]*compactionState === 'pending'[\s\S]*messageSender\?\.cancelResponsesLocalCompaction\?\.\(messageId\);/
+  );
+});
