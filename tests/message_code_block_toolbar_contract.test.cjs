@@ -31,6 +31,7 @@ test('message_processor 会给 Markdown 代码块挂载语言标签、复制按�
   assert.match(source, /cerebr-markdown-code-block__copy/);
   assert.match(source, /navigator\.clipboard\?\.writeText/);
   assert.match(source, /cerebr-markdown-code-block__toggle/);
+  assert.match(source, /rootElement\.matches\('.*cerebr-markdown-code-block.*'\)/);
   assert.match(source, /subscribe\?\.\('collapseLongCodeBlocks'/);
 });
 
@@ -49,4 +50,21 @@ test('sidebar.css 已提供代码块工具条与 50vh 折叠体样式', async ()
   assert.match(source, /\.message \.cerebr-markdown-code-block__action/);
   assert.match(source, /\.message \.cerebr-markdown-code-block\.is-collapsible:not\(\.is-expanded\) \.cerebr-markdown-code-block__body/);
   assert.match(source, /max-height: 50vh;/);
+});
+
+test('sidebar.css 保证 Markdown 代码块换行并可横向滚动', async () => {
+  const source = await readWorkspaceFile('src/ui/styles/sidebar.css');
+
+  assert.match(
+    source,
+    /\.message \.cerebr-markdown-code-block__body\s*\{[\s\S]*overflow-x:\s*auto;[\s\S]*overflow-y:\s*hidden;[\s\S]*overscroll-behavior-x:\s*contain;[\s\S]*\}/
+  );
+  assert.match(
+    source,
+    /\.message \.cerebr-markdown-code-block\.is-collapsible\.is-expanded \.cerebr-markdown-code-block__body\s*\{[\s\S]*overflow-x:\s*auto;[\s\S]*overflow-y:\s*hidden;[\s\S]*\}/
+  );
+  assert.match(
+    source,
+    /\.message \.cerebr-markdown-code-block pre code\s*\{[\s\S]*white-space:\s*pre-wrap;[\s\S]*overflow:\s*visible;[\s\S]*\}/
+  );
 });

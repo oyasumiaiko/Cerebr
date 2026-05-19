@@ -5243,6 +5243,9 @@ export function createMessageProcessor(appContext) {
 
   function enhanceRenderedMarkdownCodeBlocks(rootElement) {
     if (!rootElement || typeof rootElement.querySelectorAll !== 'function') return;
+    if (typeof rootElement.matches === 'function' && rootElement.matches('.cerebr-markdown-code-block')) {
+      ensureMarkdownCodeBlockChrome(rootElement);
+    }
     rootElement.querySelectorAll('.cerebr-markdown-code-block').forEach((wrapper) => {
       ensureMarkdownCodeBlockChrome(wrapper);
     });

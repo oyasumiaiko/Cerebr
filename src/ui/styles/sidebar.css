@@ -4951,6 +4951,7 @@ input:checked + .slider::before {
 
 .message .cerebr-markdown-code-block {
     margin: 0.5em 0;
+    max-width: 100%;
     border-radius: 10px;
     border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 72%, transparent);
     background: color-mix(in srgb, var(--cerebr-code-bg) 82%, transparent);
@@ -5009,6 +5010,10 @@ input:checked + .slider::before {
 
 .message .cerebr-markdown-code-block__body {
     min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
 }
 
 .message .cerebr-markdown-code-block.is-collapsible:not(.is-expanded) .cerebr-markdown-code-block__body {
@@ -5019,7 +5024,9 @@ input:checked + .slider::before {
 
 .message .cerebr-markdown-code-block.is-collapsible.is-expanded .cerebr-markdown-code-block__body {
     max-height: none;
-    overflow: visible;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-x: contain;
 }
 
 .message .cerebr-markdown-code-block pre {
@@ -5034,7 +5041,7 @@ input:checked + .slider::before {
     border-radius: 0;
     background: transparent;
     color: inherit;
-    white-space: pre;
+    white-space: pre-wrap;
     word-break: normal;
     overflow-wrap: normal;
     overflow: visible;
