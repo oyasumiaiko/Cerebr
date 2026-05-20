@@ -71,7 +71,7 @@ test('草稿会话首条消息失败后，retry queue key 改绑到真实 conver
 
   assert.match(
     source,
-    /const resolveRetryQueueKey = \(conversationId = ''\) => \{[\s\S]*?isDraftConversationQueueKey\(normalizedConversationQueueKey\)[\s\S]*?resolveConversationQueueKey\(retryConversationId\)/,
+    /const resolveRetryQueueKey = \(conversationId = ''\) => \{[\s\S]*?const retryThreadId = getThreadIdForQueue\(normalizedConversationQueueKey\);[\s\S]*?isDraftConversationQueueKey\(normalizedConversationQueueKey\)[\s\S]*?resolveConversationQueueKey\(retryConversationId, \{ threadId: retryThreadId \}\)/,
     '首条消息落库后不能继续用 __draft_queue_* 执行手动或自动重试'
   );
   assert.match(

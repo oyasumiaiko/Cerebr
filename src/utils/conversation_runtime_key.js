@@ -13,10 +13,68 @@
  *   导致当前会话看不到，也不会按预期自动续发。
  */
 
+const THREAD_RUNTIME_KEY_SEPARATOR = '::thread:';
+
 function normalizeKey(value) {
   if (value == null) return '';
   const normalized = String(value).trim();
   return normalized || '';
+}
+
+/**
+ * 将运行态 key 拆成“会话基准 key + 线程 key”。
+ *
+ * 运行态 key 的粒度不是单纯会话，而是消息链：
+ * - 主线消息链直接使用 conversationId / draft key；
+ * - 划词线程消息链在会话 key 后追加 threadId。
+ *
+ * 这样同一条消息链之后的发送保持 FIFO，不同线程或主线互不阻塞。
+ *
+ * @param {string|null|undefined} value
+ * @returns {{ conversationKey: string, threadId: string }}
+ */
+export function parseConversationRuntimeKey(value) {
+  const normalized = normalizeKey(value);
+  if (!normalized) {
+    return { conversationKey: '', threadId: '' };
+  }
+
+  const separatorIndex = normalized.indexOf(THREAD_RUNTIME_KEY_SEPARATOR);
+  if (separatorIndex < 0) {
+    return { conversationKey: normalized, threadId: '' };
+  }
+
+  const conversationKey = normalizeKey(normalized.slice(0, separatorIndex));
+  const threadId = normalizeKey(normalized.slice(separatorIndex + THREAD_RUNTIME_KEY_SEPARATOR.length));
+  if (!conversationKey || !threadId) {
+    return { conversationKey: normalized, threadId: '' };
+  }
+  return { conversationKey, threadId };
+}
+
+/**
+ * 构造消息链运行态 key。
+ *
+ * @param {string|null|undefined} conversationKey
+ * @param {string|null|undefined} threadId
+ * @returns {string}
+ */
+export function buildConversationRuntimeKey(conversationKey, threadId = '') {
+  const base = parseConversationRuntimeKey(conversationKey).conversationKey;
+  const inheritedThreadId = parseConversationRuntimeKey(conversationKey).threadId;
+  const normalizedThreadId = normalizeKey(threadId) || inheritedThreadId;
+  if (!base) return '';
+  return normalizedThreadId
+    ? `${base}${THREAD_RUNTIME_KEY_SEPARATOR}${normalizedThreadId}`
+    : base;
+}
+
+export function getConversationKeyFromRuntimeKey(value) {
+  return parseConversationRuntimeKey(value).conversationKey;
+}
+
+export function getThreadIdFromRuntimeKey(value) {
+  return parseConversationRuntimeKey(value).threadId;
 }
 
 /**
@@ -26,7 +84,7 @@ function normalizeKey(value) {
  * @returns {boolean}
  */
 export function isDraftConversationQueueKey(value) {
-  return normalizeKey(value).startsWith('__draft_queue_');
+  return getConversationKeyFromRuntimeKey(value).startsWith('__draft_queue_');
 }
 
 /**
@@ -43,14 +101,17 @@ export function isDraftConversationQueueKey(value) {
  * @param {string|null|undefined} [options.fallbackConversationId]
  * @param {string|null|undefined} [options.activeConversationId]
  * @param {string|null|undefined} [options.activeDraftConversationQueueKey]
+ * @param {string|null|undefined} [options.threadId]
  * @returns {string}
  */
 export function resolveAttemptRuntimeConversationKey(options = {}) {
   const explicitRuntimeConversationKey = normalizeKey(options?.explicitRuntimeConversationKey);
+  const explicitRuntimeParts = parseConversationRuntimeKey(explicitRuntimeConversationKey);
   const boundConversationId = normalizeKey(options?.boundConversationId);
   const fallbackConversationId = normalizeKey(options?.fallbackConversationId);
   const activeConversationId = normalizeKey(options?.activeConversationId);
   const activeDraftConversationQueueKey = normalizeKey(options?.activeDraftConversationQueueKey);
+  const threadId = normalizeKey(options?.threadId) || explicitRuntimeParts.threadId;
 
   const hasBoundConversationId = !!(boundConversationId && !isDraftConversationQueueKey(boundConversationId));
   const hasExplicitRuntimeConversationKey = !!explicitRuntimeConversationKey;
@@ -62,8 +123,8 @@ export function resolveAttemptRuntimeConversationKey(options = {}) {
     return explicitRuntimeConversationKey;
   }
 
-  if (hasBoundConversationId) return boundConversationId;
-  if (fallbackConversationId) return fallbackConversationId;
-  if (activeConversationId) return activeConversationId;
-  return activeDraftConversationQueueKey;
+  if (hasBoundConversationId) return buildConversationRuntimeKey(boundConversationId, threadId);
+  if (fallbackConversationId) return buildConversationRuntimeKey(fallbackConversationId, threadId);
+  if (activeConversationId) return buildConversationRuntimeKey(activeConversationId, threadId);
+  return buildConversationRuntimeKey(activeDraftConversationQueueKey, threadId);
 }

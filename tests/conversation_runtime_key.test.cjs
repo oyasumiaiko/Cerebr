@@ -14,8 +14,28 @@ test('isDraftConversationQueueKey only matches draft queue keys', async () => {
   const { isDraftConversationQueueKey } = await loadConversationRuntimeKeyModule();
 
   assert.equal(isDraftConversationQueueKey('__draft_queue_1'), true);
+  assert.equal(isDraftConversationQueueKey('__draft_queue_1::thread:thread_a'), true);
   assert.equal(isDraftConversationQueueKey('conv_123'), false);
+  assert.equal(isDraftConversationQueueKey('conv_123::thread:thread_a'), false);
   assert.equal(isDraftConversationQueueKey(''), false);
+});
+
+test('conversation runtime key preserves thread scope separately from conversation id', async () => {
+  const {
+    buildConversationRuntimeKey,
+    getConversationKeyFromRuntimeKey,
+    getThreadIdFromRuntimeKey,
+    parseConversationRuntimeKey
+  } = await loadConversationRuntimeKeyModule();
+
+  assert.equal(buildConversationRuntimeKey('conv_123', 'thread_a'), 'conv_123::thread:thread_a');
+  assert.deepEqual(parseConversationRuntimeKey('conv_123::thread:thread_a'), {
+    conversationKey: 'conv_123',
+    threadId: 'thread_a'
+  });
+  assert.equal(getConversationKeyFromRuntimeKey('conv_123::thread:thread_a'), 'conv_123');
+  assert.equal(getThreadIdFromRuntimeKey('conv_123::thread:thread_a'), 'thread_a');
+  assert.equal(buildConversationRuntimeKey('conv_123::thread:thread_a'), 'conv_123::thread:thread_a');
 });
 
 test('resolveAttemptRuntimeConversationKey keeps explicit real runtime key when already bound to a real conversation', async () => {
@@ -36,6 +56,16 @@ test('resolveAttemptRuntimeConversationKey upgrades old draft runtime key to bou
     boundConversationId: 'conv_saved_7',
     activeDraftConversationQueueKey: '__draft_queue_7'
   }), 'conv_saved_7');
+});
+
+test('resolveAttemptRuntimeConversationKey upgrades draft thread key without losing message-chain scope', async () => {
+  const { resolveAttemptRuntimeConversationKey } = await loadConversationRuntimeKeyModule();
+
+  assert.equal(resolveAttemptRuntimeConversationKey({
+    explicitRuntimeConversationKey: '__draft_queue_7::thread:thread_a',
+    boundConversationId: 'conv_saved_7',
+    activeDraftConversationQueueKey: '__draft_queue_7'
+  }), 'conv_saved_7::thread:thread_a');
 });
 
 test('resolveAttemptRuntimeConversationKey keeps draft runtime key before the conversation is saved', async () => {

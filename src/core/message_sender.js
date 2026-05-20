@@ -39,6 +39,9 @@ import {
 import { attemptBelongsToConversationQueue } from '../utils/conversation_attempt_membership.js';
 import { selectLatestRunningAttemptForCurrentConversation } from '../utils/conversation_active_attempt_selector.js';
 import {
+  buildConversationRuntimeKey,
+  getConversationKeyFromRuntimeKey,
+  getThreadIdFromRuntimeKey,
   isDraftConversationQueueKey,
   resolveAttemptRuntimeConversationKey
 } from '../utils/conversation_runtime_key.js';
@@ -559,7 +562,7 @@ export function createMessageSender(appContext) {
       const jobs = Array.isArray(queueJobs) ? queueJobs : [];
       const hasDelayedRetry = jobs.some((job) => normalizeConversationQueuedTask(job).status === 'delayed_retry');
       if (!hasDelayedRetry) continue;
-      const boundId = normalizeConversationId(queueKey);
+      const boundId = getPersistedConversationIdForQueue(queueKey);
       if (!boundId || isDraftConversationQueueKey(boundId)) continue;
       ids.add(boundId);
     }
@@ -636,7 +639,8 @@ export function createMessageSender(appContext) {
         normalizeConversationId(currentConversationId)
         || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.())
       ),
-      activeDraftConversationQueueKey: getActiveDraftConversationQueueKey()
+      activeDraftConversationQueueKey: getActiveDraftConversationQueueKey(),
+      threadId: normalizeConversationId(attemptState?.threadContext?.threadId)
     });
   }
 
@@ -794,6 +798,7 @@ export function createMessageSender(appContext) {
       && nextRuntimeConversationKey
       && previousRuntimeConversationKey !== nextRuntimeConversationKey
     ) {
+      moveConversationSendQueue(previousRuntimeConversationKey, nextRuntimeConversationKey);
       migrateConversationRuntimeState(previousRuntimeConversationKey, nextRuntimeConversationKey);
     }
     attemptState.runtimeConversationKey = nextRuntimeConversationKey || previousRuntimeConversationKey || null;
@@ -2435,20 +2440,118 @@ export function createMessageSender(appContext) {
    * @param {Object|null} threadContext
    * @returns {Object|null}
    */
-  function prepareActiveThreadContextForAppend(threadContext) {
+  function prepareThreadContextForAppend(threadContext) {
     if (!threadContext || !threadContainer) return null;
 
     const preparedContext = {
       ...threadContext,
       container: threadContainer
     };
-    const repairedAnnotation = services.selectionThreadManager?.repairThreadAnnotation?.(preparedContext.threadId);
+    const repairedAnnotation = preparedContext.historyMessagesRef
+      ? null
+      : services.selectionThreadManager?.repairThreadAnnotation?.(preparedContext.threadId);
     if (repairedAnnotation) {
       preparedContext.annotation = repairedAnnotation;
     }
     preparedContext.rootMessageId = preparedContext.annotation?.rootMessageId || null;
     preparedContext.lastMessageId = preparedContext.annotation?.lastMessageId || null;
     return preparedContext;
+  }
+
+  function prepareActiveThreadContextForAppend(threadContext) {
+    return prepareThreadContextForAppend(threadContext);
+  }
+
+  function findThreadAnnotationInMessages(messages, threadId) {
+    const normalizedThreadId = normalizeConversationId(threadId);
+    const list = Array.isArray(messages) ? messages : [];
+    if (!normalizedThreadId || list.length === 0) return null;
+
+    for (const node of list) {
+      const annotations = Array.isArray(node?.threadAnnotations) ? node.threadAnnotations : [];
+      const found = annotations.find((item) => item?.id === normalizedThreadId);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function normalizeThreadContextSnapshot(snapshot) {
+    const source = (snapshot && typeof snapshot === 'object') ? snapshot : {};
+    const threadId = normalizeConversationId(source.threadId);
+    if (!threadId) return null;
+    return {
+      threadId,
+      anchorMessageId: normalizeConversationId(source.anchorMessageId),
+      selectionText: typeof source.selectionText === 'string' ? source.selectionText : '',
+      rootMessageId: normalizeConversationId(source.rootMessageId),
+      lastMessageId: normalizeConversationId(source.lastMessageId),
+      matchIndex: Number.isFinite(Number(source.matchIndex)) ? Number(source.matchIndex) : 0
+    };
+  }
+
+  function buildThreadContextSnapshot(threadContext) {
+    if (!threadContext?.threadId) return null;
+    return {
+      threadId: threadContext.threadId,
+      anchorMessageId: threadContext.anchorMessageId || threadContext.annotation?.anchorMessageId || '',
+      selectionText: threadContext.selectionText || threadContext.annotation?.selectionText || '',
+      rootMessageId: threadContext.rootMessageId || threadContext.annotation?.rootMessageId || '',
+      lastMessageId: threadContext.lastMessageId || threadContext.annotation?.lastMessageId || '',
+      matchIndex: Number.isFinite(Number(threadContext.annotation?.matchIndex))
+        ? Number(threadContext.annotation.matchIndex)
+        : 0
+    };
+  }
+
+  /**
+   * 从入队时冻结的 threadId 还原消息链上下文。
+   *
+   * 注意这里不要求该线程当前可见：同一会话内线程 A 后台生成时，
+   * 用户可能已经切到线程 B；此时仍必须写入线程 A 的历史链，不能
+   * 读取“当前激活线程”来决定 parentId。
+   */
+  function resolveThreadContextFromSnapshot(snapshot, options = {}) {
+    const normalizedSnapshot = normalizeThreadContextSnapshot(snapshot);
+    if (!normalizedSnapshot) return null;
+
+    const explicitMessages = Array.isArray(options?.historyMessages)
+      ? options.historyMessages
+      : null;
+    const historyMessages = explicitMessages || chatHistoryManager?.chatHistory?.messages || [];
+    const manager = services.selectionThreadManager;
+    const managerInfo = manager?.findThreadById?.(normalizedSnapshot.threadId) || null;
+    const repairedAnnotation = manager?.repairThreadAnnotation?.(normalizedSnapshot.threadId) || null;
+    const annotationFromMessages = findThreadAnnotationInMessages(historyMessages, normalizedSnapshot.threadId);
+    const annotation = (explicitMessages ? annotationFromMessages : null)
+      || repairedAnnotation
+      || managerInfo?.annotation
+      || annotationFromMessages
+      || {
+        id: normalizedSnapshot.threadId,
+        anchorMessageId: normalizedSnapshot.anchorMessageId,
+        selectionText: normalizedSnapshot.selectionText,
+        matchIndex: normalizedSnapshot.matchIndex,
+        rootMessageId: normalizedSnapshot.rootMessageId || null,
+        lastMessageId: normalizedSnapshot.lastMessageId || null
+      };
+
+    const anchorMessageId = normalizeConversationId(
+      normalizedSnapshot.anchorMessageId
+      || annotation.anchorMessageId
+      || managerInfo?.anchorMessageId
+    );
+    if (!anchorMessageId) return null;
+
+    const anchorNode = historyMessages.find((node) => node?.id === anchorMessageId) || null;
+    if (!anchorNode) return null;
+
+    return {
+      threadId: normalizedSnapshot.threadId,
+      anchorMessageId,
+      selectionText: annotation.selectionText || normalizedSnapshot.selectionText || '',
+      annotation,
+      historyMessagesRef: explicitMessages
+    };
   }
 
   /**
@@ -2480,6 +2583,36 @@ export function createMessageSender(appContext) {
 
     const selectionText = threadContext.selectionText || '';
     const content = selectionText ? `> ${selectionText}` : '>';
+    const activeHistoryMessages = chatHistoryManager?.chatHistory?.messages || [];
+    const detachedHistoryMessages = Array.isArray(threadContext.historyMessagesRef)
+      && threadContext.historyMessagesRef !== activeHistoryMessages
+      ? threadContext.historyMessagesRef
+      : null;
+    if (detachedHistoryMessages) {
+      const node = createUserHistoryNodeForDetachedList({
+        content,
+        imagesHTML: '',
+        historyParentId: threadContext.anchorMessageId,
+        historyPatch: {
+          threadId: threadContext.threadId,
+          threadAnchorId: threadContext.anchorMessageId,
+          threadSelectionText: threadContext.selectionText || '',
+          threadHiddenSelection: true,
+          threadMatchIndex: Number.isFinite(threadContext.annotation.matchIndex)
+            ? threadContext.annotation.matchIndex
+            : 0
+        },
+        meta: null,
+        historyMessagesRef: detachedHistoryMessages
+      });
+      if (!node) return null;
+      threadContext.annotation.rootMessageId = node.id;
+      threadContext.annotation.lastMessageId = node.id;
+      threadContext.rootMessageId = node.id;
+      threadContext.lastMessageId = node.id;
+      return node.id;
+    }
+
     const node = chatHistoryManager.addMessageToTreeWithOptions(
       'user',
       content,
@@ -2525,7 +2658,9 @@ export function createMessageSender(appContext) {
    */
   function buildThreadConversationChain(threadContext, lastMessageIdOverride = null) {
     if (!threadContext) return getCurrentConversationChain();
-    const nodes = chatHistoryManager?.chatHistory?.messages || [];
+    const nodes = Array.isArray(threadContext.historyMessagesRef)
+      ? threadContext.historyMessagesRef
+      : (chatHistoryManager?.chatHistory?.messages || []);
     const findNode = (id) => nodes.find(m => m.id === id) || null;
 
     const mainChain = [];
@@ -2635,23 +2770,57 @@ export function createMessageSender(appContext) {
     return activeDraftConversationQueueKey;
   }
 
-  function resolveConversationQueueKey(conversationId) {
+  function resolveConversationQueueKey(conversationId, options = {}) {
     const normalizedId = normalizeConversationId(conversationId);
-    return normalizedId || getActiveDraftConversationQueueKey();
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const requestedThreadId = normalizeConversationId(normalizedOptions.threadId);
+    if (normalizedId) {
+      const baseKey = getConversationKeyFromRuntimeKey(normalizedId) || normalizedId;
+      const inheritedThreadId = getThreadIdFromRuntimeKey(normalizedId);
+      return buildConversationRuntimeKey(baseKey, requestedThreadId || inheritedThreadId);
+    }
+    return buildConversationRuntimeKey(getActiveDraftConversationQueueKey(), requestedThreadId);
   }
 
-  function getCurrentActiveConversationQueueKey() {
+  function getConversationKeyForQueue(queueKey) {
+    return getConversationKeyFromRuntimeKey(resolveConversationQueueKey(queueKey));
+  }
+
+  function getPersistedConversationIdForQueue(queueKey) {
+    const conversationKey = getConversationKeyForQueue(queueKey);
+    return conversationKey && !isDraftConversationQueueKey(conversationKey)
+      ? conversationKey
+      : '';
+  }
+
+  function getThreadIdForQueue(queueKey) {
+    return getThreadIdFromRuntimeKey(resolveConversationQueueKey(queueKey));
+  }
+
+  function getActiveThreadIdForQueueScope() {
+    const threadManager = services.selectionThreadManager;
+    if (!threadManager?.isThreadModeActive?.()) return '';
+    return normalizeConversationId(threadManager.getActiveThreadId?.());
+  }
+
+  function getCurrentActiveConversationQueueKey(options = {}) {
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
     const activeId = normalizeConversationId(currentConversationId)
       || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
+    const activeThreadId = normalizeConversationId(normalizedOptions.activeThreadContext?.threadId)
+      || normalizeConversationId(normalizedOptions.threadId)
+      || getActiveThreadIdForQueueScope();
+    const activeRuntimeKey = resolveConversationQueueKey(activeId, { threadId: activeThreadId });
     const preferredAttempt = selectLatestRunningAttemptForCurrentConversation(
       Array.from(activeAttempts.values()),
-      activeId
+      activeId,
+      activeRuntimeKey
     );
     if (preferredAttempt) {
       const attemptQueueKey = getAttemptRuntimeConversationKey(preferredAttempt, activeId || '');
       if (attemptQueueKey) return attemptQueueKey;
     }
-    return resolveConversationQueueKey(activeId);
+    return activeRuntimeKey;
   }
 
   function normalizeConversationHistoryRevision(value) {
@@ -2664,7 +2833,8 @@ export function createMessageSender(appContext) {
     if (overrideValue !== undefined) {
       return normalizeConversationHistoryRevision(overrideValue);
     }
-    const normalizedConversationId = normalizeConversationId(conversationId);
+    const normalizedConversationId = getPersistedConversationIdForQueue(conversationId)
+      || normalizeConversationId(conversationId);
     const activeConversationId = normalizeConversationId(currentConversationId)
       || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
     if (!normalizedConversationId || normalizedConversationId === activeConversationId) {
@@ -4022,7 +4192,7 @@ export function createMessageSender(appContext) {
     const targetQueue = ensureConversationSendQueue(normalizedToKey);
     targetQueue.push(...fromQueue.map((task) => normalizeConversationQueuedTask({
       ...cloneDataSafely(task),
-      conversationId: normalizeConversationId(normalizedToKey) || normalizeConversationId(task?.conversationId)
+      conversationId: getPersistedConversationIdForQueue(normalizedToKey) || normalizeConversationId(task?.conversationId)
     })));
     conversationSendQueues.delete(normalizedFromKey);
     if (Array.isArray(fromMutations) && fromMutations.length > 0) {
@@ -4093,8 +4263,11 @@ export function createMessageSender(appContext) {
         __conversationRetryPolicy: cloneDataSafely(nextTask.retryPolicy),
         __autoRetryAttempt: nextTask.retryCount
       };
-      const queueConversationId = normalizeConversationId(normalizedQueueKey);
-      const shouldDispatchInBackground = !!(queueConversationId && !isConversationQueueKeyActive(normalizedQueueKey));
+      const queueConversationId = getPersistedConversationIdForQueue(normalizedQueueKey);
+      const shouldDispatchInBackground = !!(
+        queueConversationId
+        && !isConversationIdCurrentlyActive(queueConversationId)
+      );
       if (shouldDispatchInBackground) {
         const conversationSnapshot = await chatHistoryUI?.getConversationSnapshotById?.(queueConversationId);
         if (!conversationSnapshot || !Array.isArray(conversationSnapshot.messages)) {
@@ -4672,9 +4845,11 @@ export function createMessageSender(appContext) {
   function getLatestRunningAttemptForCurrentConversationUi() {
     const activeId = normalizeConversationId(currentConversationId)
       || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
+    const activeRuntimeKey = getCurrentActiveConversationQueueKey();
     return selectLatestRunningAttemptForCurrentConversation(
       Array.from(activeAttempts.values()),
-      activeId
+      activeId,
+      activeRuntimeKey
     );
   }
 
@@ -4902,7 +5077,7 @@ export function createMessageSender(appContext) {
     }
     const restoredJobs = buildRestoredQueueJobsFromPendingSteers(steersToRestore, {
       createJobId: createQueuedConversationTaskId,
-      conversationId: normalizeConversationId(attemptState.boundConversationId) || normalizeConversationId(runtimeConversationKey),
+      conversationId: normalizeConversationId(attemptState.boundConversationId) || getPersistedConversationIdForQueue(runtimeConversationKey),
       conversationRevisionAtEnqueue: attemptState.historyConversationRevision,
       retryPolicy: buildDefaultConversationJobRetryPolicy('append_user_message'),
       status: restoreDisposition.status,
@@ -4976,7 +5151,7 @@ export function createMessageSender(appContext) {
       type: 'edit_message',
       createdAt: Date.now(),
       apply: async (effectiveQueueKey = targetQueueKey) => {
-        const effectiveConversationId = normalizeConversationId(effectiveQueueKey) || targetConversationId;
+        const effectiveConversationId = getPersistedConversationIdForQueue(effectiveQueueKey) || targetConversationId;
         const context = await loadConversationMutationContext(effectiveConversationId);
         const node = Array.isArray(context.chatHistory?.messages)
           ? context.chatHistory.messages.find((item) => item?.id === normalizedMessageId)
@@ -5035,7 +5210,7 @@ export function createMessageSender(appContext) {
       type: 'delete_message',
       createdAt: Date.now(),
       apply: async (effectiveQueueKey = targetQueueKey) => {
-        const effectiveConversationId = normalizeConversationId(effectiveQueueKey) || targetConversationId;
+        const effectiveConversationId = getPersistedConversationIdForQueue(effectiveQueueKey) || targetConversationId;
         const context = await loadConversationMutationContext(effectiveConversationId);
         const node = Array.isArray(context.chatHistory?.messages)
           ? context.chatHistory.messages.find((item) => item?.id === normalizedMessageId)
@@ -5076,7 +5251,7 @@ export function createMessageSender(appContext) {
       type: 'regenerate_message',
       createdAt: Date.now(),
       apply: async (effectiveQueueKey = targetQueueKey) => {
-        const effectiveConversationId = normalizeConversationId(effectiveQueueKey) || targetConversationId;
+        const effectiveConversationId = getPersistedConversationIdForQueue(effectiveQueueKey) || targetConversationId;
         const context = await loadConversationMutationContext(effectiveConversationId);
         const nextRevision = normalizeConversationHistoryRevision(context.chatHistory?.conversationRevision) + 1;
         context.chatHistory.conversationRevision = nextRevision;
@@ -10056,7 +10231,8 @@ export function createMessageSender(appContext) {
       __conversationJobKind = '',
       __conversationQueueKey = '',
       __conversationRevisionAtStart = null,
-      __conversationRetryPolicy = null
+      __conversationRetryPolicy = null,
+      __threadContextSnapshot = null
     } = options;
 
     const conversationApiInfo = (typeof chatHistoryUI?.resolveActiveConversationApiConfig === 'function')
@@ -10201,7 +10377,13 @@ export function createMessageSender(appContext) {
     const isEffectivelyEmpty = isEmptyMessageRaw && !templateHasContent;
     if (isEffectivelyEmpty && !regenerateMode && !forceSendFullHistory) return;
 
-    const threadContextCandidate = prepareActiveThreadContextForAppend(resolveActiveThreadContext());
+    const queuedThreadContextCandidate = prepareThreadContextForAppend(
+      resolveThreadContextFromSnapshot(__threadContextSnapshot, {
+        historyMessages: Array.isArray(historyMessagesSnapshot) ? historyMessagesSnapshot : null
+      })
+    );
+    const threadContextCandidate = queuedThreadContextCandidate
+      || prepareActiveThreadContextForAppend(resolveActiveThreadContext());
     if (threadContextCandidate) {
       // 重新生成时，仅当目标消息属于当前线程才启用线程上下文
       let shouldUseThreadContext = true;
@@ -10490,22 +10672,48 @@ export function createMessageSender(appContext) {
             const historyPatch = (threadHistoryPatch || preprocessHistoryPatch)
               ? { ...(threadHistoryPatch || {}), ...(preprocessHistoryPatch || {}) }
               : null;
-            userMessageDiv = messageProcessor.appendMessage(
-              messageTextForHistory,
-              'user',
-              false,
-              null,
-              resolvedInputImagesHtml,
-              null,
-              null,
-              historyMeta,
-              {
-                container: activeThreadContext.container,
-                historyParentId,
-                preserveCurrentNode: true,
-                historyPatch
-              }
+            const activeHistoryMessages = chatHistoryManager?.chatHistory?.messages || [];
+            const threadHistoryMessages = Array.isArray(activeThreadContext.historyMessagesRef)
+              ? activeThreadContext.historyMessagesRef
+              : activeHistoryMessages;
+            const shouldWriteThreadUserHistoryOnly = (
+              !isThreadUiActive(activeThreadContext)
+              || threadHistoryMessages !== activeHistoryMessages
             );
+
+            if (shouldWriteThreadUserHistoryOnly) {
+              detachedUserMessageNode = createUserHistoryNodeForDetachedList({
+                content: messageTextForHistory,
+                imagesHTML: resolvedInputImagesHtml,
+                historyParentId,
+                historyPatch,
+                meta: historyMeta,
+                historyMessagesRef: threadHistoryMessages,
+                pageMeta: pageContentSnapshot || buildCurrentPageMetaSnapshot()
+              });
+              const userMessageId = detachedUserMessageNode?.id || '';
+              if (userMessageId) {
+                activeThreadContext.userMessageId = userMessageId;
+                updateThreadLastMessage(activeThreadContext, userMessageId);
+              }
+            } else {
+              userMessageDiv = messageProcessor.appendMessage(
+                messageTextForHistory,
+                'user',
+                false,
+                null,
+                resolvedInputImagesHtml,
+                null,
+                null,
+                historyMeta,
+                {
+                  container: activeThreadContext.container,
+                  historyParentId,
+                  preserveCurrentNode: true,
+                  historyPatch
+                }
+              );
+            }
 
             if (userMessageDiv) {
               const userMessageId = userMessageDiv.getAttribute('data-message-id') || '';
@@ -11051,6 +11259,7 @@ export function createMessageSender(appContext) {
         aspectRatioOverride,
         __skipClearInputs: true,
         __skipUserMessagePreprocess: skipNextPreprocess,
+        __threadContextSnapshot: buildThreadContextSnapshot(activeThreadContext),
         // 透传外部策略决定的API（若有）
         resolvedApiConfig,
         api
@@ -11083,8 +11292,9 @@ export function createMessageSender(appContext) {
       );
       const resolveRetryQueueKey = (conversationId = '') => {
         const retryConversationId = normalizeConversationId(conversationId) || resolveRetryConversationId();
+        const retryThreadId = getThreadIdForQueue(normalizedConversationQueueKey);
         if (isDraftConversationQueueKey(normalizedConversationQueueKey)) {
-          return resolveConversationQueueKey(retryConversationId) || normalizedConversationQueueKey;
+          return resolveConversationQueueKey(retryConversationId, { threadId: retryThreadId }) || normalizedConversationQueueKey;
         }
         return normalizedConversationQueueKey || retryConversationId;
       };
@@ -11581,12 +11791,20 @@ export function createMessageSender(appContext) {
       singleOpts.aspectRatioOverride = aspectRatio;
     }
 
+    const activeThreadContextForSend = prepareActiveThreadContextForAppend(resolveActiveThreadContext());
+    const activeThreadSnapshotForSend = buildThreadContextSnapshot(activeThreadContextForSend);
+    if (activeThreadSnapshotForSend) {
+      singleOpts.__threadContextSnapshot = activeThreadSnapshotForSend;
+    }
+
     const queueSetting = settingsManager?.getSetting?.('queueCurrentConversationMessages');
     if (typeof queueSetting === 'boolean') {
       queueCurrentConversationMessages = queueSetting;
     }
 
-    const currentConversationQueueKey = getCurrentActiveConversationQueueKey();
+    const currentConversationQueueKey = getCurrentActiveConversationQueueKey({
+      activeThreadContext: activeThreadContextForSend
+    });
     const currentConversationIdForSend = normalizeConversationId(currentConversationId)
       || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
     const hasPendingWorkInCurrentConversation = hasPendingWorkForConversationQueue(currentConversationQueueKey);

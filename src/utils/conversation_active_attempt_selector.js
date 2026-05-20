@@ -20,6 +20,10 @@ function normalizeConversationId(value) {
   return normalized || '';
 }
 
+function hasThreadScopedRuntimeKey(value) {
+  return normalizeConversationId(value).includes('::thread:');
+}
+
 function getStartedAt(attempt) {
   const numeric = Number(attempt?.startedAt);
   return Number.isFinite(numeric) ? numeric : 0;
@@ -33,15 +37,36 @@ function selectLatestAttempt(attempts) {
     .sort((left, right) => getStartedAt(right) - getStartedAt(left))[0] || null;
 }
 
-export function selectLatestRunningAttemptForCurrentConversation(attempts, currentConversationId = '') {
+export function selectLatestRunningAttemptForCurrentConversation(
+  attempts,
+  currentConversationId = '',
+  currentRuntimeConversationKey = ''
+) {
   const list = Array.isArray(attempts)
     ? attempts.filter((attempt) => attempt && attempt.finished !== true)
     : [];
   if (list.length <= 0) return null;
 
   const normalizedCurrentConversationId = normalizeConversationId(currentConversationId);
+  const normalizedCurrentRuntimeKey = normalizeConversationId(currentRuntimeConversationKey);
+  if (normalizedCurrentRuntimeKey) {
+    const exactRuntimeMatches = list.filter((attempt) => (
+      normalizeConversationId(attempt?.runtimeConversationKey) === normalizedCurrentRuntimeKey
+    ));
+    if (exactRuntimeMatches.length > 0) {
+      return selectLatestAttempt(exactRuntimeMatches);
+    }
+
+    // 当前 UI 处在线程消息链时，不能退回到“同会话任意 attempt”。
+    // 否则线程 A 正在生成时，线程 B 会被误判成同一条链并进入 queue。
+    if (hasThreadScopedRuntimeKey(normalizedCurrentRuntimeKey)) {
+      return null;
+    }
+  }
+
   const exactBoundMatches = list.filter((attempt) => (
     normalizeConversationId(attempt?.boundConversationId) === normalizedCurrentConversationId
+    && !hasThreadScopedRuntimeKey(attempt?.runtimeConversationKey)
   ));
   if (exactBoundMatches.length > 0) {
     return selectLatestAttempt(exactBoundMatches);

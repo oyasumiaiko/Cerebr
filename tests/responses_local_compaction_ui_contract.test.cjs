@@ -48,7 +48,7 @@ test('/compact 在线程模式下写入线程容器并修复线程尾指针', as
 
   assert.match(
     messageSenderSource,
-    /function prepareActiveThreadContextForAppend\(threadContext\) \{[\s\S]*container:\s*threadContainer[\s\S]*repairThreadAnnotation\?\.\(preparedContext\.threadId\)[\s\S]*preparedContext\.lastMessageId = preparedContext\.annotation\?\.lastMessageId \|\| null;/
+    /function prepareThreadContextForAppend\(threadContext\) \{[\s\S]*container:\s*threadContainer[\s\S]*repairThreadAnnotation\?\.\(preparedContext\.threadId\)[\s\S]*preparedContext\.lastMessageId = preparedContext\.annotation\?\.lastMessageId \|\| null;[\s\S]*function prepareActiveThreadContextForAppend\(threadContext\) \{\s*return prepareThreadContextForAppend\(threadContext\);\s*\}/
   );
   assert.match(
     messageSenderSource,

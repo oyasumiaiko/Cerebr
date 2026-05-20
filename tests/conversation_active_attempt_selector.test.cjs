@@ -25,6 +25,50 @@ test('selectLatestRunningAttemptForCurrentConversation 优先返回当前会话�
   assert.equal(selected?.id, 'attempt_new');
 });
 
+test('selectLatestRunningAttemptForCurrentConversation 优先按当前消息链 runtime key 精确匹配', async () => {
+  const { selectLatestRunningAttemptForCurrentConversation } = await loadConversationActiveAttemptSelectorModule();
+
+  const selected = selectLatestRunningAttemptForCurrentConversation(
+    [
+      { id: 'attempt_thread_a', boundConversationId: 'conv_a', runtimeConversationKey: 'conv_a::thread:thread_a', startedAt: 3000, finished: false },
+      { id: 'attempt_thread_b', boundConversationId: 'conv_a', runtimeConversationKey: 'conv_a::thread:thread_b', startedAt: 2000, finished: false }
+    ],
+    'conv_a',
+    'conv_a::thread:thread_b'
+  );
+
+  assert.equal(selected?.id, 'attempt_thread_b');
+});
+
+test('selectLatestRunningAttemptForCurrentConversation 在线程消息链中不会退回同会话其它线程', async () => {
+  const { selectLatestRunningAttemptForCurrentConversation } = await loadConversationActiveAttemptSelectorModule();
+
+  const selected = selectLatestRunningAttemptForCurrentConversation(
+    [
+      { id: 'attempt_thread_a', boundConversationId: 'conv_a', runtimeConversationKey: 'conv_a::thread:thread_a', startedAt: 3000, finished: false }
+    ],
+    'conv_a',
+    'conv_a::thread:thread_b'
+  );
+
+  assert.equal(selected, null);
+});
+
+test('selectLatestRunningAttemptForCurrentConversation 主线不会把线程 attempt 当作当前 attempt', async () => {
+  const { selectLatestRunningAttemptForCurrentConversation } = await loadConversationActiveAttemptSelectorModule();
+
+  const selected = selectLatestRunningAttemptForCurrentConversation(
+    [
+      { id: 'attempt_thread_a', boundConversationId: 'conv_a', runtimeConversationKey: 'conv_a::thread:thread_a', startedAt: 3000, finished: false },
+      { id: 'attempt_main', boundConversationId: 'conv_a', runtimeConversationKey: 'conv_a', startedAt: 1000, finished: false }
+    ],
+    'conv_a',
+    'conv_a'
+  );
+
+  assert.equal(selected?.id, 'attempt_main');
+});
+
 test('selectLatestRunningAttemptForCurrentConversation 在当前会话已存在但尚未绑定时接受唯一未绑定 attempt', async () => {
   const { selectLatestRunningAttemptForCurrentConversation } = await loadConversationActiveAttemptSelectorModule();
 
