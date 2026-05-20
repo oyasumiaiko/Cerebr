@@ -11387,6 +11387,54 @@ body.chat-empty .empty-state-content {
     background: #ffffff;
   }
 
+  .conversation-document-html-fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 2147483647;
+    display: flex;
+    flex-direction: column;
+    width: 100vw;
+    height: 100vh;
+    background: #ffffff;
+    color: #111111;
+  }
+
+  .conversation-document-html-fullscreen:fullscreen {
+    width: 100vw;
+    height: 100vh;
+  }
+
+  .conversation-document-html-fullscreen__toolbar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 42px;
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(15, 23, 42, 0.14);
+    background: rgba(255, 255, 255, 0.96);
+    color: #111827;
+    font-size: 12px;
+  }
+
+  .conversation-document-html-fullscreen__title {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+  }
+
+  .conversation-document-html-fullscreen__frame {
+    display: block;
+    flex: 1 1 auto;
+    width: 100%;
+    min-height: 0;
+    border: 0;
+    background: #ffffff;
+  }
+
   .conversation-document-card__content--code {
     white-space: pre;
     overflow-x: auto;

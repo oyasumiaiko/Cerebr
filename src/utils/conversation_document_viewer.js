@@ -23,6 +23,14 @@ import {
   normalizeConversationDocumentHrefPath
 } from '../agent_tools/virtual_file_io/index.js';
 
+const HTML_PREVIEW_RENDER_MESSAGE = 'CEREBR_HTML_PREVIEW_RENDER';
+const HTML_PREVIEW_READY_MESSAGE = 'CEREBR_HTML_PREVIEW_READY';
+const HTML_PREVIEW_RENDERED_MESSAGE = 'CEREBR_HTML_PREVIEW_RENDERED';
+const HTML_PREVIEW_SANDBOX_FRAME_URL = new URL(
+  '../ui/html_preview_sandbox/html_preview_sandbox.html',
+  import.meta.url
+).toString();
+
 function normalizeViewerString(value) {
   return (typeof value === 'string' || typeof value === 'number')
     ? String(value).trim()
@@ -65,6 +73,16 @@ function buildHtmlPreviewModeDescriptor(mode) {
   return {
     iconClass: 'fa-solid fa-file-lines',
     label: '纯文本'
+  };
+}
+
+function createHtmlPreviewRenderPayload({ content = '', path = '', title = '' } = {}) {
+  return {
+    type: HTML_PREVIEW_RENDER_MESSAGE,
+    requestId: `html_preview_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+    html: typeof content === 'string' ? content : '',
+    path: normalizeViewerString(path),
+    title: normalizeViewerString(title)
   };
 }
 
@@ -217,7 +235,8 @@ export function createConversationDocumentViewer(options = {}) {
         refs: {
           meta: null,
           body: null,
-          modeButton: null
+          modeButton: null,
+          htmlFullscreenButton: null
         }
       };
       conversationDocumentCardState.set(card, state);
@@ -289,6 +308,15 @@ export function createConversationDocumentViewer(options = {}) {
     });
   }
 
+  function syncConversationDocumentHtmlFullscreenButton(card) {
+    const state = getConversationDocumentCardState(card);
+    const button = state.refs.htmlFullscreenButton;
+    if (!button) return;
+    const isHtmlFile = isConversationDocumentHtmlPreviewPath(card?.dataset?.documentPath || '');
+    button.hidden = !isHtmlFile;
+    button.disabled = !isHtmlFile;
+  }
+
   function renderPlainContent(content) {
     const pre = document.createElement('pre');
     pre.className = 'conversation-document-card__content conversation-document-card__content--plain';
@@ -308,19 +336,50 @@ export function createConversationDocumentViewer(options = {}) {
     return container;
   }
 
+  function createHtmlPreviewSandboxFrame({ content = '', path = '', title = '', className = '' } = {}) {
+    const frame = document.createElement('iframe');
+    frame.className = className || 'conversation-document-card__html-frame';
+    frame.title = `${title || path || 'HTML 文件'} 预览`;
+    frame.setAttribute('referrerpolicy', 'no-referrer');
+    frame.setAttribute('allow', 'fullscreen');
+
+    const payload = createHtmlPreviewRenderPayload({ content, path, title });
+    const cleanupMessageListener = () => {
+      window.removeEventListener('message', handleSandboxMessage);
+    };
+    const postRenderPayload = () => {
+      try {
+        frame.contentWindow?.postMessage(payload, '*');
+      } catch (_) {}
+    };
+    const handleSandboxMessage = (event) => {
+      if (event.source !== frame.contentWindow) return;
+      if (!event.data || typeof event.data !== 'object') return;
+      if (event.data.source !== 'cerebr-html-preview-sandbox') return;
+      if (event.data.type === HTML_PREVIEW_READY_MESSAGE) {
+        postRenderPayload();
+        return;
+      }
+      if (event.data.type === HTML_PREVIEW_RENDERED_MESSAGE && event.data.requestId === payload.requestId) {
+        cleanupMessageListener();
+      }
+    };
+    window.addEventListener('message', handleSandboxMessage);
+    frame.addEventListener('load', postRenderPayload);
+    frame.src = HTML_PREVIEW_SANDBOX_FRAME_URL;
+    return frame;
+  }
+
   function renderHtmlPreviewContent(content, path) {
     const container = document.createElement('div');
     container.className = 'conversation-document-card__content conversation-document-card__content--html-preview';
     container.tabIndex = 0;
 
-    // HTML 文件可能由模型生成，必须放进独立 sandbox iframe；不授予同源能力，避免预览脚本触达扩展页面能力。
-    const frame = document.createElement('iframe');
-    frame.className = 'conversation-document-card__html-frame';
-    frame.title = `${path || 'HTML 文件'} 预览`;
-    frame.setAttribute('sandbox', 'allow-scripts');
-    frame.setAttribute('referrerpolicy', 'no-referrer');
-    frame.srcdoc = content || '';
-    container.appendChild(frame);
+    // HTML 文件可能由模型生成，必须交给 manifest sandbox page 渲染；主扩展页 CSP 不应为此放宽 inline script。
+    container.appendChild(createHtmlPreviewSandboxFrame({
+      content,
+      path
+    }));
     return container;
   }
 
@@ -375,6 +434,7 @@ export function createConversationDocumentViewer(options = {}) {
       state.missing = true;
       state.file = null;
       syncConversationDocumentModeButton(card);
+      syncConversationDocumentHtmlFullscreenButton(card);
       return;
     }
 
@@ -409,6 +469,7 @@ export function createConversationDocumentViewer(options = {}) {
     card.classList.remove('is-missing');
     state.missing = false;
     syncConversationDocumentModeButton(card);
+    syncConversationDocumentHtmlFullscreenButton(card);
 
     const metaParts = [];
     if (Number.isFinite(Number(file.size_chars))) {
@@ -572,6 +633,62 @@ export function createConversationDocumentViewer(options = {}) {
     await navigator.clipboard.writeText(result.file.content || '');
   }
 
+  async function enterConversationDocumentHtmlFullscreen(card) {
+    const result = await loadConversationDocumentCard(card);
+    if (result?.ok !== true || !result.file) return;
+    if (!isConversationDocumentHtmlPreviewPath(result.file.path || card?.dataset?.documentPath || '')) return;
+
+    const overlay = document.createElement('section');
+    overlay.className = 'conversation-document-html-fullscreen';
+    overlay.setAttribute('aria-label', `${result.file.path || 'HTML 文件'} 全屏预览`);
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'conversation-document-html-fullscreen__toolbar';
+
+    const title = document.createElement('div');
+    title.className = 'conversation-document-html-fullscreen__title';
+    title.textContent = result.file.path || card?.dataset?.documentPath || 'HTML 文件';
+
+    const closeButton = createDocumentActionIconButton({
+      iconClass: 'fa-solid fa-compress',
+      title: '退出全屏预览',
+      ariaLabel: '退出全屏预览',
+      className: 'conversation-document-html-fullscreen__close',
+      onClick: async () => {
+        if (document.fullscreenElement === overlay && document.exitFullscreen) {
+          await document.exitFullscreen();
+        } else {
+          overlay.remove();
+        }
+      }
+    });
+
+    toolbar.appendChild(title);
+    toolbar.appendChild(closeButton);
+    overlay.appendChild(toolbar);
+    overlay.appendChild(createHtmlPreviewSandboxFrame({
+      content: result.file.content || '',
+      path: result.file.path || '',
+      title: result.file.path || '',
+      className: 'conversation-document-html-fullscreen__frame'
+    }));
+
+    const cleanup = () => {
+      if (document.fullscreenElement === overlay) return;
+      document.removeEventListener('fullscreenchange', cleanup);
+      overlay.remove();
+    };
+    document.addEventListener('fullscreenchange', cleanup);
+    document.body.appendChild(overlay);
+    try {
+      await overlay.requestFullscreen();
+    } catch (error) {
+      document.removeEventListener('fullscreenchange', cleanup);
+      overlay.remove();
+      throw error;
+    }
+  }
+
   async function downloadConversationDocumentCard(card) {
     const result = await loadConversationDocumentCard(card);
     if (result?.ok !== true || !result.file) return;
@@ -627,6 +744,15 @@ export function createConversationDocumentViewer(options = {}) {
     });
     state.refs.modeButton = modeButton;
     actions.appendChild(modeButton);
+    const htmlFullscreenButton = createDocumentActionIconButton({
+      iconClass: 'fa-solid fa-expand',
+      title: '全屏预览 HTML',
+      ariaLabel: '全屏预览 HTML',
+      className: 'conversation-document-card__tool-button--html-fullscreen',
+      onClick: () => enterConversationDocumentHtmlFullscreen(card)
+    });
+    state.refs.htmlFullscreenButton = htmlFullscreenButton;
+    actions.appendChild(htmlFullscreenButton);
     actions.appendChild(createDocumentActionIconButton({
       iconClass: 'fa-regular fa-pen-to-square',
       title: '编辑文件',
@@ -666,6 +792,7 @@ export function createConversationDocumentViewer(options = {}) {
     card.appendChild(meta);
     card.appendChild(body);
     syncConversationDocumentModeButton(card);
+    syncConversationDocumentHtmlFullscreenButton(card);
     card.addEventListener('toggle', () => {
       if (card.open && !state.editing) {
         void loadConversationDocumentCard(card);

@@ -46,7 +46,12 @@ const INITIAL_HTML_DOC_CONTENT = [
   '    <main>',
   '      <section>',
   '        <h1 id="html-preview-title">HTML preview rendered</h1>',
+  '        <p id="html-preview-script-status">script pending</p>',
   '        <p>Created by the virtual file tool and rendered inside the document card.</p>',
+  '        <script>',
+  '          window.__cerebrInlineScriptRan = true;',
+  '          document.getElementById("html-preview-script-status").textContent = "inline script ran";',
+  '        </script>',
   '      </section>',
   '    </main>',
   '  </body>',
@@ -514,6 +519,14 @@ async function main() {
     result.steps.push('browser_ready');
 
     const page = context.pages()[0] || await context.newPage();
+    result.consoleMessages = [];
+    page.on('console', (message) => {
+      result.consoleMessages.push({
+        type: message.type(),
+        text: message.text(),
+        location: message.location()
+      });
+    });
     page.on('pageerror', (error) => {
       result.pageError = String(error && (error.stack || error.message || error));
     });
@@ -823,12 +836,14 @@ async function main() {
         if (!content || !frame) return null;
         const isHtmlPreview = content.classList.contains('conversation-document-card__content--html-preview');
         const sandbox = frame.getAttribute('sandbox') || '';
-        const srcdoc = frame.getAttribute('srcdoc') || '';
-        if (!isHtmlPreview || !srcdoc.includes('HTML preview rendered')) return null;
+        const allow = frame.getAttribute('allow') || '';
+        const src = frame.getAttribute('src') || '';
+        if (!isHtmlPreview || !src.includes('html_preview_sandbox.html')) return null;
         return {
           modeClass: Array.from(content.classList),
           sandbox,
-          srcdocLength: srcdoc.length
+          allow,
+          src
         };
       }).catch(() => null);
     }, {
@@ -836,23 +851,51 @@ async function main() {
       intervalMs: 250,
       label: 'html document iframe preview'
     });
-    if (result.htmlPreviewState.sandbox.includes('allow-same-origin')) {
-      throw new Error(`HTML preview iframe must not allow same-origin: ${result.htmlPreviewState.sandbox}`);
+    if (result.htmlPreviewState.sandbox) {
+      throw new Error(`Outer HTML preview iframe should rely on manifest sandbox only: ${result.htmlPreviewState.sandbox}`);
     }
 
     const htmlFrameHandle = await htmlCardRoot.locator('iframe.conversation-document-card__html-frame').elementHandle();
-    const htmlPreviewFrame = htmlFrameHandle ? await htmlFrameHandle.contentFrame() : null;
+    const htmlSandboxFrame = htmlFrameHandle ? await htmlFrameHandle.contentFrame() : null;
+    if (!htmlSandboxFrame) {
+      throw new Error('HTML preview sandbox frame unavailable');
+    }
+    result.htmlSandboxInnerFrameState = await htmlSandboxFrame.evaluate(() => {
+      const frame = document.querySelector('iframe.html-preview-sandbox__content-frame');
+      return frame ? {
+        sandbox: frame.getAttribute('sandbox') || '',
+        referrerPolicy: frame.getAttribute('referrerpolicy') || ''
+      } : null;
+    });
+    if (!result.htmlSandboxInnerFrameState?.sandbox?.includes('allow-scripts')) {
+      throw new Error(`Inner HTML preview iframe must allow scripts: ${JSON.stringify(result.htmlSandboxInnerFrameState)}`);
+    }
+    if (result.htmlSandboxInnerFrameState.sandbox.includes('allow-same-origin')) {
+      throw new Error(`Inner HTML preview iframe must not allow same-origin: ${result.htmlSandboxInnerFrameState.sandbox}`);
+    }
+    const innerHtmlFrameHandle = await htmlSandboxFrame.locator('iframe.html-preview-sandbox__content-frame').elementHandle();
+    const htmlPreviewFrame = innerHtmlFrameHandle ? await innerHtmlFrameHandle.contentFrame() : null;
     if (!htmlPreviewFrame) {
       throw new Error('HTML preview iframe content frame unavailable');
     }
-    result.htmlPreviewFrameText = await waitFor(async () => {
-      const text = await htmlPreviewFrame.locator('#html-preview-title').textContent().catch(() => null);
-      return text && text.includes('HTML preview rendered') ? text : null;
+    result.htmlPreviewFrameState = await waitFor(async () => {
+      const state = await htmlPreviewFrame.evaluate(() => ({
+        titleText: document.getElementById('html-preview-title')?.textContent || '',
+        scriptStatus: document.getElementById('html-preview-script-status')?.textContent || '',
+        inlineScriptRan: window.__cerebrInlineScriptRan === true
+      })).catch(() => null);
+      return state?.titleText.includes('HTML preview rendered') && state?.inlineScriptRan ? state : null;
     }, {
       timeoutMs: 30_000,
       intervalMs: 250,
       label: 'html preview rendered DOM'
     });
+    const cspInlineScriptErrors = result.consoleMessages.filter((entry) => (
+      String(entry.text || '').includes('Executing inline script violates')
+    ));
+    if (cspInlineScriptErrors.length > 0) {
+      throw new Error(`HTML preview should not emit inline-script CSP errors: ${JSON.stringify(cspInlineScriptErrors)}`);
+    }
 
     await htmlCardRoot.locator('.conversation-document-card__tool-button--mode').click();
     result.htmlSourceState = await waitFor(async () => {
@@ -873,6 +916,35 @@ async function main() {
       timeoutMs: 30_000,
       intervalMs: 250,
       label: 'html toggled to highlighted source'
+    });
+
+    await htmlCardRoot.locator('.conversation-document-card__tool-button--html-fullscreen').click();
+    result.htmlFullscreenState = await waitFor(async () => {
+      return await sidebarFrame.evaluate(() => {
+        const overlay = document.fullscreenElement;
+        if (!(overlay instanceof HTMLElement)) return null;
+        if (!overlay.classList.contains('conversation-document-html-fullscreen')) return null;
+        const frame = overlay.querySelector('iframe.conversation-document-html-fullscreen__frame');
+        if (!frame) return null;
+        return {
+          overlayClass: Array.from(overlay.classList),
+          frameSandbox: frame.getAttribute('sandbox') || '',
+          frameAllow: frame.getAttribute('allow') || '',
+          frameSrc: frame.getAttribute('src') || ''
+        };
+      }).catch(() => null);
+    }, {
+      timeoutMs: 10_000,
+      intervalMs: 200,
+      label: 'html fullscreen overlay'
+    });
+    if (result.htmlFullscreenState.frameSandbox) {
+      throw new Error(`Fullscreen HTML preview iframe should rely on manifest sandbox only: ${result.htmlFullscreenState.frameSandbox}`);
+    }
+    await sidebarFrame.evaluate(async () => {
+      if (document.fullscreenElement && document.exitFullscreen) {
+        await document.exitFullscreen();
+      }
     });
     result.steps.push('document_loaded');
 

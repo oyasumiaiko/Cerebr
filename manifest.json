@@ -66,9 +66,15 @@
     "service_worker": "src/extension/background.js",
     "type": "module"
   },
+  "sandbox": {
+    "pages": [
+      "src/ui/html_preview_sandbox/html_preview_sandbox.html"
+    ]
+  },
   "web_accessible_resources": [{
     "resources": [
       "src/ui/sidebar/sidebar.html",
+      "src/ui/html_preview_sandbox/*",
       "lib/*"
     ],
     "matches": ["<all_urls>"]

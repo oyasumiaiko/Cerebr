@@ -47,21 +47,47 @@ test('conversation_document_viewer 使用无边框图标按钮承载基础文档
   assert.match(source, /fa-brands fa-markdown/);
   assert.match(source, /fa-brands fa-html5/);
   assert.match(source, /fa-solid fa-code/);
+  assert.match(source, /fa-solid fa-expand/);
 });
 
-test('conversation_document_viewer 会用 sandbox iframe 渲染 HTML 文件预览', async () => {
+test('conversation_document_viewer 会通过 manifest sandbox page 渲染 HTML 文件预览', async () => {
   const source = await readWorkspaceFile('src/utils/conversation_document_viewer.js');
   const stateSource = await readWorkspaceFile('src/utils/conversation_document_viewer_state.js');
   const sidebarCssSource = await readWorkspaceFile('src/ui/styles/sidebar.css');
+  const manifestSource = await readWorkspaceFile('manifest.json');
+  const sandboxHtmlSource = await readWorkspaceFile('src/ui/html_preview_sandbox/html_preview_sandbox.html');
 
   assert.match(stateSource, /CONVERSATION_DOCUMENT_VIEW_MODE_HTML_PREVIEW/);
   assert.match(stateSource, /HTML_PREVIEW_EXTENSIONS/);
   assert.match(source, /renderHtmlPreviewContent/);
+  assert.match(source, /HTML_PREVIEW_SANDBOX_FRAME_URL/);
+  assert.match(source, /html_preview_sandbox\/html_preview_sandbox\.html/);
+  assert.match(source, /CEREBR_HTML_PREVIEW_RENDER/);
+  assert.match(source, /CEREBR_HTML_PREVIEW_READY/);
   assert.match(source, /conversation-document-card__content--html-preview/);
-  assert.match(source, /frame\.setAttribute\('sandbox', 'allow-scripts'\)/);
+  assert.doesNotMatch(source, /frame\.setAttribute\('sandbox'/);
   assert.doesNotMatch(source, /allow-same-origin/);
-  assert.match(source, /frame\.srcdoc = content \|\| ''/);
+  assert.doesNotMatch(source, /frame\.srcdoc = content \|\| ''/);
+  assert.match(sandboxHtmlSource, /sandbox="allow-scripts allow-forms allow-popups allow-modals"/);
+  assert.doesNotMatch(sandboxHtmlSource, /allow-same-origin/);
   assert.match(sidebarCssSource, /\.conversation-document-card__html-frame/);
+  assert.match(manifestSource, /"sandbox"\s*:\s*\{/);
+  assert.match(manifestSource, /src\/ui\/html_preview_sandbox\/html_preview_sandbox\.html/);
+  assert.match(manifestSource, /src\/ui\/html_preview_sandbox\/\*/);
+});
+
+test('conversation_document_viewer 为 HTML iframe 提供全屏预览入口', async () => {
+  const viewerSource = await readWorkspaceFile('src/utils/conversation_document_viewer.js');
+  const sidebarCssSource = await readWorkspaceFile('src/ui/styles/sidebar.css');
+  const contentSource = await readWorkspaceFile('src/extension/content.js');
+
+  assert.match(viewerSource, /enterConversationDocumentHtmlFullscreen/);
+  assert.match(viewerSource, /conversation-document-card__tool-button--html-fullscreen/);
+  assert.match(viewerSource, /overlay\.requestFullscreen\(\)/);
+  assert.match(viewerSource, /document\.exitFullscreen\(\)/);
+  assert.match(sidebarCssSource, /\.conversation-document-html-fullscreen/);
+  assert.match(sidebarCssSource, /\.conversation-document-html-fullscreen__frame/);
+  assert.match(contentSource, /iframe\.allow = 'clipboard-write; file-system-access; fullscreen'/);
 });
 
 test('settings_manager 已注册文档渲染默认值偏好', async () => {
