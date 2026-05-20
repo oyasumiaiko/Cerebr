@@ -4968,6 +4968,10 @@ input:checked + .slider::before {
     background: color-mix(in srgb, var(--cerebr-bg-color) 24%, transparent);
 }
 
+.message .cerebr-markdown-code-block__header[hidden] {
+    display: none;
+}
+
 .message .cerebr-markdown-code-block__language {
     min-width: 0;
     font-size: 11px;

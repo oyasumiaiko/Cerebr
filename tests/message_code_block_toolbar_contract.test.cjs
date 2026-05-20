@@ -15,6 +15,14 @@ test('settings_manager 已注册过长代码块折叠开关', async () => {
   assert.match(source, /label: '折叠过长代码块'/);
 });
 
+test('settings_manager 已注册代码块工具条显示开关', async () => {
+  const source = await readWorkspaceFile('src/ui/settings_manager.js');
+
+  assert.match(source, /showCodeBlockToolbar/);
+  assert.match(source, /label: '显示代码块工具条'/);
+  assert.match(source, /showCodeBlockToolbar: true/);
+});
+
 test('markdown_renderer 会为 fenced code block 输出可增强的包装节点', async () => {
   const source = await readWorkspaceFile('src/utils/markdown_renderer.js');
 
@@ -33,6 +41,9 @@ test('message_processor 会给 Markdown 代码块挂载语言标签、复制按�
   assert.match(source, /cerebr-markdown-code-block__toggle/);
   assert.match(source, /rootElement\.matches\('.*cerebr-markdown-code-block.*'\)/);
   assert.match(source, /subscribe\?\.\('collapseLongCodeBlocks'/);
+  assert.match(source, /subscribe\?\.\('showCodeBlockToolbar'/);
+  assert.match(source, /header\.hidden = !toolbarVisible/);
+  assert.match(source, /wrapper\.classList\.remove\('is-collapsible', 'is-expanded'\)/);
 });
 
 test('conversation_document_viewer 的 Markdown 模式也会复用挂载期增强链路', async () => {
@@ -47,6 +58,7 @@ test('sidebar.css 已提供代码块工具条与 50vh 折叠体样式', async ()
 
   assert.match(source, /\.message \.cerebr-markdown-code-block/);
   assert.match(source, /\.message \.cerebr-markdown-code-block__header/);
+  assert.match(source, /\.message \.cerebr-markdown-code-block__header\[hidden\]/);
   assert.match(source, /\.message \.cerebr-markdown-code-block__action/);
   assert.match(source, /\.message \.cerebr-markdown-code-block\.is-collapsible:not\(\.is-expanded\) \.cerebr-markdown-code-block__body/);
   assert.match(source, /max-height: 50vh;/);

@@ -112,6 +112,7 @@ export function createSettingsManager(appContext) {
     documentHighlightCodeByExtension: true,
     documentViewModeOverrides: {},
     renderMarkdownForUserMessages: false,
+    showCodeBlockToolbar: true,
     collapseLongCodeBlocks: false,
     lineHeight: 1.5, // Added for better text readability control
     chatWidth: 100, // Percentage of sidebar width
@@ -1083,6 +1084,13 @@ export function createSettingsManager(appContext) {
       group: 'display',
       label: '用户消息启用 Markdown 渲染',
       defaultValue: DEFAULT_SETTINGS.renderMarkdownForUserMessages
+    },
+    {
+      key: 'showCodeBlockToolbar',
+      type: 'toggle',
+      group: 'display',
+      label: '显示代码块工具条',
+      defaultValue: DEFAULT_SETTINGS.showCodeBlockToolbar
     },
     {
       key: 'collapseLongCodeBlocks',

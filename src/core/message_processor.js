@@ -5035,6 +5035,10 @@ export function createMessageProcessor(appContext) {
     return settingsManager?.getSetting?.('collapseLongCodeBlocks') === true;
   }
 
+  function shouldShowMarkdownCodeBlockToolbar() {
+    return settingsManager?.getSetting?.('showCodeBlockToolbar') !== false;
+  }
+
   function resolveMarkdownCodeBlockLanguage(wrapper, block) {
     const wrapperLanguage = String(wrapper?.dataset?.codeLanguage || '').trim().toLowerCase();
     if (wrapperLanguage) return wrapperLanguage;
@@ -5083,9 +5087,24 @@ export function createMessageProcessor(appContext) {
 
   function syncMarkdownCodeBlockChrome(wrapper) {
     if (!(wrapper instanceof HTMLElement)) return;
+    const header = wrapper.querySelector(':scope > .cerebr-markdown-code-block__header');
     const body = wrapper.querySelector(':scope > .cerebr-markdown-code-block__body');
     const toggleButton = wrapper.querySelector('.cerebr-markdown-code-block__toggle');
     if (!(body instanceof HTMLElement) || !(toggleButton instanceof HTMLElement)) return;
+
+    const toolbarVisible = shouldShowMarkdownCodeBlockToolbar();
+    if (header instanceof HTMLElement) {
+      header.hidden = !toolbarVisible;
+    }
+    wrapper.classList.toggle('is-toolbar-hidden', !toolbarVisible);
+
+    if (!toolbarVisible) {
+      wrapper.dataset.expanded = 'false';
+      wrapper.classList.remove('is-collapsible', 'is-expanded');
+      toggleButton.hidden = true;
+      updateMarkdownCodeBlockToggleButton(toggleButton, false);
+      return;
+    }
 
     const collapseEnabled = shouldCollapseLongCodeBlocks();
     const isOverflowing = collapseEnabled ? measureMarkdownCodeBlockOverflow(wrapper, body) : false;
@@ -5248,6 +5267,12 @@ export function createMessageProcessor(appContext) {
     }
     rootElement.querySelectorAll('.cerebr-markdown-code-block').forEach((wrapper) => {
       ensureMarkdownCodeBlockChrome(wrapper);
+    });
+  }
+
+  function scheduleAllMarkdownCodeBlockChromeSync() {
+    document.querySelectorAll('.cerebr-markdown-code-block').forEach((wrapper) => {
+      scheduleMarkdownCodeBlockSync(wrapper);
     });
   }
 
@@ -5437,12 +5462,18 @@ export function createMessageProcessor(appContext) {
 
   try {
     services.settingsManager?.subscribe?.('collapseLongCodeBlocks', () => {
-      document.querySelectorAll('.cerebr-markdown-code-block').forEach((wrapper) => {
-        scheduleMarkdownCodeBlockSync(wrapper);
-      });
+      scheduleAllMarkdownCodeBlockChromeSync();
     });
   } catch (error) {
     console.warn('订阅 collapseLongCodeBlocks 设置变化失败:', error);
+  }
+
+  try {
+    services.settingsManager?.subscribe?.('showCodeBlockToolbar', () => {
+      scheduleAllMarkdownCodeBlockChromeSync();
+    });
+  } catch (error) {
+    console.warn('订阅 showCodeBlockToolbar 设置变化失败:', error);
   }
 
   try {
