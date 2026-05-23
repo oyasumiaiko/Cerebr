@@ -16,6 +16,7 @@ import { enhanceMermaidDiagrams } from '../utils/mermaid_renderer.js';
 import { extractThinkingFromText, mergeThoughts } from '../utils/thoughts_parser.js';
 import { normalizeResponsesReasoningText } from '../utils/responses_activity_reasoning.js';
 import { buildApiFooterRenderData } from '../utils/api_footer_template.js';
+import { renderApiFooterDom } from '../utils/api_footer_dom.js';
 import { resolveThoughtsPanelLifecycleState } from '../utils/thoughts_panel_lifecycle.js';
 import {
   getAssistantActivityTimeline,
@@ -4299,11 +4300,8 @@ export function createMessageProcessor(appContext) {
       tooltipTemplate: footerTooltipTemplate
     });
     const previousSnapshot = surfaceSnapshots.footer || null;
-    if (!previousSnapshot || previousSnapshot.text !== renderData.text) {
-      footer.textContent = renderData.text;
-    }
-    if (!previousSnapshot || previousSnapshot.title !== renderData.title) {
-      footer.title = renderData.title;
+    if (!previousSnapshot || previousSnapshot.text !== renderData.text || previousSnapshot.title !== renderData.title) {
+      renderApiFooterDom(footer, renderData);
     }
     surfaceSnapshots.footer = {
       text: renderData.text,

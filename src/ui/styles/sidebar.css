@@ -6016,10 +6016,18 @@ input:checked + .slider::before {
     font-size: calc(var(--cerebr-font-size) - 4px);
     opacity: 0.55;
     color: var(--cerebr-text-color);
+    line-height: 1.35;
+    display: flex;
+    justify-content: flex-end;
+    pointer-events: none;
+}
+
+.api-footer__text {
+    max-width: 100%;
     text-align: right;
     white-space: pre-line;
-    line-height: 1.35;
     user-select: text;
+    pointer-events: auto;
 }
 .dark-theme .api-footer { opacity: 0.6; }
 

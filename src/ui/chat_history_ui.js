@@ -26,6 +26,7 @@ import {
   splitStoredMessageContent
 } from '../utils/message_content.js';
 import { buildApiFooterRenderData } from '../utils/api_footer_template.js';
+import { renderApiFooterDom } from '../utils/api_footer_dom.js';
 import { normalizeResponsesPromptCacheKey } from '../utils/responses_prompt_cache.js';
 import { findPendingRequestUserInputFromConversationMessages } from '../utils/request_user_input_resume.js';
 import {
@@ -3389,8 +3390,7 @@ export function createChatHistoryUI(appContext) {
       inlineSeparator: footerInlineSeparator,
       tooltipTemplate: footerTooltipTemplate
     });
-    footer.textContent = renderData.text;
-    footer.title = renderData.title;
+    renderApiFooterDom(footer, renderData);
   }
 
   function refreshVisibleAiMessageFooters() {

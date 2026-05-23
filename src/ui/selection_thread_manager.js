@@ -5,6 +5,7 @@ import {
 } from '../utils/message_content.js';
 import { queueStorageSet } from '../utils/storage_write_queue_bridge.js';
 import { buildApiFooterRenderData } from '../utils/api_footer_template.js';
+import { renderApiFooterDom } from '../utils/api_footer_dom.js';
 import {
   getDocumentZoomFactor,
   getElementLayoutRect,
@@ -854,8 +855,7 @@ export function createSelectionThreadManager(appContext) {
       inlineSeparator: footerInlineSeparator,
       tooltipTemplate: footerTooltipTemplate
     });
-    footer.textContent = renderData.text;
-    footer.title = renderData.title;
+    renderApiFooterDom(footer, renderData);
   }
 
   function collectThreadChain(annotation) {
