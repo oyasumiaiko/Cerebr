@@ -76,17 +76,19 @@ test('conversation_document_viewer 会通过 manifest sandbox page 渲染 HTML �
   assert.match(manifestSource, /src\/ui\/html_preview_sandbox\/\*/);
 });
 
-test('conversation_document_viewer 为 HTML iframe 提供全屏预览入口', async () => {
+test('conversation_document_viewer 为 HTML iframe 提供不重建 iframe 的放大预览入口', async () => {
   const viewerSource = await readWorkspaceFile('src/utils/conversation_document_viewer.js');
   const sidebarCssSource = await readWorkspaceFile('src/ui/styles/sidebar.css');
   const contentSource = await readWorkspaceFile('src/extension/content.js');
 
-  assert.match(viewerSource, /enterConversationDocumentHtmlFullscreen/);
+  assert.match(viewerSource, /toggleConversationDocumentHtmlPopout/);
+  assert.match(viewerSource, /closeConversationDocumentHtmlPopout/);
   assert.match(viewerSource, /conversation-document-card__tool-button--html-fullscreen/);
-  assert.match(viewerSource, /overlay\.requestFullscreen\(\)/);
-  assert.match(viewerSource, /document\.exitFullscreen\(\)/);
-  assert.match(sidebarCssSource, /\.conversation-document-html-fullscreen/);
-  assert.match(sidebarCssSource, /\.conversation-document-html-fullscreen__frame/);
+  assert.doesNotMatch(viewerSource, /requestFullscreen\(\)/);
+  assert.doesNotMatch(viewerSource, /exitFullscreen\(\)/);
+  assert.match(sidebarCssSource, /\.conversation-document-card__content--html-preview\.is-popout/);
+  assert.match(sidebarCssSource, /\.conversation-document-html-popout__toggle/);
+  assert.doesNotMatch(sidebarCssSource, /\.conversation-document-html-fullscreen__toolbar/);
   assert.match(contentSource, /iframe\.allow = 'clipboard-write; file-system-access; fullscreen'/);
 });
 

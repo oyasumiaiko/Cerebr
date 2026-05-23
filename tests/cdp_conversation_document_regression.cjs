@@ -897,6 +897,62 @@ async function main() {
       throw new Error(`HTML preview should not emit inline-script CSP errors: ${JSON.stringify(cspInlineScriptErrors)}`);
     }
 
+    await htmlPreviewFrame.evaluate(() => {
+      window.__cerebrPreviewStateCounter = 42;
+    });
+    await htmlCardRoot.locator('.conversation-document-card__tool-button--html-fullscreen').click();
+    result.htmlPopoutState = await waitFor(async () => {
+      return await htmlCardRoot.evaluate((card) => {
+        const content = card.querySelector('.conversation-document-card__content');
+        if (!content || !content.classList.contains('is-popout')) return null;
+        const frame = content.querySelector('iframe.conversation-document-card__html-frame');
+        const closeButton = content.querySelector('.conversation-document-html-popout__toggle');
+        if (!frame || !closeButton) return null;
+        return {
+          modeClass: Array.from(content.classList),
+          frameSandbox: frame.getAttribute('sandbox') || '',
+          frameAllow: frame.getAttribute('allow') || '',
+          frameSrc: frame.getAttribute('src') || '',
+          hasHoverButton: true
+        };
+      }).catch(() => null);
+    }, {
+      timeoutMs: 10_000,
+      intervalMs: 200,
+      label: 'html preview popout'
+    });
+    if (result.htmlPopoutState.frameSandbox) {
+      throw new Error(`Popout HTML preview iframe should rely on manifest sandbox only: ${result.htmlPopoutState.frameSandbox}`);
+    }
+    result.htmlPreviewFrameStateAfterPopout = await htmlPreviewFrame.evaluate(() => ({
+      counter: window.__cerebrPreviewStateCounter || 0,
+      inlineScriptRan: window.__cerebrInlineScriptRan === true
+    })).catch((error) => ({ error: String(error && (error.stack || error.message || error)) }));
+    if (result.htmlPreviewFrameStateAfterPopout.counter !== 42) {
+      throw new Error(`HTML preview popout should not reload iframe state: ${JSON.stringify(result.htmlPreviewFrameStateAfterPopout)}`);
+    }
+    await htmlCardRoot.locator('.conversation-document-html-popout__toggle').click();
+    result.htmlPopoutRestoredState = await waitFor(async () => {
+      return await htmlCardRoot.evaluate((card) => {
+        const content = card.querySelector('.conversation-document-card__content--html-preview');
+        if (!content || content.classList.contains('is-popout')) return null;
+        return {
+          modeClass: Array.from(content.classList)
+        };
+      }).catch(() => null);
+    }, {
+      timeoutMs: 10_000,
+      intervalMs: 200,
+      label: 'html preview popout restored'
+    });
+    result.htmlPreviewFrameStateAfterRestore = await htmlPreviewFrame.evaluate(() => ({
+      counter: window.__cerebrPreviewStateCounter || 0,
+      inlineScriptRan: window.__cerebrInlineScriptRan === true
+    })).catch((error) => ({ error: String(error && (error.stack || error.message || error)) }));
+    if (result.htmlPreviewFrameStateAfterRestore.counter !== 42) {
+      throw new Error(`HTML preview restore should not reload iframe state: ${JSON.stringify(result.htmlPreviewFrameStateAfterRestore)}`);
+    }
+
     await htmlCardRoot.locator('.conversation-document-card__tool-button--mode').click();
     result.htmlSourceState = await waitFor(async () => {
       return await htmlCardRoot.evaluate((card) => {
@@ -916,35 +972,6 @@ async function main() {
       timeoutMs: 30_000,
       intervalMs: 250,
       label: 'html toggled to highlighted source'
-    });
-
-    await htmlCardRoot.locator('.conversation-document-card__tool-button--html-fullscreen').click();
-    result.htmlFullscreenState = await waitFor(async () => {
-      return await sidebarFrame.evaluate(() => {
-        const overlay = document.fullscreenElement;
-        if (!(overlay instanceof HTMLElement)) return null;
-        if (!overlay.classList.contains('conversation-document-html-fullscreen')) return null;
-        const frame = overlay.querySelector('iframe.conversation-document-html-fullscreen__frame');
-        if (!frame) return null;
-        return {
-          overlayClass: Array.from(overlay.classList),
-          frameSandbox: frame.getAttribute('sandbox') || '',
-          frameAllow: frame.getAttribute('allow') || '',
-          frameSrc: frame.getAttribute('src') || ''
-        };
-      }).catch(() => null);
-    }, {
-      timeoutMs: 10_000,
-      intervalMs: 200,
-      label: 'html fullscreen overlay'
-    });
-    if (result.htmlFullscreenState.frameSandbox) {
-      throw new Error(`Fullscreen HTML preview iframe should rely on manifest sandbox only: ${result.htmlFullscreenState.frameSandbox}`);
-    }
-    await sidebarFrame.evaluate(async () => {
-      if (document.fullscreenElement && document.exitFullscreen) {
-        await document.exitFullscreen();
-      }
     });
     result.steps.push('document_loaded');
 

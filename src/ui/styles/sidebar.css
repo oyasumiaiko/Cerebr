@@ -11395,52 +11395,59 @@ body.chat-empty .empty-state-content {
     background: #ffffff;
   }
 
-  .conversation-document-html-fullscreen {
-    position: fixed;
-    inset: 0;
-    z-index: 2147483647;
-    display: flex;
-    flex-direction: column;
-    width: 100vw;
-    height: 100vh;
-    background: #ffffff;
-    color: #111111;
-  }
-
-  .conversation-document-html-fullscreen:fullscreen {
-    width: 100vw;
-    height: 100vh;
-  }
-
-  .conversation-document-html-fullscreen__toolbar {
-    flex: 0 0 auto;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    min-height: 42px;
-    padding: 6px 10px;
-    border-bottom: 1px solid rgba(15, 23, 42, 0.14);
-    background: rgba(255, 255, 255, 0.96);
-    color: #111827;
-    font-size: 12px;
-  }
-
-  .conversation-document-html-fullscreen__title {
-    min-width: 0;
+  body.conversation-document-html-popout-open {
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-weight: 600;
   }
 
-  .conversation-document-html-fullscreen__frame {
-    display: block;
-    flex: 1 1 auto;
-    width: 100%;
-    min-height: 0;
-    border: 0;
+  .conversation-document-card__content--html-preview.is-popout {
+    position: fixed;
+    inset: clamp(12px, 4vh, 34px) clamp(10px, 4vw, 46px);
+    z-index: 2147483647;
+    width: auto;
+    height: auto;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border-radius: 8px;
+    border: 1px solid rgba(15, 23, 42, 0.18);
+    box-shadow: 0 24px 80px rgba(15, 23, 42, 0.34);
     background: #ffffff;
+    overflow: hidden;
+  }
+
+  .conversation-document-card__content--html-preview.is-popout .conversation-document-card__html-frame {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .conversation-document-html-popout__toggle {
+    display: none;
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 2;
+    width: 34px;
+    height: 34px;
+    border-radius: 999px;
+    background: rgba(17, 24, 39, 0.72);
+    color: #ffffff;
+    opacity: 0;
+    transform: translateY(-2px);
+    transition: opacity 0.15s ease, transform 0.15s ease, background 0.15s ease;
+  }
+
+  .conversation-document-card__content--html-preview.is-popout .conversation-document-html-popout__toggle {
+    display: inline-flex;
+  }
+
+  .conversation-document-card__content--html-preview.is-popout:hover .conversation-document-html-popout__toggle,
+  .conversation-document-html-popout__toggle:focus-visible {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  .conversation-document-html-popout__toggle:hover {
+    background: rgba(17, 24, 39, 0.9);
   }
 
   .conversation-document-card__content--code {

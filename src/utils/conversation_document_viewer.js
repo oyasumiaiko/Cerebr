@@ -158,6 +158,8 @@ export function createConversationDocumentViewer(options = {}) {
   const conversationDocumentCardState = new WeakMap();
   let changeListenerInstalled = false;
   let keyboardShortcutInstalled = false;
+  let htmlPreviewPopoutShortcutInstalled = false;
+  let activeHtmlPreviewPopout = null;
 
   function getViewerSettingsSnapshot() {
     return {
@@ -315,6 +317,15 @@ export function createConversationDocumentViewer(options = {}) {
     const isHtmlFile = isConversationDocumentHtmlPreviewPath(card?.dataset?.documentPath || '');
     button.hidden = !isHtmlFile;
     button.disabled = !isHtmlFile;
+    if (!isHtmlFile) return;
+
+    const isPopout = activeHtmlPreviewPopout?.card === card;
+    applyToolButtonVisualState(button, {
+      iconClass: isPopout ? 'fa-solid fa-compress' : 'fa-solid fa-expand',
+      active: isPopout,
+      title: isPopout ? '缩回 HTML 预览' : '放大 HTML 预览',
+      ariaLabel: isPopout ? '缩回 HTML 预览' : '放大 HTML 预览'
+    });
   }
 
   function renderPlainContent(content) {
@@ -370,7 +381,43 @@ export function createConversationDocumentViewer(options = {}) {
     return frame;
   }
 
-  function renderHtmlPreviewContent(content, path) {
+  function closeConversationDocumentHtmlPopout(card = null, options = {}) {
+    if (!activeHtmlPreviewPopout) return;
+    if (card && activeHtmlPreviewPopout.card !== card) return;
+
+    const { card: activeCard, content, backdrop, restoreFocusTo } = activeHtmlPreviewPopout;
+    activeHtmlPreviewPopout = null;
+
+    content?.classList?.remove?.('is-popout');
+    content?.removeAttribute?.('role');
+    content?.removeAttribute?.('aria-modal');
+    content?.removeAttribute?.('data-html-preview-popout');
+    activeCard?.classList?.remove?.('is-html-popout');
+    backdrop?.remove?.();
+    document.body.classList.remove('conversation-document-html-popout-open');
+    syncConversationDocumentHtmlFullscreenButton(activeCard);
+
+    if (options.restoreFocus === true && restoreFocusTo instanceof HTMLElement) {
+      try {
+        restoreFocusTo.focus({ preventScroll: true });
+      } catch (_) {
+        restoreFocusTo.focus?.();
+      }
+    }
+  }
+
+  function installConversationDocumentHtmlPopoutShortcuts() {
+    if (htmlPreviewPopoutShortcutInstalled) return;
+    document.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || !activeHtmlPreviewPopout) return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeConversationDocumentHtmlPopout(null, { restoreFocus: true });
+    }, true);
+    htmlPreviewPopoutShortcutInstalled = true;
+  }
+
+  function renderHtmlPreviewContent(content, path, card) {
     const container = document.createElement('div');
     container.className = 'conversation-document-card__content conversation-document-card__content--html-preview';
     container.tabIndex = 0;
@@ -379,6 +426,13 @@ export function createConversationDocumentViewer(options = {}) {
     container.appendChild(createHtmlPreviewSandboxFrame({
       content,
       path
+    }));
+    container.appendChild(createDocumentActionIconButton({
+      iconClass: 'fa-solid fa-compress',
+      title: '缩回 HTML 预览',
+      ariaLabel: '缩回 HTML 预览',
+      className: 'conversation-document-html-popout__toggle',
+      onClick: () => closeConversationDocumentHtmlPopout(card, { restoreFocus: true })
     }));
     return container;
   }
@@ -423,6 +477,7 @@ export function createConversationDocumentViewer(options = {}) {
   function renderConversationDocumentCardContent(card, file) {
     const state = getConversationDocumentCardState(card);
     if (!state.refs.body) return;
+    closeConversationDocumentHtmlPopout(card);
     state.refs.body.replaceChildren();
 
     if (!file) {
@@ -451,7 +506,7 @@ export function createConversationDocumentViewer(options = {}) {
     const enableDollarMath = settingsManager?.getSetting?.('enableDollarMath') !== false;
     let contentNode = null;
     if (renderState.mode === CONVERSATION_DOCUMENT_VIEW_MODE_HTML_PREVIEW) {
-      contentNode = renderHtmlPreviewContent(file.content || '', file.path || card.dataset.documentPath || '');
+      contentNode = renderHtmlPreviewContent(file.content || '', file.path || card.dataset.documentPath || '', card);
     } else if (renderState.mode === CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN) {
       contentNode = renderMarkdownContent(file.content || '', enableDollarMath);
     } else if (renderState.mode === CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT) {
@@ -633,60 +688,46 @@ export function createConversationDocumentViewer(options = {}) {
     await navigator.clipboard.writeText(result.file.content || '');
   }
 
-  async function enterConversationDocumentHtmlFullscreen(card) {
-    const result = await loadConversationDocumentCard(card);
-    if (result?.ok !== true || !result.file) return;
-    if (!isConversationDocumentHtmlPreviewPath(result.file.path || card?.dataset?.documentPath || '')) return;
-
-    const overlay = document.createElement('section');
-    overlay.className = 'conversation-document-html-fullscreen';
-    overlay.setAttribute('aria-label', `${result.file.path || 'HTML 文件'} 全屏预览`);
-
-    const toolbar = document.createElement('div');
-    toolbar.className = 'conversation-document-html-fullscreen__toolbar';
-
-    const title = document.createElement('div');
-    title.className = 'conversation-document-html-fullscreen__title';
-    title.textContent = result.file.path || card?.dataset?.documentPath || 'HTML 文件';
-
-    const closeButton = createDocumentActionIconButton({
-      iconClass: 'fa-solid fa-compress',
-      title: '退出全屏预览',
-      ariaLabel: '退出全屏预览',
-      className: 'conversation-document-html-fullscreen__close',
-      onClick: async () => {
-        if (document.fullscreenElement === overlay && document.exitFullscreen) {
-          await document.exitFullscreen();
-        } else {
-          overlay.remove();
-        }
-      }
-    });
-
-    toolbar.appendChild(title);
-    toolbar.appendChild(closeButton);
-    overlay.appendChild(toolbar);
-    overlay.appendChild(createHtmlPreviewSandboxFrame({
-      content: result.file.content || '',
-      path: result.file.path || '',
-      title: result.file.path || '',
-      className: 'conversation-document-html-fullscreen__frame'
-    }));
-
-    const cleanup = () => {
-      if (document.fullscreenElement === overlay) return;
-      document.removeEventListener('fullscreenchange', cleanup);
-      overlay.remove();
-    };
-    document.addEventListener('fullscreenchange', cleanup);
-    document.body.appendChild(overlay);
-    try {
-      await overlay.requestFullscreen();
-    } catch (error) {
-      document.removeEventListener('fullscreenchange', cleanup);
-      overlay.remove();
-      throw error;
+  async function toggleConversationDocumentHtmlPopout(card) {
+    if (activeHtmlPreviewPopout?.card === card) {
+      closeConversationDocumentHtmlPopout(card, { restoreFocus: true });
+      return;
     }
+
+    const state = getConversationDocumentCardState(card);
+    let file = state.file;
+    if (!file) {
+      const result = await loadConversationDocumentCard(card);
+      if (result?.ok !== true || !result.file) return;
+      file = result.file;
+    }
+    if (!isConversationDocumentHtmlPreviewPath(file.path || card?.dataset?.documentPath || '')) return;
+
+    const renderState = resolveCardRenderState(card);
+    if (renderState.mode !== CONVERSATION_DOCUMENT_VIEW_MODE_HTML_PREVIEW && state.file) {
+      persistConversationDocumentViewMode(card, CONVERSATION_DOCUMENT_VIEW_MODE_HTML_PREVIEW);
+      renderConversationDocumentCardContent(card, state.file);
+    }
+
+    const content = state.refs.body?.querySelector('.conversation-document-card__content--html-preview');
+    if (!(content instanceof HTMLElement)) return;
+
+    closeConversationDocumentHtmlPopout();
+    activeHtmlPreviewPopout = {
+      card,
+      content,
+      backdrop: null,
+      restoreFocusTo: document.activeElement instanceof HTMLElement ? document.activeElement : null
+    };
+    document.body.classList.add('conversation-document-html-popout-open');
+    card.classList.add('is-html-popout');
+    content.classList.add('is-popout');
+    content.setAttribute('role', 'dialog');
+    content.setAttribute('aria-modal', 'true');
+    content.setAttribute('data-html-preview-popout', 'true');
+    content.setAttribute('aria-label', `${file.path || 'HTML 文件'} 放大预览`);
+    installConversationDocumentHtmlPopoutShortcuts();
+    syncConversationDocumentHtmlFullscreenButton(card);
   }
 
   async function downloadConversationDocumentCard(card) {
@@ -749,7 +790,7 @@ export function createConversationDocumentViewer(options = {}) {
       title: '全屏预览 HTML',
       ariaLabel: '全屏预览 HTML',
       className: 'conversation-document-card__tool-button--html-fullscreen',
-      onClick: () => enterConversationDocumentHtmlFullscreen(card)
+      onClick: () => toggleConversationDocumentHtmlPopout(card)
     });
     state.refs.htmlFullscreenButton = htmlFullscreenButton;
     actions.appendChild(htmlFullscreenButton);
