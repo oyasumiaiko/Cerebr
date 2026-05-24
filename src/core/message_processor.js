@@ -519,6 +519,31 @@ export function createMessageProcessor(appContext) {
       .join('\n\n');
   }
 
+  function detectContextualInputTextType(text) {
+    const source = typeof text === 'string' ? text : '';
+    if (!source.trim()) return '';
+    const match = source.match(/<([a-zA-Z][\w:-]*)\b/);
+    return match?.[1] || '';
+  }
+
+  function buildLegacyContextualInputDebugEntries(contextualItems) {
+    const items = Array.isArray(contextualItems) ? contextualItems : [];
+    return items
+      .map((item) => {
+        const text = extractContextualInputText(item);
+        const type = detectContextualInputTextType(text);
+        if (!type || !text) return null;
+        return {
+          type,
+          status: 'injected',
+          reason: 'legacy_metadata',
+          itemCount: 1,
+          text
+        };
+      })
+      .filter(Boolean);
+  }
+
   function normalizeContextualInputDebugEntry(entry) {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
     const type = (typeof entry.type === 'string' && entry.type.trim()) ? entry.type.trim() : '';
@@ -572,16 +597,8 @@ export function createMessageProcessor(appContext) {
     const contextualItems = Array.isArray(node?.contextual_input_items_before)
       ? node.contextual_input_items_before
       : [];
-    const environmentText = findContextualInputTextByType(contextualItems, 'environment_context');
     if (debugEntries.length <= 0) {
-      if (!environmentText) return [];
-      return [{
-        type: 'environment_context',
-        status: 'injected',
-        reason: 'legacy_metadata',
-        itemCount: environmentText ? 1 : 0,
-        text: environmentText
-      }];
+      return buildLegacyContextualInputDebugEntries(contextualItems);
     }
     return debugEntries
       .map((entry) => ({

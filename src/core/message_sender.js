@@ -8094,7 +8094,9 @@ export function createMessageSender(appContext) {
     targetUserNode.environmentContextSignature = environmentAttachment.signature || null;
     targetUserNode.skillContextSignature = skillAttachment.signature || null;
     targetUserNode.contextualInputDebug = buildContextualInputDebugState([
-      buildContextualInputDebugEntry('environment_context', environmentAttachment)
+      buildContextualInputDebugEntry('environment_context', environmentAttachment),
+      buildContextualInputDebugEntry('page_runtime_context', pageAttachment),
+      buildContextualInputDebugEntry('skill_context', skillAttachment)
     ]);
     return true;
   }

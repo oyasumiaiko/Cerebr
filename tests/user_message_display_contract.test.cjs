@@ -17,6 +17,7 @@ test('settings_manager 已注册用户消息 Markdown 渲染开关', async () =>
 
 test('message_processor 会按设置对用户消息走 Markdown 渲染，且不再挂载展开按钮', async () => {
   const source = await readWorkspaceFile('src/core/message_processor.js');
+  const senderSource = await readWorkspaceFile('src/core/message_sender.js');
 
   assert.match(source, /shouldRenderUserMessagesAsMarkdown/);
   assert.match(source, /renderMarkdownSafe\(messageText \|\| '', \{/);
@@ -24,6 +25,9 @@ test('message_processor 会按设置对用户消息走 Markdown 渲染，且不�
   assert.match(source, /syncConversationDocumentAttachmentStrip\(messageDiv\)/);
   assert.match(source, /syncUserContextualInputDebugView/);
   assert.match(source, /contextual-input-debug/);
+  assert.match(senderSource, /buildContextualInputDebugEntry\('environment_context', environmentAttachment\),\s*buildContextualInputDebugEntry\('page_runtime_context', pageAttachment\),\s*buildContextualInputDebugEntry\('skill_context', skillAttachment\)/s);
+  assert.match(source, /function buildLegacyContextualInputDebugEntries\(contextualItems\)/);
+  assert.match(source, /detectContextualInputTextType\(text\)/);
   assert.match(source, /entry\.status === 'injected' && entry\.text/);
   assert.match(source, /subscribe\?\.\('renderMarkdownForUserMessages'/);
   assert.doesNotMatch(source, /user-message-text-content__toggle/);
