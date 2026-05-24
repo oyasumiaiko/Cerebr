@@ -1883,6 +1883,8 @@ class CerebrSidebarManager {
       type: 'URL_CHANGED',
       url: window.location.href,
       title: document.title,
+      contentType: document.contentType || '',
+      isPdf: isCurrentPagePdfLike(),
       referrer: document.referrer,
       lastModified: document.lastModified,
       lang: document.documentElement.lang,
@@ -2216,7 +2218,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (pageReadSidebar) sidebarManager?.setActiveSidebar?.(pageReadSidebar);
     isProcessing = true;
 
-    extractPageContent(pageReadSidebar).then((content) => {
+    extractPageContent(pageReadSidebar, message?.args).then((content) => {
       isProcessing = false;
       sendResponse(buildPageContentReadResultForTransport(content, message?.args));
     }).catch((error) => {
@@ -2500,6 +2502,14 @@ function extractImportantDOM() {
   return clone.outerHTML;
 }
 
+function isCurrentPagePdfLike() {
+  const currentUrl = typeof window.location?.href === 'string' ? window.location.href : '';
+  const lowerUrl = currentUrl.toLowerCase();
+  return document.contentType === 'application/pdf'
+    || lowerUrl.includes('.pdf')
+    || !!document.querySelector('iframe[src*="pdf.js"], iframe[src*=".pdf"]');
+}
+
 const PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS = 10_000;
 const PAGE_CONTENT_READ_MAX_CHARS = 50_000;
 const PDF_CONTENT_READ_DEFAULT_MAX_CHARS = 10_000;
@@ -2558,17 +2568,85 @@ function normalizePageContentReadArgsForTransport(rawArgs) {
     );
   return {
     skipChars,
-    maxChars
+    maxChars,
+    includeImageUrls: args.include_image_urls === true
+  };
+}
+
+function normalizeImageReferenceListForTransport(value) {
+  const items = Array.isArray(value) ? value : [];
+  return items
+    .map((item) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return null;
+      const id = typeof item.id === 'string' ? item.id.trim() : '';
+      const url = typeof item.url === 'string' ? item.url.trim() : '';
+      const title = typeof item.title === 'string' ? item.title.trim() : '';
+      if (!/^img-\d+$/.test(id) || !/^https?:\/\//i.test(url)) return null;
+      return { id, title, url };
+    })
+    .filter(Boolean);
+}
+
+function collectReferencedImageIdsForTransport(text) {
+  const source = typeof text === 'string' ? text : '';
+  const ids = [];
+  const seen = new Set();
+  const pattern = /\[[^\]\n]{1,200}\]\[(img-\d+)\]/g;
+  let match;
+  while ((match = pattern.exec(source)) !== null) {
+    const id = match[1];
+    if (seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  return ids;
+}
+
+function appendImageReferenceAppendixForTransport(content, imageReferences) {
+  const body = typeof content === 'string' ? content : '';
+  const references = normalizeImageReferenceListForTransport(imageReferences);
+  if (!body || references.length <= 0) {
+    return {
+      content: body,
+      imageReferenceCount: 0
+    };
+  }
+
+  const referencedIds = new Set(collectReferencedImageIdsForTransport(body));
+  if (referencedIds.size <= 0) {
+    return {
+      content: body,
+      imageReferenceCount: 0
+    };
+  }
+
+  const lines = references
+    .filter((item) => referencedIds.has(item.id))
+    .map((item) => `[${item.id}]: ${item.url}`);
+  if (lines.length <= 0) {
+    return {
+      content: body,
+      imageReferenceCount: 0
+    };
+  }
+
+  return {
+    content: `${body}\n\n${lines.join('\n')}`,
+    imageReferenceCount: lines.length
   };
 }
 
 function buildPageContentReadResultForTransport(pageContent, rawArgs) {
   const title = typeof pageContent?.title === 'string' ? pageContent.title.trim() : '';
   const url = typeof pageContent?.url === 'string' ? pageContent.url.trim() : '';
-  const normalizedText = normalizePageContentReadTextForTransport(pageContent?.content || '');
+  const { skipChars, maxChars, includeImageUrls } = normalizePageContentReadArgsForTransport(rawArgs);
+  const contentSource = includeImageUrls && typeof pageContent?.content_with_image_refs === 'string'
+    ? pageContent.content_with_image_refs
+    : pageContent?.content || '';
+  const normalizedText = normalizePageContentReadTextForTransport(contentSource);
   const totalChars = normalizedText.length;
-  const { skipChars, maxChars } = normalizePageContentReadArgsForTransport(rawArgs);
   const hasExplicitRange = skipChars > 0 || maxChars !== null;
+  const sourceImageReferences = includeImageUrls ? pageContent?.image_references : [];
 
   if (!normalizedText) {
     return {
@@ -2586,8 +2664,9 @@ function buildPageContentReadResultForTransport(pageContent, rawArgs) {
   if (!hasExplicitRange) {
     const effectiveMaxChars = PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS;
     const end = Math.min(totalChars, effectiveMaxChars);
-    const content = normalizedText.slice(0, end);
-    const omittedChars = Math.max(0, totalChars - content.length);
+    const selectedContent = normalizedText.slice(0, end);
+    const appendixResult = appendImageReferenceAppendixForTransport(selectedContent, sourceImageReferences);
+    const omittedChars = Math.max(0, totalChars - selectedContent.length);
     return {
       ok: true,
       mode: 'preview',
@@ -2597,20 +2676,23 @@ function buildPageContentReadResultForTransport(pageContent, rawArgs) {
       extraction_scope: 'page_plus_accessible_iframe_text',
       total_chars: totalChars,
       max_chars: effectiveMaxChars,
-      returned_chars: content.length,
+      returned_chars: selectedContent.length,
       omitted_chars: omittedChars,
       omitted_pct: formatPercent(omittedChars, totalChars),
       truncated: omittedChars > 0,
       has_more_after_range: end < totalChars,
-      content
+      include_image_urls: includeImageUrls,
+      image_reference_count: appendixResult.imageReferenceCount,
+      content: appendixResult.content
     };
   }
 
   const effectiveMaxChars = maxChars ?? PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS;
   const start = Math.min(skipChars, totalChars);
   const end = Math.min(totalChars, start + effectiveMaxChars);
-  const content = normalizedText.slice(start, end);
-  const omittedChars = Math.max(0, totalChars - content.length);
+  const selectedContent = normalizedText.slice(start, end);
+  const appendixResult = appendImageReferenceAppendixForTransport(selectedContent, sourceImageReferences);
+  const omittedChars = Math.max(0, totalChars - selectedContent.length);
 
   return {
     ok: true,
@@ -2622,12 +2704,14 @@ function buildPageContentReadResultForTransport(pageContent, rawArgs) {
     total_chars: totalChars,
     skip_chars: start,
     max_chars: effectiveMaxChars,
-    returned_chars: content.length,
+    returned_chars: selectedContent.length,
     omitted_chars: omittedChars,
     omitted_pct: formatPercent(omittedChars, totalChars),
     truncated: omittedChars > 0,
     has_more_after_range: end < totalChars,
-    content
+    include_image_urls: includeImageUrls,
+    image_reference_count: appendixResult.imageReferenceCount,
+    content: appendixResult.content
   };
 }
 
@@ -2913,18 +2997,16 @@ function buildPdfContentReadResultForTransport(pageContent, rawArgs) {
   };
 }
 
-async function extractPageContent(targetSidebar = null) {
+async function extractPageContent(targetSidebar = null, rawArgs = null) {
   console.log('extractPageContent 开始提取页面内容');
+  const pageReadArgs = normalizePageContentReadArgsForTransport(rawArgs);
 
   // 在提取开始时冻结页面元数据快照，保证 URL/标题 与本次内容抓取使用同一时间点。
   const snapshotUrl = window.location.href;
   const snapshotTitle = document.title || snapshotUrl;
 
   // 检查是否是PDF或者iframe中的PDF
-  if (document.contentType === 'application/pdf' ||
-      (window.location.href.includes('.pdf') ||
-       document.querySelector('iframe[src*="pdf.js"]') ||
-       document.querySelector('iframe[src*=".pdf"]'))) {
+  if (isCurrentPagePdfLike()) {
     console.log('检测到PDF文件，尝试提取PDF内容');
     
     let pdfUrl = window.location.href;
@@ -2979,7 +3061,9 @@ async function extractPageContent(targetSidebar = null) {
   console.log('非PDF，执行HTML页面内容提取逻辑（包含Shadow DOM支持）');
 
 
-  const texts = [];
+  const textSegments = [];
+  const imageReferences = [];
+  const imageReferenceByUrl = new Map();
   // 选择器，用于跳过不应提取文本的元素
   // 标签名选择器（小写）
   const tagSelectorsToSkip = [
@@ -3001,7 +3085,91 @@ async function extractPageContent(targetSidebar = null) {
     '[data-nosnippet]' // Google no-snippet attribute
   ];
 
-  function shouldSkipElement(element) {
+  function sanitizeMarkdownReferenceTitle(value) {
+    return String(value ?? '')
+      .replace(/[\r\n]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/[\[\]]/g, '')
+      .trim();
+  }
+
+  function getImageFilenameFromUrl(url) {
+    try {
+      const parsed = new URL(url);
+      const tail = parsed.pathname.split('/').filter(Boolean).pop() || '';
+      return decodeURIComponent(tail).trim();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function resolveReadableImageUrl(img) {
+    if (!img || img.nodeType !== Node.ELEMENT_NODE) return '';
+    const raw = img.currentSrc
+      || img.src
+      || img.getAttribute('src')
+      || '';
+    if (!raw || typeof raw !== 'string') return '';
+    try {
+      const baseUrl = img.ownerDocument?.baseURI || snapshotUrl;
+      const resolved = new URL(raw, baseUrl);
+      if (resolved.protocol !== 'http:' && resolved.protocol !== 'https:') return '';
+      return resolved.href;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function resolveImageReferenceTitle(img, url) {
+    const fromAttributes = [
+      img?.getAttribute?.('alt'),
+      img?.getAttribute?.('title'),
+      img?.getAttribute?.('aria-label')
+    ];
+    for (const value of fromAttributes) {
+      const title = sanitizeMarkdownReferenceTitle(value);
+      if (title) return title;
+    }
+
+    try {
+      const figcaption = img.closest('figure')?.querySelector?.('figcaption');
+      const caption = sanitizeMarkdownReferenceTitle(figcaption?.textContent || '');
+      if (caption) return caption;
+    } catch (_) {}
+
+    const filename = sanitizeMarkdownReferenceTitle(getImageFilenameFromUrl(url));
+    return filename || 'Image';
+  }
+
+  function isElementVisiblyRendered(element, ownerWindow = window) {
+    try {
+      const computedStyle = ownerWindow.getComputedStyle(element);
+      return computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden';
+    } catch (_) {
+      return true;
+    }
+  }
+
+  function appendImageReferenceSegment(img, segments, ownerWindow = window) {
+    if (!pageReadArgs.includeImageUrls || !isElementVisiblyRendered(img, ownerWindow)) return;
+    const url = resolveReadableImageUrl(img);
+    if (!url) return;
+
+    let reference = imageReferenceByUrl.get(url);
+    if (!reference) {
+      reference = {
+        id: `img-${imageReferences.length + 1}`,
+        title: resolveImageReferenceTitle(img, url),
+        url
+      };
+      imageReferenceByUrl.set(url, reference);
+      imageReferences.push(reference);
+    }
+
+    segments.push(`[${reference.title}][${reference.id}]`);
+  }
+
+  function shouldSkipElement(element, ownerWindow = window) {
     if (!element || element.nodeType !== Node.ELEMENT_NODE) {
       return false;
     }
@@ -3017,43 +3185,47 @@ async function extractPageContent(targetSidebar = null) {
       // console.warn('Error matching selector for skip:', element.tagName, e.message);
     }
     // 检查计算样式是否为 display: none
-    const computedStyle = window.getComputedStyle(element);
-    if (computedStyle.display === 'none' || computedStyle.visibility === 'hidden') {
+    if (!isElementVisiblyRendered(element, ownerWindow)) {
         // console.log('Skipping non-visible element:', element.tagName, element.id, element.className);
         return true;
     }
     return false;
   }
 
-  function extractTextRecursively(node) {
-    if (shouldSkipElement(node)) {
+  function extractTextRecursively(node, ownerWindow = window, segments = textSegments) {
+    if (node?.nodeType === Node.ELEMENT_NODE && node.tagName?.toLowerCase() === 'img') {
+      appendImageReferenceSegment(node, segments, ownerWindow);
+      return;
+    }
+
+    if (shouldSkipElement(node, ownerWindow)) {
       return;
     }
 
     if (node.nodeType === Node.TEXT_NODE) {
       const trimmedText = node.textContent.trim();
       if (trimmedText) {
-        texts.push(trimmedText);
+        segments.push(trimmedText);
       }
     } else if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.DOCUMENT_FRAGMENT_NODE) {
       // 优先处理 Light DOM 子节点
       for (const child of node.childNodes) {
-        extractTextRecursively(child);
+        extractTextRecursively(child, ownerWindow, segments);
       }
       // 然后处理 Shadow DOM (仅对 Element 节点)
       if (node.nodeType === Node.ELEMENT_NODE && node.shadowRoot && node.shadowRoot.mode === 'open') {
         // console.log('Extracting from open shadowRoot of:', node.tagName);
         for (const shadowChild of node.shadowRoot.childNodes) {
-          extractTextRecursively(shadowChild);
+          extractTextRecursively(shadowChild, ownerWindow, segments);
         }
       }
     }
   }
 
   // 从 document.body 开始递归提取文本
-  extractTextRecursively(document.body);
+  extractTextRecursively(document.body, window, textSegments);
 
-  let mainContent = texts.join(' ').replace(/\s+/g, ' ').trim();
+  let mainContent = textSegments.join(' ').replace(/\s+/g, ' ').trim();
 
   // 新增：提取 iframe 内容 (此部分逻辑基本不变，但主内容提取已包含 Shadow DOM)
   let iframeContent = '';
@@ -3077,7 +3249,9 @@ async function extractPageContent(targetSidebar = null) {
             console.log('跳过隐藏或不可见的iframe body:', iframe.id || iframe.src);
             continue;
           }
-          const content = iframeDocument.body.innerText;
+          const iframeSegments = [];
+          extractTextRecursively(iframeDocument.body, iframe.contentWindow, iframeSegments);
+          const content = iframeSegments.join(' ').replace(/\s+/g, ' ').trim();
           if (content && content.trim()) {
             console.log('成功从iframe中提取内容 (前100字符):', content.substring(0,100) + "...");
             iframeContent += content.trim() + '\n\n'; // 添加换行符分隔不同iframe的内容
@@ -3103,6 +3277,8 @@ async function extractPageContent(targetSidebar = null) {
     title: snapshotTitle,
     url: snapshotUrl, // 使用提取开始时冻结的页面 URL
     content: mainContent,
+    content_with_image_refs: pageReadArgs.includeImageUrls ? mainContent : '',
+    image_references: pageReadArgs.includeImageUrls ? imageReferences : [],
     selectedText: currentSelection
   };
   

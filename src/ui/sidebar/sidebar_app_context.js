@@ -223,9 +223,20 @@ export function registerSidebarUtilities(appContext) {
     const explicitTemporaryMode = (typeof options?.isTemporaryMode === 'boolean')
       ? options.isTemporaryMode
       : appContext.services.messageSender?.getTemporaryModeState?.() === true;
+    const pageInfo = appContext.state.pageInfo && typeof appContext.state.pageInfo === 'object'
+      ? appContext.state.pageInfo
+      : {};
+    const contentType = typeof pageInfo.contentType === 'string' ? pageInfo.contentType.trim().toLowerCase() : '';
+    const pageUrl = typeof pageInfo.url === 'string' ? pageInfo.url.trim().toLowerCase() : '';
+    const isPdfPage = options?.isPdfPage === true
+      || pageInfo.isPdf === true
+      || pageInfo.is_pdf === true
+      || contentType === 'application/pdf'
+      || pageUrl.includes('.pdf');
     return resolvePageToolEnvironment({
       isStandalone: appContext.state.isStandalone,
-      isTemporaryMode: explicitTemporaryMode
+      isTemporaryMode: explicitTemporaryMode,
+      isPdfPage
     });
   }
 

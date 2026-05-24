@@ -116,6 +116,7 @@ export function normalizePageRuntimeContextFrames(frames) {
  *   pageToolEnvironment?: {
  *     exposeHostPageTools?: boolean,
  *     exposePageContentTool?: boolean,
+ *     exposePdfContentTool?: boolean,
  *     jsRuntimeEnvironment?: string
  *   }|null,
  *   pageMeta?: {url?:string, title?:string}|null,
@@ -149,6 +150,7 @@ export function buildPageRuntimeContextPayload(options = {}) {
   }
 
   const exposePageContentTool = pageToolEnvironment?.exposePageContentTool === true;
+  const exposePdfContentTool = pageToolEnvironment?.exposePdfContentTool === true;
   const mode = 'host_page';
 
   if (!url && !title && normalizedFrames.length === 0) {
@@ -159,6 +161,7 @@ export function buildPageRuntimeContextPayload(options = {}) {
     type: 'page_runtime_context',
     mode,
     page_content_tool: exposePageContentTool ? 'available' : 'unavailable',
+    pdf_content_tool: exposePdfContentTool ? 'available' : 'unavailable',
     js_runtime_environment: jsRuntimeEnvironment,
     url,
     title,
@@ -194,6 +197,7 @@ function buildHostPageRuntimeContextText(payload) {
   const lines = [
     `<page_runtime_context mode="${escapeXmlText(payload.mode)}">`,
     `  <page_content_tool>${escapeXmlText(payload.page_content_tool)}</page_content_tool>`,
+    `  <pdf_content_tool>${escapeXmlText(payload.pdf_content_tool)}</pdf_content_tool>`,
     `  <js_runtime_environment>${escapeXmlText(payload.js_runtime_environment)}</js_runtime_environment>`
   ];
   if (payload.url) lines.push(`  <url>${escapeXmlText(payload.url)}</url>`);

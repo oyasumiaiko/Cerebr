@@ -1073,7 +1073,11 @@ function buildResponsesPageContentToolOutputText(result) {
     omitted_chars: Number.isFinite(Number(normalized.omitted_chars)) ? Number(normalized.omitted_chars) : null,
     omitted_pct: Number.isFinite(Number(normalized.omitted_pct)) ? Number(normalized.omitted_pct) : null,
     truncated: normalized.truncated === true,
-    has_more_after_range: normalized.has_more_after_range === true
+    has_more_after_range: normalized.has_more_after_range === true,
+    include_image_urls: normalized.include_image_urls === true,
+    image_reference_count: Number.isFinite(Number(normalized.image_reference_count))
+      ? Number(normalized.image_reference_count)
+      : null
   };
   const blocks = [];
   if (typeof normalized.content === 'string' && normalized.content.trim()) {

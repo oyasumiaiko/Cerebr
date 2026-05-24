@@ -261,10 +261,11 @@ test('page_content_read 摘要会显示页面预览或字符范围', async () =>
     name: 'page_content_read',
     arguments: JSON.stringify({
       skip_chars: 200,
-      max_chars: 600
+      max_chars: 600,
+      include_image_urls: true
     })
   };
-  assert.equal(buildResponseActivityCustomToolPrimaryText(rangeRecord), '读取 当前页面 C200-C800');
+  assert.equal(buildResponseActivityCustomToolPrimaryText(rangeRecord), '读取 当前页面 C200-C800 · 含图片URL');
 });
 
 test('pdf_content_read 摘要会区分目录、章节和全文读取', async () => {

@@ -8252,9 +8252,16 @@ export function createMessageSender(appContext) {
     if (attemptState?.pageToolEnvironment && typeof attemptState.pageToolEnvironment === 'object') {
       return attemptState.pageToolEnvironment;
     }
+    const pageInfo = state?.pageInfo && typeof state.pageInfo === 'object' ? state.pageInfo : {};
+    const contentType = typeof pageInfo.contentType === 'string' ? pageInfo.contentType.trim().toLowerCase() : '';
+    const pageUrl = typeof pageInfo.url === 'string' ? pageInfo.url.trim().toLowerCase() : '';
     return resolvePageToolEnvironment({
       isStandalone: state?.isStandalone === true,
-      isTemporaryMode
+      isTemporaryMode,
+      isPdfPage: pageInfo.isPdf === true
+        || pageInfo.is_pdf === true
+        || contentType === 'application/pdf'
+        || pageUrl.includes('.pdf')
     });
   }
 
@@ -8263,7 +8270,7 @@ export function createMessageSender(appContext) {
    *
    * 语义说明：
    * - 不再向模型暴露宿主页增强工具；
-   * - `page_content_read` 对新请求隐藏；
+   * - `page_content_read` / `pdf_content_read` 对新请求隐藏；
    * - `js_runtime_execute` 对新请求切换到侧栏内部隔离沙箱；
    * - 不影响当前已经发出的请求契约，当前 request/turn 仍按开始时快照执行。
    * @public
@@ -8298,7 +8305,7 @@ export function createMessageSender(appContext) {
    *
    * 当前工具暴露规则：
    * - 仅在 Responses API 场景下注入；
-   * - `page_content_read` 只在“宿主页增强模式”下注入；
+   * - 页面读取工具只在“宿主页增强模式”下注入；普通网页注入 `page_content_read`，PDF 页面注入 `pdf_content_read`；
    * - `js_runtime_execute` 始终可以注入，但会根据当前模式切换到：
    *   1. 宿主页 JS 环境；
    *   2. 或侧栏内部隔离 sandbox。
@@ -8325,9 +8332,12 @@ export function createMessageSender(appContext) {
       buildHistorySearchFunctionToolDefinition(),
       buildHistoryReadFunctionToolDefinition()
     ];
-    if (pageToolEnvironment?.exposePageContentTool) {
+    if (pageToolEnvironment?.exposeHostPageTools) {
       tools.push(buildWebpageScreenshotFunctionToolDefinition());
+    }
+    if (pageToolEnvironment?.exposePdfContentTool) {
       tools.push(buildPdfContentReadFunctionToolDefinition());
+    } else if (pageToolEnvironment?.exposePageContentTool) {
       tools.push(buildPageContentReadFunctionToolDefinition());
     }
     if (typeof utils?.executeJsRuntime === 'function') {

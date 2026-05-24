@@ -236,12 +236,16 @@ test('buildResponsesPageContentToolOutputContentItems 使用 metadata + content 
     title: 'Example',
     url: 'https://example.com',
     total_chars: 100,
+    include_image_urls: true,
+    image_reference_count: 1,
     content: 'Alpha <b>Beta</b>\nGamma'
   });
   const text = formatResponsesToolOutputForDisplay(items);
   assert.match(text, /<page_content_read_result>/);
   assert.match(text, /<metadata>/);
   assert.match(text, /"mode": "preview"/);
+  assert.match(text, /"include_image_urls": true/);
+  assert.match(text, /"image_reference_count": 1/);
   assert.match(text, /<content>\s*Alpha <b>Beta<\/b>/);
 });
 

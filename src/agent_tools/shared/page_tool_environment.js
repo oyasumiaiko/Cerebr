@@ -2,7 +2,7 @@
  * 统一描述“当前这次请求是否暴露宿主页增强工具”。
  *
  * 这里把几个容易混淆的概念拆开：
- * 1. 是否暴露 `page_content_read`；
+ * 1. 是否暴露 `page_content_read` / `pdf_content_read`；
  * 2. `js_runtime_execute` 当前应连接到宿主页，还是侧栏内部隔离沙箱；
  * 3. 是否应该把宿主页 frame 快照注入给模型。
  *
@@ -26,7 +26,9 @@ export const JS_RUNTIME_ENV_ISOLATED_SANDBOX = 'isolated_sandbox_iframe';
  *   isStandalone:boolean,
  *   isTemporaryMode:boolean,
  *   exposeHostPageTools:boolean,
+ *   isPdfPage:boolean,
  *   exposePageContentTool:boolean,
+ *   exposePdfContentTool:boolean,
  *   jsRuntimeEnvironment:string,
  *   shouldInjectJsRuntimeFrameContext:boolean
  * }}
@@ -34,13 +36,16 @@ export const JS_RUNTIME_ENV_ISOLATED_SANDBOX = 'isolated_sandbox_iframe';
 export function resolvePageToolEnvironment(options = {}) {
   const isStandalone = options?.isStandalone === true;
   const isTemporaryMode = options?.isTemporaryMode === true;
+  const isPdfPage = options?.isPdfPage === true;
   const exposeHostPageTools = !isStandalone && !isTemporaryMode;
 
   return {
     isStandalone,
     isTemporaryMode,
+    isPdfPage,
     exposeHostPageTools,
-    exposePageContentTool: exposeHostPageTools,
+    exposePageContentTool: exposeHostPageTools && !isPdfPage,
+    exposePdfContentTool: exposeHostPageTools && isPdfPage,
     jsRuntimeEnvironment: exposeHostPageTools
       ? JS_RUNTIME_ENV_BOUND_HOST_PAGE
       : JS_RUNTIME_ENV_ISOLATED_SANDBOX,
@@ -58,6 +63,9 @@ export function resolvePageToolEnvironment(options = {}) {
  */
 export function buildPageToolModeStatusTitle(mode = {}) {
   if (mode?.exposeHostPageTools) {
+    if (mode?.isPdfPage || mode?.exposePdfContentTool) {
+      return 'PDF 增强模式：暴露 PDF 读取工具，JS 运行在当前侧栏绑定网页标签页。';
+    }
     return '网页增强模式：暴露页面内容工具，JS 运行在当前侧栏绑定网页标签页。';
   }
   return '纯对话模式：不暴露页面内容工具，JS 运行在隔离沙箱，不访问宿主标签页。';

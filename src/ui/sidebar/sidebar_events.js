@@ -93,7 +93,9 @@ function setupStatusDot(appContext) {
   const sender = appContext.services.messageSender;
   const refresh = () => {
     const isTemp = sender.getTemporaryModeState?.() === true;
-    const pageToolEnvironment = resolvePageToolEnvironment({
+    const pageToolEnvironment = appContext.utils.resolveCurrentPageToolEnvironment?.({
+      isTemporaryMode: isTemp
+    }) || resolvePageToolEnvironment({
       isStandalone: appContext.state.isStandalone,
       isTemporaryMode: isTemp
     });
@@ -113,6 +115,8 @@ function setupStatusDot(appContext) {
   refresh();
   window.addEventListener('message', (event) => {
     if (event?.data?.type === 'TOGGLE_TEMP_MODE_FROM_EXTENSION') {
+      setTimeout(refresh, 0);
+    } else if (event?.data?.type === 'URL_CHANGED') {
       setTimeout(refresh, 0);
     }
   });

@@ -47,8 +47,30 @@ test('host page runtime context 会包含 URL、Title 与 frame 列表', async (
   assert.equal(items.length, 1);
   const text = items[0].content[0].text;
   assert.match(text, /<page_runtime_context mode="host_page">/);
+  assert.match(text, /<page_content_tool>available<\/page_content_tool>/);
+  assert.match(text, /<pdf_content_tool>unavailable<\/pdf_content_tool>/);
   assert.match(text, /<url>https:\/\/example\.com\/page<\/url>/);
   assert.match(text, /<frame id="2" top="false">/);
+});
+
+test('PDF runtime context 会标记 PDF 读取工具可用且页面读取工具不可用', async () => {
+  const { buildPageRuntimeContextPayload } = await loadPageRuntimeContextModule();
+
+  const payload = buildPageRuntimeContextPayload({
+    pageToolEnvironment: {
+      exposePageContentTool: false,
+      exposePdfContentTool: true,
+      jsRuntimeEnvironment: 'bound_host_page'
+    },
+    pageMeta: {
+      url: 'https://example.com/file.pdf',
+      title: 'Example PDF'
+    },
+    frames: []
+  });
+
+  assert.equal(payload.page_content_tool, 'unavailable');
+  assert.equal(payload.pdf_content_tool, 'available');
 });
 
 test('isolated sandbox runtime context 不再生成隐藏页面上下文', async () => {

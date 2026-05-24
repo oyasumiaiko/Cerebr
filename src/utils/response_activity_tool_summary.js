@@ -303,11 +303,15 @@ function buildPageContentReadSummaryParts(args, options = {}) {
   const maxChars = Number.isFinite(Number(args?.max_chars))
     ? Number(args.max_chars)
     : PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS;
+  const metaParts = [
+    hasExplicitRange ? formatCharRangeSuffix(skipChars, maxChars) : '预览',
+    args?.include_image_urls === true ? '含图片URL' : ''
+  ].filter(Boolean);
   return {
     action: isInProgress ? '正在读取' : '读取',
     value: '当前页面',
     valueUrl: '',
-    meta: hasExplicitRange ? formatCharRangeSuffix(skipChars, maxChars) : '预览',
+    meta: metaParts.join(' · '),
     locationAction: '',
     locationValue: '',
     locationUrl: ''
