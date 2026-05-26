@@ -2962,6 +2962,22 @@ export function createSettingsManager(appContext) {
   }
 
   function getCurrentViewportWidthForFullscreenSetting() {
+    if (isStandalone) {
+      // 独立页的 fullscreenWidth 对用户保持“可见像素”语义；
+      // --cerebr-viewport-width 是 zoom 反算后的布局视口，不能拿它当滑条上限，
+      // 否则 DPR/缩放越大，聊天列越容易被允许超过真实窗口宽度。
+      const visualViewportWidth = Number(window.visualViewport?.width);
+      if (Number.isFinite(visualViewportWidth) && visualViewportWidth > 0) {
+        return visualViewportWidth;
+      }
+      const innerWidth = Number(window.innerWidth);
+      if (Number.isFinite(innerWidth) && innerWidth > 0) {
+        return innerWidth;
+      }
+      const clientWidth = Number(document.documentElement?.clientWidth);
+      return Number.isFinite(clientWidth) && clientWidth > 0 ? clientWidth : 0;
+    }
+
     const cssViewportWidthRaw = document.documentElement?.style?.getPropertyValue?.('--cerebr-viewport-width')
       || getComputedStyle(document.documentElement || document.body).getPropertyValue('--cerebr-viewport-width');
     const cssViewportWidth = parseFloat(cssViewportWidthRaw || '');

@@ -1,4 +1,10 @@
 import { deriveAutoScrollFollowState } from '../utils/auto_scroll_follow_state.js';
+import {
+  getDocumentZoomFactor,
+  getElementLayoutRect,
+  getElementLayoutSize,
+  getLayoutViewportSize
+} from '../utils/coordinate_space.js';
 
 /**
  * UI管理模块
@@ -74,23 +80,6 @@ export function createUIManager(appContext) {
     return Math.min(max, Math.max(min, numeric));
   }
 
-  function getDocumentZoomFactor() {
-    const root = document.documentElement;
-    if (!root) return 1;
-    const inlineZoom = Number.parseFloat(root.style.zoom || '');
-    if (Number.isFinite(inlineZoom) && inlineZoom > 0) return inlineZoom;
-    const computedZoom = Number.parseFloat(window.getComputedStyle(root).zoom || '');
-    if (Number.isFinite(computedZoom) && computedZoom > 0) return computedZoom;
-    return 1;
-  }
-
-  function toLayoutPixels(value, zoomFactor = getDocumentZoomFactor()) {
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric)) return 0;
-    if (!Number.isFinite(zoomFactor) || zoomFactor <= 0) return numeric;
-    return numeric / zoomFactor;
-  }
-
   /**
    * 将“...”菜单提升到 body 下，避免受输入框层叠上下文与 backdrop-filter 影响。
    */
@@ -106,27 +95,16 @@ export function createUIManager(appContext) {
   function positionSettingsMenu() {
     if (!dom.settingsMenu || !dom.settingsButton) return;
     const zoomFactor = getDocumentZoomFactor();
-    const buttonRect = dom.settingsButton.getBoundingClientRect();
-    const buttonTop = toLayoutPixels(buttonRect.top, zoomFactor);
-    const buttonRight = toLayoutPixels(buttonRect.right, zoomFactor);
+    const buttonRect = getElementLayoutRect(dom.settingsButton, { zoomFactor });
+    const buttonTop = buttonRect.top;
+    const buttonRight = buttonRect.right;
     const menu = dom.settingsMenu;
-    const viewportWidth = Math.max(
-      Number(document.documentElement?.clientWidth) || 0,
-      Number(window.innerWidth) || 0
-    );
-    const viewportHeight = Math.max(
-      Number(document.documentElement?.clientHeight) || 0,
-      Number(window.innerHeight) || 0
-    );
-    const menuRect = menu.getBoundingClientRect();
-    const menuWidth = Math.max(
-      1,
-      Number(menu.offsetWidth) || toLayoutPixels(menuRect.width, zoomFactor) || 1
-    );
-    const menuHeight = Math.max(
-      1,
-      Number(menu.offsetHeight) || toLayoutPixels(menuRect.height, zoomFactor) || 1
-    );
+    const viewport = getLayoutViewportSize({ zoomFactor });
+    const menuSize = getElementLayoutSize(menu, { zoomFactor });
+    const viewportWidth = Math.max(1, viewport.width);
+    const viewportHeight = Math.max(1, viewport.height);
+    const menuWidth = Math.max(1, menuSize.width || 1);
+    const menuHeight = Math.max(1, menuSize.height || 1);
 
     const leftMin = SETTINGS_MENU_VIEWPORT_MARGIN_PX;
     const leftMax = viewportWidth - menuWidth - SETTINGS_MENU_VIEWPORT_MARGIN_PX;

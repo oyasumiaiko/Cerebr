@@ -74,6 +74,13 @@ import {
   readChatHistoryPanelLayoutEntry,
   resolveChatHistoryPanelInteractionScale
 } from '../utils/chat_history_panel_layout.js';
+import {
+  getDocumentZoomFactor,
+  getElementLayoutRect,
+  getElementLayoutSize,
+  getLayoutViewportSize,
+  toLayoutPixels
+} from '../utils/coordinate_space.js';
 
 /**
  * 创建聊天历史UI管理器
@@ -10050,13 +10057,7 @@ export function createChatHistoryUI(appContext) {
   }
 
   function getChatHistoryPanelDocumentZoomFactor() {
-    const root = document.documentElement;
-    if (!root) return 1;
-    const inlineZoom = Number.parseFloat(root.style.zoom || '');
-    if (Number.isFinite(inlineZoom) && inlineZoom > 0) return inlineZoom;
-    const computedZoom = Number.parseFloat(window.getComputedStyle(root).zoom || '');
-    if (Number.isFinite(computedZoom) && computedZoom > 0) return computedZoom;
-    return 1;
+    return getDocumentZoomFactor();
   }
 
   function getChatHistoryPanelHostEmbedScale() {
@@ -10083,10 +10084,27 @@ export function createChatHistoryUI(appContext) {
   }
 
   function toChatHistoryPanelLayoutPixels(value, zoomFactor = getChatHistoryPanelInteractionZoomFactor()) {
-    const numeric = Number(value);
-    if (!Number.isFinite(numeric)) return 0;
-    if (!Number.isFinite(zoomFactor) || zoomFactor <= 0) return numeric;
-    return numeric / zoomFactor;
+    return toLayoutPixels(value, zoomFactor);
+  }
+
+  function getChatHistoryPanelDocumentLayoutRect(panel) {
+    const zoomFactor = getChatHistoryPanelDocumentZoomFactor();
+    return getElementLayoutRect(panel, { zoomFactor });
+  }
+
+  function getChatHistoryPanelDocumentLayoutSize(panel) {
+    const zoomFactor = getChatHistoryPanelDocumentZoomFactor();
+    return getElementLayoutSize(panel, { zoomFactor });
+  }
+
+  function getChatHistoryPanelDocumentLayoutViewport() {
+    const zoomFactor = getChatHistoryPanelDocumentZoomFactor();
+    return getLayoutViewportSize({ zoomFactor });
+  }
+
+  function readPositiveStylePixelValue(element, property) {
+    const value = Number.parseFloat(element?.style?.[property]);
+    return Number.isFinite(value) && value > 0 ? value : null;
   }
 
   // 读取 Esc 面板布局快照；优先读取新版分模式存储，并兼容旧版 fullscreen-only 数据。
@@ -10111,15 +10129,16 @@ export function createChatHistoryUI(appContext) {
   function persistChatHistoryPanelLayout(panel) {
     if (!panel) return;
     try {
-      const rect = panel.getBoundingClientRect();
-      if (!rect || !Number.isFinite(rect.width) || !Number.isFinite(rect.height)) return;
+      const layoutRect = getChatHistoryPanelDocumentLayoutRect(panel);
+      if (!layoutRect || !Number.isFinite(layoutRect.width) || !Number.isFinite(layoutRect.height)) return;
 
       const layoutMode = getChatHistoryPanelLayoutMode();
       const isFullscreenLayout = layoutMode === CHAT_HISTORY_PANEL_LAYOUT_MODE_FULLSCREEN;
       const dragPositioned = panel.dataset.dragPositioned === '1';
       const sizeCustomized = panel.dataset.sizeCustomized === '1';
-      const fallbackLeft = Number.isFinite(rect.left) ? rect.left : null;
-      const fallbackTop = Number.isFinite(rect.top) ? rect.top : null;
+      const layoutSize = getChatHistoryPanelDocumentLayoutSize(panel);
+      const fallbackLeft = Number.isFinite(layoutRect.left) ? layoutRect.left : null;
+      const fallbackTop = Number.isFinite(layoutRect.top) ? layoutRect.top : null;
       const styleLeft = Number.parseFloat(panel.style.left);
       const styleTop = Number.parseFloat(panel.style.top);
       const left = dragPositioned
@@ -10128,8 +10147,8 @@ export function createChatHistoryUI(appContext) {
       const top = dragPositioned
         ? (Number.isFinite(styleTop) ? styleTop : fallbackTop)
         : fallbackTop;
-      const width = Number.parseFloat(panel.style.width) || panel.offsetWidth || rect.width;
-      const height = Number.parseFloat(panel.style.height) || panel.offsetHeight || rect.height;
+      const width = readPositiveStylePixelValue(panel, 'width') || layoutSize.width || layoutRect.width;
+      const height = readPositiveStylePixelValue(panel, 'height') || layoutSize.height || layoutRect.height;
 
       const payload = buildChatHistoryPanelStoredLayout({
         existingLayout: readChatHistoryPanelLayoutSnapshot(),
@@ -10218,13 +10237,14 @@ export function createChatHistoryUI(appContext) {
 
   function clampChatHistoryPanelPosition(panel, nextLeft = null, nextTop = null) {
     if (!panel || panel.dataset.dragPositioned !== '1') return;
-    const rect = panel.getBoundingClientRect();
-    if (!rect || !Number.isFinite(rect.width) || !Number.isFinite(rect.height)) return;
+    const layoutSize = getChatHistoryPanelDocumentLayoutSize(panel);
+    if (!layoutSize || !Number.isFinite(layoutSize.width) || !Number.isFinite(layoutSize.height)) return;
+    const viewport = getChatHistoryPanelDocumentLayoutViewport();
 
     const minLeft = CHAT_HISTORY_PANEL_DRAG_MARGIN_PX;
     const minTop = CHAT_HISTORY_PANEL_DRAG_MARGIN_PX;
-    const maxLeft = Math.max(minLeft, window.innerWidth - rect.width - CHAT_HISTORY_PANEL_DRAG_MARGIN_PX);
-    const maxTop = Math.max(minTop, window.innerHeight - rect.height - CHAT_HISTORY_PANEL_DRAG_MARGIN_PX);
+    const maxLeft = Math.max(minLeft, viewport.width - layoutSize.width - CHAT_HISTORY_PANEL_DRAG_MARGIN_PX);
+    const maxTop = Math.max(minTop, viewport.height - layoutSize.height - CHAT_HISTORY_PANEL_DRAG_MARGIN_PX);
     const rawLeft = Number.isFinite(nextLeft) ? Number(nextLeft) : Number.parseFloat(panel.style.left);
     const rawTop = Number.isFinite(nextTop) ? Number(nextTop) : Number.parseFloat(panel.style.top);
     if (!Number.isFinite(rawLeft) || !Number.isFinite(rawTop)) return;
@@ -10244,8 +10264,9 @@ export function createChatHistoryUI(appContext) {
     const hasInputSize = Number.isFinite(nextWidth) || Number.isFinite(nextHeight);
     if (!hasCustomSize && !hasInputSize) return;
 
-    const rect = panel.getBoundingClientRect();
-    if (!rect || !Number.isFinite(rect.width) || !Number.isFinite(rect.height)) return;
+    const layoutSize = getChatHistoryPanelDocumentLayoutSize(panel);
+    if (!layoutSize || !Number.isFinite(layoutSize.width) || !Number.isFinite(layoutSize.height)) return;
+    const viewport = getChatHistoryPanelDocumentLayoutViewport();
 
     const isFullscreenLayout = isChatHistoryPanelFullscreenLayout();
     const reservedBottomSpace = isFullscreenLayout
@@ -10253,15 +10274,19 @@ export function createChatHistoryUI(appContext) {
       : 60 + CHAT_HISTORY_PANEL_RESIZE_MARGIN_PX;
     const maxWidth = Math.max(
       CHAT_HISTORY_PANEL_MIN_WIDTH_PX,
-      window.innerWidth - CHAT_HISTORY_PANEL_RESIZE_MARGIN_PX * 2
+      viewport.width - CHAT_HISTORY_PANEL_RESIZE_MARGIN_PX * 2
     );
     const maxHeight = Math.max(
       CHAT_HISTORY_PANEL_MIN_HEIGHT_PX,
-      window.innerHeight - CHAT_HISTORY_PANEL_RESIZE_MARGIN_PX - reservedBottomSpace
+      viewport.height - CHAT_HISTORY_PANEL_RESIZE_MARGIN_PX - reservedBottomSpace
     );
 
-    const rawWidth = Number.isFinite(nextWidth) ? Number(nextWidth) : rect.width;
-    const rawHeight = Number.isFinite(nextHeight) ? Number(nextHeight) : rect.height;
+    const rawWidth = Number.isFinite(nextWidth)
+      ? Number(nextWidth)
+      : (readPositiveStylePixelValue(panel, 'width') || layoutSize.width);
+    const rawHeight = Number.isFinite(nextHeight)
+      ? Number(nextHeight)
+      : (readPositiveStylePixelValue(panel, 'height') || layoutSize.height);
     if (!Number.isFinite(rawWidth) || !Number.isFinite(rawHeight)) return;
 
     const clampedWidth = Math.min(Math.max(rawWidth, CHAT_HISTORY_PANEL_MIN_WIDTH_PX), maxWidth);
@@ -10339,9 +10364,9 @@ export function createChatHistoryUI(appContext) {
       if (!isChatHistoryPanelFullscreenLayout()) return;
 
       // 仅在全屏模式允许拖动位移：把当前布局位置固化为 left/top 后再拖拽。
-      const rect = panel.getBoundingClientRect();
-      panel.style.left = `${Math.round(rect.left)}px`;
-      panel.style.top = `${Math.round(rect.top)}px`;
+      const layoutRect = getChatHistoryPanelDocumentLayoutRect(panel);
+      panel.style.left = `${Math.round(layoutRect.left)}px`;
+      panel.style.top = `${Math.round(layoutRect.top)}px`;
       panel.style.right = 'auto';
       panel.style.bottom = 'auto';
       panel.style.margin = '0';
@@ -10352,8 +10377,8 @@ export function createChatHistoryUI(appContext) {
         pointerId: event.pointerId,
         startClientX: event.clientX,
         startClientY: event.clientY,
-        startLeft: Number.parseFloat(panel.style.left) || rect.left,
-        startTop: Number.parseFloat(panel.style.top) || rect.top,
+        startLeft: Number.parseFloat(panel.style.left) || layoutRect.left,
+        startTop: Number.parseFloat(panel.style.top) || layoutRect.top,
         zoomFactor
       };
       panel.classList.add('chat-history-panel-dragging');
@@ -10427,14 +10452,14 @@ export function createChatHistoryUI(appContext) {
 
     resizeHandle.addEventListener('pointerdown', (event) => {
       if (event.button !== 0) return;
-      const rect = panel.getBoundingClientRect();
       const zoomFactor = getChatHistoryPanelInteractionZoomFactor();
+      const layoutSize = getChatHistoryPanelDocumentLayoutSize(panel);
       resizeSession = {
         pointerId: event.pointerId,
         startClientX: event.clientX,
         startClientY: event.clientY,
-        startWidth: Number.parseFloat(panel.style.width) || panel.offsetWidth || rect.width,
-        startHeight: Number.parseFloat(panel.style.height) || panel.offsetHeight || rect.height,
+        startWidth: readPositiveStylePixelValue(panel, 'width') || layoutSize.width,
+        startHeight: readPositiveStylePixelValue(panel, 'height') || layoutSize.height,
         zoomFactor
       };
       panel.classList.add('chat-history-panel-resizing');
