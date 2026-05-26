@@ -4218,6 +4218,9 @@ export function createMessageSender(appContext) {
   function hasPendingWorkForConversationQueue(queueKey) {
     const normalizedQueueKey = resolveConversationQueueKey(queueKey);
     if (conversationQueueDrainLocks.has(normalizedQueueKey)) return true;
+    // 手动 compact 不是普通 assistant attempt，但它同样会改写当前消息链的历史边界；
+    // 因此同一会话/线程里的后续发送必须先进入 FIFO queue，等待 compact 落库后再执行。
+    if (hasRunningResponsesLocalCompactionForConversationQueue(normalizedQueueKey)) return true;
 
     for (const attemptState of activeAttempts.values()) {
       if (doesAttemptBelongToConversationQueueKey(attemptState, normalizedQueueKey)) {
@@ -5710,6 +5713,55 @@ export function createMessageSender(appContext) {
     responsesLocalCompactionRuns.delete(normalizedMessageId);
   }
 
+  function resolveExplicitConversationQueueKey(queueKey) {
+    const rawQueueKey = (typeof queueKey === 'string' || typeof queueKey === 'number')
+      ? String(queueKey).trim()
+      : '';
+    return rawQueueKey ? resolveConversationQueueKey(rawQueueKey) : '';
+  }
+
+  /**
+   * 为一次本地 compact 解析它所属的 runtime queue key。
+   *
+   * 这里优先使用调用方在 `/compact` 启动瞬间冻结的 queue key；缺省时再从 marker
+   * 所在的 history node/threadId 反推。这样用户在 compact 期间切换线程或对话时，
+   * 后续发送的排队判定仍然绑定到最初那条消息链，不会退化成全局阻塞或主会话串线。
+   */
+  function resolveResponsesLocalCompactionQueueKey(options = {}) {
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const explicitQueueKey = resolveExplicitConversationQueueKey(
+      normalizedOptions.conversationQueueKey || normalizedOptions.queueKey
+    );
+    if (explicitQueueKey) return explicitQueueKey;
+
+    const targetNode = findAssistantHistoryNodeForCompactionMessage(
+      normalizedOptions.targetMessageId || '',
+      normalizedOptions.historyMessagesRef || null
+    );
+    const activeThreadContext = normalizedOptions.activeThreadContext || null;
+    const threadId = normalizeConversationId(activeThreadContext?.threadId)
+      || normalizeConversationId(targetNode?.threadId);
+    const conversationId = normalizeConversationId(normalizedOptions.conversationId)
+      || normalizeConversationId(currentConversationId)
+      || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
+
+    return resolveConversationQueueKey(conversationId, { threadId });
+  }
+
+  function hasRunningResponsesLocalCompactionForConversationQueue(queueKey) {
+    const normalizedQueueKey = resolveConversationQueueKey(queueKey);
+    if (!normalizedQueueKey) return false;
+
+    for (const runContext of responsesLocalCompactionRuns.values()) {
+      const runQueueKey = resolveExplicitConversationQueueKey(runContext?.queueKey);
+      if (runQueueKey && runQueueKey === normalizedQueueKey) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   function updateResponsesLocalCompactionStatusNode({
     targetMessageId,
     activeThreadContext = null,
@@ -6054,7 +6106,10 @@ export function createMessageSender(appContext) {
 
   async function runResponsesLocalCompactionWithRetries({
     targetMessageId,
-    clearComposer = false
+    clearComposer = false,
+    composerTextSnapshot = '',
+    conversationQueueKey = '',
+    activeThreadContext = null
   } = {}) {
     const normalizedTargetMessageId = normalizeConversationId(targetMessageId);
     if (!normalizedTargetMessageId) {
@@ -6065,13 +6120,28 @@ export function createMessageSender(appContext) {
     }
 
     const controller = new AbortController();
+    const normalizedCompactionQueueKey = resolveResponsesLocalCompactionQueueKey({
+      targetMessageId: normalizedTargetMessageId,
+      conversationQueueKey,
+      activeThreadContext
+    });
     const runContext = {
       controller,
-      totalAttempts: RESPONSES_LOCAL_COMPACTION_TOTAL_ATTEMPTS
+      totalAttempts: RESPONSES_LOCAL_COMPACTION_TOTAL_ATTEMPTS,
+      queueKey: normalizedCompactionQueueKey,
+      targetMessageId: normalizedTargetMessageId
     };
     responsesLocalCompactionRuns.set(normalizedTargetMessageId, runContext);
+    refreshConversationQueueState(normalizedCompactionQueueKey);
+    notifyStreamingConversationStateChanged();
 
-    if (clearComposer) {
+    if (
+      clearComposer
+      && (
+        !composerTextSnapshot
+        || isCurrentComposerTextStillSlashCommandSnapshot(composerTextSnapshot)
+      )
+    ) {
       clearInputs();
       inputController?.focusToEnd?.();
     }
@@ -6170,7 +6240,15 @@ export function createMessageSender(appContext) {
         }
       }
     } finally {
+      const queueKeyToFlush = runContext.queueKey;
       clearResponsesLocalCompactionRun(normalizedTargetMessageId);
+      if (queueKeyToFlush) {
+        refreshConversationQueueState(queueKeyToFlush);
+        notifyStreamingConversationStateChanged();
+        if (hasQueuedMessagesForConversation(queueKeyToFlush)) {
+          scheduleConversationQueueFlush(queueKeyToFlush);
+        }
+      }
     }
 
     return { ok: false, error: lastError?.message || '上下文压缩失败' };
@@ -6183,9 +6261,13 @@ export function createMessageSender(appContext) {
       showNotification?.({ message: '当前有进行中的请求，请等待结束后再重试压缩', type: 'warning' });
       return { ok: false, error: 'request_in_progress' };
     }
+    const retryQueueKey = resolveResponsesLocalCompactionQueueKey({
+      targetMessageId: normalizedTargetMessageId
+    });
     return runResponsesLocalCompactionWithRetries({
       targetMessageId: normalizedTargetMessageId,
-      clearComposer: false
+      clearComposer: false,
+      conversationQueueKey: retryQueueKey
     });
   }
 
@@ -6672,6 +6754,32 @@ export function createMessageSender(appContext) {
     }
   }
 
+  function readCurrentComposerTextSafely() {
+    try {
+      return inputController ? inputController.getInputText() : (messageInput.textContent || '');
+    } catch (error) {
+      console.warn('读取当前输入框文本失败:', error);
+      return '';
+    }
+  }
+
+  function normalizeSlashCommandInputSnapshot(value) {
+    return String(value ?? '').replace(/\r\n/g, '\n').trimStart();
+  }
+
+  /**
+   * 异步斜杠命令结束后只清理“当初提交的那条命令文本”。
+   *
+   * 如果用户在命令运行期间已经输入了新草稿，当前 composer 文本会和快照不同，
+   * 这里就不会再调用 clearInputs，避免长耗时命令完成时误删新输入。
+   */
+  function isCurrentComposerTextStillSlashCommandSnapshot(snapshotText) {
+    const expectedText = normalizeSlashCommandInputSnapshot(snapshotText);
+    if (!expectedText) return false;
+    const currentText = normalizeSlashCommandInputSnapshot(readCurrentComposerTextSafely());
+    return currentText === expectedText;
+  }
+
   /**
    * 解析用户输入中的斜杠命令。
    *
@@ -6743,7 +6851,7 @@ export function createMessageSender(appContext) {
       aliases: ['cmp'],
       usage: '/compact',
       description: '手动压缩当前 Responses 上下文',
-      handler: async () => {
+      handler: async ({ raw }) => {
         if (activeAttempts.size > 0) {
           if (typeof showNotification === 'function') {
             showNotification({ message: '当前有进行中的请求，请等待结束后再执行 /compact', type: 'warning' });
@@ -6777,10 +6885,22 @@ export function createMessageSender(appContext) {
           activeThreadContext,
           historyMessagesRef: null
         });
-        return runResponsesLocalCompactionWithRetries({
-          targetMessageId: pendingMarkerResult?.messageId || '',
-          clearComposer: true
+        const compactionQueueKey = getCurrentActiveConversationQueueKey({
+          activeThreadContext
         });
+        const compactionResult = await runResponsesLocalCompactionWithRetries({
+          targetMessageId: pendingMarkerResult?.messageId || '',
+          clearComposer: true,
+          composerTextSnapshot: raw,
+          conversationQueueKey: compactionQueueKey,
+          activeThreadContext
+        });
+
+        return {
+          ...compactionResult,
+          // /compact 可能运行很久；启动时清掉命令文本即可，结束时不能再清空用户期间输入的新草稿。
+          keepInput: true
+        };
       },
       requiresArgs: false
     },
@@ -11778,12 +11898,13 @@ export function createMessageSender(appContext) {
       && opts.__skipSlashCommand !== true;
 
     if (shouldCheckSlashCommand) {
+      const slashCommandInputSnapshot = rawText;
       const slashResult = await runSlashCommandIfMatched(rawText, { hasImages: hasImagesInInput });
       if (typeof slashResult?.overrideText === 'string') {
         rawText = slashResult.overrideText;
       }
       if (slashResult?.handled) {
-        if (!slashResult.keepInput) {
+        if (!slashResult.keepInput && isCurrentComposerTextStillSlashCommandSnapshot(slashCommandInputSnapshot)) {
           clearInputs();
           inputController?.focusToEnd?.();
         }
@@ -11821,6 +11942,9 @@ export function createMessageSender(appContext) {
       || normalizeConversationId(chatHistoryUI?.getCurrentConversationId?.());
     const hasPendingWorkInCurrentConversation = hasPendingWorkForConversationQueue(currentConversationQueueKey);
     const hasRunningAttemptInCurrentConversation = hasRunningAttemptForConversationQueue(currentConversationQueueKey);
+    const hasRunningCompactionInCurrentConversation = hasRunningResponsesLocalCompactionForConversationQueue(
+      currentConversationQueueKey
+    );
     const hasQueuedMessagesInCurrentConversation = hasQueuedMessagesForConversation(currentConversationQueueKey);
     const canQueueOrInterrupt = !!(
       singleOpts.regenerateMode
@@ -11858,7 +11982,9 @@ export function createMessageSender(appContext) {
     }
 
     if (!requestedSteer && (hasPendingWorkInCurrentConversation || hasQueuedMessagesInCurrentConversation) && canQueueOrInterrupt) {
-      const shouldEnqueue = hasQueuedMessagesInCurrentConversation || queueCurrentConversationMessages;
+      const shouldEnqueue = hasRunningCompactionInCurrentConversation
+        || hasQueuedMessagesInCurrentConversation
+        || queueCurrentConversationMessages;
 
       if (!shouldEnqueue) {
         abortRequestsForConversationQueue(currentConversationQueueKey, { suppressQueueFlush: true });

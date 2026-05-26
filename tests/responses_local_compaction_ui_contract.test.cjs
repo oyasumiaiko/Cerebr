@@ -93,3 +93,40 @@ test('compact marker 右键菜单只保留生命周期动作，删除 pending ma
     /isResponsesLocalCompactionMessage[\s\S]*historyNode\?\.contextCompactionMarker[\s\S]*historyNode\?\.responsesLocalCompactionStatus[\s\S]*compactionState === 'pending'[\s\S]*messageSender\?\.cancelResponsesLocalCompaction\?\.\(messageId\);/
   );
 });
+
+test('/compact 运行期间同线程发送进入队列，完成时不清空新草稿', async () => {
+  const messageSenderSource = await readWorkspaceFile('src/core/message_sender.js');
+
+  assert.match(
+    messageSenderSource,
+    /function hasPendingWorkForConversationQueue\(queueKey\) \{[\s\S]*conversationQueueDrainLocks\.has\(normalizedQueueKey\)[\s\S]*hasRunningResponsesLocalCompactionForConversationQueue\(normalizedQueueKey\)/
+  );
+  assert.match(
+    messageSenderSource,
+    /function hasRunningResponsesLocalCompactionForConversationQueue\(queueKey\) \{[\s\S]*responsesLocalCompactionRuns\.values\(\)[\s\S]*runContext\?\.queueKey[\s\S]*runQueueKey === normalizedQueueKey/
+  );
+  assert.match(
+    messageSenderSource,
+    /const normalizedCompactionQueueKey = resolveResponsesLocalCompactionQueueKey\(\{[\s\S]*conversationQueueKey,[\s\S]*activeThreadContext[\s\S]*\}\);[\s\S]*queueKey: normalizedCompactionQueueKey/
+  );
+  assert.match(
+    messageSenderSource,
+    /finally \{[\s\S]*const queueKeyToFlush = runContext\.queueKey;[\s\S]*clearResponsesLocalCompactionRun\(normalizedTargetMessageId\);[\s\S]*scheduleConversationQueueFlush\(queueKeyToFlush\);/
+  );
+  assert.match(
+    messageSenderSource,
+    /const compactionQueueKey = getCurrentActiveConversationQueueKey\(\{[\s\S]*activeThreadContext[\s\S]*\}\);[\s\S]*runResponsesLocalCompactionWithRetries\(\{[\s\S]*conversationQueueKey: compactionQueueKey,[\s\S]*activeThreadContext/
+  );
+  assert.match(
+    messageSenderSource,
+    /const hasRunningCompactionInCurrentConversation = hasRunningResponsesLocalCompactionForConversationQueue\([\s\S]*currentConversationQueueKey[\s\S]*\);[\s\S]*const shouldEnqueue = hasRunningCompactionInCurrentConversation[\s\S]*hasQueuedMessagesInCurrentConversation[\s\S]*queueCurrentConversationMessages;/
+  );
+  assert.match(
+    messageSenderSource,
+    /const slashCommandInputSnapshot = rawText;[\s\S]*if \(!slashResult\.keepInput && isCurrentComposerTextStillSlashCommandSnapshot\(slashCommandInputSnapshot\)\) \{[\s\S]*clearInputs\(\);/
+  );
+  assert.match(
+    messageSenderSource,
+    /return \{[\s\S]*\.\.\.compactionResult,[\s\S]*keepInput: true[\s\S]*\};/
+  );
+});
