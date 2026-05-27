@@ -408,10 +408,12 @@ export function registerSidebarUtilities(appContext) {
     input.setAttribute('placeholder', placeholder);
   };
 
-  appContext.utils.scrollToBottom = (targetContainer = null) => {
+  appContext.utils.scrollToBottom = (targetContainer = null, options = {}) => {
     const settingsManager = appContext.services.settingsManager;
     const messageSender = appContext.services.messageSender;
     const chatContainer = targetContainer || appContext.dom.chatContainer;
+    const scrollOptions = (options && typeof options === 'object') ? options : {};
+    const behavior = scrollOptions.behavior === 'smooth' ? 'smooth' : 'auto';
 
     if (!chatContainer) return;
 
@@ -436,7 +438,13 @@ export function registerSidebarUtilities(appContext) {
           top = latestAiMessage.offsetTop + messageHeight - marginBottom;
         }
       }
-      chatContainer.scrollTo({ top, behavior: 'smooth' });
+      // 流式自动跟随属于“状态同步”，不是用户发起的导航动画。
+      // 默认使用确定性的 auto 定位，避免连续 token 更新叠加 smooth 动画后和用户滚轮互相抢位置。
+      if (behavior === 'smooth') {
+        chatContainer.scrollTo({ top, behavior: 'smooth' });
+      } else {
+        chatContainer.scrollTop = top;
+      }
     });
   };
 

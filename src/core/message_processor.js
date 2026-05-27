@@ -719,6 +719,55 @@ export function createMessageProcessor(appContext) {
     schedule(() => callback?.());
   }
 
+  const markdownSurfaceHeightFloorState = new WeakMap();
+
+  function runWithTemporaryMarkdownSurfaceHeightFloor(container, enabled, mutate) {
+    if (!enabled || !(container instanceof HTMLElement)) {
+      return mutate?.();
+    }
+
+    const beforeHeight = container.getBoundingClientRect?.().height || 0;
+    if (!Number.isFinite(beforeHeight) || beforeHeight <= 0) {
+      return mutate?.();
+    }
+
+    let state = markdownSurfaceHeightFloorState.get(container);
+    if (!state) {
+      state = {
+        token: 0,
+        originalMinHeight: container.style.minHeight || ''
+      };
+      markdownSurfaceHeightFloorState.set(container, state);
+    }
+    state.token += 1;
+    const token = state.token;
+    const currentInlineMinHeight = parseFloat(container.style.minHeight || '');
+    const floorHeight = Math.ceil(Math.max(
+      beforeHeight,
+      Number.isFinite(currentInlineMinHeight) ? currentInlineMinHeight : 0
+    ));
+
+    // 流式 Markdown 可能在同一块内容里从段落、列表、代码块之间来回重解析。
+    // 这里仅给当前 surface 设置短暂 min-height 地板，不改外层 scrollTop，
+    // 让局部 DOM patch 和后续高亮/代码块增强不会把正在阅读的位置反复压缩再展开。
+    container.style.minHeight = `${floorHeight}px`;
+
+    try {
+      return mutate?.();
+    } finally {
+      scheduleAfterLayout(() => {
+        scheduleAfterLayout(() => {
+          const latestState = markdownSurfaceHeightFloorState.get(container);
+          if (!latestState || latestState.token !== token) return;
+          if (container.isConnected) {
+            container.style.minHeight = latestState.originalMinHeight || '';
+          }
+          markdownSurfaceHeightFloorState.delete(container);
+        });
+      });
+    }
+  }
+
   function captureStableToggleScrollAnchor(targetElement, scrollContainer = null) {
     if (!(targetElement instanceof HTMLElement)) return null;
     const ownerMessage = targetElement.classList?.contains('message')
@@ -1399,15 +1448,17 @@ export function createMessageProcessor(appContext) {
     };
   }
 
-  function reconcileMarkdownSurfaceContainer(container, rawText, processMathAndMarkdownFn, previousSnapshot) {
+  function reconcileMarkdownSurfaceContainer(container, rawText, processMathAndMarkdownFn, previousSnapshot, options = {}) {
     if (!container) return null;
     const renderedHtml = processMathAndMarkdownFn(rawText || '');
     const nextSnapshot = buildMarkdownSurfaceSnapshot(rawText, renderedHtml, container);
     const previousSurfaceSnapshot = previousSnapshot || {
       blockSignatures: nextSnapshot.domBlockSignatures || []
     };
-    reconcileRenderedSurfaceBlocks(container, nextSnapshot, previousSurfaceSnapshot, {
-      afterInsert: (element) => enhanceMarkdownContent(element)
+    runWithTemporaryMarkdownSurfaceHeightFloor(container, options.stabilizeHeightDuringUpdate === true, () => {
+      reconcileRenderedSurfaceBlocks(container, nextSnapshot, previousSurfaceSnapshot, {
+        afterInsert: (element) => enhanceMarkdownContent(element)
+      });
     });
     return nextSnapshot;
   }
@@ -1531,7 +1582,10 @@ export function createMessageProcessor(appContext) {
         thoughtsInnerContent,
         rawThoughts,
         processMathAndMarkdownFn,
-        surfaceSnapshots.thoughts
+        surfaceSnapshots.thoughts,
+        {
+          stabilizeHeightDuringUpdate: messageWrapperDiv.classList.contains('updating')
+        }
       );
 
       // 自动展开/折叠策略：
@@ -1699,7 +1753,10 @@ export function createMessageProcessor(appContext) {
             textContentDiv,
             messageText,
             processMathAndMarkdown,
-            surfaceSnapshots.text
+            surfaceSnapshots.text,
+            {
+              stabilizeHeightDuringUpdate: messageDiv.classList.contains('updating')
+            }
           );
         }
       } catch (error) {
@@ -1899,7 +1956,10 @@ export function createMessageProcessor(appContext) {
       textContentDiv,
       safeAnswerContent,
       processMathAndMarkdown,
-      surfaceSnapshots.text
+      surfaceSnapshots.text,
+      {
+        stabilizeHeightDuringUpdate: messageDiv.classList.contains('updating')
+      }
     );
 
     syncAssistantMessageMetadata(node?.id || null, node, {
@@ -4853,6 +4913,9 @@ export function createMessageProcessor(appContext) {
       }) || syncedAny;
       syncedAny = renderAssistantApiFooter(messageWrapperDiv, node) || syncedAny;
     }
+    if (messageWrapperDiv && !messageWrapperDiv.classList.contains('updating')) {
+      enhanceRenderedMarkdownCodeBlocks(messageWrapperDiv);
+    }
     return syncedAny;
   }
 
@@ -5054,6 +5117,11 @@ export function createMessageProcessor(appContext) {
     return settingsManager?.getSetting?.('showCodeBlockToolbar') !== false;
   }
 
+  function isInsideUpdatingMessage(element) {
+    const ownerMessage = element?.closest?.('.message');
+    return !!ownerMessage?.classList?.contains('updating');
+  }
+
   function resolveMarkdownCodeBlockLanguage(wrapper, block) {
     const wrapperLanguage = String(wrapper?.dataset?.codeLanguage || '').trim().toLowerCase();
     if (wrapperLanguage) return wrapperLanguage;
@@ -5114,6 +5182,17 @@ export function createMessageProcessor(appContext) {
     wrapper.classList.toggle('is-toolbar-hidden', !toolbarVisible);
 
     if (!toolbarVisible) {
+      wrapper.dataset.expanded = 'false';
+      wrapper.classList.remove('is-collapsible', 'is-expanded');
+      toggleButton.hidden = true;
+      updateMarkdownCodeBlockToggleButton(toggleButton, false);
+      return;
+    }
+
+    if (isInsideUpdatingMessage(wrapper)) {
+      // 流式输出期间不做“是否超长、是否折叠”的布局测量与 class 切换。
+      // 代码块内容仍然正常增长；折叠按钮等到消息完成后再同步，避免每个 token
+      // 都触发 max-height 开关导致最新回答高度上下闪烁。
       wrapper.dataset.expanded = 'false';
       wrapper.classList.remove('is-collapsible', 'is-expanded');
       toggleButton.hidden = true;

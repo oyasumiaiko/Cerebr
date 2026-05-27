@@ -671,6 +671,31 @@ export function createUIManager(appContext) {
       animateAltScrollStateBy(nestedAltScrollState, target, deltaY, deltaX)
     );
 
+    const nowMs = () => (
+      typeof performance !== 'undefined' && typeof performance.now === 'function'
+        ? performance.now()
+        : Date.now()
+    );
+    let lastUserScrollIntentAt = 0;
+    let scrollbarDragActive = false;
+    const USER_SCROLL_INTENT_GRACE_MS = 700;
+    const markUserScrollIntent = () => {
+      lastUserScrollIntentAt = nowMs();
+    };
+    const hasRecentUserScrollIntent = () => (
+      scrollbarDragActive || (nowMs() - lastUserScrollIntentAt) <= USER_SCROLL_INTENT_GRACE_MS
+    );
+    const isVerticalScrollbarPointerDown = (event) => {
+      if (!event || !(container instanceof HTMLElement)) return false;
+      const rect = container.getBoundingClientRect();
+      const scrollbarWidth = Math.max(0, container.offsetWidth - container.clientWidth);
+      if (scrollbarWidth <= 0) return false;
+      return event.clientX >= rect.right - scrollbarWidth && event.clientX <= rect.right + 1;
+    };
+    const clearScrollbarDragIntent = () => {
+      scrollbarDragActive = false;
+    };
+
     /**
      * 将滚轮事件的 delta 值统一转换为像素单位
      * @param {number} value - 原始 delta 数值
@@ -725,6 +750,9 @@ export function createUIManager(appContext) {
       }
 
       const effectiveDeltaY = e.deltaY;
+      if (effectiveDeltaY !== 0) {
+        markUserScrollIntent();
+      }
       if (effectiveDeltaY < 0) {
         messageSender.setShouldAutoScroll(false);
         return;
@@ -737,6 +765,10 @@ export function createUIManager(appContext) {
           && distanceFromBottom < AUTO_SCROLL_THRESHOLD
         ) {
           messageSender.setShouldAutoScroll(true);
+        } else {
+          // 用户向下滚动但还没真正回到底部时，仍然应由用户接管滚动。
+          // 否则流式输出的下一帧会重新把视口拉到底部，表现为“滚不动/闪回”。
+          messageSender.setShouldAutoScroll(false);
         }
       }
     };
@@ -748,6 +780,7 @@ export function createUIManager(appContext) {
       if (nestedScrollable) {
         // 在气泡预览内按 Alt+滚轮时，优先滚动气泡内部，不让主聊天容器抢滚动。
         e.preventDefault();
+        markUserScrollIntent();
         const acceleratedDeltaY = normalizeWheelDelta(e.deltaY, e.deltaMode, nestedScrollable) * ALT_SCROLL_MULTIPLIER;
         const acceleratedDeltaX = normalizeWheelDelta(e.deltaX, e.deltaMode, nestedScrollable) * ALT_SCROLL_MULTIPLIER;
         animateNestedAltScrollBy(nestedScrollable, acceleratedDeltaY, acceleratedDeltaX);
@@ -759,6 +792,7 @@ export function createUIManager(appContext) {
       }
 
       e.preventDefault();
+      markUserScrollIntent();
       const acceleratedDeltaY = normalizeWheelDelta(e.deltaY, e.deltaMode) * ALT_SCROLL_MULTIPLIER;
       const acceleratedDeltaX = normalizeWheelDelta(e.deltaX, e.deltaMode) * ALT_SCROLL_MULTIPLIER;
 
@@ -839,30 +873,44 @@ export function createUIManager(appContext) {
         0,
         (Number(container.scrollHeight) || 0) - currentTop - (Number(container.clientHeight) || 0)
       );
+      if (distanceFromBottom <= AUTO_SCROLL_THRESHOLD) {
+        lastUserScrollIntentAt = 0;
+        scrollbarDragActive = false;
+      }
       const nextShouldAutoScroll = deriveAutoScrollFollowState({
         previousTop: lastObservedScrollTop,
         currentTop,
         distanceFromBottom,
         threshold: AUTO_SCROLL_THRESHOLD,
         autoScrollEnabled: settingsManager?.getSetting?.('autoScroll') !== false,
-        currentShouldAutoScroll: messageSender?.getShouldAutoScroll?.() === true
+        currentShouldAutoScroll: messageSender?.getShouldAutoScroll?.() === true,
+        userScrollIntent: hasRecentUserScrollIntent()
       });
       messageSender.setShouldAutoScroll(nextShouldAutoScroll);
       lastObservedScrollTop = currentTop;
+    };
+    const handleTouchScrollIntent = () => {
+      markUserScrollIntent();
     };
 
     // 默认滚动路径始终 passive，仅在 Alt 按下时临时启用非被动监听。
     container.addEventListener('wheel', handleRegularWheel, { passive: true });
     container.addEventListener('scroll', handleContainerScrollAutoFollowState, { passive: true });
+    container.addEventListener('touchstart', handleTouchScrollIntent, { passive: true });
+    container.addEventListener('touchmove', handleTouchScrollIntent, { passive: true });
     window.addEventListener('keydown', handleWindowKeyDownForAltWheel, { passive: true });
     window.addEventListener('keyup', handleWindowKeyUpForAltWheel, { passive: true });
     window.addEventListener('blur', handleWindowBlurForAltWheel, { passive: true });
+    window.addEventListener('mouseup', clearScrollbarDragIntent, { passive: true });
+    window.addEventListener('blur', clearScrollbarDragIntent, { passive: true });
 
     container.addEventListener('mousedown', (e) => {
       stopMainAltScrollAnimation();
       stopNestedAltScrollAnimation();
-      if (e.offsetX < container.clientWidth) { 
-         messageSender.setShouldAutoScroll(false);
+      if (isVerticalScrollbarPointerDown(e)) {
+        scrollbarDragActive = true;
+        markUserScrollIntent();
+        messageSender.setShouldAutoScroll(false);
       }
     });
 

@@ -1697,6 +1697,15 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     -webkit-backdrop-filter: none;
 }
 
+/* 流式更新中的消息内容会持续变高，禁止浏览器在这块不稳定 DOM 内选择滚动锚点。 */
+.message.updating,
+.message.updating .text-content,
+.message.updating .thoughts-content,
+.message.updating .response-activity-timeline,
+.message.updating .cerebr-markdown-code-block {
+    overflow-anchor: none;
+}
+
 /* 聊天记录历史跳转时禁用入场动画，避免定位消息出现延时 */
 #chat-container .message.skip-appear-animation {
     animation: none;

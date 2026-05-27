@@ -8,15 +8,16 @@ async function loadModule() {
   return import(`${pathToFileURL(modulePath).href}?test=${Date.now()}`);
 }
 
-test('用户向上滚动时立即停止自动跟随', async () => {
+test('用户主动滚动且尚未回到底部时立即停止自动跟随', async () => {
   const { deriveAutoScrollFollowState } = await loadModule();
   const next = deriveAutoScrollFollowState({
     previousTop: 420,
-    currentTop: 360,
+    currentTop: 520,
     distanceFromBottom: 280,
     threshold: 100,
     autoScrollEnabled: true,
-    currentShouldAutoScroll: true
+    currentShouldAutoScroll: true,
+    userScrollIntent: true
   });
   assert.equal(next, false);
 });
@@ -56,6 +57,20 @@ test('仅因内容继续增长而暂时离底部变远时保留当前自动跟�
     threshold: 100,
     autoScrollEnabled: true,
     currentShouldAutoScroll: true
+  });
+  assert.equal(next, true);
+});
+
+test('Markdown 布局变化触发的非用户 scrollTop 回退不会关闭自动跟随', async () => {
+  const { deriveAutoScrollFollowState } = await loadModule();
+  const next = deriveAutoScrollFollowState({
+    previousTop: 920,
+    currentTop: 880,
+    distanceFromBottom: 180,
+    threshold: 100,
+    autoScrollEnabled: true,
+    currentShouldAutoScroll: true,
+    userScrollIntent: false
   });
   assert.equal(next, true);
 });
