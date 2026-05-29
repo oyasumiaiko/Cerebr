@@ -4,6 +4,7 @@
  * 设计目标：
  * - 尽量贴近官方 Codex skills section，只注入轻量 skill 摘要；
  * - 每轮只统一注入一次 how-to-use，而不是给每个 skill 都重复一遍调用说明；
+ * - 只在当前页面实际命中 skill 时注入，且同一条对话里只注入第一次命中的 skill_context；
  * - 具体细节仍然由模型按需去读目标 skill 的 `SKILL.md` 与相关文件。
  */
 
@@ -77,6 +78,7 @@ export function buildSkillContextSignature(payload) {
 export function buildSkillContextInputItems(payload) {
   if (!payload || typeof payload !== 'object') return [];
   const skills = normalizeSkillContextSkills(payload.skills);
+  if (skills.length <= 0) return [];
   const howToUse = typeof payload.how_to_use === 'string' ? payload.how_to_use.trim() : '';
   const lines = ['<skill_context>'];
   if (payload.url) {
@@ -114,33 +116,47 @@ export function resolveSkillContextAttachment(options = {}) {
   const previousEffectiveSignature = (typeof options?.previousEffectiveSignature === 'string')
     ? options.previousEffectiveSignature
     : '';
+  const currentSkills = normalizeSkillContextSkills(payload?.skills);
+  if (currentSkills.length <= 0) {
+    return {
+      signature: null,
+      inputItems: null,
+      currentSignature: null,
+      status: 'empty',
+      reason: 'no_matching_skills'
+    };
+  }
+
   const signature = buildSkillContextSignature(payload);
   const inputItems = buildSkillContextInputItems(payload);
 
   if (!signature || inputItems.length <= 0) {
     return {
       signature: null,
-      inputItems: null
+      inputItems: null,
+      currentSignature: signature || null,
+      status: 'empty',
+      reason: !signature ? 'empty_signature' : 'empty_input'
     };
   }
 
-  const currentSkills = Array.isArray(payload?.skills) ? payload.skills : [];
-  if (currentSkills.length <= 0 && !previousEffectiveSignature) {
+  if (previousEffectiveSignature) {
     return {
       signature: null,
-      inputItems: null
-    };
-  }
-
-  if (previousEffectiveSignature && previousEffectiveSignature === signature) {
-    return {
-      signature: null,
-      inputItems: null
+      inputItems: null,
+      currentSignature: signature,
+      status: 'reused',
+      reason: previousEffectiveSignature === signature
+        ? 'signature_unchanged'
+        : 'skill_context_already_injected'
     };
   }
 
   return {
     signature,
-    inputItems
+    inputItems,
+    currentSignature: signature,
+    status: 'injected',
+    reason: 'initial'
   };
 }

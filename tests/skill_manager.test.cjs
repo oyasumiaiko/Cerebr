@@ -487,7 +487,7 @@ test('模板式 create_skill 默认禁用且不会自动 refresh 当前文档', 
   assert.match(manifest.skill.file.content, /"entry_path": null/);
 });
 
-test('listMatchingSkillSummariesForTab 会同时注入 builtin、启用的 guidance skill 和命中的 page runtime skill 摘要', async () => {
+test('listMatchingSkillSummariesForTab 只返回当前页面命中的 page runtime skill 摘要', async () => {
   const { createSkillManager } = await loadSkillManagerModule();
 
   const manager = createSkillManager({
@@ -550,11 +550,13 @@ test('listMatchingSkillSummariesForTab 会同时注入 builtin、启用的 guida
   assert.equal(Array.isArray(summaries.skills), true);
   assert.deepEqual(
     summaries.skills.map((skill) => skill.name),
-    ['skill-creator', 'ops-guide', 'page-probe']
+    ['page-probe']
   );
   assert.equal(summaries.skills.every((skill) => typeof skill.short_description === 'string' && skill.short_description), true);
   assert.equal(summaries.skills.every((skill) => skill.instruction_path === 'SKILL.md'), true);
   assert.equal(summaries.skills.every((skill) => !Object.prototype.hasOwnProperty.call(skill, 'mount_surface')), true);
+  assert.equal(summaries.skills.some((skill) => skill.name === 'skill-creator'), false);
+  assert.equal(summaries.skills.some((skill) => skill.name === 'ops-guide'), false);
 });
 
 test('skill 可以在后续 patch 后从 guidance 演进成 page runtime，再退回 guidance', async () => {
@@ -1218,7 +1220,8 @@ test('listMatchingSkillSummariesForTab 只返回当前 URL 命中的轻量摘要
   assert.equal(result.ok, true);
   assert.equal(result.skills.some((skill) => skill.name === 'dom-probe'), true);
   assert.equal(result.skills.some((skill) => skill.name === 'file-only'), false);
-  assert.equal(result.skills[0].name, 'skill-creator');
+  assert.equal(result.skills.some((skill) => skill.name === 'skill-creator'), false);
+  assert.equal(result.skills[0].name, 'dom-probe');
 });
 
 test('skill_registry list 默认只返回当前页面可见的技能，include_all_sites=true 时返回全量', async () => {

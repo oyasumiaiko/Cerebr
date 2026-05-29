@@ -497,44 +497,34 @@ export function createSkillManager(options = {}) {
       tab_id,
       url,
       title,
-      builtinRecords,
-      guidanceRecords,
       pageRuntimeRecords
     } = await listCurrentPageVisibleSkillRecordsForTab(tabId);
-    const builtinSummaries = builtinRecords
-      .map((record) => buildSkillContextSummary(record))
-      .filter(Boolean);
-    const guidanceSummaries = guidanceRecords
-      .map((record) => buildSkillContextSummary(record))
-      .filter(Boolean);
+    // 隐藏 skill_context 只暴露“当前页面 URL 实际命中的页面 runtime skill”。
+    // 内置 skill-creator 与普通 guidance skill 仍可通过 skill_registry 显式读取，
+    // 但它们不代表当前页面能力，自动注入会让无关对话也背上 skill 段落。
+    const pageSkillSummaries = tab_id === null
+      ? []
+      : pageRuntimeRecords
+        .map((record) => buildSkillContextSummary(record))
+        .filter(Boolean);
     if (tab_id === null) {
       return {
         ok: true,
         tab_id: null,
         url: '',
         title: '',
-        total_skills: builtinSummaries.length + guidanceSummaries.length,
-        skills: [
-          ...builtinSummaries,
-          ...guidanceSummaries
-        ]
+        total_skills: 0,
+        skills: []
       };
     }
 
-    const pageSkillSummaries = pageRuntimeRecords
-      .map((record) => buildSkillContextSummary(record))
-      .filter(Boolean);
     return {
       ok: true,
       tab_id,
       url,
       title,
-      total_skills: builtinSummaries.length + guidanceSummaries.length + pageSkillSummaries.length,
-      skills: [
-        ...builtinSummaries,
-        ...guidanceSummaries,
-        ...pageSkillSummaries
-      ]
+      total_skills: pageSkillSummaries.length,
+      skills: pageSkillSummaries
     };
   }
 
