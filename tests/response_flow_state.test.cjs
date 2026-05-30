@@ -168,3 +168,37 @@ test('planStreamingRenderTransition skips forced update once answer has appeared
     }
   });
 });
+
+test('resolveResponsesStreamClosureAction retries only before visible progress', async () => {
+  const { resolveResponsesStreamClosureAction } = await loadResponseFlowStateModule();
+
+  assert.equal(
+    resolveResponsesStreamClosureAction({
+      hasTerminalEvent: false,
+      hasStartedResponse: false,
+      hasRenderedAssistantMessage: false,
+      hasVisibleAnswerContent: false
+    }),
+    'retry'
+  );
+
+  assert.equal(
+    resolveResponsesStreamClosureAction({
+      hasTerminalEvent: false,
+      hasStartedResponse: true,
+      hasRenderedAssistantMessage: true,
+      hasVisibleAnswerContent: false
+    }),
+    'preserve_partial'
+  );
+
+  assert.equal(
+    resolveResponsesStreamClosureAction({
+      hasTerminalEvent: true,
+      hasStartedResponse: true,
+      hasRenderedAssistantMessage: true,
+      hasVisibleAnswerContent: true
+    }),
+    'complete'
+  );
+});

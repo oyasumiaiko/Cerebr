@@ -25,7 +25,8 @@ import { deleteMessageFromChatHistory } from './chat_history_manager.js';
 import {
   resolveResponseHandlingMode,
   resolveReceivedResponseHandlingMode,
-  planStreamingRenderTransition
+  planStreamingRenderTransition,
+  resolveResponsesStreamClosureAction
 } from './response_flow_state.js';
 import {
   splitPendingSteersByTurnIds,
@@ -10237,6 +10238,10 @@ export function createMessageSender(appContext) {
           .filter(record => String(record?.type || '').trim().toLowerCase() === 'function_call')
         : [];
 
+      if (lastHandleResult?.incomplete === true) {
+        return lastHandleResult;
+      }
+
       if (pendingFunctionCalls.length <= 0) {
         return lastHandleResult;
       }
@@ -12830,11 +12835,30 @@ export function createMessageSender(appContext) {
 	      }
 	    }
 
-      if (isOpenAIResponsesStream && !hasOpenAIResponsesTerminalEvent) {
+      const responsesStreamClosureAction = isOpenAIResponsesStream
+        ? resolveResponsesStreamClosureAction({
+            hasTerminalEvent: hasOpenAIResponsesTerminalEvent,
+            hasStartedResponse: streamRenderState.hasStartedResponse,
+            hasRenderedAssistantMessage: !!currentAiMessageId,
+            hasVisibleAnswerContent: streamRenderState.hasEverShownAnswerContent
+              || ((typeof aiResponse === 'string') && aiResponse.trim() !== '')
+              || latestResponsesAnswerImages.length > 0
+          })
+        : 'complete';
+
+      if (responsesStreamClosureAction === 'retry') {
         throw createResponsesRecoverableError(
           'Responses stream closed before response.completed',
           { reason: 'stream_closed_before_completed' }
         );
+      }
+      if (responsesStreamClosureAction === 'preserve_partial') {
+        console.warn('Responses stream closed before response.completed after visible output; preserving partial assistant response.');
+        showNotification?.({
+          message: '连接在回答结束前中断，已保留当前已收到的部分回答',
+          type: 'warning',
+          duration: 2600
+        });
       }
 
 	    // 流式响应结束：强制刷新最后一帧，避免尾部 token 被节流合并后未能落到 UI。
@@ -12968,7 +12992,8 @@ export function createMessageSender(appContext) {
           ? getNewResponsesToolCalls(previousResponsesActivityTimeline, latestResponsesActivityTimeline)
           : null,
         assistantPhase: latestResponsesAssistantPhase || null,
-        isResponsesApi: isOpenAIResponsesStream
+        isResponsesApi: isOpenAIResponsesStream,
+        incomplete: responsesStreamClosureAction === 'preserve_partial'
       };
 
     async function processLine(line) {

@@ -170,3 +170,35 @@ export function planStreamingRenderTransition(input = {}) {
     }
   };
 }
+
+/**
+ * Responses SSE 提前关闭时的收尾策略。
+ *
+ * 关键边界：
+ * - 如果还没有任何可见进度，连接异常可以交给上层恢复性重试；
+ * - 如果已经把 assistant 消息或正文展示给用户，再自动重试会复用同一个消息节点，
+ *   新流的首段内容会覆盖旧流已收到的部分回答，因此必须保留当前部分结果。
+ *
+ * @param {{
+ *   hasTerminalEvent?: boolean,
+ *   hasStartedResponse?: boolean,
+ *   hasRenderedAssistantMessage?: boolean,
+ *   hasVisibleAnswerContent?: boolean
+ * }} [input]
+ * @returns {'complete'|'retry'|'preserve_partial'}
+ */
+export function resolveResponsesStreamClosureAction(input = {}) {
+  if (input?.hasTerminalEvent === true) {
+    return 'complete';
+  }
+
+  const hasStartedResponse = input?.hasStartedResponse === true;
+  const hasRenderedAssistantMessage = input?.hasRenderedAssistantMessage === true;
+  const hasVisibleAnswerContent = input?.hasVisibleAnswerContent === true;
+
+  if (hasVisibleAnswerContent || (hasStartedResponse && hasRenderedAssistantMessage)) {
+    return 'preserve_partial';
+  }
+
+  return 'retry';
+}

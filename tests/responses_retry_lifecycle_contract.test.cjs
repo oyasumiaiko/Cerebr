@@ -32,7 +32,7 @@ test('Responses API lifecycle 在发送和流式消费外层有默认 5 次恢�
   );
 });
 
-test('Responses stream 未收到 completed 就关闭会转为可恢复错误', async () => {
+test('Responses stream 未收到 completed 就关闭时按可见进度区分重试或保留部分回答', async () => {
   const source = await readWorkspaceFile('src/core/message_sender.js');
 
   assert.match(
@@ -48,6 +48,26 @@ test('Responses stream 未收到 completed 就关闭会转为可恢复错误', a
   assert.match(
     source,
     /Responses stream closed before response\.completed/,
-    '连接提前关闭不能被当作成功的部分响应'
+    '连接提前关闭在无可见进度时仍应作为可恢复错误'
+  );
+  assert.match(
+    source,
+    /resolveResponsesStreamClosureAction\([\s\S]*?hasRenderedAssistantMessage: !!currentAiMessageId[\s\S]*?hasVisibleAnswerContent:[\s\S]*?streamRenderState\.hasEverShownAnswerContent/,
+    'Responses 提前关闭必须先区分是否已有可见输出，避免重试覆盖已显示内容'
+  );
+  assert.match(
+    source,
+    /responsesStreamClosureAction === 'retry'[\s\S]*?createResponsesRecoverableError/,
+    '只有尚无可见进度的提前关闭才允许进入恢复性重试'
+  );
+  assert.match(
+    source,
+    /incomplete: responsesStreamClosureAction === 'preserve_partial'/,
+    '已有可见输出时应把部分回答作为不完整结果保留下来'
+  );
+  assert.match(
+    source,
+    /if \(lastHandleResult\?\.incomplete === true\) \{[\s\S]*?return lastHandleResult;[\s\S]*?\}[\s\S]*?if \(pendingFunctionCalls\.length <= 0\)/,
+    '部分回答保留后不能继续执行半截工具调用 follow-up'
   );
 });
