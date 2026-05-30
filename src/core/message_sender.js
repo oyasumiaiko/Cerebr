@@ -6324,12 +6324,23 @@ export function createMessageSender(appContext) {
     const accumulatedTimeline = Array.isArray(runtimeSnapshot?.responses?.accumulatedTimeline)
       ? cloneResponsesActivityTimeline(runtimeSnapshot.responses.accumulatedTimeline)
       : [];
-    const previewNode = {
-      role: 'assistant',
-      timestamp: Number.isFinite(Number(attemptState?.startedAt))
-        ? Number(attemptState.startedAt)
-        : Date.now()
-    };
+    const liveMessageId = normalizeConversationId(
+      liveElement.getAttribute?.('data-message-id') || attemptState?.aiMessageId || ''
+    );
+    const boundAssistantNode = liveMessageId
+      ? resolveAttemptAiNode(attemptState, liveMessageId)
+      : null;
+    // pulse 会在首个正文 answer 出现前反复同步状态；一旦 loadingMessage 已升级成 AI 消息，
+    // 必须基于真实 assistant 节点渲染。普通 Gemini 的流式思考保存在 node.thoughtsRaw；
+    // 若这里退回空 preview，metadata 同步会把统一思考面板误清空，再由下一帧真实增量重建，形成闪烁。
+    const previewNode = boundAssistantNode
+      ? { ...boundAssistantNode }
+      : {
+          role: 'assistant',
+          timestamp: Number.isFinite(Number(attemptState?.startedAt))
+            ? Number(attemptState.startedAt)
+            : Date.now()
+        };
     if (accumulatedTimeline.length > 0) {
       // loadingMessage 在 reasoning 阶段会被 pulse 反复重绘。
       // 这里把当前累计的 response_activity_timeline 一并带过去，
@@ -6338,7 +6349,7 @@ export function createMessageSender(appContext) {
     }
     if (typeof messageProcessor?.syncAssistantMessageMetadata === 'function') {
       messageProcessor.syncAssistantMessageMetadata(
-        liveElement.getAttribute?.('data-message-id') || null,
+        liveMessageId || null,
         previewNode,
         {
           fallbackElement: liveElement,
