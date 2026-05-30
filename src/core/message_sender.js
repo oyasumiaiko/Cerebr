@@ -7979,6 +7979,19 @@ export function createMessageSender(appContext) {
     });
   }
 
+  function normalizeJsRuntimeFrameSnapshotId(value) {
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? Math.trunc(value) : null;
+    }
+    if (typeof value === 'string') {
+      const text = value.trim();
+      if (!text) return null;
+      const numeric = Number(text);
+      return Number.isFinite(numeric) ? Math.trunc(numeric) : null;
+    }
+    return null;
+  }
+
   /**
    * 获取当前侧栏绑定网页标签页的 JS Runtime frame 快照。
    * 这里的目标不是让模型再额外调用发现工具，而是在请求发出前把 frame_id 提示直接塞进隐藏上下文。
@@ -7993,13 +8006,16 @@ export function createMessageSender(appContext) {
         return null;
       }
       const frames = response.frames
-        .map((item) => ({
-          frameId: Number(item?.frameId),
-          documentId: (typeof item?.documentId === 'string' && item.documentId) ? item.documentId : null,
-          url: (typeof item?.url === 'string') ? item.url : '',
-          title: (typeof item?.title === 'string') ? item.title : '',
-          isTop: item?.isTop === true || Number(item?.frameId) === 0
-        }))
+        .map((item) => {
+          const frameId = normalizeJsRuntimeFrameSnapshotId(item?.frameId);
+          return {
+            frameId,
+            documentId: (typeof item?.documentId === 'string' && item.documentId) ? item.documentId : null,
+            url: (typeof item?.url === 'string') ? item.url : '',
+            title: (typeof item?.title === 'string') ? item.title : '',
+            isTop: item?.isTop === true || frameId === 0
+          };
+        })
         .filter(item => Number.isFinite(item.frameId))
         .sort((a, b) => {
           if (a.isTop !== b.isTop) return a.isTop ? -1 : 1;

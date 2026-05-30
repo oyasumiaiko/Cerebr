@@ -9,6 +9,19 @@ import {
  * @param {Array<any>|null|undefined} frames
  * @returns {Array<{frame_id:number, is_top:boolean, url:string, title:string}>}
  */
+function normalizePageRuntimeContextFrameId(value) {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? Math.trunc(value) : null;
+  }
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return null;
+    const numeric = Number(text);
+    return Number.isFinite(numeric) ? Math.trunc(numeric) : null;
+  }
+  return null;
+}
+
 function tryParseFrameUrl(url) {
   const text = (typeof url === 'string') ? url.trim() : '';
   if (!text) return null;
@@ -55,7 +68,7 @@ function isHighChurnChallengeFrame(frame) {
  * 过滤对模型几乎没有选择价值、但会显著增加噪声的辅助 frame。
  *
  * 当前策略：
- * - 保留顶层 frame；
+ * - 顶层 frame 只用于推导顶层 URL/title，不再写入最终 `<frames>`；
  * - 过滤已知 challenge frame；
  * - 过滤没有标题、URL 又只是 `about:blank` / `about:srcdoc` / `data:` / `blob:` 的辅助 frame。
  *
@@ -86,21 +99,38 @@ function shouldIncludePageRuntimeContextFrame(frame) {
   return true;
 }
 
+function normalizePageRuntimeContextFrame(item) {
+  if (!item || typeof item !== 'object') return null;
+  const rawFrameId = item.frameId ?? item.frame_id;
+  const frameId = normalizePageRuntimeContextFrameId(rawFrameId);
+  const isTop = item?.isTop === true || item?.is_top === true || frameId === 0;
+  return {
+    frame_id: frameId,
+    is_top: isTop,
+    url: (typeof item?.url === 'string') ? item.url.trim() : '',
+    title: (typeof item?.title === 'string') ? item.title.trim() : ''
+  };
+}
+
 export function normalizePageRuntimeContextFrames(frames) {
   const source = Array.isArray(frames) ? frames : [];
   return source
-    .map((item) => ({
-      frame_id: Number.isFinite(Number(item?.frameId)) ? Number(item.frameId) : null,
-      is_top: item?.isTop === true || Number(item?.frameId) === 0,
-      url: (typeof item?.url === 'string') ? item.url.trim() : '',
-      title: (typeof item?.title === 'string') ? item.title.trim() : ''
-    }))
+    .map(normalizePageRuntimeContextFrame)
+    .filter(Boolean)
     .filter((item) => Number.isFinite(item.frame_id))
     .filter((item) => shouldIncludePageRuntimeContextFrame(item))
     .sort((left, right) => {
       if (left.is_top !== right.is_top) return left.is_top ? -1 : 1;
       return left.frame_id - right.frame_id;
     });
+}
+
+function findTopPageRuntimeContextFrame(frames) {
+  const source = Array.isArray(frames) ? frames : [];
+  return source
+    .map(normalizePageRuntimeContextFrame)
+    .filter(Boolean)
+    .find((item) => item.is_top === true) || null;
 }
 
 /**
@@ -137,7 +167,10 @@ export function buildPageRuntimeContextPayload(options = {}) {
     ? options.pageMeta
     : null;
 
-  const topFrame = normalizedFrames.find((item) => item.is_top) || null;
+  const topFrame = normalizedFrames.find((item) => item.is_top)
+    || findTopPageRuntimeContextFrame(options?.frames)
+    || null;
+  const childFrames = normalizedFrames.filter((item) => item.is_top !== true);
   const url = topFrame?.url
     || ((typeof rawPageMeta?.url === 'string') ? rawPageMeta.url.trim() : '');
   const title = topFrame?.title
@@ -153,7 +186,7 @@ export function buildPageRuntimeContextPayload(options = {}) {
   const exposePdfContentTool = pageToolEnvironment?.exposePdfContentTool === true;
   const mode = 'host_page';
 
-  if (!url && !title && normalizedFrames.length === 0) {
+  if (!url && !title && childFrames.length === 0) {
     return null;
   }
 
@@ -165,7 +198,7 @@ export function buildPageRuntimeContextPayload(options = {}) {
     js_runtime_environment: jsRuntimeEnvironment,
     url,
     title,
-    frames: normalizedFrames
+    frames: childFrames
   };
 }
 
@@ -194,6 +227,11 @@ function escapeXmlText(value) {
 }
 
 function buildHostPageRuntimeContextText(payload) {
+  const childFrames = (Array.isArray(payload?.frames) ? payload.frames : [])
+    .map(normalizePageRuntimeContextFrame)
+    .filter(Boolean)
+    .filter((item) => Number.isFinite(item.frame_id) && item.is_top !== true)
+    .filter((item) => shouldIncludePageRuntimeContextFrame(item));
   const lines = [
     `<page_runtime_context mode="${escapeXmlText(payload.mode)}">`,
     `  <page_content_tool>${escapeXmlText(payload.page_content_tool)}</page_content_tool>`,
@@ -202,9 +240,9 @@ function buildHostPageRuntimeContextText(payload) {
   ];
   if (payload.url) lines.push(`  <url>${escapeXmlText(payload.url)}</url>`);
   if (payload.title) lines.push(`  <title>${escapeXmlText(payload.title)}</title>`);
-  if (Array.isArray(payload.frames) && payload.frames.length > 0) {
+  if (childFrames.length > 0) {
     lines.push('  <frames>');
-    payload.frames.forEach((item) => {
+    childFrames.forEach((item) => {
       lines.push(`    <frame id="${escapeXmlText(item.frame_id)}" top="${item.is_top ? 'true' : 'false'}">`);
       if (item.url) lines.push(`      <url>${escapeXmlText(item.url)}</url>`);
       if (item.title) lines.push(`      <title>${escapeXmlText(item.title)}</title>`);
