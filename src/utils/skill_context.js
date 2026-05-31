@@ -8,6 +8,10 @@
  * - 具体细节仍然由模型按需去读目标 skill 的 `SKILL.md` 与相关文件。
  */
 
+const HIDDEN_SKILL_CONTEXT_EXCLUDED_SKILL_NAMES = new Set([
+  'skill-creator'
+]);
+
 function escapeXmlText(value) {
   return String(value || '')
     .replace(/&/g, '&amp;')
@@ -34,6 +38,9 @@ function normalizeSkillContextSkills(skills) {
       const instructionPath = typeof skill.instruction_path === 'string' ? skill.instruction_path.trim() : '';
       const priority = Number.isFinite(Number(skill.priority)) ? Number(skill.priority) : 1000;
       if (!name || !shortDescription || !instructionPath) return null;
+      // 双层防线：background 正常只返回当前页命中的 page runtime skill；
+      // 若旧 service worker 或旧数据仍返回内置通用指导，也不要把 skill 创建指南塞进模型隐藏上下文。
+      if (HIDDEN_SKILL_CONTEXT_EXCLUDED_SKILL_NAMES.has(name)) return null;
       return {
         _index: index,
         priority,

@@ -22,6 +22,12 @@ test('resolveSkillContextAttachment 只在首次页面命中时注入官方风�
     url: 'https://example.com/app',
     skills: [
       {
+        name: 'skill-creator',
+        priority: 0,
+        short_description: '创建或更新 skill 时先读的内置指导 skill',
+        instruction_path: 'SKILL.md'
+      },
+      {
         name: 'dom-probe',
         short_description: '读取页面标题和 URL',
         instruction_path: 'SKILL.md'
@@ -106,4 +112,19 @@ test('空 skill 集始终不注入 skill_context', async () => {
   assert.equal(second.inputItems, null);
   assert.equal(second.status, 'empty');
   assert.equal(second.reason, 'no_matching_skills');
+
+  const creatorOnlyPayload = buildSkillContextPayload({
+    mode: 'host_page',
+    url: 'https://example.com/app',
+    skills: [
+      {
+        name: 'skill-creator',
+        priority: 0,
+        short_description: '创建或更新 skill 时先读的内置指导 skill',
+        instruction_path: 'SKILL.md'
+      }
+    ]
+  });
+  assert.deepEqual(creatorOnlyPayload.skills, []);
+  assert.deepEqual(buildSkillContextInputItems(creatorOnlyPayload), []);
 });
