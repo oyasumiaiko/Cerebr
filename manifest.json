@@ -68,12 +68,15 @@
   },
   "sandbox": {
     "pages": [
-      "src/ui/html_preview_sandbox/html_preview_sandbox.html"
+      "src/ui/html_preview_sandbox/html_preview_sandbox.html",
+      "src/ui/sidebar/js_sandbox_frame.html"
     ]
   },
   "web_accessible_resources": [{
     "resources": [
       "src/ui/sidebar/sidebar.html",
+      "src/ui/sidebar/js_sandbox_frame.html",
+      "src/ui/sidebar/js_sandbox_frame.js",
       "src/ui/html_preview_sandbox/*",
       "lib/*"
     ],

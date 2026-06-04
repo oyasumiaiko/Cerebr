@@ -102,7 +102,6 @@ export function createSidebarJsSandboxRuntime(options = {}) {
 
   function createSandboxFrame() {
     const iframe = ownerDocument.createElement('iframe');
-    iframe.setAttribute('sandbox', 'allow-scripts');
     iframe.setAttribute('aria-hidden', 'true');
     iframe.tabIndex = -1;
     iframe.src = sandboxFrameUrl;

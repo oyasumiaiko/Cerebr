@@ -1,11 +1,209 @@
-import {
-  buildJsSandboxSuccessEnvelope,
-  buildJsSandboxErrorEnvelope
-} from '../../utils/js_sandbox_transport.js';
-
 const SANDBOX_MESSAGE_FLAG = '__cerebrJsSandbox';
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const activeExecutionAborters = new Map();
+const JS_SANDBOX_DOCUMENT_ID = 'cerebr-js-sandbox';
+const JS_SANDBOX_MAX_DEPTH = 6;
+const JS_SANDBOX_MAX_ARRAY_ITEMS = 80;
+const JS_SANDBOX_MAX_OBJECT_KEYS = 80;
+const JS_SANDBOX_DOM_TEXT_PREVIEW = 400;
+const JS_SANDBOX_HTML_PREVIEW = 1200;
+const JS_SANDBOX_MAX_LOGS = 50;
+const JS_SANDBOX_MAX_LOG_TEXT = 4000;
+
+function previewLongString(value, maxChars) {
+  if (typeof value !== 'string') return '';
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, maxChars)}…`;
+}
+
+function isDomLikeValue(value) {
+  return !!(
+    value
+    && typeof value === 'object'
+    && Number.isFinite(Number(value.nodeType))
+    && typeof value.nodeName === 'string'
+  );
+}
+
+function isErrorLikeValue(value) {
+  return !!(
+    value
+    && typeof value === 'object'
+    && typeof value.message === 'string'
+    && typeof value.name === 'string'
+  );
+}
+
+function normalizeDomLikeValue(value) {
+  return {
+    type: 'dom_node',
+    nodeType: Number.isFinite(Number(value?.nodeType)) ? Number(value.nodeType) : null,
+    nodeName: (typeof value?.nodeName === 'string') ? value.nodeName : '',
+    id: (typeof value?.id === 'string') ? value.id : '',
+    className: (typeof value?.className === 'string') ? value.className : '',
+    textContent: previewLongString(
+      typeof value?.textContent === 'string' ? value.textContent : '',
+      JS_SANDBOX_DOM_TEXT_PREVIEW
+    ),
+    outerHTML: previewLongString(
+      typeof value?.outerHTML === 'string' ? value.outerHTML : '',
+      JS_SANDBOX_HTML_PREVIEW
+    )
+  };
+}
+
+function normalizeErrorLikeValue(value) {
+  return {
+    name: (typeof value?.name === 'string' && value.name.trim()) ? value.name.trim() : 'Error',
+    message: (typeof value?.message === 'string' && value.message.trim())
+      ? value.message.trim()
+      : String(value || '未知错误'),
+    stack: (typeof value?.stack === 'string') ? value.stack : ''
+  };
+}
+
+// 这个文件必须保持 classic script：manifest sandbox page 是唯一源环境，
+// module script 在这里会触发跨源加载限制，导致父级一直等不到 ready 握手。
+function normalizeJsSandboxTransferValue(value, depth = 0, seen = new WeakSet()) {
+  if (value == null) return value;
+
+  const primitiveType = typeof value;
+  if (primitiveType === 'string' || primitiveType === 'number' || primitiveType === 'boolean') {
+    return value;
+  }
+  if (primitiveType === 'bigint') {
+    return {
+      type: 'bigint',
+      value: value.toString()
+    };
+  }
+  if (primitiveType === 'function') {
+    return {
+      type: 'function',
+      name: (typeof value.name === 'string') ? value.name : ''
+    };
+  }
+  if (primitiveType !== 'object') {
+    try {
+      return String(value);
+    } catch (_) {
+      return '[unserializable]';
+    }
+  }
+
+  if (isDomLikeValue(value)) {
+    return normalizeDomLikeValue(value);
+  }
+  if (isErrorLikeValue(value)) {
+    return normalizeErrorLikeValue(value);
+  }
+  if (depth >= JS_SANDBOX_MAX_DEPTH) {
+    return {
+      type: Array.isArray(value) ? 'truncated_array' : 'truncated_object'
+    };
+  }
+  if (seen.has(value)) {
+    return {
+      type: 'circular_ref'
+    };
+  }
+
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const items = value
+        .slice(0, JS_SANDBOX_MAX_ARRAY_ITEMS)
+        .map((item) => normalizeJsSandboxTransferValue(item, depth + 1, seen));
+      if (value.length > JS_SANDBOX_MAX_ARRAY_ITEMS) {
+        items.push({
+          type: 'truncated_items',
+          omitted_count: value.length - JS_SANDBOX_MAX_ARRAY_ITEMS
+        });
+      }
+      return items;
+    }
+
+    const entries = Object.entries(value);
+    const result = {};
+    for (const [key, child] of entries.slice(0, JS_SANDBOX_MAX_OBJECT_KEYS)) {
+      result[key] = normalizeJsSandboxTransferValue(child, depth + 1, seen);
+    }
+    if (entries.length > JS_SANDBOX_MAX_OBJECT_KEYS) {
+      result.__truncated_keys__ = entries.length - JS_SANDBOX_MAX_OBJECT_KEYS;
+    }
+    return result;
+  } catch (error) {
+    return {
+      type: 'normalization_error',
+      error: normalizeErrorLikeValue(error)
+    };
+  } finally {
+    seen.delete(value);
+  }
+}
+
+function normalizeJsSandboxConsoleLogs(logs, fallbackFrameId = 0) {
+  if (!Array.isArray(logs) || logs.length <= 0) return [];
+  const normalized = logs
+    .slice(0, JS_SANDBOX_MAX_LOGS)
+    .map((entry) => {
+      const log = (entry && typeof entry === 'object' && !Array.isArray(entry)) ? entry : {};
+      const level = (typeof log.level === 'string' && log.level.trim()) ? log.level.trim().toLowerCase() : 'log';
+      const frameId = Number.isFinite(Number(log.frameId)) ? Number(log.frameId) : fallbackFrameId;
+      const text = typeof log.text === 'string'
+        ? log.text
+        : String(log.text ?? '');
+      return {
+        frameId,
+        level,
+        text: text.length <= JS_SANDBOX_MAX_LOG_TEXT ? text : `${text.slice(0, JS_SANDBOX_MAX_LOG_TEXT)}…`
+      };
+    });
+  if (logs.length > JS_SANDBOX_MAX_LOGS) {
+    normalized.push({
+      frameId: fallbackFrameId,
+      level: 'info',
+      text: `[… ${logs.length - JS_SANDBOX_MAX_LOGS} console entries omitted …]`
+    });
+  }
+  return normalized;
+}
+
+function buildJsSandboxSuccessEnvelope(value, logs = []) {
+  const normalizedValue = normalizeJsSandboxTransferValue(value);
+  const normalizedLogs = normalizeJsSandboxConsoleLogs(logs, 0);
+  return {
+    ok: true,
+    value: normalizedValue,
+    logs: normalizedLogs,
+    items: [{
+      frameId: 0,
+      documentId: JS_SANDBOX_DOCUMENT_ID,
+      result: normalizedValue,
+      logs: normalizedLogs,
+      error: null
+    }],
+    error: null
+  };
+}
+
+function buildJsSandboxErrorEnvelope(error, logs = []) {
+  const normalizedError = normalizeErrorLikeValue(error);
+  const normalizedLogs = normalizeJsSandboxConsoleLogs(logs, 0);
+  return {
+    ok: false,
+    value: null,
+    logs: normalizedLogs,
+    items: [{
+      frameId: 0,
+      documentId: JS_SANDBOX_DOCUMENT_ID,
+      result: null,
+      logs: normalizedLogs,
+      error: normalizedError
+    }],
+    error: normalizedError
+  };
+}
 
 function postSandboxMessage(type, payload = {}) {
   try {

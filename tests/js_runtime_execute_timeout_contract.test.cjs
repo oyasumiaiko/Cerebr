@@ -79,3 +79,18 @@ test('js_runtime_execute 在纯对话模式下的工具说明不再指向宿主�
   assert.match(toolDefinition.parameters.properties.frame_ids.description, /忽略宿主页 frame/);
   assert.doesNotMatch(toolDefinition.description, /当前页面是单页应用/);
 });
+
+test('纯对话 JS Runtime 使用 manifest sandbox classic script，避免 module 握手超时', async () => {
+  const manifestSource = await readWorkspaceFile('manifest.json');
+  const runtimeSource = await readWorkspaceFile('src/ui/sidebar/js_sandbox_runtime.js');
+  const frameHtmlSource = await readWorkspaceFile('src/ui/sidebar/js_sandbox_frame.html');
+  const frameSource = await readWorkspaceFile('src/ui/sidebar/js_sandbox_frame.js');
+
+  assert.match(manifestSource, /"sandbox"\s*:\s*\{[\s\S]*src\/ui\/sidebar\/js_sandbox_frame\.html/);
+  assert.match(manifestSource, /"web_accessible_resources"\s*:\s*\[[\s\S]*src\/ui\/sidebar\/js_sandbox_frame\.js/);
+  assert.doesNotMatch(runtimeSource, /iframe\.setAttribute\('sandbox'/);
+  assert.match(frameHtmlSource, /<script src="\.\/js_sandbox_frame\.js"><\/script>/);
+  assert.doesNotMatch(frameHtmlSource, /type="module"/);
+  assert.doesNotMatch(frameSource, /^\s*import\s/m);
+  assert.match(frameSource, /postSandboxMessage\('ready'\);/);
+});
