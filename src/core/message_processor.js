@@ -2234,6 +2234,7 @@ export function createMessageProcessor(appContext) {
       deletions: preview.totalDeletions
     });
     const summaryNotes = [];
+    if (preview.isPartial) summaryNotes.push('生成中');
     if (preview.skillName) summaryNotes.push(`skill ${preview.skillName}`);
     if (preview.truncatedFiles > 0) summaryNotes.push(`另有 ${preview.truncatedFiles} 个文件未展开`);
     if (summaryNotes.length > 0) {
