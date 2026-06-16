@@ -371,14 +371,14 @@ test('buildResponsesConversationDocumentToolOutputContentItems 不再把 workspa
     ok: true,
     action: 'apply_patch',
     affected_files: {
-      added: ['workspace/plan.md'],
+      added: ['plan.md'],
       modified: [],
       deleted: []
     }
   });
   const conversationText = formatResponsesToolOutputForDisplay(conversationItems);
   assert.match(conversationText, /Success\. Updated the following files:/);
-  assert.match(conversationText, /A workspace\/plan\.md/);
+  assert.match(conversationText, /A plan\.md/);
   assert.doesNotMatch(conversationText, /Reminder:/);
   assert.doesNotMatch(conversationText, /Markdown 相对路径链接/);
   assert.doesNotMatch(conversationText, /<apply_patch_result|<result>|<reminder>/);
@@ -389,7 +389,7 @@ test('buildResponsesConversationDocumentToolOutputContentItems 不再把 workspa
     affected_files: {
       added: [],
       modified: [],
-      deleted: ['workspace/plan.md']
+      deleted: ['plan.md']
     }
   });
   const deleteOnlyText = formatResponsesToolOutputForDisplay(deleteOnlyItems);

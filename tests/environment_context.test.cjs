@@ -113,7 +113,7 @@ test('buildEnvironmentContextInputItems 会在用户上传文件时附带文件�
     currentDate: '2026-04-20',
     uploadedFiles: [
       {
-        path: 'workspace/untitled',
+        path: 'untitled',
         source_name: '',
         file_name_was_missing: true,
         upload_event_id: 'upload-1'
@@ -125,7 +125,7 @@ test('buildEnvironmentContextInputItems 会在用户上传文件时附带文件�
   assert.equal(payload.uploaded_files.length, 1);
   const text = buildEnvironmentContextInputItems(payload)[0].content[0].text;
   assert.match(text, /<user_uploaded_files>/);
-  assert.match(text, /<path>workspace\/untitled<\/path>/);
+  assert.match(text, /<path>untitled<\/path>/);
   assert.match(text, /<file_name_was_missing>true<\/file_name_was_missing>/);
   assert.match(text, /untitled/);
   assert.match(text, /Markdown 相对路径链接/);
@@ -158,6 +158,6 @@ test('buildEnvironmentContextInputItems 会声明 local mount 是只读实时映
   assert.match(text, /<path>local\/project<\/path>/);
   assert.match(text, /<kind>directory<\/kind>/);
   assert.match(text, /<read_only>true<\/read_only>/);
-  assert.match(text, /copy_file 把 local\/\.\.\. 复制到 workspace\/\.\.\./);
+  assert.match(text, /copy_file 把 local\/\.\.\. 复制成普通会话文件/);
   assert.match(text, /list_files 或 search_files/);
 });

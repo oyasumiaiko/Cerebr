@@ -51,23 +51,15 @@ function buildTimestampSuffix() {
   ].join('');
 }
 
-function buildSuggestedConversationDocumentPath(content) {
-  const lines = String(content || '')
-    .replace(/\r\n?/g, '\n')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
-  const firstLine = lines[0] || '';
-  const heading = firstLine.replace(/^#+\s*/, '').trim();
-  const candidate = sanitizeDocumentFileSegment(heading || firstLine);
-  const filename = candidate || `file-${buildTimestampSuffix()}`;
-  return `workspace/${filename}.md`;
+function buildSuggestedConversationDocumentPath(_content) {
+  // 留空路径时必须使用稳定的默认文件名，避免把粘贴内容的首行误当作文件名。
+  return 'untitled.md';
 }
 
 function buildSuggestedConversationDocumentPathFromUploadName(fileName) {
   const normalizedName = sanitizeDocumentFileSegment(fileName);
   const filename = normalizedName || 'untitled';
-  return `workspace/${filename}`;
+  return filename;
 }
 
 function buildSuggestedLocalMountPath(sourceName) {
@@ -504,7 +496,7 @@ export function createConversationDocumentComposer(appContext) {
     pathInput = document.createElement('input');
     pathInput.type = 'text';
     pathInput.className = 'composer-document-panel__input';
-    pathInput.placeholder = '留空时默认生成 workspace/<标题>.md；也可以自定义 .txt / .html / .js 等纯文本路径';
+    pathInput.placeholder = '留空时默认生成 untitled.md；也可以自定义 .txt / .html / .js 等纯文本路径';
     pathField.appendChild(pathLabel);
     pathField.appendChild(pathInput);
 
@@ -515,7 +507,7 @@ export function createConversationDocumentComposer(appContext) {
     contentLabel.textContent = '文件内容';
     contentTextarea = document.createElement('textarea');
     contentTextarea.className = 'composer-document-panel__textarea';
-    contentTextarea.placeholder = '输入纯文本文件内容；可以是笔记、Markdown、代码、HTML 等。若首行是 # 标题，会优先用它生成默认文件名。';
+    contentTextarea.placeholder = '输入纯文本文件内容；可以是笔记、Markdown、代码、HTML 等。';
     contentField.appendChild(contentLabel);
     contentField.appendChild(contentTextarea);
 

@@ -19,7 +19,7 @@ const {
   waitForWorktreeExtensionWorker
 } = require('./lib/worktree_unpacked_extension_harness.cjs');
 
-const EXPECTED_DOC_PATH = 'workspace/手动文档.md';
+const EXPECTED_DOC_PATH = '手动文档.md';
 const EXPECTED_DOC_CONTENT = '# 手动文档\n\n来自输入区。\n';
 
 const [rawRepoRoot, outputDir, rawArg3 = '', rawArg4 = ''] = process.argv.slice(2);

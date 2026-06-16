@@ -117,15 +117,15 @@ test('normalizeConversationDocumentPath 支持空格与 Unicode，并拒绝越�
 
   assert.equal(
     normalizeConversationDocumentPath('workspace\\研究 计划(终版).md'),
-    'workspace/研究 计划(终版).md'
+    '研究 计划(终版).md'
   );
   assert.equal(
     normalizeConversationDocumentHrefPath('workspace/%E9%9A%8F%E7%AC%94%20%E7%BB%88%E7%89%88.md'),
-    'workspace/随笔 终版.md'
+    '随笔 终版.md'
   );
   assert.equal(
     normalizeConversationDocumentHrefPath('workspace/a%2Fb.md'),
-    'workspace/a%2Fb.md'
+    'a%2Fb.md'
   );
   assert.throws(
     () => normalizeConversationDocumentPath('../secret.txt'),
@@ -133,7 +133,7 @@ test('normalizeConversationDocumentPath 支持空格与 Unicode，并拒绝越�
   );
 });
 
-test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验并默认 workspace', async () => {
+test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验并默认会话文件目标', async () => {
   const {
     VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
     VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
@@ -174,7 +174,7 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
   );
 
   const bashStyleRead = normalizeVirtualFileToolArguments(VIRTUAL_FILE_READ_FILE_TOOL_NAME, {
-    path: 'workspace/spec.md',
+    path: 'spec.md',
     line_range: '20,40p',
     numbered: true
   });
@@ -184,7 +184,7 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
       kind: 'workspace',
       name: null
     },
-    file_path: 'workspace/spec.md',
+    file_path: 'spec.md',
     include_line_numbers: true,
     read_options: {
       max_chars: undefined,
@@ -195,7 +195,7 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
 
   const bashStyleSearch = normalizeVirtualFileToolArguments(VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME, {
     pattern: 'token',
-    glob: 'workspace/**/*.md',
+    glob: '**/*.md',
     context: 2,
     ignore_case: true,
     limit: 10
@@ -209,15 +209,15 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
     pattern: 'token',
     regex: false,
     case_mode: 'insensitive',
-    path_glob: 'workspace/**/*.md',
+    path_glob: '**/*.md',
     context_before: 2,
     context_after: 2,
     max_results: 10
   });
 
   const copyFile = normalizeVirtualFileToolArguments(VIRTUAL_FILE_COPY_FILE_TOOL_NAME, {
-    from: 'workspace/spec.md',
-    to: 'workspace/spec.md'
+    from: 'spec.md',
+    to: 'spec.md'
   });
   assert.deepEqual(copyFile, {
     action: 'copy_file',
@@ -225,8 +225,8 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
       kind: 'workspace',
       name: null
     },
-    source_path: 'workspace/spec.md',
-    destination_path: 'workspace/spec.md'
+    source_path: 'spec.md',
+    destination_path: 'spec.md'
   });
 
   const moveSkillFile = normalizeVirtualFileToolArguments(VIRTUAL_FILE_MOVE_FILE_TOOL_NAME, {
@@ -243,13 +243,24 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
   assert.equal(moveSkillFile.destination_path, 'references/new.md');
 
   const deleteFile = normalizeVirtualFileToolArguments(VIRTUAL_FILE_DELETE_FILE_TOOL_NAME, {
-    path: 'workspace/spec.md'
+    path: 'spec.md'
   });
   assert.equal(deleteFile.action, 'delete_file');
-  assert.equal(deleteFile.file_path, 'workspace/spec.md');
+  assert.equal(deleteFile.file_path, 'spec.md');
+
+  const legacyWorkspacePrefixRead = normalizeVirtualFileToolArguments(VIRTUAL_FILE_READ_FILE_TOOL_NAME, {
+    path: 'workspace/spec.md'
+  });
+  assert.equal(legacyWorkspacePrefixRead.file_path, 'spec.md');
+
+  const legacyWorkspacePrefixSearch = normalizeVirtualFileToolArguments(VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME, {
+    pattern: 'token',
+    glob: 'workspace/**/*.md'
+  });
+  assert.equal(legacyWorkspacePrefixSearch.path_glob, '**/*.md');
 });
 
-test('apply_patch 工具定义承载 workspace 文件交付提示', async () => {
+test('apply_patch 工具定义承载根路径文件交付提示', async () => {
   const {
     buildVirtualFileApplyPatchFunctionToolDefinition
   } = await loadConversationDocumentToolsModule();
@@ -257,11 +268,12 @@ test('apply_patch 工具定义承载 workspace 文件交付提示', async () => 
   const applyPatchDefinition = buildVirtualFileApplyPatchFunctionToolDefinition();
   assert.match(applyPatchDefinition.description, /纯文本文件/);
   assert.match(applyPatchDefinition.description, /HTML/);
-  assert.match(applyPatchDefinition.description, /workspace\/\*\.html/);
+  assert.match(applyPatchDefinition.description, /preview\.html/);
   assert.match(applyPatchDefinition.description, /sandbox iframe/);
   assert.match(applyPatchDefinition.description, /最终回复应给出 Markdown 相对路径链接/);
-  assert.match(applyPatchDefinition.description, /\[计划\]\(workspace\/plan\.md\)/);
-  assert.match(applyPatchDefinition.description, /\[预览页面\]\(workspace\/preview\.html\)/);
+  assert.match(applyPatchDefinition.description, /\[计划\]\(plan\.md\)/);
+  assert.match(applyPatchDefinition.description, /\[预览页面\]\(preview\.html\)/);
+  assert.doesNotMatch(applyPatchDefinition.description, /workspace\//);
 });
 
 test('read_file/search_files 工具定义优先暴露 bash 风格参数', async () => {
@@ -317,7 +329,7 @@ test('apply_patch 遇到同名 Add File 时会按 Windows 语义追加 (2)', asy
   } = await loadConversationDocumentToolsModule();
 
   const store = createInMemoryDocumentStore({
-    'workspace/计划.md': '# old\n'
+    '计划.md': '# old\n'
   });
 
   const result = await executeConversationDocumentAction(
@@ -337,10 +349,10 @@ test('apply_patch 遇到同名 Add File 时会按 Windows 语义追加 (2)', asy
   );
 
   assert.equal(result.ok, true);
-  assert.deepEqual(result.affected_files.added, ['workspace/计划 (2).md']);
+  assert.deepEqual(result.affected_files.added, ['计划 (2).md']);
   assert.deepEqual(result.renamed_targets, [{
-    requested_path: 'workspace/计划.md',
-    final_path: 'workspace/计划 (2).md',
+    requested_path: '计划.md',
+    final_path: '计划 (2).md',
     reason: 'collision'
   }]);
 });
@@ -370,6 +382,7 @@ test('read_file 支持行范围与带行号输出', async () => {
   );
 
   assert.equal(result.ok, true);
+  assert.equal(result.file.path, 'spec.md');
   assert.equal(result.file.content, 'line2\nline3\n');
   assert.match(result.file.numbered_content, /2 \| line2/);
   assert.match(result.file.numbered_content, /3 \| line3/);
@@ -382,8 +395,8 @@ test('search_files 会在当前对话文档里返回上下文命中', async () =
   } = await loadConversationDocumentToolsModule();
 
   const store = createInMemoryDocumentStore({
-    'workspace/spec.md': 'alpha\nbeta token\ncharlie\n',
-    'workspace/todo.txt': 'token again\n'
+    'spec.md': 'alpha\nbeta token\ncharlie\n',
+    'todo.txt': 'token again\n'
   });
 
   const result = await executeConversationDocumentAction(
@@ -401,6 +414,7 @@ test('search_files 会在当前对话文档里返回上下文命中', async () =
 
   assert.equal(result.ok, true);
   assert.equal(result.total_matches, 2);
+  assert.equal(result.matches[0].file_path, 'spec.md');
   assert.equal(result.matches[0].before[0].text, 'alpha');
 });
 
@@ -414,7 +428,7 @@ test('write_file 内部 action 会写回内容并产出 change_event', async () 
   const result = await executeConversationDocumentAction(
     CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION,
     {
-      file_path: 'workspace/new note.md',
+      file_path: 'new note.md',
       content: 'hello'
     },
     {
@@ -425,8 +439,8 @@ test('write_file 内部 action 会写回内容并产出 change_event', async () 
   );
 
   assert.equal(result.ok, true);
-  assert.equal(result.file.path, 'workspace/new note.md');
-  assert.deepEqual(result.change_event.updated_paths, ['workspace/new note.md']);
+  assert.equal(result.file.path, 'new note.md');
+  assert.deepEqual(result.change_event.updated_paths, ['new note.md']);
 });
 
 test('copy_file/move_file/delete_file 会显式管理对话虚拟文件且不覆盖目标', async () => {
@@ -439,15 +453,15 @@ test('copy_file/move_file/delete_file 会显式管理对话虚拟文件且不覆
   } = await loadConversationDocumentToolsModule();
 
   const store = createInMemoryDocumentStore({
-    'workspace/source.md': '# source\n',
-    'workspace/existing.md': '# existing\n'
+    'source.md': '# source\n',
+    'existing.md': '# existing\n'
   });
 
   const copied = await executeConversationDocumentAction(
     CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
     {
-      source_path: 'workspace/source.md',
-      destination_path: 'workspace/source-copy.md'
+      source_path: 'source.md',
+      destination_path: 'source-copy.md'
     },
     {
       conversationId: 'conv-doc-5',
@@ -455,8 +469,8 @@ test('copy_file/move_file/delete_file 会显式管理对话虚拟文件且不覆
     }
   );
   assert.equal(copied.ok, true);
-  assert.equal(copied.file.path, 'workspace/source-copy.md');
-  assert.deepEqual(copied.affected_files.added, ['workspace/source-copy.md']);
+  assert.equal(copied.file.path, 'source-copy.md');
+  assert.deepEqual(copied.affected_files.added, ['source-copy.md']);
 
   await assert.rejects(
     () => executeConversationDocumentAction(
@@ -483,22 +497,22 @@ test('copy_file/move_file/delete_file 会显式管理对话虚拟文件且不覆
     () => executeConversationDocumentAction(
       CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
       {
-        source_path: 'workspace/source.md',
-        destination_path: 'workspace/existing.md'
+        source_path: 'source.md',
+        destination_path: 'existing.md'
       },
       {
         conversationId: 'conv-doc-5',
         store
       }
     ),
-    /目标文件 workspace\/existing\.md 已存在/
+    /目标文件 existing\.md 已存在/
   );
 
   const moved = await executeConversationDocumentAction(
     CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME,
     {
-      source_path: 'workspace/source.md',
-      destination_path: 'workspace/renamed.md'
+      source_path: 'source.md',
+      destination_path: 'renamed.md'
     },
     {
       conversationId: 'conv-doc-5',
@@ -506,14 +520,14 @@ test('copy_file/move_file/delete_file 会显式管理对话虚拟文件且不覆
     }
   );
   assert.equal(moved.ok, true);
-  assert.deepEqual(moved.affected_files.modified, ['workspace/renamed.md']);
-  assert.deepEqual(moved.affected_files.deleted, ['workspace/source.md']);
-  assert.deepEqual(moved.change_event.deleted_paths, ['workspace/source.md']);
+  assert.deepEqual(moved.affected_files.modified, ['renamed.md']);
+  assert.deepEqual(moved.affected_files.deleted, ['source.md']);
+  assert.deepEqual(moved.change_event.deleted_paths, ['source.md']);
 
   const deleted = await executeConversationDocumentAction(
     CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME,
     {
-      file_path: 'workspace/renamed.md'
+      file_path: 'renamed.md'
     },
     {
       conversationId: 'conv-doc-5',
@@ -521,10 +535,10 @@ test('copy_file/move_file/delete_file 会显式管理对话虚拟文件且不覆
     }
   );
   assert.equal(deleted.ok, true);
-  assert.deepEqual(deleted.affected_files.deleted, ['workspace/renamed.md']);
+  assert.deepEqual(deleted.affected_files.deleted, ['renamed.md']);
 });
 
-test('local mount 路径支持只读 read/list/search，并可复制到 workspace 副本', async () => {
+test('local mount 路径支持只读 read/list/search，并可复制到会话文件副本', async () => {
   const {
     CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
     CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
@@ -600,7 +614,7 @@ test('local mount 路径支持只读 read/list/search，并可复制到 workspac
     CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
     {
       source_path: 'local/project/src/a.js',
-      destination_path: 'workspace/project/src/a.js'
+      destination_path: 'project/src/a.js'
     },
     {
       conversationId: 'conv-local-1',
@@ -609,14 +623,14 @@ test('local mount 路径支持只读 read/list/search，并可复制到 workspac
     }
   );
   assert.equal(copyResult.ok, true);
-  assert.deepEqual(copyResult.affected_files.added, ['workspace/project/src/a.js']);
-  assert.equal((await store.getDocument('conv-local-1', 'workspace/project/src/a.js')).content, 'const token = 1;\n');
+  assert.deepEqual(copyResult.affected_files.added, ['project/src/a.js']);
+  assert.equal((await store.getDocument('conv-local-1', 'project/src/a.js')).content, 'const token = 1;\n');
 
   await assert.rejects(
     () => executeConversationDocumentAction(
       CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
       {
-        source_path: 'workspace/project/src/a.js',
+        source_path: 'project/src/a.js',
         destination_path: 'local/project/src/b.js'
       },
       {

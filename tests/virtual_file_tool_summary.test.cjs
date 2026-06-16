@@ -143,12 +143,12 @@ test('顶层 copy_file/move_file/delete_file 摘要使用 shell 风格动词', a
     name: 'copy_file',
     arguments: JSON.stringify({
       from: 'local/project/src/a.js',
-      to: 'workspace/project/src/a.js'
+      to: 'project/src/a.js'
     })
   };
   assert.deepEqual(buildVirtualFileSummaryParts(copyRecord), {
     action: '复制',
-    value: 'local/project/src/a.js -> workspace/project/src/a.js',
+    value: 'local/project/src/a.js -> project/src/a.js',
     valueUrl: '',
     meta: '',
     locationAction: '',
@@ -157,7 +157,7 @@ test('顶层 copy_file/move_file/delete_file 摘要使用 shell 风格动词', a
   });
   assert.equal(
     buildVirtualFilePrimaryText(copyRecord),
-    '复制 local/project/src/a.js -> workspace/project/src/a.js'
+    '复制 local/project/src/a.js -> project/src/a.js'
   );
 
   const moveRecord = {
@@ -181,7 +181,7 @@ test('顶层 copy_file/move_file/delete_file 摘要使用 shell 风格动词', a
       path: 'workspace/project/src/a.js'
     })
   };
-  assert.equal(buildVirtualFilePrimaryText(deleteRecord), '删除 workspace/project/src/a.js');
+  assert.equal(buildVirtualFilePrimaryText(deleteRecord), '删除 project/src/a.js');
 });
 
 test('顶层 apply_patch 在 skill target 下会显示首个文件与 diff 汇总', async () => {

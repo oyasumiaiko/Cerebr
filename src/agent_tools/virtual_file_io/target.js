@@ -36,7 +36,7 @@ export function normalizeVirtualFileTarget(rawTarget, options = {}) {
     };
   }
   if (name) {
-    throw new Error('virtual_file 参数错误：target.kind=workspace 时不能提供 target.name。');
+    throw new Error('virtual_file 参数错误：默认会话文件目标不能提供 target.name。');
   }
   return {
     kind,
@@ -49,13 +49,13 @@ export function buildVirtualFileTargetSchemaDescription(options = {}) {
   return {
     type: ['object', 'null'],
     description: requireSkillName
-      ? '可选。文件目标作用域。默认 `workspace`；若 `kind="skill"` 则必须提供 `name`。本地映射不使用 target.kind，而是直接使用 `local/...` 路径。'
-      : '可选。文件目标作用域。默认 `workspace`；当 `kind="skill"` 时可用 `name` 指定单个技能。本地映射不使用 target.kind，而是直接使用 `local/...` 路径。',
+      ? '可选。文件目标作用域。默认当前对话文件区；若 `kind="skill"` 则必须提供 `name`。本地映射不使用 target.kind，而是直接使用 `local/...` 路径。'
+      : '可选。文件目标作用域。默认当前对话文件区；当 `kind="skill"` 时可用 `name` 指定单个技能。本地映射不使用 target.kind，而是直接使用 `local/...` 路径。',
     additionalProperties: false,
     properties: {
       kind: {
         type: ['string', 'null'],
-        description: '可选。支持 `workspace` 与 `skill`。省略时默认 `workspace`。'
+        description: '可选。支持默认会话文件目标与 `skill`；省略时使用会话文件目标。'
       },
       name: {
         type: ['string', 'null'],

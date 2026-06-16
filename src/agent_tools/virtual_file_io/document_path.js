@@ -1,26 +1,34 @@
 import { normalizeString } from './shared.js';
 
+function stripLegacyWorkspacePathPrefix(path) {
+  const normalized = String(path || '');
+  return normalized.startsWith('workspace/')
+    ? normalized.slice('workspace/'.length)
+    : normalized;
+}
+
 export function normalizeConversationDocumentPath(value) {
   const rawPath = normalizeString(value).replace(/\\/g, '/');
   const withoutLeadingDot = rawPath.replace(/^(?:\.\/)+/, '');
-  const normalizedPath = withoutLeadingDot.startsWith('/')
+  const normalizedPathWithLegacyPrefix = withoutLeadingDot.startsWith('/')
     ? withoutLeadingDot.slice(1)
     : withoutLeadingDot;
+  const normalizedPath = stripLegacyWorkspacePathPrefix(normalizedPathWithLegacyPrefix);
 
   if (!normalizedPath) {
-    throw new Error('workspace 参数错误：file_path 不能为空。');
+    throw new Error('virtual_file 参数错误：file_path 不能为空。');
   }
   if (normalizedPath.length > 512) {
-    throw new Error('workspace 参数错误：file_path 长度不能超过 512。');
+    throw new Error('virtual_file 参数错误：file_path 长度不能超过 512。');
   }
 
   const segments = normalizedPath.split('/');
   if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
-    throw new Error(`workspace 参数错误：文件路径 \`${normalizedPath}\` 不能包含空段、"." 或 ".."。`);
+    throw new Error(`virtual_file 参数错误：文件路径 \`${normalizedPath}\` 不能包含空段、"." 或 ".."。`);
   }
   for (const segment of segments) {
     if (/[\u0000-\u001F<>:"|?*]/.test(segment)) {
-      throw new Error(`workspace 参数错误：文件路径 \`${normalizedPath}\` 包含 Windows 不允许的字符。`);
+      throw new Error(`virtual_file 参数错误：文件路径 \`${normalizedPath}\` 包含 Windows 不允许的字符。`);
     }
   }
   return normalizedPath;
@@ -31,7 +39,7 @@ export function normalizeConversationDocumentPath(value) {
  *
  * 为什么单独提供这层：
  * - Markdown 渲染后的 `<a href>` 往往会把空格、中文等字符转成 `%20` / `%E4...`；
- * - 但 workspace 文件实际存储时使用的是“原始逻辑路径”，例如 `workspace/随笔.md`；
+ * - 但会话文件实际存储时使用的是“原始逻辑路径”，例如 `随笔.md`；
  * - 如果 UI 直接拿编码后的 href 去查文档，就会误判为“文档不存在”。
  *
  * 这里使用 `decodeURI()` 而不是 `decodeURIComponent()`：

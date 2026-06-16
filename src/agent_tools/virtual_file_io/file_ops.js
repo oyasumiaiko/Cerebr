@@ -53,7 +53,7 @@ export function buildVirtualFileCopyFileFunctionToolDefinition() {
   return {
     type: 'function',
     name: VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
-    description: '复制虚拟文件，接近 `cp <from> <to>`。可把 `local/...` 只读映射复制成 `workspace/...` 副本；如果目标已存在会失败，不会覆盖。',
+    description: '复制虚拟文件，接近 `cp <from> <to>`。可把 `local/...` 只读映射复制成普通会话文件副本；如果目标已存在会失败，不会覆盖。',
     strict: false,
     parameters: {
       type: 'object',
@@ -78,7 +78,7 @@ export function buildVirtualFileMoveFileFunctionToolDefinition() {
   return {
     type: 'function',
     name: VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
-    description: '移动或重命名可写虚拟文件，接近 `mv <from> <to>`。只支持 workspace 或 skill，不会移动真实本机文件；如果目标已存在会失败，不会覆盖。',
+    description: '移动或重命名可写虚拟文件，接近 `mv <from> <to>`。只支持当前对话文件或 skill，不会移动真实本机文件；如果目标已存在会失败，不会覆盖。',
     strict: false,
     parameters: {
       type: 'object',
@@ -103,7 +103,7 @@ export function buildVirtualFileDeleteFileFunctionToolDefinition() {
   return {
     type: 'function',
     name: VIRTUAL_FILE_DELETE_FILE_TOOL_NAME,
-    description: '删除可写虚拟文件，接近 `rm <path>`。只支持 workspace 或 skill，不会删除真实本机文件。',
+    description: '删除可写虚拟文件，接近 `rm <path>`。只支持当前对话文件或 skill，不会删除真实本机文件。',
     strict: false,
     parameters: {
       type: 'object',

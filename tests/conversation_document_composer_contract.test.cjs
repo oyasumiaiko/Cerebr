@@ -47,6 +47,8 @@ test('文件创建面板支持导入本地文件，并为无文件名上传兜�
 
   assert.match(composerSource, /buildSuggestedConversationDocumentPathFromUploadName/);
   assert.match(composerSource, /const filename = normalizedName \|\| 'untitled';/);
+  assert.match(composerSource, /return 'untitled\.md';/);
+  assert.doesNotMatch(composerSource, /heading \|\| firstLine/);
   assert.match(composerSource, /导入本地文件/);
   assert.match(composerSource, /importLocalDocumentFile/);
   assert.match(composerSource, /consumePendingUploadedFileEnvironmentEntries/);

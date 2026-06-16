@@ -20,10 +20,10 @@ const {
   waitForWorktreeExtensionWorker
 } = require('./lib/worktree_unpacked_extension_harness.cjs');
 
-const MD_DOC_PATH = 'workspace/随笔-关于学习与判断.md';
-const TXT_DOC_PATH = 'workspace/文本文档.txt';
+const MD_DOC_PATH = '随笔-关于学习与判断.md';
+const TXT_DOC_PATH = '文本文档.txt';
 const CODE_DOC_PATH = 'snippets/example.js';
-const HTML_DOC_PATH = 'workspace/preview.html';
+const HTML_DOC_PATH = 'preview.html';
 const PATCH_CALL_ID = 'call_conversation_document_apply_patch_1';
 const EXPECTED_FINAL_MARKER = 'CONVERSATION_DOCUMENT_TOOL_OK_20260413';
 const INITIAL_MD_DOC_CONTENT = '# 随笔\n\n第一版内容。\n';

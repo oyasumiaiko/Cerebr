@@ -17,11 +17,11 @@ test('对 md/txt/code 文件会推断出正确的默认显示模式', async () =
     resolveConversationDocumentRenderState
   } = await importViewerStateModule();
 
-  const mdState = resolveConversationDocumentRenderState('workspace/plan.md', {});
+  const mdState = resolveConversationDocumentRenderState('plan.md', {});
   assert.equal(mdState.mode, CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN);
   assert.equal(mdState.allowMarkdownToggle, true);
 
-  const txtState = resolveConversationDocumentRenderState('workspace/notes.txt', {});
+  const txtState = resolveConversationDocumentRenderState('notes.txt', {});
   assert.equal(txtState.mode, CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN);
   assert.equal(txtState.allowMarkdownToggle, true);
 
@@ -29,7 +29,7 @@ test('对 md/txt/code 文件会推断出正确的默认显示模式', async () =
   assert.equal(codeState.mode, CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT);
   assert.equal(codeState.allowCodeHighlightToggle, true);
 
-  const htmlState = resolveConversationDocumentRenderState('workspace/preview.html', {});
+  const htmlState = resolveConversationDocumentRenderState('preview.html', {});
   assert.equal(htmlState.mode, CONVERSATION_DOCUMENT_VIEW_MODE_HTML_PREVIEW);
   assert.equal(htmlState.language, 'xml');
   assert.equal(htmlState.allowHtmlPreviewToggle, true);
@@ -40,7 +40,7 @@ test('对 md/txt/code 文件会推断出正确的默认显示模式', async () =
     CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN
   ]);
 
-  const otherState = resolveConversationDocumentRenderState('workspace/readme.rst', {});
+  const otherState = resolveConversationDocumentRenderState('readme.rst', {});
   assert.equal(otherState.mode, CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN);
   assert.equal(otherState.allowMarkdownToggle, false);
 });
@@ -52,22 +52,22 @@ test('全局默认值与按路径 override 会正确合并', async () => {
     resolveConversationDocumentRenderState
   } = await importViewerStateModule();
 
-  const txtMarkdownState = resolveConversationDocumentRenderState('workspace/notes.txt', {
+  const txtMarkdownState = resolveConversationDocumentRenderState('notes.txt', {
     documentRenderMarkdownForTxt: true
   });
   assert.equal(txtMarkdownState.mode, CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN);
 
-  const overriddenMdState = resolveConversationDocumentRenderState('workspace/plan.md', {
+  const overriddenMdState = resolveConversationDocumentRenderState('plan.md', {
     documentRenderMarkdownForMd: true,
     documentViewModeOverrides: {
-      'workspace/plan.md': 'plain'
+      'plan.md': 'plain'
     }
   });
   assert.equal(overriddenMdState.mode, CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN);
 
-  const overriddenHtmlState = resolveConversationDocumentRenderState('workspace/preview.html', {
+  const overriddenHtmlState = resolveConversationDocumentRenderState('preview.html', {
     documentViewModeOverrides: {
-      'workspace/preview.html': 'code-highlight'
+      'preview.html': 'code-highlight'
     }
   });
   assert.equal(overriddenHtmlState.mode, 'code-highlight');

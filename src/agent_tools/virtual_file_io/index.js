@@ -3,8 +3,8 @@
  *
  * 说明：
  * - 顶层公开给模型的文件工具统一为 `apply_patch` / `list_files` / `read_file` / `search_files`；
- * - 文件工具通过结构化 `target` 选择 skill，默认 workspace；本地映射通过 `local/...` 路径进入；
- * - workspace 文件仍在侧栏本地 IndexedDB 执行；local 文件实时读取用户授权 handle；skill 文件复用现有 skill package / background 执行链路；
+ * - 文件工具通过结构化 `target` 选择 skill，默认当前对话文件区；本地映射通过 `local/...` 路径进入；
+ * - 会话文件仍在侧栏本地 IndexedDB 执行；local 文件实时读取用户授权 handle；skill 文件复用现有 skill package / background 执行链路；
  * - UI 为了编辑对话文档与完整查看，会额外复用 `write_file` / `read_file_full` 两个内部 action。
  *
  * 当前目录结构：
@@ -159,7 +159,7 @@ export {
 function normalizeConversationId(value) {
   const text = normalizeString(value);
   if (!text) {
-    throw new Error('workspace 参数错误：conversation_id 不能为空。');
+    throw new Error('virtual_file 参数错误：conversation_id 不能为空。');
   }
   return text;
 }
@@ -367,9 +367,12 @@ function normalizeContextLineCount(value) {
 function normalizeSearchPathGlob(value) {
   const rawGlob = normalizeString(value).replace(/\\/g, '/');
   const withoutLeadingDot = rawGlob.replace(/^(?:\.\/)+/, '');
-  const normalizedGlob = withoutLeadingDot.startsWith('/')
+  const normalizedGlobWithLegacyPrefix = withoutLeadingDot.startsWith('/')
     ? withoutLeadingDot.slice(1)
     : withoutLeadingDot;
+  const normalizedGlob = normalizedGlobWithLegacyPrefix === 'workspace'
+    ? ''
+    : normalizedGlobWithLegacyPrefix.replace(/^workspace\//, '');
   if (!normalizedGlob) return null;
   if (normalizedGlob.length > 512) {
     throw new Error('virtual_file 参数错误：path_glob 长度不能超过 512。');
@@ -493,7 +496,7 @@ function collectMatchesForLine(lineText, pattern, options = {}) {
 function buildDocumentManifest(documents, options = {}) {
   const pathGlob = normalizeSearchPathGlob(options?.path_glob);
   const pathGlobRegExp = buildPathGlobRegExp(pathGlob);
-  const files = (Array.isArray(documents) ? documents : [])
+  const files = normalizeDocumentRecords(documents)
     .filter((doc) => !pathGlobRegExp || pathGlobRegExp.test(doc.path))
     .sort((left, right) => left.path.localeCompare(right.path))
     .map((doc) => {
@@ -537,7 +540,7 @@ function searchConversationDocuments(documents, rawOptions = {}) {
   const matches = [];
   let totalMatches = 0;
 
-  for (const documentRecord of Array.isArray(documents) ? documents : []) {
+  for (const documentRecord of normalizeDocumentRecords(documents)) {
     if (pathGlobRegExp && !pathGlobRegExp.test(documentRecord.path)) {
       continue;
     }
@@ -592,6 +595,30 @@ function normalizeDocumentRecord(rawDocument, fallbackUpdatedAt = null) {
   };
 }
 
+function normalizeDocumentRecordSafe(rawDocument, fallbackUpdatedAt = null) {
+  try {
+    return normalizeDocumentRecord(rawDocument, fallbackUpdatedAt);
+  } catch (_) {
+    return null;
+  }
+}
+
+function normalizeDocumentRecords(documents) {
+  const recordsByPath = new Map();
+  for (const rawDocument of cloneDocuments(documents)) {
+    const record = normalizeDocumentRecordSafe(rawDocument);
+    if (!record) continue;
+    const existing = recordsByPath.get(record.path);
+    const existingTime = existing ? Date.parse(existing.updated_at) : Number.NEGATIVE_INFINITY;
+    const recordTime = Date.parse(record.updated_at);
+    if (!existing || (Number.isFinite(recordTime) && recordTime >= existingTime)) {
+      recordsByPath.set(record.path, record);
+    }
+  }
+  return Array.from(recordsByPath.values())
+    .sort((left, right) => left.path.localeCompare(right.path));
+}
+
 function cloneDocuments(documents) {
   return (Array.isArray(documents) ? documents : []).map((doc) => ({ ...doc }));
 }
@@ -606,9 +633,7 @@ function applyConversationDocumentPatch(documents, patch) {
     throw new Error('No files were modified.');
   }
 
-  const nextDocuments = cloneDocuments(documents)
-    .map((doc) => normalizeDocumentRecord(doc))
-    .sort((left, right) => left.path.localeCompare(right.path));
+  const nextDocuments = normalizeDocumentRecords(documents);
   const affectedFiles = {
     added: [],
     modified: [],
@@ -700,10 +725,22 @@ function applyConversationDocumentPatch(documents, patch) {
 
 function buildChangeEventPayload(conversationId, action, options = {}) {
   const updatedPaths = Array.isArray(options.updated_paths)
-    ? Array.from(new Set(options.updated_paths.map((value) => normalizeString(value)).filter(Boolean)))
+    ? Array.from(new Set(options.updated_paths.map((value) => {
+        try {
+          return normalizeConversationDocumentPath(value);
+        } catch (_) {
+          return normalizeString(value);
+        }
+      }).filter(Boolean)))
     : [];
   const deletedPaths = Array.isArray(options.deleted_paths)
-    ? Array.from(new Set(options.deleted_paths.map((value) => normalizeString(value)).filter(Boolean)))
+    ? Array.from(new Set(options.deleted_paths.map((value) => {
+        try {
+          return normalizeConversationDocumentPath(value);
+        } catch (_) {
+          return normalizeString(value);
+        }
+      }).filter(Boolean)))
     : [];
   return {
     conversation_id: conversationId,
@@ -766,14 +803,14 @@ function buildReadFilePayload(documentRecord, readOptions, includeLineNumbers) {
 
 function assertDifferentFileOperationPaths(sourcePath, destinationPath, action) {
   if (sourcePath === destinationPath) {
-    throw new Error(`workspace 参数错误：${action} 的 from 与 to 不能相同。`);
+    throw new Error(`virtual_file 参数错误：${action} 的 from 与 to 不能相同。`);
   }
 }
 
 function findRequiredConversationDocument(documents, filePath, action) {
   const index = findDocumentIndex(documents, filePath);
   if (index < 0) {
-    throw new Error(`workspace 参数错误：${action} 找不到文件 ${filePath}。`);
+    throw new Error(`virtual_file 参数错误：${action} 找不到文件 ${filePath}。`);
   }
   return {
     index,
@@ -783,8 +820,17 @@ function findRequiredConversationDocument(documents, filePath, action) {
 
 function assertConversationDocumentDestinationAvailable(documents, filePath, action) {
   if (findDocumentIndex(documents, filePath) >= 0) {
-    throw new Error(`workspace 参数错误：${action} 目标文件 ${filePath} 已存在。`);
+    throw new Error(`virtual_file 参数错误：${action} 目标文件 ${filePath} 已存在。`);
   }
+}
+
+async function getRequiredConversationDocumentByPath(store, conversationId, filePath) {
+  const directRecord = await store.getDocument(conversationId, filePath);
+  if (directRecord) {
+    return normalizeDocumentRecord(directRecord);
+  }
+  const documents = normalizeDocumentRecords(await store.listDocuments(conversationId));
+  return documents.find((doc) => doc.path === filePath) || null;
 }
 
 function buildFileOperationFilePayload(documentRecord) {
@@ -887,7 +933,7 @@ export function buildConversationDocumentActionPayloadFromVirtualFileAction(acti
         file_path: input.file_path
       };
     default:
-      throw new Error(`virtual_file 参数错误：未处理的 workspace action \`${action}\`。`);
+      throw new Error(`virtual_file 参数错误：未处理的会话文件 action \`${action}\`。`);
   }
 }
 
@@ -960,7 +1006,7 @@ function normalizeActionArgs(action, rawArgs, options = {}) {
   const args = ensurePlainObject(rawArgs);
   const normalizedAction = normalizeString(action).toLowerCase();
   if (!VIRTUAL_FILE_PUBLIC_ACTIONS.has(normalizedAction) && !(allowInternalActions && VIRTUAL_FILE_INTERNAL_ACTIONS.has(normalizedAction))) {
-    throw new Error(`workspace 参数错误：不支持的 action \`${action}\`。`);
+    throw new Error(`virtual_file 参数错误：不支持的 action \`${action}\`。`);
   }
 
   const includeLineNumbers = args.include_line_numbers === true;
@@ -975,7 +1021,7 @@ function normalizeActionArgs(action, rawArgs, options = {}) {
   switch (normalizedAction) {
     case CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME:
       if (!normalizeString(args.patch)) {
-        throw new Error('workspace 参数错误：apply_patch 需要 patch。');
+        throw new Error('virtual_file 参数错误：apply_patch 需要 patch。');
       }
       return {
         action: normalizedAction,
@@ -1026,7 +1072,7 @@ function normalizeActionArgs(action, rawArgs, options = {}) {
       };
     case CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME:
       if (!normalizeString(args.pattern)) {
-        throw new Error('workspace 参数错误：search_files 需要 pattern。');
+        throw new Error('virtual_file 参数错误：search_files 需要 pattern。');
       }
       return {
         action: normalizedAction,
@@ -1130,7 +1176,7 @@ function normalizeActionArgs(action, rawArgs, options = {}) {
         content: typeof args.content === 'string' ? args.content : ''
       };
     default:
-      throw new Error(`workspace 参数错误：未处理的 action \`${action}\`。`);
+      throw new Error(`virtual_file 参数错误：未处理的 action \`${action}\`。`);
   }
 }
 
@@ -1188,7 +1234,11 @@ export async function executeConversationDocumentAction(action, rawArgs, options
           file: buildReadFilePayload(localDocumentRecord, normalizedArgs.read_options, normalizedArgs.include_line_numbers)
         };
       }
-      const documentRecord = await store.getDocument(conversationId, normalizedArgs.file_path);
+      const documentRecord = await getRequiredConversationDocumentByPath(
+        store,
+        conversationId,
+        normalizedArgs.file_path
+      );
       if (!documentRecord) {
         throw new Error(`当前对话中不存在文件 ${normalizedArgs.file_path}。`);
       }
@@ -1234,7 +1284,11 @@ export async function executeConversationDocumentAction(action, rawArgs, options
           };
         }
       }
-      const documentRecord = await store.getDocument(conversationId, normalizedArgs.file_path);
+      const documentRecord = await getRequiredConversationDocumentByPath(
+        store,
+        conversationId,
+        normalizedArgs.file_path
+      );
       if (!documentRecord) {
         return {
           ok: false,
@@ -1288,9 +1342,7 @@ export async function executeConversationDocumentAction(action, rawArgs, options
       assertDifferentFileOperationPaths(normalizedArgs.source_path, normalizedArgs.destination_path, 'copy_file');
       assertWritableWorkspacePath(normalizedArgs.destination_path, 'copy_file');
       if (isLocalVirtualPath(normalizedArgs.source_path)) {
-        const existingDocuments = cloneDocuments(await store.listDocuments(conversationId))
-          .map((doc) => normalizeDocumentRecord(doc))
-          .sort((left, right) => left.path.localeCompare(right.path));
+        const existingDocuments = normalizeDocumentRecords(await store.listDocuments(conversationId));
         assertConversationDocumentDestinationAvailable(
           existingDocuments,
           normalizedArgs.destination_path,
@@ -1329,9 +1381,7 @@ export async function executeConversationDocumentAction(action, rawArgs, options
           })
         };
       }
-      const existingDocuments = cloneDocuments(await store.listDocuments(conversationId))
-        .map((doc) => normalizeDocumentRecord(doc))
-        .sort((left, right) => left.path.localeCompare(right.path));
+      const existingDocuments = normalizeDocumentRecords(await store.listDocuments(conversationId));
       const { document: sourceDocument } = findRequiredConversationDocument(
         existingDocuments,
         normalizedArgs.source_path,
@@ -1374,9 +1424,7 @@ export async function executeConversationDocumentAction(action, rawArgs, options
       assertDifferentFileOperationPaths(normalizedArgs.source_path, normalizedArgs.destination_path, 'move_file');
       assertWritableWorkspacePath(normalizedArgs.source_path, 'move_file');
       assertWritableWorkspacePath(normalizedArgs.destination_path, 'move_file');
-      const existingDocuments = cloneDocuments(await store.listDocuments(conversationId))
-        .map((doc) => normalizeDocumentRecord(doc))
-        .sort((left, right) => left.path.localeCompare(right.path));
+      const existingDocuments = normalizeDocumentRecords(await store.listDocuments(conversationId));
       const { index: sourceIndex, document: sourceDocument } = findRequiredConversationDocument(
         existingDocuments,
         normalizedArgs.source_path,
@@ -1420,9 +1468,7 @@ export async function executeConversationDocumentAction(action, rawArgs, options
     }
     case CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME: {
       assertWritableWorkspacePath(normalizedArgs.file_path, 'delete_file');
-      const existingDocuments = cloneDocuments(await store.listDocuments(conversationId))
-        .map((doc) => normalizeDocumentRecord(doc))
-        .sort((left, right) => left.path.localeCompare(right.path));
+      const existingDocuments = normalizeDocumentRecords(await store.listDocuments(conversationId));
       findRequiredConversationDocument(
         existingDocuments,
         normalizedArgs.file_path,
@@ -1493,7 +1539,7 @@ export async function executeConversationDocumentAction(action, rawArgs, options
       };
     }
     default:
-      throw new Error(`workspace 参数错误：未处理的 action \`${action}\`。`);
+      throw new Error(`virtual_file 参数错误：未处理的 action \`${action}\`。`);
   }
 }
 

@@ -92,7 +92,7 @@ function buildCommonFileReadParametersDescription() {
       target: buildVirtualFileTargetSchemaDescription({ requireSkillName: true }),
       path: {
         type: 'string',
-        description: '必填。要读取的虚拟文件路径，等价于 shell 里 `cat <path>` / `sed -n ... <path>` 的 path；示例 `workspace/plan.md`、`local/project/src/main.js`、`SKILL.md`、`src/main.js`。'
+        description: '必填。要读取的虚拟文件路径，等价于 shell 里 `cat <path>` / `sed -n ... <path>` 的 path；示例 `plan.md`、`local/project/src/main.js`、`SKILL.md`、`src/main.js`。'
       },
       max_chars: {
         type: ['integer', 'null'],
@@ -115,7 +115,7 @@ export function buildVirtualFileReadFileFunctionToolDefinition() {
   return {
     type: 'function',
     name: VIRTUAL_FILE_READ_FILE_TOOL_NAME,
-    description: '读取单个虚拟文件，调用方式尽量贴近 `cat` / `sed -n` / `nl`：常用 `path` 指定文件，`line_range` 指定行范围，`numbered=true` 获取行号。默认读取 workspace；`local/...` 会实时读取用户授权的本地只读映射；当 `target.kind="skill"` 时必须指定 `target.name`。输出是少量 path/range 属性 + 原文 content/numbered_content。',
+    description: '读取单个虚拟文件，调用方式尽量贴近 `cat` / `sed -n` / `nl`：常用 `path` 指定文件，`line_range` 指定行范围，`numbered=true` 获取行号。默认读取当前对话文件区；`local/...` 会实时读取用户授权的本地只读映射；当 `target.kind="skill"` 时必须指定 `target.name`。输出是少量 path/range 属性 + 原文 content/numbered_content。',
     strict: false,
     parameters: buildCommonFileReadParametersDescription()
   };
