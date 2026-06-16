@@ -148,9 +148,8 @@ test('search_files 的对话文档工具输出会把命中上下文渲染成 rg 
   const text = items.map(item => item.text).join('\n');
   assert.doesNotMatch(text, /<search_files_result/);
   assert.doesNotMatch(text, /<matches>/);
-  assert.match(text, /workspace\/spec\.md-1-before line/);
-  assert.match(text, /workspace\/spec\.md:2:7:alpha token beta/);
-  assert.match(text, /workspace\/spec\.md-3-after line/);
+  assert.match(text, /^workspace\/spec\.md\n1-before line\n2:7:alpha token beta\n3-after line/m);
+  assert.equal((text.match(/workspace\/spec\.md/g) || []).length, 1);
   assert.doesNotMatch(text, /<match rank="1">/);
   assert.doesNotMatch(text, /"before": \[/);
 });

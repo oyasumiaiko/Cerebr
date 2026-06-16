@@ -847,26 +847,22 @@ function buildResponsesSearchLinePath(match) {
   return skillName ? `${skillName}/${filePath}` : filePath;
 }
 
-function buildResponsesFileSearchContextLine(match, line, separator = '-') {
+function buildResponsesFileSearchContextLine(line, separator = '-') {
   const normalizedLine = isResponsesToolOutputPlainObject(line) ? line : {};
-  const path = buildResponsesSearchLinePath(match);
   const lineNumber = readPositiveInteger(normalizedLine.line_number);
   const text = typeof normalizedLine.text === 'string' ? normalizedLine.text : '';
-  if (!path && !lineNumber) return text;
-  if (!lineNumber) return `${path}${separator}${text}`;
-  return `${path}${separator}${lineNumber}${separator}${text}`;
+  if (!lineNumber) return text;
+  return `${lineNumber}${separator}${text}`;
 }
 
 function buildResponsesFileSearchMatchLine(match) {
   const normalized = isResponsesToolOutputPlainObject(match) ? match : {};
-  const path = buildResponsesSearchLinePath(normalized);
   const lineNumber = readPositiveInteger(normalized.line_number);
   const column = readPositiveInteger(normalized.column_start);
   const lineText = typeof normalized.line_text === 'string' ? normalized.line_text : '';
-  if (!path && !lineNumber) return lineText;
-  if (!lineNumber) return `${path}:${lineText}`;
-  if (!column) return `${path}:${lineNumber}:${lineText}`;
-  return `${path}:${lineNumber}:${column}:${lineText}`;
+  if (!lineNumber) return lineText;
+  if (!column) return `${lineNumber}:${lineText}`;
+  return `${lineNumber}:${column}:${lineText}`;
 }
 
 function buildResponsesFileSearchContext(match) {
@@ -875,17 +871,54 @@ function buildResponsesFileSearchContext(match) {
   const before = Array.isArray(normalized.before) ? normalized.before : [];
   const after = Array.isArray(normalized.after) ? normalized.after : [];
   for (const line of before) {
-    const text = buildResponsesFileSearchContextLine(normalized, line, '-');
+    const text = buildResponsesFileSearchContextLine(line, '-');
     if (text) lines.push(text);
   }
   if (typeof normalized.line_text === 'string' && normalized.line_text.trim()) {
     lines.push(buildResponsesFileSearchMatchLine(normalized));
   }
   for (const line of after) {
-    const text = buildResponsesFileSearchContextLine(normalized, line, '-');
+    const text = buildResponsesFileSearchContextLine(line, '-');
     if (text) lines.push(text);
   }
   return lines.join('\n');
+}
+
+function groupResponsesFileSearchMatchesByPath(matches) {
+  const groups = [];
+  const groupsByPath = new Map();
+  for (const match of Array.isArray(matches) ? matches : []) {
+    const displayPath = buildResponsesSearchLinePath(match);
+    const groupKey = displayPath || '(unknown)';
+    let group = groupsByPath.get(groupKey);
+    if (!group) {
+      group = {
+        path: displayPath,
+        matches: []
+      };
+      groupsByPath.set(groupKey, group);
+      groups.push(group);
+    }
+    group.matches.push(match);
+  }
+  return groups;
+}
+
+function buildResponsesFileSearchGroupedText(matches) {
+  const groups = groupResponsesFileSearchMatchesByPath(matches);
+  return groups
+    .map((group) => {
+      const contextText = group.matches
+        .map((match) => buildResponsesFileSearchContext(match))
+        .filter(Boolean)
+        .join('\n--\n');
+      if (!group.path) return contextText;
+      // 对齐 `rg --heading --line-number --column -C`：文件路径只出现一次，
+      // 后续上下文行只保留行号/列号/正文，避免同一文件多行命中重复完整路径。
+      return [group.path, contextText].filter(Boolean).join('\n');
+    })
+    .filter(Boolean)
+    .join('\n\n');
 }
 
 function buildResponsesFileReadToolOutputText(rootTag, result, options = {}) {
@@ -939,13 +972,10 @@ function buildResponsesFileSearchToolOutputText(rootTag, result, options = {}) {
   const matches = Array.isArray(options?.matches) ? options.matches : [];
   const lines = [];
   if (matches.length > 0) {
-    // 这里刻意采用接近 `rg --line-number --column` 的纯文本形状：
-    // `path:line:column:text` 是模型后续 read_file / apply_patch 最常用的定位信息，
+    // 这里刻意采用接近 `rg --heading --line-number --column` 的纯文本形状：
+    // `path` heading 加 `line:column:text` 是模型后续 read_file / apply_patch 最常用的定位信息，
     // 省掉每条命中的 JSON metadata，避免搜索工具输出比真正的匹配内容更吵。
-    const matchesText = matches
-      .map((match) => buildResponsesFileSearchContext(match))
-      .filter(Boolean)
-      .join('\n--\n');
+    const matchesText = buildResponsesFileSearchGroupedText(matches);
     if (matchesText) {
       lines.push(matchesText);
     }

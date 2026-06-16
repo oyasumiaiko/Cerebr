@@ -585,9 +585,8 @@ test('buildResponsesSkillRegistryToolOutputContentItems 对 search_files 输出 
   const text = formatResponsesToolOutputForDisplay(items);
   assert.doesNotMatch(text, /<skill_registry_result/);
   assert.doesNotMatch(text, /<matches>/);
-  assert.match(text, /dom-probe\/src\/main\.js-1-before line/);
-  assert.match(text, /dom-probe\/src\/main\.js:2:7:alpha token beta/);
-  assert.match(text, /dom-probe\/src\/main\.js-3-after line/);
+  assert.match(text, /^dom-probe\/src\/main\.js\n1-before line\n2:7:alpha token beta\n3-after line/m);
+  assert.equal((text.match(/dom-probe\/src\/main\.js/g) || []).length, 1);
   assert.doesNotMatch(text, /<match rank="1">/);
   assert.doesNotMatch(text, /"line_text": "alpha token beta"/);
 });

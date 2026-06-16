@@ -52,7 +52,7 @@ export function buildVirtualFileSearchFilesFunctionToolDefinition() {
   return {
     type: 'function',
     name: VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME,
-    description: '在虚拟文件中搜索文本或正则模式，调用方式尽量贴近 `rg "pattern" --glob "src/**/*.js" -n -C 2`。结果按接近 `rg --line-number --column` 的 `path:line:column:text` 纯文本行返回。默认作用于 workspace 可写区；传 `glob="local/..."` 时搜索用户授权的本地只读映射；当 `target.kind="skill"` 时可搜索单个或全部 skill 文件。',
+    description: '在虚拟文件中搜索文本或正则模式，调用方式尽量贴近 `rg "pattern" --glob "src/**/*.js" -n -C 2`。结果按接近 `rg --heading --line-number --column` 的纯文本块返回：每个文件路径只作为 heading 出现一次，下面是 `line:column:text` / `line-context` 行。默认作用于 workspace 可写区；传 `glob="local/..."` 时搜索用户授权的本地只读映射；当 `target.kind="skill"` 时可搜索单个或全部 skill 文件。',
     strict: false,
     parameters: {
       type: 'object',
