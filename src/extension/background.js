@@ -11,6 +11,9 @@ import {
 } from '../agent_tools/webpage_screenshot/tool.js';
 import { normalizeViewImageArguments } from '../agent_tools/view_image/tool.js';
 
+const CONTEXT_MENU_EXPLAIN_IMAGE_ID = 'explain-image';
+const CONTEXT_MENU_RELOAD_SIDEBAR_IFRAME_ID = 'reload-sidebar-iframe';
+
 // 确保 Service Worker 立即激活
 self.addEventListener('install', (event) => {
   console.log('Service Worker 安装中...', new Date().toISOString());
@@ -259,29 +262,45 @@ function checkCustomShortcut(callback) {
   });
 }
 
+async function resolveCommandTab(tab = null) {
+  const explicitTabId = Number(tab?.id);
+  if (Number.isInteger(explicitTabId) && explicitTabId >= 0) {
+    return tab;
+  }
+
+  const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return activeTab || null;
+}
+
+async function sendCommandToTab(commandType, tab = null) {
+  const targetTab = await resolveCommandTab(tab);
+  const targetTabId = Number(targetTab?.id);
+  if (!Number.isInteger(targetTabId) || targetTabId < 0) {
+    console.log('没有找到活动标签页');
+    return false;
+  }
+
+  // 所有从快捷键、action 菜单、action click 进入的宿主页命令都先确认 content script 在线；
+  // 这样失败边界集中在 background，content script 不需要理解不同入口的重试策略。
+  const isConnected = await isTabConnected(targetTabId);
+  if (!isConnected) {
+    console.log('标签页未连接，等待重试...');
+    await new Promise(resolve => setTimeout(resolve, 500));
+    const retryConnection = await isTabConnected(targetTabId);
+    if (!retryConnection) {
+      console.log('重试失败，标签页仍未连接');
+      return false;
+    }
+  }
+
+  await chrome.tabs.sendMessage(targetTabId, { type: commandType });
+  return true;
+}
+
 // 处理标签页连接和消息发送的通用函数
 async function handleTabCommand(commandType) {
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab) {
-      console.log('没有找到活动标签页');
-      return;
-    }
-
-    // 检查标签页是否已连接
-    const isConnected = await isTabConnected(tab.id);
-    if (!isConnected) {
-      console.log('标签页未连接，等待重试...');
-      // 等待一段时间后重试
-      await new Promise(resolve => setTimeout(resolve, 500));
-      const retryConnection = await isTabConnected(tab.id);
-      if (!retryConnection) {
-        console.log('重试失败，标签页仍未连接');
-        return;
-      }
-    }
-
-    await chrome.tabs.sendMessage(tab.id, { type: commandType });
+    await sendCommandToTab(commandType);
   } catch (error) {
     console.error(`处理${commandType}命令失败:`, error);
   }
@@ -327,20 +346,7 @@ chrome.commands.onCommand.addListener(async (command) => {
 chrome.action.onClicked.addListener(async (tab) => {
   // console.log('扩展图标被点击');
   try {
-    // 检查标签页是否已连接
-    const isConnected = await isTabConnected(tab.id);
-    if (!isConnected) {
-      console.log('标签页未连接，等待重试...');
-      // 等待一段时间后重试
-      await new Promise(resolve => setTimeout(resolve, 500));
-      const retryConnection = await isTabConnected(tab.id);
-      if (!retryConnection) {
-        console.log('重试失败，标签页仍未连接');
-        return;
-      }
-    }
-
-    await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_SIDEBAR_onClicked' });
+    await sendCommandToTab('TOGGLE_SIDEBAR_onClicked', tab);
   } catch (error) {
     console.error('处理切换失败:', error);
   }
@@ -700,21 +706,82 @@ const keepAliveInterval = setInterval(() => {
 
 self.addEventListener('beforeunload', () => clearInterval(keepAliveInterval));
 
+function removeAllContextMenus() {
+    return new Promise((resolve) => {
+        chrome.contextMenus.removeAll(() => {
+            const error = chrome.runtime.lastError;
+            if (error) {
+                console.warn('清理右键菜单失败（继续注册新菜单）:', error.message);
+            }
+            resolve();
+        });
+    });
+}
+
+function createContextMenu(definition) {
+    return new Promise((resolve) => {
+        chrome.contextMenus.create(definition, () => {
+            const error = chrome.runtime.lastError;
+            if (error) {
+                console.warn(`创建右键菜单失败 (${definition?.id || 'unknown'}):`, error.message);
+                resolve(false);
+                return;
+            }
+            resolve(true);
+        });
+    });
+}
+
+let contextMenuRegistrationPromise = null;
+
+function registerContextMenus() {
+    if (contextMenuRegistrationPromise) {
+        return contextMenuRegistrationPromise;
+    }
+
+    contextMenuRegistrationPromise = (async () => {
+        // Chrome 会按扩展维度管理 context menu；每次 service worker 启动时先清空再注册，
+        // 可以避免开发态 reload 后菜单定义滞留，也让 image 菜单与 action 菜单始终成套更新。
+        await removeAllContextMenus();
+        await createContextMenu({
+            id: CONTEXT_MENU_EXPLAIN_IMAGE_ID,
+            title: '使用 Cerebr 解释图片',
+            contexts: ['image']
+        });
+        await createContextMenu({
+            id: CONTEXT_MENU_RELOAD_SIDEBAR_IFRAME_ID,
+            title: '重新加载侧栏 iframe',
+            contexts: ['action']
+        });
+    })()
+        .catch((error) => {
+            console.error('注册右键菜单失败:', error);
+        })
+        .finally(() => {
+            contextMenuRegistrationPromise = null;
+        });
+
+    return contextMenuRegistrationPromise;
+}
+
 // 简化初始化检查
 chrome.runtime.onInstalled.addListener(() => {
     console.log('扩展已安装/更新:', new Date().toISOString());
-
-    // 创建右键菜单
-    chrome.contextMenus.create({
-        id: 'explain-image',
-        title: '使用 Cerebr 解释图片',
-        contexts: ['image']
-    });
+    void registerContextMenus();
 });
 
 // 处理右键菜单点击
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-    if (info.menuItemId === 'explain-image') {
+    if (info.menuItemId === CONTEXT_MENU_RELOAD_SIDEBAR_IFRAME_ID) {
+        try {
+            await sendCommandToTab('RELOAD_SIDEBAR_IFRAME_FROM_BACKGROUND', tab);
+        } catch (error) {
+            console.error('重新加载侧栏 iframe 失败:', error);
+        }
+        return;
+    }
+
+    if (info.menuItemId === CONTEXT_MENU_EXPLAIN_IMAGE_ID) {
         try {
             // 检查标签页是否已连接
             const isConnected = await isTabConnected(tab.id);
@@ -760,6 +827,8 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
         }
     }
 });
+
+void registerContextMenus();
 
 // 简化标签页连接检查
 async function isTabConnected(tabId) {
@@ -981,6 +1050,7 @@ function ensureSkillManagerReady(options = {}) {
 if (chrome?.runtime?.onStartup?.addListener) {
   chrome.runtime.onStartup.addListener(() => {
     void ensureSkillManagerReady({ force: true });
+    void registerContextMenus();
   });
 }
 

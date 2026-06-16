@@ -6,6 +6,16 @@ console.log('Document readyState:', document.readyState);
 let currentSelection = "";
 // 存储已附加监听器的 iframe 窗口，防止重复操作
 const monitoredFrames = new WeakSet();
+
+function buildSidebarFrameUrl(instanceId, isPrimary) {
+    const safeInstanceId = (typeof instanceId === 'string' && instanceId.trim())
+        ? instanceId.trim()
+        : `sidebar_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    return chrome.runtime.getURL(
+        `src/ui/sidebar/sidebar.html?instanceId=${encodeURIComponent(safeInstanceId)}&isPrimary=${isPrimary ? '1' : '0'}`
+    );
+}
+
 // 统一的 sync 写入入口：优先走写入队列，避免高频触发配额
 const storageWriteQueue = globalThis.CerebrStorageWriteQueue || null;
 function queueSyncSet(payload) {
@@ -308,6 +318,39 @@ class CerebrSidebar {
     if (!iframe || !iframe.contentWindow) return false;
     iframe.contentWindow.postMessage(message, '*');
     return true;
+  }
+
+  reloadIframe() {
+    const iframe = this.getIframe();
+    if (!iframe) {
+      return {
+        success: false,
+        instanceId: this.instanceId,
+        error: 'Sidebar iframe not found'
+      };
+    }
+
+    const frameUrl = iframe.src || buildSidebarFrameUrl(this.instanceId, this.isPrimary);
+
+    try {
+      // 从宿主页侧直接重载 iframe，不依赖 iframe 内部 JS；即使侧栏页面脚本崩溃，
+      // 父页面仍然可以像浏览器原生“重新加载框架”一样触发同一个 frame 导航。
+      const frameLocation = iframe.contentWindow?.location;
+      if (frameLocation && typeof frameLocation.reload === 'function') {
+        frameLocation.reload();
+      } else {
+        iframe.src = frameUrl;
+      }
+    } catch (error) {
+      console.warn('通过 contentWindow 重载侧栏 iframe 失败，改为重新设置 iframe src:', error);
+      iframe.src = frameUrl;
+    }
+
+    return {
+      success: true,
+      instanceId: this.instanceId,
+      src: frameUrl
+    };
   }
 
   setStackOffsetPx(offsetPx) {
@@ -816,9 +859,7 @@ class CerebrSidebar {
       const iframe = document.createElement('iframe');
       iframe.className = 'cerebr-sidebar__iframe';
       iframe.dataset.cerebrSidebarInstanceId = this.instanceId;
-      iframe.src = chrome.runtime.getURL(
-        `src/ui/sidebar/sidebar.html?instanceId=${encodeURIComponent(this.instanceId)}&isPrimary=${this.isPrimary ? '1' : '0'}`
-      );
+      iframe.src = buildSidebarFrameUrl(this.instanceId, this.isPrimary);
       iframe.allow = 'clipboard-write; file-system-access; fullscreen';
 
       // 重要：当用户在 DevTools 中对 iframe 执行「重新加载框架」时，iframe 内部状态会被重置；
@@ -1418,6 +1459,18 @@ class CerebrSidebarManager {
   toggleAllSidebars() {
     const shouldHideAll = this.sidebars.some((item) => item?.isVisible);
     this.setAllSidebarsVisible(!shouldHideAll);
+  }
+
+  reloadActiveSidebarIframe() {
+    const target = this.getActiveSidebar();
+    if (!target) {
+      return {
+        success: false,
+        error: 'Active sidebar instance not found'
+      };
+    }
+    this.setActiveSidebar(target);
+    return target.reloadIframe();
   }
 
   isMultiSidebarFullscreenActive() {
@@ -2302,6 +2355,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'CLOSE_SIDEBAR':
         sidebarManager?.setAllSidebarsVisible?.(false);
         break;
+      case 'RELOAD_SIDEBAR_IFRAME_FROM_BACKGROUND':
+        {
+          const reloadResult = sidebarManager?.reloadActiveSidebarIframe?.() || targetSidebar.reloadIframe();
+          sendResponse({
+            success: reloadResult?.success === true,
+            status: targetSidebar.isVisible,
+            activeSidebarId: reloadResult?.instanceId || targetSidebar.instanceId,
+            reloadResult
+          });
+        }
+        return true;
       case 'GET_SIDEBAR_DEBUG_STATE':
         {
           const activeDebugState = targetSidebar.getDebugState();

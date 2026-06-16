@@ -32,10 +32,8 @@ test('content script creates embedded sidebar iframes with explicit instanceId q
 
   assert.match(source, /class CerebrSidebarManager/);
   assert.match(source, /generateInstanceId\(\)/);
-  assert.match(
-    source,
-    /sidebar\.html\?instanceId=\$\{encodeURIComponent\(this\.instanceId\)\}&isPrimary=\$\{this\.isPrimary \? '1' : '0'\}/
-  );
+  assert.match(source, /function buildSidebarFrameUrl\(instanceId, isPrimary\)/);
+  assert.match(source, /iframe\.src = buildSidebarFrameUrl\(this\.instanceId, this\.isPrimary\)/);
   assert.match(source, /case 'CREATE_ADDITIONAL_SIDEBAR':/);
   assert.match(source, /case 'CLOSE_SIDEBAR':/);
 });
@@ -88,6 +86,21 @@ test('global sidebar visibility commands operate on all instances', async () => 
   assert.match(source, /case 'TOGGLE_SIDEBAR_onClicked':[\s\S]*sidebarManager\?\.toggleAllSidebars\?\.\(\)/);
   assert.match(source, /case 'OPEN_SIDEBAR':[\s\S]*sidebarManager\?\.setAllSidebarsVisible\?\.\(true\)/);
   assert.match(source, /case 'CLOSE_SIDEBAR':[\s\S]*sidebarManager\?\.setAllSidebarsVisible\?\.\(false\)/);
+});
+
+test('extension action menu can reload the active embedded sidebar iframe from the host page', async () => {
+  const contentSource = await readRepoFile('src/extension/content.js');
+  const backgroundSource = await readRepoFile('src/extension/background.js');
+
+  assert.match(contentSource, /reloadIframe\(\) \{[\s\S]*const frameLocation = iframe\.contentWindow\?\.location;[\s\S]*frameLocation\.reload\(\);[\s\S]*iframe\.src = frameUrl;/);
+  assert.match(contentSource, /reloadActiveSidebarIframe\(\) \{[\s\S]*const target = this\.getActiveSidebar\(\);[\s\S]*return target\.reloadIframe\(\);/);
+  assert.match(contentSource, /case 'RELOAD_SIDEBAR_IFRAME_FROM_BACKGROUND':[\s\S]*reloadActiveSidebarIframe\?\.\(\)/);
+  assert.match(backgroundSource, /const CONTEXT_MENU_RELOAD_SIDEBAR_IFRAME_ID = 'reload-sidebar-iframe';/);
+  assert.match(backgroundSource, /id: CONTEXT_MENU_RELOAD_SIDEBAR_IFRAME_ID,[\s\S]*title: '重新加载侧栏 iframe',[\s\S]*contexts: \['action'\]/);
+  assert.match(
+    backgroundSource,
+    /info\.menuItemId === CONTEXT_MENU_RELOAD_SIDEBAR_IFRAME_ID[\s\S]*sendCommandToTab\('RELOAD_SIDEBAR_IFRAME_FROM_BACKGROUND', tab\)/
+  );
 });
 
 test('embedded sidebar manager supports drag reorder and per-instance resize', async () => {
