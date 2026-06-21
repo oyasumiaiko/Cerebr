@@ -170,7 +170,6 @@ import {
 } from '../agent_tools/virtual_file_io/index.js';
 import {
   JS_RUNTIME_ENV_BOUND_HOST_PAGE,
-  JS_RUNTIME_ENV_ISOLATED_SANDBOX,
   resolvePageToolEnvironment
 } from '../agent_tools/shared/page_tool_environment.js';
 import {
@@ -8818,6 +8817,9 @@ export function createMessageSender(appContext) {
       items: Array.isArray(normalized?.items)
         ? cloneDataSafely(normalized.items)
         : [],
+      workspace_files: normalized?.workspace_files && typeof normalized.workspace_files === 'object' && !Array.isArray(normalized.workspace_files)
+        ? cloneDataSafely(normalized.workspace_files)
+        : null,
       error: normalized?.error ? cloneDataSafely(normalized.error) : null
     };
   }
@@ -8844,6 +8846,10 @@ export function createMessageSender(appContext) {
 
     try {
       const normalizedArgs = normalizeJsRuntimeExecuteToolArguments(rawArgs);
+      const workspaceFiles = normalizedArgs.workspaceFiles === true;
+      const conversationId = workspaceFiles
+        ? await resolveConversationIdForConversationDocumentTool(options)
+        : null;
       const runtimeEnvironment = (typeof options?.runtimeEnvironment === 'string' && options.runtimeEnvironment)
         ? options.runtimeEnvironment
         : resolveResponsesPageToolEnvironment(options?.attemptState).jsRuntimeEnvironment;
@@ -8851,6 +8857,8 @@ export function createMessageSender(appContext) {
         timeoutMs: normalizedArgs.timeoutMs,
         frameIds: normalizedArgs.frameIds,
         runtimeEnvironment,
+        workspaceFiles,
+        conversationId,
         signal: options?.attemptState?.controller?.signal || null
       });
 

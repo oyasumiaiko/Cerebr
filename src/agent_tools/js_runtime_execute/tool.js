@@ -30,6 +30,7 @@ export function buildJsRuntimeExecuteFunctionToolDefinition(pageToolEnvironment 
       : '可访问隔离沙箱自身的基础 DOM / Web API，但这些对象不代表用户正在浏览的网页。',
     'console.log/info/warn/error/debug 的输出会被捕获并一并回传，可用于调试或分步观察。',
     '若需要回传大量长字符串或多行文本，优先使用 console.log 输出；为避免长字符串作为 return 值时变成 JSON 字符串表现，return 更适合简洁结果值。',
+    '若需要用 JS 读取、搜索或批量改写当前会话文件区，请传 workspace_files=true；代码中会注入 files API：await files.list(glob)、await files.read(path, options)、await files.write(path, content)、await files.search(pattern, options)、await files.copy(from, to)、await files.move(from, to)、await files.delete(path)、await files.applyPatch(patch)。',
     '工具返回结果采用 XML 分块文本：通常包含 <metadata>、<return_value>、<console_logs>、<error>；多 frame 时还可能包含 <frame_results>。',
     '其中 metadata 是小型 JSON，其余正文块是纯文本；过长块会自动截断。请尽量返回紧凑、可序列化的小结果。'
   ];
@@ -59,9 +60,13 @@ export function buildJsRuntimeExecuteFunctionToolDefinition(pageToolEnvironment 
           items: {
             type: 'integer'
           }
+        },
+        workspace_files: {
+          type: ['boolean', 'null'],
+          description: '可选。为 true 时把当前会话文件区链接到 JS Runtime，代码中可使用 files API 读写 workspace 文件；不会改变当前运行环境选择，宿主页模式下仍可访问宿主页 DOM，隔离模式下仍运行在 sandbox。'
         }
       },
-      required: ['code', 'timeout_ms', 'frame_ids']
+      required: ['code', 'timeout_ms', 'frame_ids', 'workspace_files']
     }
   };
 }
@@ -102,6 +107,7 @@ export function normalizeJsRuntimeExecuteToolArguments(rawArgs) {
   return {
     code,
     timeoutMs,
-    frameIds: (Array.isArray(frameIds) && frameIds.length > 0) ? frameIds : null
+    frameIds: (Array.isArray(frameIds) && frameIds.length > 0) ? frameIds : null,
+    workspaceFiles: args.workspace_files === true
   };
 }

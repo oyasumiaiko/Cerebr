@@ -1,6 +1,7 @@
 const SANDBOX_MESSAGE_FLAG = '__cerebrJsSandbox';
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const activeExecutionAborters = new Map();
+const pendingWorkspaceFileRequests = new Map();
 const JS_SANDBOX_DOCUMENT_ID = 'cerebr-js-sandbox';
 const JS_SANDBOX_MAX_DEPTH = 6;
 const JS_SANDBOX_MAX_ARRAY_ITEMS = 80;
@@ -9,6 +10,8 @@ const JS_SANDBOX_DOM_TEXT_PREVIEW = 400;
 const JS_SANDBOX_HTML_PREVIEW = 1200;
 const JS_SANDBOX_MAX_LOGS = 50;
 const JS_SANDBOX_MAX_LOG_TEXT = 4000;
+const JS_SANDBOX_WORKSPACE_FILE_REQUEST_TIMEOUT_MS = 30000;
+let workspaceFileRequestSeq = 0;
 
 function previewLongString(value, maxChars) {
   if (typeof value !== 'string') return '';
@@ -217,10 +220,108 @@ function postSandboxMessage(type, payload = {}) {
   }
 }
 
-async function executeUserCode(code) {
+function createWorkspaceFileApiError(rawError) {
+  const input = (rawError && typeof rawError === 'object' && !Array.isArray(rawError))
+    ? rawError
+    : {};
+  const error = new Error((typeof input.message === 'string' && input.message.trim())
+    ? input.message.trim()
+    : 'workspace files 操作失败。');
+  error.name = (typeof input.name === 'string' && input.name.trim())
+    ? input.name.trim()
+    : 'WorkspaceFileApiError';
+  if (typeof input.stack === 'string') {
+    try { error.stack = input.stack; } catch (_) {}
+  }
+  return error;
+}
+
+function requestWorkspaceFileOperation(executionRequestId, operation, args = null) {
+  const normalizedExecutionRequestId = (typeof executionRequestId === 'string') ? executionRequestId : '';
+  const normalizedOperation = (typeof operation === 'string') ? operation.trim() : '';
+  if (!normalizedExecutionRequestId) {
+    return Promise.reject(new Error('files API 尚未绑定当前 JS Runtime 执行。'));
+  }
+  if (!normalizedOperation) {
+    return Promise.reject(new Error('files API operation 不能为空。'));
+  }
+
+  workspaceFileRequestSeq += 1;
+  const requestId = `workspace_file_${Date.now()}_${workspaceFileRequestSeq}`;
+  return new Promise((resolve, reject) => {
+    const timeoutId = setTimeout(() => {
+      pendingWorkspaceFileRequests.delete(requestId);
+      reject(new Error(`files.${normalizedOperation} 超时（${JS_SANDBOX_WORKSPACE_FILE_REQUEST_TIMEOUT_MS}ms）。`));
+    }, JS_SANDBOX_WORKSPACE_FILE_REQUEST_TIMEOUT_MS);
+
+    pendingWorkspaceFileRequests.set(requestId, {
+      resolve: (value) => {
+        clearTimeout(timeoutId);
+        resolve(value);
+      },
+      reject: (error) => {
+        clearTimeout(timeoutId);
+        reject(error);
+      }
+    });
+
+    postSandboxMessage('workspace_file_request', {
+      requestId,
+      executionRequestId: normalizedExecutionRequestId,
+      operation: normalizedOperation,
+      args
+    });
+  });
+}
+
+function createWorkspaceFilesApi(executionRequestId) {
+  const call = (operation, args) => requestWorkspaceFileOperation(executionRequestId, operation, args);
+  const api = {
+    list(glob = null) {
+      return call('list', { glob });
+    },
+    read(path, options = {}) {
+      return call('read', {
+        ...(options && typeof options === 'object' && !Array.isArray(options) ? options : {}),
+        path
+      });
+    },
+    write(path, content) {
+      return call('write', {
+        path,
+        content: typeof content === 'string' ? content : String(content ?? '')
+      });
+    },
+    search(pattern, options = {}) {
+      return call('search', {
+        ...(options && typeof options === 'object' && !Array.isArray(options) ? options : {}),
+        pattern
+      });
+    },
+    copy(from, to) {
+      return call('copy', { from, to });
+    },
+    move(from, to) {
+      return call('move', { from, to });
+    },
+    delete(path) {
+      return call('delete', { path });
+    },
+    applyPatch(patch) {
+      return call('apply_patch', { patch });
+    },
+    apply_patch(patch) {
+      return call('apply_patch', { patch });
+    }
+  };
+  return Object.freeze(api);
+}
+
+async function executeUserCode(code, options = {}) {
   const body = (typeof code === 'string') ? code : '';
-  const fn = new AsyncFunction(body);
-  return await fn();
+  const fn = new AsyncFunction('files', 'workspace', body);
+  const filesApi = options?.files || undefined;
+  return await fn(filesApi, filesApi);
 }
 
 function normalizeConsoleArg(value) {
@@ -270,7 +371,7 @@ function normalizeConsoleArg(value) {
   }
 }
 
-async function executeUserCodeWithCapturedConsole(code) {
+async function executeUserCodeWithCapturedConsole(code, options = {}) {
   const logs = [];
   const originalConsole = globalThis.console;
   const capturedConsole = Object.create(originalConsole || {});
@@ -285,7 +386,7 @@ async function executeUserCodeWithCapturedConsole(code) {
 
   try {
     globalThis.console = capturedConsole;
-    const result = await executeUserCode(code);
+    const result = await executeUserCode(code, options);
     return {
       ok: true,
       value: result,
@@ -314,6 +415,21 @@ window.addEventListener('message', async (event) => {
   if (data?.[SANDBOX_MESSAGE_FLAG] !== true) return;
 
   const requestId = (typeof data.requestId === 'string') ? data.requestId : '';
+  if (data.type === 'workspace_file_response') {
+    const pending = pendingWorkspaceFileRequests.get(requestId);
+    if (!pending) return;
+    pendingWorkspaceFileRequests.delete(requestId);
+    const payload = (data.payload && typeof data.payload === 'object' && !Array.isArray(data.payload))
+      ? data.payload
+      : {};
+    if (payload.ok === true) {
+      pending.resolve(payload.result);
+    } else {
+      pending.reject(createWorkspaceFileApiError(payload.error));
+    }
+    return;
+  }
+
   if (data.type === 'abort') {
     const abortExecution = activeExecutionAborters.get(requestId);
     if (typeof abortExecution === 'function') {
@@ -331,8 +447,13 @@ window.addEventListener('message', async (event) => {
     if (typeof abort === 'function') {
       activeExecutionAborters.set(requestId, abort);
     }
+    const workspaceFilesApi = data.workspaceFiles === true
+      ? createWorkspaceFilesApi(requestId)
+      : undefined;
     const execution = await Promise.race([
-      executeUserCodeWithCapturedConsole(data.code),
+      executeUserCodeWithCapturedConsole(data.code, {
+        files: workspaceFilesApi
+      }),
       abortPromise
     ]);
     if (execution.ok !== true) {

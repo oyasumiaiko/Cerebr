@@ -148,12 +148,13 @@ function shouldExposeNavigationFrameSnapshot(frame) {
  * - 整段代码作为字符串传给 `chrome.userScripts.execute()`；
  * - 将用户提供的代码作为 async IIFE 函数体执行；
  * - 因此模型/调用方可以直接写 `await` 与 `return`；
- * - 不向执行环境额外注入任何扩展对象，保持纯页面 JS 语义。
+ * - 默认不向执行环境额外注入扩展对象，保持纯页面 JS 语义；
+ * - workspace_files 显式开启时，只注入本次执行局部可见的 files/workspace 变量，不写入页面全局对象。
  *
  * @param {string} userCode
  * @returns {string}
  */
-function buildUserScriptSource(userCode, timeoutMs = 0, executionId = '') {
+function buildUserScriptSource(userCode, timeoutMs = 0, executionId = '', workspaceBridge = null) {
   const body = (typeof userCode === 'string') ? userCode : '';
   const normalizedTimeoutMs = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0
     ? Math.trunc(Number(timeoutMs))
@@ -161,12 +162,20 @@ function buildUserScriptSource(userCode, timeoutMs = 0, executionId = '') {
   const normalizedExecutionId = (typeof executionId === 'string' && executionId.trim())
     ? executionId.trim()
     : '';
+  const normalizedWorkspaceBridge = (workspaceBridge && typeof workspaceBridge === 'object' && !Array.isArray(workspaceBridge))
+    ? {
+        bridgeId: (typeof workspaceBridge.bridgeId === 'string' && workspaceBridge.bridgeId.trim()) ? workspaceBridge.bridgeId.trim() : '',
+        executionId: (typeof workspaceBridge.executionId === 'string' && workspaceBridge.executionId.trim()) ? workspaceBridge.executionId.trim() : normalizedExecutionId
+      }
+    : null;
   return `
   (async () => {
     const __cerebrMaxLogs = 50;
     const __cerebrMaxLogChars = 4000;
     const __cerebrTimeoutMs = ${normalizedTimeoutMs};
     const __cerebrExecutionId = ${JSON.stringify(normalizedExecutionId)};
+    const __cerebrWorkspaceBridge = ${JSON.stringify(normalizedWorkspaceBridge)};
+    let __cerebrWorkspaceFileRequestSeq = 0;
     const __cerebrAbortEventName = '__cerebrJsRuntimeAbort';
     const __cerebrAbortRegistry = globalThis.__cerebrJsRuntimeAbortRegistry ??= new Set();
     const __cerebrBuildReplacer = () => {
@@ -271,6 +280,88 @@ function buildUserScriptSource(userCode, timeoutMs = 0, executionId = '') {
         text: text.length <= __cerebrMaxLogChars ? text : \`\${text.slice(0, __cerebrMaxLogChars)}…\`
       });
     };
+    const __cerebrCreateWorkspaceFileApiError = (rawError) => {
+      const input = rawError && typeof rawError === 'object' ? rawError : {};
+      const error = new Error((typeof input.message === 'string' && input.message.trim())
+        ? input.message.trim()
+        : 'workspace files 操作失败。');
+      error.name = (typeof input.name === 'string' && input.name.trim())
+        ? input.name.trim()
+        : 'WorkspaceFileApiError';
+      if (typeof input.stack === 'string') {
+        try { error.stack = input.stack; } catch (_) {}
+      }
+      return error;
+    };
+    const __cerebrRequestWorkspaceFileOperation = async (operation, args = null) => {
+      if (!__cerebrWorkspaceBridge || !__cerebrWorkspaceBridge.bridgeId) {
+        throw new Error('当前 JS Runtime 调用未启用 workspace_files，不能访问 files API。');
+      }
+      if (!globalThis.chrome?.runtime?.sendMessage) {
+        throw new Error('当前 JS Runtime 环境没有可用的 chrome.runtime.sendMessage，无法桥接 files API。');
+      }
+      const normalizedOperation = (typeof operation === 'string') ? operation.trim() : '';
+      if (!normalizedOperation) {
+        throw new Error('files API operation 不能为空。');
+      }
+      __cerebrWorkspaceFileRequestSeq += 1;
+      const requestId = \`workspace_file_\${Date.now()}_\${__cerebrWorkspaceFileRequestSeq}\`;
+      const response = await globalThis.chrome.runtime.sendMessage({
+        type: 'JS_RUNTIME_WORKSPACE_FILE_REQUEST',
+        bridgeId: __cerebrWorkspaceBridge.bridgeId,
+        executionId: __cerebrWorkspaceBridge.executionId || __cerebrExecutionId,
+        requestId,
+        operation: normalizedOperation,
+        args
+      });
+      if (response?.ok === true) {
+        return response.result;
+      }
+      throw __cerebrCreateWorkspaceFileApiError(response?.error);
+    };
+    const __cerebrCreateWorkspaceFilesApi = () => {
+      const call = (operation, args) => __cerebrRequestWorkspaceFileOperation(operation, args);
+      return Object.freeze({
+        list(glob = null) {
+          return call('list', { glob });
+        },
+        read(path, options = {}) {
+          return call('read', {
+            ...(options && typeof options === 'object' && !Array.isArray(options) ? options : {}),
+            path
+          });
+        },
+        write(path, content) {
+          return call('write', {
+            path,
+            content: typeof content === 'string' ? content : String(content ?? '')
+          });
+        },
+        search(pattern, options = {}) {
+          return call('search', {
+            ...(options && typeof options === 'object' && !Array.isArray(options) ? options : {}),
+            pattern
+          });
+        },
+        copy(from, to) {
+          return call('copy', { from, to });
+        },
+        move(from, to) {
+          return call('move', { from, to });
+        },
+        delete(path) {
+          return call('delete', { path });
+        },
+        applyPatch(patch) {
+          return call('apply_patch', { patch });
+        },
+        apply_patch(patch) {
+          return call('apply_patch', { patch });
+        }
+      });
+    };
+    const files = __cerebrCreateWorkspaceFilesApi();
+    const workspace = files;
     const __cerebrOriginalConsole = globalThis.console;
     const __cerebrConsole = Object.create(__cerebrOriginalConsole || {});
     ['log', 'info', 'warn', 'error', 'debug'].forEach((level) => {
@@ -460,7 +551,7 @@ export function createJsRuntimeManager() {
       worldId: CEREBR_SKILL_WORLD_ID,
       js: [
         {
-          code: buildUserScriptSource(code, timeoutMs, executionId)
+          code: buildUserScriptSource(code, timeoutMs, executionId, request?.workspaceBridge || null)
         }
       ]
     });

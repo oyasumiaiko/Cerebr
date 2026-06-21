@@ -83,6 +83,6 @@ test('js_runtime_execute 中止链会把 AbortSignal 贯穿到 sender/sidebar/ba
   );
   assert.match(
     jsSandboxFrameSource,
-    /const execution = await Promise\.race\(\[\s*executeUserCodeWithCapturedConsole\(data\.code\),\s*abortPromise\s*\]\);/s
+    /const execution = await Promise\.race\(\[\s*executeUserCodeWithCapturedConsole\(data\.code,\s*\{[\s\S]*?files: workspaceFilesApi[\s\S]*?\}\),\s*abortPromise\s*\]\);/s
   );
 });

@@ -384,8 +384,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === 'JS_RUNTIME_WORKSPACE_FILE_REQUEST') {
+    (async () => {
+      const result = await handleJsRuntimeWorkspaceFileRequest(message, sender);
+      sendResponse(result);
+    })();
+    return true;
+  }
+
   if (message?.type === 'EXECUTE_JS_RUNTIME') {
     (async () => {
+      let workspaceFileSession = null;
       try {
         if (typeof sender?.url === 'string' && sender.url.includes('#standalone')) {
           sendResponse({
@@ -404,6 +413,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return;
         }
 
+        const workspaceFiles = message?.workspaceFiles === true;
+        workspaceFileSession = workspaceFiles
+          ? registerJsRuntimeWorkspaceFileSession({
+              tabId: targetTabId,
+              executionId: message?.executionId || '',
+              timeoutMs: message?.timeoutMs,
+              sidebarInstanceId: typeof message?.sidebarInstanceId === 'string' ? message.sidebarInstanceId : '',
+              conversationId: typeof message?.workspaceConversationId === 'string' ? message.workspaceConversationId : ''
+            })
+          : null;
         const result = await jsRuntimeManager.execute({
           tabId: targetTabId,
           code: message?.code || '',
@@ -411,15 +430,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           timeoutMs: message?.timeoutMs,
           frameIds: Array.isArray(message?.frameIds) ? message.frameIds : null,
           allFrames: message?.allFrames === true,
-          injectImmediately: message?.injectImmediately === true
+          injectImmediately: message?.injectImmediately === true,
+          workspaceBridge: workspaceFileSession
+            ? {
+                bridgeId: workspaceFileSession.bridgeId,
+                executionId: workspaceFileSession.executionId
+              }
+            : null
         });
         sendResponse({
           success: true,
           tabId: targetTabId,
-          ...result
+          ...result,
+          ...(workspaceFileSession ? { workspace_files: buildWorkspaceFileBridgeSummary(workspaceFileSession.summary) } : {})
         });
       } catch (error) {
         sendResponse({ success: false, error: error?.message || '执行 JS Runtime 失败' });
+      } finally {
+        unregisterJsRuntimeWorkspaceFileSession(workspaceFileSession);
       }
     })();
     return true;
@@ -848,6 +876,151 @@ async function sendMessageToTab(tabId, message) {
     return null;
 }
 
+const jsRuntimeWorkspaceFileSessions = new Map();
+
+function normalizeWorkspaceFileBridgeError(error) {
+    return {
+        message: (typeof error?.message === 'string' && error.message.trim())
+            ? error.message.trim()
+            : String(error || '文件桥接操作失败。'),
+        name: (typeof error?.name === 'string' && error.name.trim())
+            ? error.name.trim()
+            : 'WorkspaceFileBridgeError',
+        stack: typeof error?.stack === 'string' ? error.stack : ''
+    };
+}
+
+function addWorkspaceFileSummaryPath(targetSet, value) {
+    const text = (typeof value === 'string') ? value.trim() : '';
+    if (text) targetSet.add(text);
+}
+
+function createWorkspaceFileSummaryState() {
+    return {
+        operationsCount: 0,
+        operationCounts: {},
+        affectedFiles: {
+            added: new Set(),
+            modified: new Set(),
+            deleted: new Set()
+        },
+        updatedPaths: new Set(),
+        deletedPaths: new Set()
+    };
+}
+
+function collectWorkspaceFileBridgeSummary(summary, operation, result) {
+    if (!summary) return;
+    summary.operationsCount += 1;
+    const normalizedOperation = (typeof operation === 'string' && operation.trim())
+        ? operation.trim()
+        : 'unknown';
+    summary.operationCounts[normalizedOperation] = Number(summary.operationCounts[normalizedOperation] || 0) + 1;
+
+    const affected = (result?.affected_files && typeof result.affected_files === 'object')
+        ? result.affected_files
+        : {};
+    (Array.isArray(affected.added) ? affected.added : []).forEach((path) => addWorkspaceFileSummaryPath(summary.affectedFiles.added, path));
+    (Array.isArray(affected.modified) ? affected.modified : []).forEach((path) => addWorkspaceFileSummaryPath(summary.affectedFiles.modified, path));
+    (Array.isArray(affected.deleted) ? affected.deleted : []).forEach((path) => addWorkspaceFileSummaryPath(summary.affectedFiles.deleted, path));
+
+    const changeEvent = (result?.change_event && typeof result.change_event === 'object')
+        ? result.change_event
+        : {};
+    (Array.isArray(changeEvent.updated_paths) ? changeEvent.updated_paths : []).forEach((path) => addWorkspaceFileSummaryPath(summary.updatedPaths, path));
+    (Array.isArray(changeEvent.deleted_paths) ? changeEvent.deleted_paths : []).forEach((path) => addWorkspaceFileSummaryPath(summary.deletedPaths, path));
+}
+
+function buildWorkspaceFileBridgeSummary(summary) {
+    if (!summary) return null;
+    return {
+        enabled: true,
+        operations_count: summary.operationsCount,
+        operation_counts: { ...summary.operationCounts },
+        affected_files: {
+            added: Array.from(summary.affectedFiles.added),
+            modified: Array.from(summary.affectedFiles.modified),
+            deleted: Array.from(summary.affectedFiles.deleted)
+        },
+        updated_paths: Array.from(summary.updatedPaths),
+        deleted_paths: Array.from(summary.deletedPaths)
+    };
+}
+
+function registerJsRuntimeWorkspaceFileSession(options = {}) {
+    const bridgeId = `jsrt_workspace_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    const timeoutMs = Number.isFinite(Number(options.timeoutMs)) && Number(options.timeoutMs) > 0
+        ? Math.trunc(Number(options.timeoutMs))
+        : 30000;
+    const session = {
+        bridgeId,
+        tabId: Number(options.tabId),
+        executionId: (typeof options.executionId === 'string') ? options.executionId : '',
+        sidebarInstanceId: (typeof options.sidebarInstanceId === 'string') ? options.sidebarInstanceId : '',
+        conversationId: (typeof options.conversationId === 'string') ? options.conversationId : '',
+        summary: createWorkspaceFileSummaryState(),
+        timeoutId: null
+    };
+    session.timeoutId = setTimeout(() => {
+        jsRuntimeWorkspaceFileSessions.delete(bridgeId);
+    }, Math.max(30000, timeoutMs + 60000));
+    jsRuntimeWorkspaceFileSessions.set(bridgeId, session);
+    return session;
+}
+
+function unregisterJsRuntimeWorkspaceFileSession(session) {
+    if (!session?.bridgeId) return;
+    jsRuntimeWorkspaceFileSessions.delete(session.bridgeId);
+    if (session.timeoutId) {
+        clearTimeout(session.timeoutId);
+    }
+}
+
+async function handleJsRuntimeWorkspaceFileRequest(message, sender) {
+    const bridgeId = (typeof message?.bridgeId === 'string') ? message.bridgeId.trim() : '';
+    const requestId = (typeof message?.requestId === 'string') ? message.requestId.trim() : '';
+    const operation = (typeof message?.operation === 'string') ? message.operation.trim() : '';
+    try {
+        const session = jsRuntimeWorkspaceFileSessions.get(bridgeId);
+        if (!session) {
+            throw new Error('workspace_files bridge 已失效或不存在。');
+        }
+        if (!requestId) {
+            throw new Error('workspace_files 请求缺少 requestId。');
+        }
+        if (!operation) {
+            throw new Error('workspace_files 请求缺少 operation。');
+        }
+        if (Number.isFinite(Number(sender?.tab?.id)) && Number(sender.tab.id) !== Number(session.tabId)) {
+            throw new Error('workspace_files 请求来源标签页与执行会话不匹配。');
+        }
+        if (session.executionId && message?.executionId && message.executionId !== session.executionId) {
+            throw new Error('workspace_files 请求 executionId 与执行会话不匹配。');
+        }
+
+        const payload = await sendMessageToTab(session.tabId, {
+            type: 'JS_RUNTIME_WORKSPACE_FILE_REQUEST_INTERNAL',
+            requestId,
+            sidebarInstanceId: session.sidebarInstanceId,
+            conversationId: session.conversationId,
+            operation,
+            args: message?.args ?? null
+        });
+        if (!payload) {
+            throw new Error('无法把 workspace 文件请求转发到当前标签页的侧栏。');
+        }
+        if (payload.ok === true) {
+            collectWorkspaceFileBridgeSummary(session.summary, operation, payload.result);
+        }
+        return payload;
+    } catch (error) {
+        return {
+            ok: false,
+            error: normalizeWorkspaceFileBridgeError(error)
+        };
+    }
+}
+
 async function relaySidebarContentRequestToTab({
     message,
     sender,
@@ -1018,7 +1191,7 @@ async function buildViewImageResultForPrompt(rawArgs = null) {
 /**
  * JS Runtime manager：
  * - 只负责基于 userScripts 的一次性执行；
- * - 不向页面执行环境注入任何扩展桥或宿主对象。
+ * - 默认不向页面执行环境注入扩展桥；workspace_files 显式开启时只注入本次执行局部可见的文件能力。
  */
 const jsRuntimeManager = createJsRuntimeManager();
 const skillManager = createSkillManager({ jsRuntimeManager });

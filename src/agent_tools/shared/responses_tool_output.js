@@ -497,6 +497,9 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
   const effectiveTopLevelLogs = topLevelLogs.length > 0 ? topLevelLogs : singleFrameLogs;
   const successFrameCount = items.filter((item) => !item?.error).length;
   const errorFrameCount = items.filter((item) => item?.error).length;
+  const workspaceFiles = (normalized.workspace_files && typeof normalized.workspace_files === 'object' && !Array.isArray(normalized.workspace_files))
+    ? normalized.workspace_files
+    : null;
   const metadata = {
     ok: normalized.ok === true,
     tab_id: Number.isFinite(Number(normalized.tabId)) ? Number(normalized.tabId) : null,
@@ -517,6 +520,27 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
     }
   );
   blocks.push(buildXmlBlock('metadata', metadataText));
+
+  if (workspaceFiles?.enabled === true) {
+    const workspaceFilesText = truncateResponsesToolOutputText(
+      trimJsonMetadataValue({
+        operations_count: Number.isFinite(Number(workspaceFiles.operations_count))
+          ? Math.max(0, Math.trunc(Number(workspaceFiles.operations_count)))
+          : 0,
+        operation_counts: workspaceFiles.operation_counts || {},
+        affected_files: workspaceFiles.affected_files || {},
+        updated_paths: Array.isArray(workspaceFiles.updated_paths) ? workspaceFiles.updated_paths : [],
+        deleted_paths: Array.isArray(workspaceFiles.deleted_paths) ? workspaceFiles.deleted_paths : []
+      }),
+      {
+        maxChars: RESPONSES_TOOL_OUTPUT_MAX_CHARS,
+        mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
+      }
+    );
+    if (workspaceFilesText) {
+      blocks.push(buildXmlBlock('workspace_files', workspaceFilesText));
+    }
+  }
 
   const returnValueText = truncateResponsesToolOutputText(
     trimTrailingWhitespace(formatResponsesJsRuntimeValueText(normalized.value)),
