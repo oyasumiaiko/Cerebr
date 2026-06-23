@@ -58,7 +58,7 @@ const INITIAL_HTML_DOC_CONTENT = [
   '</html>'
 ].join('\n');
 const EDITED_MD_DOC_CONTENT = '# 随笔\n\n第二版内容。\n';
-const EXPECTED_DOWNLOAD_NAME = 'workspace__随笔-关于学习与判断.md';
+const EXPECTED_DOWNLOAD_NAME = '随笔-关于学习与判断.md';
 
 const [rawRepoRoot, outputDir, rawArg3 = '', rawArg4 = ''] = process.argv.slice(2);
 const repoRoot = rawRepoRoot ? path.resolve(rawRepoRoot) : '';
@@ -446,6 +446,16 @@ async function waitForSidebarVisible(extensionWorker) {
     intervalMs: 250,
     label: 'sidebar visibility'
   });
+}
+
+async function readActiveSidebarDebugState(extensionWorker) {
+  const payload = await extensionWorker.evaluate(
+    buildSendContentMessageExpression(JSON.stringify({ type: 'GET_SIDEBAR_DEBUG_STATE' }))
+  );
+  if (payload?.response?.success !== true) {
+    throw new Error(`Unable to read sidebar debug state: ${JSON.stringify(payload)}`);
+  }
+  return payload.response.debugState?.active || payload.response.debugState;
 }
 
 async function waitForSidebarReady(page, extensionId) {
@@ -900,20 +910,25 @@ async function main() {
     await htmlPreviewFrame.evaluate(() => {
       window.__cerebrPreviewStateCounter = 42;
     });
+    result.htmlPreviewHostBeforePopout = await readActiveSidebarDebugState(extensionWorker);
     await htmlCardRoot.locator('.conversation-document-card__tool-button--html-fullscreen').click();
     result.htmlPopoutState = await waitFor(async () => {
       return await htmlCardRoot.evaluate((card) => {
         const content = card.querySelector('.conversation-document-card__content');
         if (!content || !content.classList.contains('is-popout')) return null;
         const frame = content.querySelector('iframe.conversation-document-card__html-frame');
-        const closeButton = content.querySelector('.conversation-document-html-popout__toggle');
-        if (!frame || !closeButton) return null;
+        const titlebar = content.querySelector('.conversation-document-html-window__titlebar');
+        const resizeHandle = content.querySelector('.conversation-document-html-window__resize--se');
+        const maximizeButton = content.querySelector('.conversation-document-html-window__maximize');
+        if (!frame || !titlebar || !resizeHandle || !maximizeButton) return null;
         return {
           modeClass: Array.from(content.classList),
           frameSandbox: frame.getAttribute('sandbox') || '',
           frameAllow: frame.getAttribute('allow') || '',
           frameSrc: frame.getAttribute('src') || '',
-          hasHoverButton: true
+          hasTitlebar: true,
+          hasResizeHandle: true,
+          hasMaximizeButton: true
         };
       }).catch(() => null);
     }, {
@@ -924,6 +939,21 @@ async function main() {
     if (result.htmlPopoutState.frameSandbox) {
       throw new Error(`Popout HTML preview iframe should rely on manifest sandbox only: ${result.htmlPopoutState.frameSandbox}`);
     }
+    result.htmlPopoutHostState = await waitFor(async () => {
+      const state = await readActiveSidebarDebugState(extensionWorker).catch(() => null);
+      if (!state?.htmlPreviewWindow?.open || !state?.htmlPreviewWindow?.hasClass) return null;
+      return state;
+    }, {
+      timeoutMs: 10_000,
+      intervalMs: 200,
+      label: 'html preview host window open'
+    });
+    if (result.htmlPopoutHostState.rect.width <= result.htmlPreviewHostBeforePopout.rect.width + 80) {
+      throw new Error(`HTML preview popout should expand the host sidebar iframe viewport: ${JSON.stringify({
+        before: result.htmlPreviewHostBeforePopout.rect,
+        after: result.htmlPopoutHostState.rect
+      })}`);
+    }
     result.htmlPreviewFrameStateAfterPopout = await htmlPreviewFrame.evaluate(() => ({
       counter: window.__cerebrPreviewStateCounter || 0,
       inlineScriptRan: window.__cerebrInlineScriptRan === true
@@ -931,7 +961,193 @@ async function main() {
     if (result.htmlPreviewFrameStateAfterPopout.counter !== 42) {
       throw new Error(`HTML preview popout should not reload iframe state: ${JSON.stringify(result.htmlPreviewFrameStateAfterPopout)}`);
     }
-    await htmlCardRoot.locator('.conversation-document-html-popout__toggle').click();
+
+    const titlebarLocator = htmlCardRoot.locator('.conversation-document-html-window__titlebar');
+    const titlebarBoxBeforeDrag = await titlebarLocator.boundingBox();
+    if (!titlebarBoxBeforeDrag) {
+      throw new Error('HTML preview titlebar bounding box unavailable before drag');
+    }
+    result.htmlPopoutTitlebarBoxBeforeDrag = titlebarBoxBeforeDrag;
+    const hostRectBeforeDrag = result.htmlPopoutHostState.rect;
+    result.htmlPopoutDragPointer = await htmlCardRoot.evaluate((card) => {
+      const titlebar = card.querySelector('.conversation-document-html-window__titlebar');
+      if (!titlebar) throw new Error('HTML preview titlebar unavailable for pointer drag');
+      const rect = titlebar.getBoundingClientRect();
+      const pointerId = 71;
+      const start = {
+        x: Math.min(rect.left + 80, rect.right - 4),
+        y: rect.top + rect.height / 2
+      };
+      const end = {
+        x: start.x + 70,
+        y: start.y + 45
+      };
+      const createEvent = (type, point, buttons) => new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        pointerId,
+        pointerType: 'mouse',
+        isPrimary: true,
+        button: 0,
+        buttons,
+        clientX: point.x,
+        clientY: point.y,
+        screenX: point.x,
+        screenY: point.y
+      });
+      titlebar.dispatchEvent(createEvent('pointerdown', start, 1));
+      return { start, end, pointerId };
+    });
+    result.htmlPopoutHostStateAfterDragMouseDown = await readActiveSidebarDebugState(extensionWorker);
+    await sidebarFrame.evaluate(({ end, pointerId }) => {
+      const createEvent = (type, point, buttons) => new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        pointerId,
+        pointerType: 'mouse',
+        isPrimary: true,
+        button: 0,
+        buttons,
+        clientX: point.x,
+        clientY: point.y,
+        screenX: point.x,
+        screenY: point.y
+      });
+      document.dispatchEvent(createEvent('pointermove', end, 1));
+      document.dispatchEvent(createEvent('pointerup', end, 0));
+    }, result.htmlPopoutDragPointer);
+    result.htmlPopoutDragState = await waitFor(async () => {
+      const state = await readActiveSidebarDebugState(extensionWorker).catch(() => null);
+      if (!state?.rect) return null;
+      const movedX = state.rect.x - hostRectBeforeDrag.x;
+      const movedY = state.rect.y - hostRectBeforeDrag.y;
+      return (Math.abs(movedX) >= 20 || Math.abs(movedY) >= 20)
+        ? {
+            before: hostRectBeforeDrag,
+            after: state.rect,
+            movedX,
+            movedY
+          }
+        : null;
+    }, {
+      timeoutMs: 10_000,
+      intervalMs: 200,
+      label: 'html preview host window dragged'
+    });
+    result.htmlPreviewFrameStateAfterDrag = await htmlPreviewFrame.evaluate(() => ({
+      counter: window.__cerebrPreviewStateCounter || 0,
+      inlineScriptRan: window.__cerebrInlineScriptRan === true
+    })).catch((error) => ({ error: String(error && (error.stack || error.message || error)) }));
+    if (result.htmlPreviewFrameStateAfterDrag.counter !== 42) {
+      throw new Error(`HTML preview drag should not reload iframe state: ${JSON.stringify(result.htmlPreviewFrameStateAfterDrag)}`);
+    }
+
+    const hostRectBeforeResize = (await readActiveSidebarDebugState(extensionWorker)).rect;
+    const resizeHandleLocator = htmlCardRoot.locator('.conversation-document-html-window__resize--se');
+    const resizeHandleBox = await resizeHandleLocator.boundingBox();
+    if (!resizeHandleBox) {
+      throw new Error('HTML preview SE resize handle bounding box unavailable');
+    }
+    result.htmlPopoutResizeHandleBox = resizeHandleBox;
+    result.htmlPopoutResizePointer = await htmlCardRoot.evaluate((card) => {
+      const handle = card.querySelector('.conversation-document-html-window__resize--se');
+      if (!handle) throw new Error('HTML preview resize handle unavailable for pointer resize');
+      const rect = handle.getBoundingClientRect();
+      const pointerId = 72;
+      const start = {
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2
+      };
+      const end = {
+        x: start.x - 70,
+        y: start.y - 45
+      };
+      const createEvent = (type, point, buttons) => new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        pointerId,
+        pointerType: 'mouse',
+        isPrimary: true,
+        button: 0,
+        buttons,
+        clientX: point.x,
+        clientY: point.y,
+        screenX: point.x,
+        screenY: point.y
+      });
+      handle.dispatchEvent(createEvent('pointerdown', start, 1));
+      return { start, end, pointerId };
+    });
+    result.htmlPopoutHostStateAfterResizeMouseDown = await readActiveSidebarDebugState(extensionWorker);
+    await sidebarFrame.evaluate(({ end, pointerId }) => {
+      const createEvent = (type, point, buttons) => new PointerEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        pointerId,
+        pointerType: 'mouse',
+        isPrimary: true,
+        button: 0,
+        buttons,
+        clientX: point.x,
+        clientY: point.y,
+        screenX: point.x,
+        screenY: point.y
+      });
+      document.dispatchEvent(createEvent('pointermove', end, 1));
+      document.dispatchEvent(createEvent('pointerup', end, 0));
+    }, result.htmlPopoutResizePointer);
+    result.htmlPopoutResizeState = await waitFor(async () => {
+      const state = await readActiveSidebarDebugState(extensionWorker).catch(() => null);
+      if (!state?.rect) return null;
+      return Math.abs(state.rect.width - hostRectBeforeResize.width) > 20
+        || Math.abs(state.rect.height - hostRectBeforeResize.height) > 15
+        ? {
+            before: hostRectBeforeResize,
+            after: state.rect
+          }
+        : null;
+    }, {
+      timeoutMs: 10_000,
+      intervalMs: 200,
+      label: 'html preview host window resized'
+    });
+    result.htmlPreviewFrameStateAfterResize = await htmlPreviewFrame.evaluate(() => ({
+      counter: window.__cerebrPreviewStateCounter || 0,
+      inlineScriptRan: window.__cerebrInlineScriptRan === true
+    })).catch((error) => ({ error: String(error && (error.stack || error.message || error)) }));
+    if (result.htmlPreviewFrameStateAfterResize.counter !== 42) {
+      throw new Error(`HTML preview resize should not reload iframe state: ${JSON.stringify(result.htmlPreviewFrameStateAfterResize)}`);
+    }
+
+    const pageViewport = await page.evaluate(() => ({
+      width: window.innerWidth,
+      height: window.innerHeight
+    }));
+    await titlebarLocator.dblclick();
+    result.htmlPopoutMaximizedState = await waitFor(async () => {
+      const state = await readActiveSidebarDebugState(extensionWorker).catch(() => null);
+      if (!state?.rect || !state.htmlPreviewWindow?.maximized) return null;
+      return state.rect.width >= pageViewport.width - 4
+        && state.rect.height >= pageViewport.height - 4
+        ? {
+            pageViewport,
+            hostRect: state.rect
+          }
+        : null;
+    }, {
+      timeoutMs: 10_000,
+      intervalMs: 200,
+      label: 'html preview host window maximized'
+    });
+    result.htmlPreviewFrameStateAfterMaximize = await htmlPreviewFrame.evaluate(() => ({
+      counter: window.__cerebrPreviewStateCounter || 0,
+      inlineScriptRan: window.__cerebrInlineScriptRan === true
+    })).catch((error) => ({ error: String(error && (error.stack || error.message || error)) }));
+    if (result.htmlPreviewFrameStateAfterMaximize.counter !== 42) {
+      throw new Error(`HTML preview maximize should not reload iframe state: ${JSON.stringify(result.htmlPreviewFrameStateAfterMaximize)}`);
+    }
+
+    await htmlCardRoot.locator('.conversation-document-html-window__close').click();
     result.htmlPopoutRestoredState = await waitFor(async () => {
       return await htmlCardRoot.evaluate((card) => {
         const content = card.querySelector('.conversation-document-card__content--html-preview');

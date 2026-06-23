@@ -26,6 +26,14 @@ import {
 const HTML_PREVIEW_RENDER_MESSAGE = 'CEREBR_HTML_PREVIEW_RENDER';
 const HTML_PREVIEW_READY_MESSAGE = 'CEREBR_HTML_PREVIEW_READY';
 const HTML_PREVIEW_RENDERED_MESSAGE = 'CEREBR_HTML_PREVIEW_RENDERED';
+const HTML_PREVIEW_WINDOW_OPEN_MESSAGE = 'HTML_PREVIEW_WINDOW_OPEN';
+const HTML_PREVIEW_WINDOW_CLOSE_MESSAGE = 'HTML_PREVIEW_WINDOW_CLOSE';
+const HTML_PREVIEW_WINDOW_DRAG_START_MESSAGE = 'HTML_PREVIEW_WINDOW_DRAG_START';
+const HTML_PREVIEW_WINDOW_RESIZE_START_MESSAGE = 'HTML_PREVIEW_WINDOW_RESIZE_START';
+const HTML_PREVIEW_WINDOW_POINTER_MOVE_MESSAGE = 'HTML_PREVIEW_WINDOW_POINTER_MOVE';
+const HTML_PREVIEW_WINDOW_POINTER_UP_MESSAGE = 'HTML_PREVIEW_WINDOW_POINTER_UP';
+const HTML_PREVIEW_WINDOW_TOGGLE_MAXIMIZE_MESSAGE = 'HTML_PREVIEW_WINDOW_TOGGLE_MAXIMIZE';
+const HTML_PREVIEW_WINDOW_HOST_STATE_MESSAGE = 'HTML_PREVIEW_WINDOW_HOST_STATE';
 const HTML_PREVIEW_SANDBOX_FRAME_URL = new URL(
   '../ui/html_preview_sandbox/html_preview_sandbox.html',
   import.meta.url
@@ -83,6 +91,28 @@ function createHtmlPreviewRenderPayload({ content = '', path = '', title = '' } 
     html: typeof content === 'string' ? content : '',
     path: normalizeViewerString(path),
     title: normalizeViewerString(title)
+  };
+}
+
+function postHtmlPreviewWindowHostMessage(type, payload = {}) {
+  try {
+    window.parent?.postMessage({
+      type,
+      source: 'cerebr-html-preview-window',
+      ...payload
+    }, '*');
+  } catch (_) {}
+}
+
+function buildHtmlPreviewWindowPointerPayload(event, extra = {}) {
+  return {
+    ...extra,
+    button: Number.isFinite(Number(event?.button)) ? Number(event.button) : 0,
+    buttons: Number.isFinite(Number(event?.buttons)) ? Number(event.buttons) : 0,
+    clientX: Number(event?.clientX),
+    clientY: Number(event?.clientY),
+    screenX: Number(event?.screenX),
+    screenY: Number(event?.screenY)
   };
 }
 
@@ -159,6 +189,7 @@ export function createConversationDocumentViewer(options = {}) {
   let changeListenerInstalled = false;
   let keyboardShortcutInstalled = false;
   let htmlPreviewPopoutShortcutInstalled = false;
+  let htmlPreviewWindowHostListenerInstalled = false;
   let activeHtmlPreviewPopout = null;
 
   function getViewerSettingsSnapshot() {
@@ -385,7 +416,7 @@ export function createConversationDocumentViewer(options = {}) {
     if (!activeHtmlPreviewPopout) return;
     if (card && activeHtmlPreviewPopout.card !== card) return;
 
-    const { card: activeCard, content, backdrop, restoreFocusTo } = activeHtmlPreviewPopout;
+    const { card: activeCard, content, restoreFocusTo } = activeHtmlPreviewPopout;
     activeHtmlPreviewPopout = null;
 
     content?.classList?.remove?.('is-popout');
@@ -393,9 +424,11 @@ export function createConversationDocumentViewer(options = {}) {
     content?.removeAttribute?.('aria-modal');
     content?.removeAttribute?.('data-html-preview-popout');
     activeCard?.classList?.remove?.('is-html-popout');
-    backdrop?.remove?.();
     document.body.classList.remove('conversation-document-html-popout-open');
     syncConversationDocumentHtmlFullscreenButton(activeCard);
+    if (options.notifyHost !== false) {
+      postHtmlPreviewWindowHostMessage(HTML_PREVIEW_WINDOW_CLOSE_MESSAGE);
+    }
 
     if (options.restoreFocus === true && restoreFocusTo instanceof HTMLElement) {
       try {
@@ -404,6 +437,30 @@ export function createConversationDocumentViewer(options = {}) {
         restoreFocusTo.focus?.();
       }
     }
+  }
+
+  function syncHtmlPreviewWindowHostState(data = {}) {
+    if (!activeHtmlPreviewPopout) return;
+    activeHtmlPreviewPopout.isMaximized = data.isMaximized === true;
+    const button = activeHtmlPreviewPopout.maximizeButton;
+    if (button) {
+      applyToolButtonVisualState(button, {
+        iconClass: activeHtmlPreviewPopout.isMaximized ? 'fa-solid fa-compress' : 'fa-solid fa-expand',
+        active: activeHtmlPreviewPopout.isMaximized,
+        title: activeHtmlPreviewPopout.isMaximized ? '还原 HTML 预览窗口' : '最大化 HTML 预览窗口',
+        ariaLabel: activeHtmlPreviewPopout.isMaximized ? '还原 HTML 预览窗口' : '最大化 HTML 预览窗口'
+      });
+    }
+  }
+
+  function installConversationDocumentHtmlPopoutHostListener() {
+    if (htmlPreviewWindowHostListenerInstalled) return;
+    window.addEventListener('message', (event) => {
+      const data = event?.data || {};
+      if (data?.type !== HTML_PREVIEW_WINDOW_HOST_STATE_MESSAGE) return;
+      syncHtmlPreviewWindowHostState(data);
+    });
+    htmlPreviewWindowHostListenerInstalled = true;
   }
 
   function installConversationDocumentHtmlPopoutShortcuts() {
@@ -417,23 +474,177 @@ export function createConversationDocumentViewer(options = {}) {
     htmlPreviewPopoutShortcutInstalled = true;
   }
 
+  function installHtmlPreviewWindowPointerRelay(extra = {}) {
+    let relayActive = true;
+    const expectedPointerId = Number(extra.pointerId);
+
+    // 浮窗拖拽从 sidebar iframe 内部开始，但真正移动的是宿主页里的 sidebar 容器。
+    // 因此 iframe 内部只负责持续转发同一个 pointerId 的坐标，宿主页统一做 DPI/缩放换算和 rect 应用。
+    const shouldHandlePointerEvent = (event) => (
+      !Number.isFinite(expectedPointerId)
+      || !Number.isFinite(Number(event?.pointerId))
+      || Number(event.pointerId) === expectedPointerId
+    );
+
+    const cleanupRelay = () => {
+      if (!relayActive) return;
+      relayActive = false;
+      document.removeEventListener('pointermove', handlePointerMove, true);
+      document.removeEventListener('pointerup', handlePointerUp, true);
+      document.removeEventListener('pointercancel', handlePointerUp, true);
+      window.removeEventListener('pointermove', handlePointerMove, true);
+      window.removeEventListener('pointerup', handlePointerUp, true);
+      window.removeEventListener('pointercancel', handlePointerUp, true);
+      window.removeEventListener('blur', cleanupRelay, true);
+    };
+
+    const handlePointerMove = (event) => {
+      if (!relayActive) return;
+      if (!shouldHandlePointerEvent(event)) return;
+      if (Number(event.buttons) !== 1) {
+        postHtmlPreviewWindowHostMessage(
+          HTML_PREVIEW_WINDOW_POINTER_UP_MESSAGE,
+          buildHtmlPreviewWindowPointerPayload(event, extra)
+        );
+        cleanupRelay();
+        return;
+      }
+      event.preventDefault();
+      postHtmlPreviewWindowHostMessage(
+        HTML_PREVIEW_WINDOW_POINTER_MOVE_MESSAGE,
+        buildHtmlPreviewWindowPointerPayload(event, extra)
+      );
+    };
+
+    const handlePointerUp = (event) => {
+      if (!relayActive) return;
+      if (!shouldHandlePointerEvent(event)) return;
+      event.preventDefault();
+      postHtmlPreviewWindowHostMessage(
+        HTML_PREVIEW_WINDOW_POINTER_UP_MESSAGE,
+        buildHtmlPreviewWindowPointerPayload(event, extra)
+      );
+      cleanupRelay();
+    };
+
+    document.addEventListener('pointermove', handlePointerMove, true);
+    document.addEventListener('pointerup', handlePointerUp, true);
+    document.addEventListener('pointercancel', handlePointerUp, true);
+    window.addEventListener('pointermove', handlePointerMove, true);
+    window.addEventListener('pointerup', handlePointerUp, true);
+    window.addEventListener('pointercancel', handlePointerUp, true);
+    window.addEventListener('blur', cleanupRelay, true);
+  }
+
+  function createHtmlPreviewWindowTitlebar(card, path) {
+    const titlebar = document.createElement('div');
+    titlebar.className = 'conversation-document-html-window__titlebar';
+
+    const title = document.createElement('div');
+    title.className = 'conversation-document-html-window__title';
+    title.textContent = path || 'HTML 预览';
+    titlebar.appendChild(title);
+
+    const actions = document.createElement('div');
+    actions.className = 'conversation-document-html-window__actions';
+
+    const maximizeButton = createDocumentActionIconButton({
+      iconClass: 'fa-solid fa-expand',
+      title: '最大化 HTML 预览窗口',
+      ariaLabel: '最大化 HTML 预览窗口',
+      className: 'conversation-document-html-window__button conversation-document-html-window__maximize',
+      onClick: () => postHtmlPreviewWindowHostMessage(HTML_PREVIEW_WINDOW_TOGGLE_MAXIMIZE_MESSAGE)
+    });
+    const closeButton = createDocumentActionIconButton({
+      iconClass: 'fa-solid fa-compress',
+      title: '缩回 HTML 预览',
+      ariaLabel: '缩回 HTML 预览',
+      className: 'conversation-document-html-window__button conversation-document-html-window__close',
+      onClick: () => closeConversationDocumentHtmlPopout(card, { restoreFocus: true })
+    });
+    actions.appendChild(maximizeButton);
+    actions.appendChild(closeButton);
+    titlebar.appendChild(actions);
+
+    const startDrag = (event) => {
+      if (event.button !== 0) return;
+      if (event.target?.closest?.('button')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      try {
+        // pointer capture 能让鼠标离开标题栏后仍继续收到 pointermove/pointerup，
+        // 避免浮窗只移动一小段或在释放鼠标后残留 dragging 状态。
+        event.currentTarget?.setPointerCapture?.(event.pointerId);
+      } catch (_) {}
+      const pointerId = Number(event.pointerId);
+      const extra = Number.isFinite(pointerId) ? { pointerId } : {};
+      postHtmlPreviewWindowHostMessage(
+        HTML_PREVIEW_WINDOW_DRAG_START_MESSAGE,
+        buildHtmlPreviewWindowPointerPayload(event, extra)
+      );
+      installHtmlPreviewWindowPointerRelay(extra);
+    };
+    titlebar.addEventListener('pointerdown', startDrag);
+    titlebar.addEventListener('mousedown', (event) => {
+      if (typeof window.PointerEvent !== 'undefined') return;
+      startDrag(event);
+    });
+    titlebar.addEventListener('dblclick', (event) => {
+      if (event.target?.closest?.('button')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      postHtmlPreviewWindowHostMessage(HTML_PREVIEW_WINDOW_TOGGLE_MAXIMIZE_MESSAGE);
+    });
+
+    return { titlebar, maximizeButton };
+  }
+
+  function appendHtmlPreviewWindowResizeHandles(container) {
+    const edges = ['n', 'e', 's', 'w', 'ne', 'nw', 'se', 'sw'];
+    edges.forEach((edge) => {
+      const handle = document.createElement('div');
+      handle.className = `conversation-document-html-window__resize conversation-document-html-window__resize--${edge}`;
+      handle.dataset.resizeEdge = edge;
+      const startResize = (event) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+          // resize handle 位于 iframe 内边缘；捕获 pointer 后，拖拽到预览内容区域也能持续改变宿主窗口大小。
+          event.currentTarget?.setPointerCapture?.(event.pointerId);
+        } catch (_) {}
+        const pointerId = Number(event.pointerId);
+        const extra = Number.isFinite(pointerId) ? { edge, pointerId } : { edge };
+        postHtmlPreviewWindowHostMessage(
+          HTML_PREVIEW_WINDOW_RESIZE_START_MESSAGE,
+          buildHtmlPreviewWindowPointerPayload(event, extra)
+        );
+        installHtmlPreviewWindowPointerRelay(extra);
+      };
+      handle.addEventListener('pointerdown', startResize);
+      handle.addEventListener('mousedown', (event) => {
+        if (typeof window.PointerEvent !== 'undefined') return;
+        startResize(event);
+      });
+      container.appendChild(handle);
+    });
+  }
+
   function renderHtmlPreviewContent(content, path, card) {
     const container = document.createElement('div');
     container.className = 'conversation-document-card__content conversation-document-card__content--html-preview';
     container.tabIndex = 0;
+
+    const { titlebar, maximizeButton } = createHtmlPreviewWindowTitlebar(card, path);
+    container.appendChild(titlebar);
 
     // HTML 文件可能由模型生成，必须交给 manifest sandbox page 渲染；主扩展页 CSP 不应为此放宽 inline script。
     container.appendChild(createHtmlPreviewSandboxFrame({
       content,
       path
     }));
-    container.appendChild(createDocumentActionIconButton({
-      iconClass: 'fa-solid fa-compress',
-      title: '缩回 HTML 预览',
-      ariaLabel: '缩回 HTML 预览',
-      className: 'conversation-document-html-popout__toggle',
-      onClick: () => closeConversationDocumentHtmlPopout(card, { restoreFocus: true })
-    }));
+    appendHtmlPreviewWindowResizeHandles(container);
+    container.__cerebrHtmlPreviewMaximizeButton = maximizeButton;
     return container;
   }
 
@@ -716,7 +927,8 @@ export function createConversationDocumentViewer(options = {}) {
     activeHtmlPreviewPopout = {
       card,
       content,
-      backdrop: null,
+      maximizeButton: content.__cerebrHtmlPreviewMaximizeButton || null,
+      isMaximized: false,
       restoreFocusTo: document.activeElement instanceof HTMLElement ? document.activeElement : null
     };
     document.body.classList.add('conversation-document-html-popout-open');
@@ -727,7 +939,9 @@ export function createConversationDocumentViewer(options = {}) {
     content.setAttribute('data-html-preview-popout', 'true');
     content.setAttribute('aria-label', `${file.path || 'HTML 文件'} 放大预览`);
     installConversationDocumentHtmlPopoutShortcuts();
+    installConversationDocumentHtmlPopoutHostListener();
     syncConversationDocumentHtmlFullscreenButton(card);
+    postHtmlPreviewWindowHostMessage(HTML_PREVIEW_WINDOW_OPEN_MESSAGE);
   }
 
   async function downloadConversationDocumentCard(card) {

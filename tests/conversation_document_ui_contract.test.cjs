@@ -83,12 +83,28 @@ test('conversation_document_viewer 为 HTML iframe 提供不重建 iframe 的放
 
   assert.match(viewerSource, /toggleConversationDocumentHtmlPopout/);
   assert.match(viewerSource, /closeConversationDocumentHtmlPopout/);
+  assert.match(viewerSource, /HTML_PREVIEW_WINDOW_OPEN/);
+  assert.match(viewerSource, /HTML_PREVIEW_WINDOW_DRAG_START/);
+  assert.match(viewerSource, /HTML_PREVIEW_WINDOW_RESIZE_START/);
+  assert.match(viewerSource, /HTML_PREVIEW_WINDOW_POINTER_MOVE/);
+  assert.match(viewerSource, /HTML_PREVIEW_WINDOW_POINTER_UP/);
+  assert.match(viewerSource, /HTML_PREVIEW_WINDOW_TOGGLE_MAXIMIZE/);
   assert.match(viewerSource, /conversation-document-card__tool-button--html-fullscreen/);
+  assert.match(viewerSource, /conversation-document-html-window__titlebar/);
+  assert.match(viewerSource, /const edges = \['n', 'e', 's', 'w', 'ne', 'nw', 'se', 'sw'\]/);
+  assert.match(viewerSource, /conversation-document-html-window__resize--\$\{edge\}/);
   assert.doesNotMatch(viewerSource, /requestFullscreen\(\)/);
   assert.doesNotMatch(viewerSource, /exitFullscreen\(\)/);
   assert.match(sidebarCssSource, /\.conversation-document-card__content--html-preview\.is-popout/);
-  assert.match(sidebarCssSource, /\.conversation-document-html-popout__toggle/);
+  assert.match(sidebarCssSource, /\.conversation-document-html-window__titlebar/);
+  assert.match(sidebarCssSource, /\.conversation-document-html-window__resize--se/);
   assert.doesNotMatch(sidebarCssSource, /\.conversation-document-html-fullscreen__toolbar/);
+  assert.match(contentSource, /openHtmlPreviewWindow/);
+  assert.match(contentSource, /startHtmlPreviewWindowDrag/);
+  assert.match(contentSource, /startHtmlPreviewWindowResize/);
+  assert.match(contentSource, /updateHtmlPreviewWindowInteraction/);
+  assert.match(contentSource, /endHtmlPreviewWindowInteraction/);
+  assert.match(contentSource, /html-preview-window/);
   assert.match(contentSource, /iframe\.allow = 'clipboard-write; file-system-access; fullscreen'/);
 });
 
