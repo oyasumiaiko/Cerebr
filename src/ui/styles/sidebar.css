@@ -11410,150 +11410,53 @@ body.chat-empty .empty-state-content {
 
   .conversation-document-card__content--html-preview.is-popout {
     position: fixed;
-    inset: 0;
+    inset: clamp(12px, 4vh, 34px) clamp(10px, 4vw, 46px);
     z-index: 2147483647;
-    display: flex;
-    flex-direction: column;
-    width: 100vw;
-    height: 100vh;
+    width: auto;
+    height: auto;
     max-height: none;
     margin: 0;
     padding: 0;
-    border: 0;
-    border-radius: 0;
-    box-shadow: none;
+    border-radius: 8px;
+    border: 1px solid rgba(15, 23, 42, 0.18);
+    box-shadow: 0 24px 80px rgba(15, 23, 42, 0.34);
     background: #ffffff;
     overflow: hidden;
   }
 
   .conversation-document-card__content--html-preview.is-popout .conversation-document-card__html-frame {
-    flex: 1 1 auto;
-    height: auto;
+    height: 100%;
     min-height: 0;
   }
 
-  .conversation-document-html-window__titlebar {
-    flex: 0 0 32px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 0 8px 0 12px;
-    background: rgba(17, 24, 39, 0.05);
-    color: #111827;
-    cursor: move;
-    user-select: none;
-    -webkit-user-select: none;
-    transition: background 0.15s ease;
-  }
-
-  .conversation-document-card__content--html-preview.is-popout:hover .conversation-document-html-window__titlebar,
-  .conversation-document-html-window__titlebar:focus-within {
-    background: rgba(17, 24, 39, 0.1);
-  }
-
-  .conversation-document-html-window__title {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 12px;
-    font-weight: 600;
-    opacity: 0.52;
-  }
-
-  .conversation-document-html-window__actions {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    opacity: 0;
-    transition: opacity 0.15s ease;
-  }
-
-  .conversation-document-card__content--html-preview.is-popout:hover .conversation-document-html-window__actions,
-  .conversation-document-html-window__actions:focus-within {
-    opacity: 1;
-  }
-
-  .conversation-document-html-window__button {
-    width: 28px;
-    height: 28px;
-    border-radius: 999px;
-    color: #111827;
-  }
-
-  .conversation-document-html-window__button:hover,
-  .conversation-document-html-window__button:focus-visible {
-    background: rgba(17, 24, 39, 0.12);
-  }
-
-  .conversation-document-html-window__resize {
+  .conversation-document-html-popout__toggle {
+    display: none;
     position: absolute;
-    z-index: 3;
-  }
-
-  .conversation-document-html-window__resize--n,
-  .conversation-document-html-window__resize--s {
-    left: 10px;
-    right: 10px;
-    height: 8px;
-    cursor: ns-resize;
-  }
-
-  .conversation-document-html-window__resize--n {
-    top: 0;
-  }
-
-  .conversation-document-html-window__resize--s {
-    bottom: 0;
-  }
-
-  .conversation-document-html-window__resize--e,
-  .conversation-document-html-window__resize--w {
     top: 10px;
-    bottom: 10px;
-    width: 8px;
-    cursor: ew-resize;
+    right: 10px;
+    z-index: 2;
+    width: 34px;
+    height: 34px;
+    border-radius: 999px;
+    background: rgba(17, 24, 39, 0.72);
+    color: #ffffff;
+    opacity: 0;
+    transform: translateY(-2px);
+    transition: opacity 0.15s ease, transform 0.15s ease, background 0.15s ease;
   }
 
-  .conversation-document-html-window__resize--e {
-    right: 0;
+  .conversation-document-card__content--html-preview.is-popout .conversation-document-html-popout__toggle {
+    display: inline-flex;
   }
 
-  .conversation-document-html-window__resize--w {
-    left: 0;
+  .conversation-document-card__content--html-preview.is-popout:hover .conversation-document-html-popout__toggle,
+  .conversation-document-html-popout__toggle:focus-visible {
+    opacity: 1;
+    transform: translateY(0);
   }
 
-  .conversation-document-html-window__resize--ne,
-  .conversation-document-html-window__resize--nw,
-  .conversation-document-html-window__resize--se,
-  .conversation-document-html-window__resize--sw {
-    width: 14px;
-    height: 14px;
-  }
-
-  .conversation-document-html-window__resize--ne {
-    top: 0;
-    right: 0;
-    cursor: ne-resize;
-  }
-
-  .conversation-document-html-window__resize--nw {
-    top: 0;
-    left: 0;
-    cursor: nw-resize;
-  }
-
-  .conversation-document-html-window__resize--se {
-    right: 0;
-    bottom: 0;
-    cursor: se-resize;
-  }
-
-  .conversation-document-html-window__resize--sw {
-    left: 0;
-    bottom: 0;
-    cursor: sw-resize;
+  .conversation-document-html-popout__toggle:hover {
+    background: rgba(17, 24, 39, 0.9);
   }
 
   .conversation-document-card__content--code {

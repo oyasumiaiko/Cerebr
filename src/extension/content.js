@@ -298,13 +298,6 @@ class CerebrSidebar {
     // 这样侧栏滚轮加速不再要求 iframe 自己先拿到键盘焦点，但我们仍不拦截宿主页原有 Alt 行为。
     this.isAltKeyPressed = false;
     this.isDocked = false;
-    this.htmlPreviewWindowState = {
-      open: false,
-      maximized: false,
-      rect: null,
-      restoreRect: null,
-      wasVisible: false
-    };
     this.sidebarPosition = 'right'; // 默认侧边栏位置为右侧
     this.dockStyleElement = null;
     // console.log('CerebrSidebar 实例创建');
@@ -393,169 +386,6 @@ class CerebrSidebar {
     const safeDelta = Number.isFinite(numericDelta) ? numericDelta : 0;
     const nextWidth = safeStartWidth + safeDelta / this.getSidebarResizeScale();
     return Math.min(Math.max(500, nextWidth), 2000);
-  }
-
-  getHostViewportRect() {
-    const width = Math.max(1, window.innerWidth || document.documentElement.clientWidth || 1);
-    const height = Math.max(1, window.innerHeight || document.documentElement.clientHeight || 1);
-    return { left: 0, top: 0, width, height };
-  }
-
-  normalizeHtmlPreviewWindowRect(rect = {}) {
-    const viewport = this.getHostViewportRect();
-    const minWidth = Math.min(520, Math.max(320, viewport.width - 24));
-    const minHeight = Math.min(360, Math.max(240, viewport.height - 24));
-    const maxWidth = viewport.width;
-    const maxHeight = viewport.height;
-
-    const rawWidth = Number(rect.width);
-    const rawHeight = Number(rect.height);
-    const width = Math.min(maxWidth, Math.max(minWidth, Number.isFinite(rawWidth) ? rawWidth : viewport.width * 0.82));
-    const height = Math.min(maxHeight, Math.max(minHeight, Number.isFinite(rawHeight) ? rawHeight : viewport.height * 0.82));
-
-    const rawLeft = Number(rect.left);
-    const rawTop = Number(rect.top);
-    const fallbackLeft = (viewport.width - width) / 2;
-    const fallbackTop = (viewport.height - height) / 2;
-    const left = Math.min(
-      Math.max(0, Number.isFinite(rawLeft) ? rawLeft : fallbackLeft),
-      Math.max(0, viewport.width - width)
-    );
-    const top = Math.min(
-      Math.max(0, Number.isFinite(rawTop) ? rawTop : fallbackTop),
-      Math.max(0, viewport.height - height)
-    );
-
-    return {
-      left: Math.round(left),
-      top: Math.round(top),
-      width: Math.round(width),
-      height: Math.round(height)
-    };
-  }
-
-  getDefaultHtmlPreviewWindowRect() {
-    const viewport = this.getHostViewportRect();
-    return this.normalizeHtmlPreviewWindowRect({
-      width: Math.min(1160, viewport.width * 0.82),
-      height: Math.min(820, viewport.height * 0.82)
-    });
-  }
-
-  applyHtmlPreviewWindowRect(rect = null) {
-    if (!this.sidebar) return null;
-    const nextRect = this.normalizeHtmlPreviewWindowRect(rect || this.htmlPreviewWindowState.rect || this.getDefaultHtmlPreviewWindowRect());
-    this.htmlPreviewWindowState.rect = nextRect;
-    this.sidebar.style.setProperty('--cerebr-html-preview-window-left', `${nextRect.left}px`);
-    this.sidebar.style.setProperty('--cerebr-html-preview-window-top', `${nextRect.top}px`);
-    this.sidebar.style.setProperty('--cerebr-html-preview-window-width', `${nextRect.width}px`);
-    this.sidebar.style.setProperty('--cerebr-html-preview-window-height', `${nextRect.height}px`);
-    return nextRect;
-  }
-
-  clearHtmlPreviewWindowStyles() {
-    if (!this.sidebar) return;
-    this.sidebar.style.removeProperty('--cerebr-html-preview-window-left');
-    this.sidebar.style.removeProperty('--cerebr-html-preview-window-top');
-    this.sidebar.style.removeProperty('--cerebr-html-preview-window-width');
-    this.sidebar.style.removeProperty('--cerebr-html-preview-window-height');
-  }
-
-  notifyIframeHtmlPreviewWindowState() {
-    this.postToIframe({
-      type: 'HTML_PREVIEW_WINDOW_HOST_STATE',
-      isOpen: !!this.htmlPreviewWindowState.open,
-      isMaximized: !!this.htmlPreviewWindowState.maximized,
-      rect: this.htmlPreviewWindowState.rect || null,
-      viewport: this.getHostViewportRect()
-    });
-  }
-
-  openHtmlPreviewWindow(options = {}) {
-    if (!this.sidebar) return;
-    if (!this.htmlPreviewWindowState.open) {
-      this.htmlPreviewWindowState.wasVisible = !!this.isVisible;
-      this.htmlPreviewWindowState.restoreRect = null;
-    }
-
-    this.htmlPreviewWindowState.open = true;
-    this.htmlPreviewWindowState.maximized = false;
-    this.sidebar.style.display = 'block';
-    this.isVisible = true;
-    this.sidebar.classList.add('visible', 'html-preview-window');
-    this.sidebar.classList.remove('html-preview-window-maximized');
-    this.applyHtmlPreviewWindowRect(options.rect || this.htmlPreviewWindowState.rect || this.getDefaultHtmlPreviewWindowRect());
-    this.manager?.setActiveSidebar?.(this);
-    this.notifyIframeHtmlPreviewWindowState();
-  }
-
-  closeHtmlPreviewWindow() {
-    if (!this.sidebar || !this.htmlPreviewWindowState.open) return;
-    this.manager?.htmlPreviewWindowInteraction?.cleanup?.();
-    const wasVisible = this.htmlPreviewWindowState.wasVisible;
-    this.htmlPreviewWindowState = {
-      open: false,
-      maximized: false,
-      rect: null,
-      restoreRect: null,
-      wasVisible: false
-    };
-    this.sidebar.classList.remove(
-      'html-preview-window',
-      'html-preview-window-maximized',
-      'html-preview-window-dragging',
-      'html-preview-window-resizing'
-    );
-    this.clearHtmlPreviewWindowStyles();
-    if (wasVisible) {
-      this.sidebar.classList.add('visible');
-      this.isVisible = true;
-      if (!this.isFullscreen) {
-        this.updatePosition(this.sidebarPosition, { persist: false });
-      }
-    } else {
-      this.toggle(false);
-    }
-    this.manager?.layoutSidebars?.();
-    this.notifyIframeHtmlPreviewWindowState();
-  }
-
-  setHtmlPreviewWindowMaximized(isMaximized) {
-    if (!this.sidebar || !this.htmlPreviewWindowState.open) return;
-    this.manager?.htmlPreviewWindowInteraction?.cleanup?.();
-    const nextMaximized = !!isMaximized;
-    if (nextMaximized === this.htmlPreviewWindowState.maximized) {
-      this.notifyIframeHtmlPreviewWindowState();
-      return;
-    }
-
-    if (nextMaximized) {
-      this.htmlPreviewWindowState.restoreRect = this.htmlPreviewWindowState.rect || this.applyHtmlPreviewWindowRect();
-      this.htmlPreviewWindowState.maximized = true;
-      this.sidebar.classList.add('html-preview-window-maximized');
-      const viewport = this.getHostViewportRect();
-      this.applyHtmlPreviewWindowRect(viewport);
-    } else {
-      const restoreRect = this.htmlPreviewWindowState.restoreRect || this.getDefaultHtmlPreviewWindowRect();
-      this.htmlPreviewWindowState.maximized = false;
-      this.sidebar.classList.remove('html-preview-window-maximized');
-      this.applyHtmlPreviewWindowRect(restoreRect);
-    }
-    this.notifyIframeHtmlPreviewWindowState();
-  }
-
-  toggleHtmlPreviewWindowMaximized() {
-    this.setHtmlPreviewWindowMaximized(!this.htmlPreviewWindowState.maximized);
-  }
-
-  clampHtmlPreviewWindowToViewport() {
-    if (!this.htmlPreviewWindowState.open) return;
-    if (this.htmlPreviewWindowState.maximized) {
-      this.applyHtmlPreviewWindowRect(this.getHostViewportRect());
-    } else {
-      this.applyHtmlPreviewWindowRect(this.htmlPreviewWindowState.rect || this.getDefaultHtmlPreviewWindowRect());
-    }
-    this.notifyIframeHtmlPreviewWindowState();
   }
 
   // 添加更新侧边栏位置的方法
@@ -708,10 +538,6 @@ class CerebrSidebar {
       : '';
     const hasVisibleClass = this.sidebar.classList.contains('visible');
     const hasIframe = !!this.sidebar.querySelector('.cerebr-sidebar__iframe');
-    const hasHtmlPreviewWindowClass = this.sidebar.classList.contains('html-preview-window');
-    const hasHtmlPreviewWindowMaximizedClass = this.sidebar.classList.contains('html-preview-window-maximized');
-    const hasHtmlPreviewWindowDraggingClass = this.sidebar.classList.contains('html-preview-window-dragging');
-    const hasHtmlPreviewWindowResizingClass = this.sidebar.classList.contains('html-preview-window-resizing');
     const computedOpacity = Number.parseFloat(computedStyle.opacity || '0');
     const isActuallyVisible = !!(
       this.isVisible
@@ -749,30 +575,6 @@ class CerebrSidebar {
       computedDisplay: computedStyle.display,
       computedVisibility: computedStyle.visibility,
       computedOpacity: computedStyle.opacity,
-      htmlPreviewWindow: {
-        open: !!this.htmlPreviewWindowState?.open,
-        maximized: !!this.htmlPreviewWindowState?.maximized,
-        hasClass: hasHtmlPreviewWindowClass,
-        hasMaximizedClass: hasHtmlPreviewWindowMaximizedClass,
-        hasDraggingClass: hasHtmlPreviewWindowDraggingClass,
-        hasResizingClass: hasHtmlPreviewWindowResizingClass,
-        rect: this.htmlPreviewWindowState?.rect
-          ? {
-              left: Math.round(Number(this.htmlPreviewWindowState.rect.left) || 0),
-              top: Math.round(Number(this.htmlPreviewWindowState.rect.top) || 0),
-              width: Math.round(Number(this.htmlPreviewWindowState.rect.width) || 0),
-              height: Math.round(Number(this.htmlPreviewWindowState.rect.height) || 0)
-            }
-          : null,
-        restoreRect: this.htmlPreviewWindowState?.restoreRect
-          ? {
-              left: Math.round(Number(this.htmlPreviewWindowState.restoreRect.left) || 0),
-              top: Math.round(Number(this.htmlPreviewWindowState.restoreRect.top) || 0),
-              width: Math.round(Number(this.htmlPreviewWindowState.restoreRect.width) || 0),
-              height: Math.round(Number(this.htmlPreviewWindowState.restoreRect.height) || 0)
-            }
-          : null
-      },
       rect: {
         x: Math.round(rect.x),
         y: Math.round(rect.y),
@@ -1012,41 +814,6 @@ class CerebrSidebar {
         }
         .cerebr-sidebar.fullscreen .cerebr-sidebar__content {
           border-radius: 0;
-        }
-
-        .cerebr-sidebar.html-preview-window {
-          top: var(--cerebr-html-preview-window-top, 24px) !important;
-          left: var(--cerebr-html-preview-window-left, 24px) !important;
-          right: auto !important;
-          bottom: auto !important;
-          width: var(--cerebr-html-preview-window-width, min(1120px, 82vw)) !important;
-          height: var(--cerebr-html-preview-window-height, min(820px, 82vh)) !important;
-          border-radius: 10px !important;
-          transform: translateX(0) !important;
-          visibility: visible !important;
-          opacity: 1 !important;
-          pointer-events: auto !important;
-          transition: none !important;
-          box-shadow: 0 24px 80px rgba(15, 23, 42, 0.34) !important;
-          background: #ffffff;
-        }
-
-        .cerebr-sidebar.html-preview-window.html-preview-window-maximized {
-          top: 0 !important;
-          left: 0 !important;
-          width: 100vw !important;
-          height: 100vh !important;
-          border-radius: 0 !important;
-        }
-
-        .cerebr-sidebar.html-preview-window .cerebr-sidebar__header,
-        .cerebr-sidebar.html-preview-window .cerebr-sidebar__fullscreen-divider {
-          display: none !important;
-        }
-
-        .cerebr-sidebar.html-preview-window .cerebr-sidebar__content {
-          border-radius: inherit;
-          background: transparent;
         }
 
 
@@ -1534,7 +1301,6 @@ class CerebrSidebarManager {
     this.isAltKeyPressed = false;
     this.nextInstanceSeq = 1;
     this.multiFullscreenRestoreStateById = null;
-    this.htmlPreviewWindowInteraction = null;
     // 全屏分栏比例只服务当前页面当前生命周期，不写入 chrome.storage；
     // 这样用户可以临时拖出适合本次阅读/对话的比例，刷新页面后自然回到默认平分。
     this.fullscreenSplitRatioById = new Map();
@@ -2009,165 +1775,6 @@ class CerebrSidebarManager {
     return Number.isFinite(clientX) ? clientX : fallback;
   }
 
-  resolveIframePointerPoint(sidebarInstance, payload = {}) {
-    const clientX = Number(payload?.clientX);
-    const clientY = Number(payload?.clientY);
-    if (!Number.isFinite(clientX) || !Number.isFinite(clientY)) return null;
-
-    // sidebar iframe 内发出的 clientX/clientY 属于 iframe 视口坐标；宿主页移动浮窗时必须先换算到
-    // 宿主页 CSS 像素坐标。这里显式乘以 iframe 嵌入缩放，避免浏览器 DPI/页面缩放下拖拽跳位。
-    const iframe = sidebarInstance?.getIframe?.();
-    const rect = iframe?.getBoundingClientRect?.();
-    if (!rect) {
-      return { x: clientX, y: clientY };
-    }
-
-    const scale = sidebarInstance?.getIframeEmbedScale?.();
-    const safeScale = (Number.isFinite(Number(scale)) && Number(scale) > 0) ? Number(scale) : 1;
-    return {
-      x: rect.left + clientX * safeScale,
-      y: rect.top + clientY * safeScale
-    };
-  }
-
-  getMouseEventPointerPoint(event, fallback = null) {
-    const clientX = Number(event?.clientX);
-    const clientY = Number(event?.clientY);
-    if (Number.isFinite(clientX) && Number.isFinite(clientY)) {
-      return { x: clientX, y: clientY };
-    }
-    return fallback;
-  }
-
-  startHtmlPreviewWindowDrag(sidebarInstance, payload = {}) {
-    if (!sidebarInstance?.sidebar || !sidebarInstance.htmlPreviewWindowState?.open) return;
-    if (Number(payload?.button || 0) !== 0) return;
-    if (sidebarInstance.htmlPreviewWindowState.maximized) return;
-
-    this.htmlPreviewWindowInteraction?.cleanup?.();
-
-    const startPoint = this.resolveIframePointerPoint(sidebarInstance, payload);
-    if (!startPoint) return;
-    const startRect = sidebarInstance.htmlPreviewWindowState.rect || sidebarInstance.applyHtmlPreviewWindowRect();
-    if (!startRect) return;
-
-    this.setActiveSidebar(sidebarInstance);
-    sidebarInstance.sidebar.classList.add('html-preview-window-dragging');
-    // HTML 浮窗本身已经占用整个 sidebar iframe。这里不再创建宿主页 overlay，
-    // 避免从 iframe 内开始拖拽时 mouseup 丢失后 overlay 残留并挡住后续 resize handle。
-    const interactionId = `html_preview_drag_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    let cleanedUp = false;
-
-    const applyPointer = (point) => {
-      if (!point) return;
-      sidebarInstance.applyHtmlPreviewWindowRect({
-        ...startRect,
-        left: startRect.left + point.x - startPoint.x,
-        top: startRect.top + point.y - startPoint.y
-      });
-      sidebarInstance.notifyIframeHtmlPreviewWindowState();
-    };
-
-    const cleanupDrag = (point = null) => {
-      if (cleanedUp) return;
-      cleanedUp = true;
-      applyPointer(point);
-      sidebarInstance.sidebar?.classList.remove('html-preview-window-dragging');
-      this.setActiveSidebar(sidebarInstance);
-      if (this.htmlPreviewWindowInteraction?.id === interactionId) {
-        this.htmlPreviewWindowInteraction = null;
-      }
-    };
-
-    this.htmlPreviewWindowInteraction = {
-      id: interactionId,
-      type: 'drag',
-      sidebarInstance,
-      applyPointer,
-      cleanup: cleanupDrag
-    };
-  }
-
-  startHtmlPreviewWindowResize(sidebarInstance, payload = {}) {
-    if (!sidebarInstance?.sidebar || !sidebarInstance.htmlPreviewWindowState?.open) return;
-    if (Number(payload?.button || 0) !== 0) return;
-    if (sidebarInstance.htmlPreviewWindowState.maximized) return;
-
-    const edge = String(payload?.edge || '').trim().toLowerCase();
-    if (!/^(n|s|e|w|ne|nw|se|sw)$/.test(edge)) return;
-
-    this.htmlPreviewWindowInteraction?.cleanup?.();
-
-    const startPoint = this.resolveIframePointerPoint(sidebarInstance, payload);
-    if (!startPoint) return;
-    const startRect = sidebarInstance.htmlPreviewWindowState.rect || sidebarInstance.applyHtmlPreviewWindowRect();
-    if (!startRect) return;
-
-    this.setActiveSidebar(sidebarInstance);
-    sidebarInstance.sidebar.classList.add('html-preview-window-resizing');
-    // resize 与 drag 共用 iframe pointer relay，保证浮窗尺寸变化不会重建 HTML sandbox iframe。
-    const interactionId = `html_preview_resize_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    let cleanedUp = false;
-
-    const applyPointer = (point) => {
-      if (!point) return;
-      const deltaX = point.x - startPoint.x;
-      const deltaY = point.y - startPoint.y;
-      const nextRect = { ...startRect };
-
-      if (edge.includes('e')) {
-        nextRect.width = startRect.width + deltaX;
-      }
-      if (edge.includes('s')) {
-        nextRect.height = startRect.height + deltaY;
-      }
-      if (edge.includes('w')) {
-        nextRect.left = startRect.left + deltaX;
-        nextRect.width = startRect.width - deltaX;
-      }
-      if (edge.includes('n')) {
-        nextRect.top = startRect.top + deltaY;
-        nextRect.height = startRect.height - deltaY;
-      }
-
-      sidebarInstance.applyHtmlPreviewWindowRect(nextRect);
-      sidebarInstance.notifyIframeHtmlPreviewWindowState();
-    };
-
-    const cleanupResize = (point = null) => {
-      if (cleanedUp) return;
-      cleanedUp = true;
-      applyPointer(point);
-      sidebarInstance.sidebar?.classList.remove('html-preview-window-resizing');
-      this.setActiveSidebar(sidebarInstance);
-      if (this.htmlPreviewWindowInteraction?.id === interactionId) {
-        this.htmlPreviewWindowInteraction = null;
-      }
-    };
-
-    this.htmlPreviewWindowInteraction = {
-      id: interactionId,
-      type: 'resize',
-      sidebarInstance,
-      applyPointer,
-      cleanup: cleanupResize
-    };
-  }
-
-  updateHtmlPreviewWindowInteraction(sidebarInstance, payload = {}) {
-    const interaction = this.htmlPreviewWindowInteraction;
-    if (!interaction || interaction.sidebarInstance !== sidebarInstance) return;
-    const point = this.resolveIframePointerPoint(sidebarInstance, payload);
-    interaction.applyPointer?.(point);
-  }
-
-  endHtmlPreviewWindowInteraction(sidebarInstance, payload = {}) {
-    const interaction = this.htmlPreviewWindowInteraction;
-    if (!interaction || interaction.sidebarInstance !== sidebarInstance) return;
-    const point = this.resolveIframePointerPoint(sidebarInstance, payload);
-    interaction.cleanup?.(point);
-  }
-
   startSidebarEdgeControlInteraction(sidebarInstance, payload = {}) {
     if (!sidebarInstance?.sidebar) return;
     if (Number(payload?.button || 0) !== 0) return;
@@ -2433,9 +2040,6 @@ class CerebrSidebarManager {
     window.addEventListener('blur', () => {
       this.syncHostAltKeyState(false);
     });
-    window.addEventListener('resize', () => {
-      this.sidebars.forEach((item) => item?.clampHtmlPreviewWindowToViewport?.());
-    });
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState !== 'visible') {
         this.syncHostAltKeyState(false);
@@ -2597,27 +2201,6 @@ class CerebrSidebarManager {
         break;
       case 'REQUEST_HOST_EMBED_SCALE':
         sourceSidebar.notifyIframeEmbedScale();
-        break;
-      case 'HTML_PREVIEW_WINDOW_OPEN':
-        sourceSidebar.openHtmlPreviewWindow(data);
-        break;
-      case 'HTML_PREVIEW_WINDOW_CLOSE':
-        sourceSidebar.closeHtmlPreviewWindow();
-        break;
-      case 'HTML_PREVIEW_WINDOW_DRAG_START':
-        this.startHtmlPreviewWindowDrag(sourceSidebar, data);
-        break;
-      case 'HTML_PREVIEW_WINDOW_RESIZE_START':
-        this.startHtmlPreviewWindowResize(sourceSidebar, data);
-        break;
-      case 'HTML_PREVIEW_WINDOW_POINTER_MOVE':
-        this.updateHtmlPreviewWindowInteraction(sourceSidebar, data);
-        break;
-      case 'HTML_PREVIEW_WINDOW_POINTER_UP':
-        this.endHtmlPreviewWindowInteraction(sourceSidebar, data);
-        break;
-      case 'HTML_PREVIEW_WINDOW_TOGGLE_MAXIMIZE':
-        sourceSidebar.toggleHtmlPreviewWindowMaximized();
         break;
       case 'TEMP_MODE_STATE_CHANGED':
         sourceSidebar.isTemporaryMode = !!data?.isOn;
