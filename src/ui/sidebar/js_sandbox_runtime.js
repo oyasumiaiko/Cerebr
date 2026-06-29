@@ -44,111 +44,6 @@ export function createSidebarJsSandboxRuntime(options = {}) {
     return error;
   }
 
-  function normalizeWorkspaceFileBridgeError(error) {
-    return {
-      message: (typeof error?.message === 'string' && error.message.trim())
-        ? error.message.trim()
-        : String(error || '文件桥接操作失败。'),
-      name: (typeof error?.name === 'string' && error.name.trim())
-        ? error.name.trim()
-        : 'WorkspaceFileBridgeError',
-      stack: (typeof error?.stack === 'string') ? error.stack : ''
-    };
-  }
-
-  function postWorkspaceFileResponse(requestId, payload) {
-    const targetWindow = sandboxFrame?.contentWindow || null;
-    if (!targetWindow || !requestId) return;
-    try {
-      targetWindow.postMessage({
-        [SANDBOX_MESSAGE_FLAG]: true,
-        type: 'workspace_file_response',
-        requestId,
-        payload
-      }, '*');
-    } catch (_) {}
-  }
-
-  function addUniquePath(targetSet, value) {
-    const text = (typeof value === 'string') ? value.trim() : '';
-    if (text) targetSet.add(text);
-  }
-
-  function collectWorkspaceFileChangeSummary(summary, operation, result) {
-    if (!summary) return;
-    summary.operationsCount += 1;
-    const normalizedOperation = (typeof operation === 'string' && operation.trim())
-      ? operation.trim()
-      : 'unknown';
-    summary.operationCounts[normalizedOperation] = Number(summary.operationCounts[normalizedOperation] || 0) + 1;
-
-    const affected = (result?.affected_files && typeof result.affected_files === 'object')
-      ? result.affected_files
-      : {};
-    (Array.isArray(affected.added) ? affected.added : []).forEach((path) => addUniquePath(summary.affectedFiles.added, path));
-    (Array.isArray(affected.modified) ? affected.modified : []).forEach((path) => addUniquePath(summary.affectedFiles.modified, path));
-    (Array.isArray(affected.deleted) ? affected.deleted : []).forEach((path) => addUniquePath(summary.affectedFiles.deleted, path));
-
-    const changeEvent = (result?.change_event && typeof result.change_event === 'object')
-      ? result.change_event
-      : {};
-    (Array.isArray(changeEvent.updated_paths) ? changeEvent.updated_paths : []).forEach((path) => addUniquePath(summary.updatedPaths, path));
-    (Array.isArray(changeEvent.deleted_paths) ? changeEvent.deleted_paths : []).forEach((path) => addUniquePath(summary.deletedPaths, path));
-  }
-
-  function buildWorkspaceFileSummary(summary) {
-    if (!summary) return null;
-    return {
-      enabled: true,
-      operations_count: summary.operationsCount,
-      operation_counts: { ...summary.operationCounts },
-      affected_files: {
-        added: Array.from(summary.affectedFiles.added),
-        modified: Array.from(summary.affectedFiles.modified),
-        deleted: Array.from(summary.affectedFiles.deleted)
-      },
-      updated_paths: Array.from(summary.updatedPaths),
-      deleted_paths: Array.from(summary.deletedPaths)
-    };
-  }
-
-  async function handleWorkspaceFileRequest(data) {
-    const requestId = (typeof data?.requestId === 'string') ? data.requestId : '';
-    const executionRequestId = (typeof data?.executionRequestId === 'string') ? data.executionRequestId : '';
-    const operation = (typeof data?.operation === 'string') ? data.operation.trim() : '';
-    const pending = pendingRequests.get(executionRequestId);
-
-    try {
-      if (!requestId) {
-        throw new Error('workspace file request 缺少 requestId。');
-      }
-      if (!pending || pending.workspaceFiles !== true) {
-        throw new Error('当前 JS Runtime 调用未启用 workspace_files，不能访问 files API。');
-      }
-      if (typeof pending.handleWorkspaceFileRequest !== 'function') {
-        throw new Error('当前客户端没有可用的 workspace 文件桥接入口。');
-      }
-      if (!operation) {
-        throw new Error('files API 请求缺少 operation。');
-      }
-
-      const result = await pending.handleWorkspaceFileRequest({
-        operation,
-        args: data?.args
-      });
-      collectWorkspaceFileChangeSummary(pending.workspaceFileSummary, operation, result);
-      postWorkspaceFileResponse(requestId, {
-        ok: true,
-        result
-      });
-    } catch (error) {
-      postWorkspaceFileResponse(requestId, {
-        ok: false,
-        error: normalizeWorkspaceFileBridgeError(error)
-      });
-    }
-  }
-
   function settleSandboxReadyAsError(error) {
     if (typeof rejectSandboxReady === 'function') {
       rejectSandboxReady(error);
@@ -190,7 +85,7 @@ export function createSidebarJsSandboxRuntime(options = {}) {
         const pending = pendingRequests.get(requestId);
         if (!pending) return;
         pendingRequests.delete(requestId);
-        const payload = data.payload || {
+        pending.resolve(data.payload || {
           ok: false,
           value: null,
           items: [],
@@ -199,16 +94,7 @@ export function createSidebarJsSandboxRuntime(options = {}) {
             message: 'JS Sandbox 返回了空 payload。',
             stack: ''
           }
-        };
-        if (pending.workspaceFiles === true && payload && typeof payload === 'object' && !Array.isArray(payload)) {
-          payload.workspace_files = buildWorkspaceFileSummary(pending.workspaceFileSummary);
-        }
-        pending.resolve(payload);
-        return;
-      }
-
-      if (data.type === 'workspace_file_request') {
-        handleWorkspaceFileRequest(data);
+        });
       }
     });
     messageListenerBound = true;
@@ -288,7 +174,6 @@ export function createSidebarJsSandboxRuntime(options = {}) {
       const raw = Number(request?.timeoutMs);
       return Number.isFinite(raw) && raw > 0 ? Math.trunc(raw) : 0;
     })();
-    const workspaceFiles = request?.workspaceFiles === true;
     if (!code.trim()) {
       throw new Error('执行隔离 JS Sandbox 失败：代码内容为空。');
     }
@@ -323,23 +208,6 @@ export function createSidebarJsSandboxRuntime(options = {}) {
         pendingRequests.delete(requestId);
       };
       pendingRequests.set(requestId, {
-        workspaceFiles,
-        handleWorkspaceFileRequest: typeof request?.handleWorkspaceFileRequest === 'function'
-          ? request.handleWorkspaceFileRequest
-          : null,
-        workspaceFileSummary: workspaceFiles
-          ? {
-              operationsCount: 0,
-              operationCounts: {},
-              affectedFiles: {
-                added: new Set(),
-                modified: new Set(),
-                deleted: new Set()
-              },
-              updatedPaths: new Set(),
-              deletedPaths: new Set()
-            }
-          : null,
         resolve: (payload) => {
           cleanup();
           resolve(payload);
@@ -373,8 +241,7 @@ export function createSidebarJsSandboxRuntime(options = {}) {
           [SANDBOX_MESSAGE_FLAG]: true,
           type: 'execute',
           requestId,
-          code,
-          workspaceFiles
+          code
         }, '*');
       } catch (error) {
         cleanup();

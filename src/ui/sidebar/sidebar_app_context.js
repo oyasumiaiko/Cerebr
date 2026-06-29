@@ -15,15 +15,6 @@ import {
   shouldAutoCompleteRequestUserInput
 } from '../../utils/request_user_input_interaction.js';
 import {
-  CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
-  CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
-  CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME,
-  CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION,
-  CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
-  CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME,
-  CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
-  CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
-  CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME,
   VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
   buildConversationDocumentActionPayloadFromVirtualFileAction,
   buildSkillRegistryFileActionPayloadFromVirtualFileAction,
@@ -227,17 +218,6 @@ export function registerSidebarUtilities(appContext) {
     ownerWindow: window,
     ownerDocument: document
   });
-
-  function dispatchConversationDocumentChange(detail) {
-    if (!detail || typeof document === 'undefined' || typeof document.dispatchEvent !== 'function') {
-      return;
-    }
-    try {
-      document.dispatchEvent(new CustomEvent(CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME, {
-        detail
-      }));
-    } catch (_) {}
-  }
 
   function resolveCurrentPageToolEnvironment(options = {}) {
     const explicitTemporaryMode = (typeof options?.isTemporaryMode === 'boolean')
@@ -1456,15 +1436,11 @@ export function registerSidebarUtilities(appContext) {
             }
           };
         }
-        const result = await executeConversationDocumentAction(
+        return await executeConversationDocumentAction(
           action,
           buildConversationDocumentActionPayloadFromVirtualFileAction(action, normalizedArgs),
           { conversationId }
         );
-        if (result?.ok === true && result?.change_event) {
-          dispatchConversationDocumentChange(result.change_event);
-        }
-        return result;
       }
 
       const skillResult = await appContext.utils.executeSkillRegistryAction(
@@ -1498,100 +1474,6 @@ export function registerSidebarUtilities(appContext) {
     }
   };
 
-  function normalizeWorkspaceFileBridgeOptions(value) {
-    return (value && typeof value === 'object' && !Array.isArray(value)) ? value : {};
-  }
-
-  // files API 复用现有 conversation-document 工具体系，只暴露当前会话文件区，不直连本机磁盘。
-  async function executeWorkspaceFileBridgeRequest(request = {}) {
-    const operation = (typeof request?.operation === 'string') ? request.operation.trim() : '';
-    const args = normalizeWorkspaceFileBridgeOptions(request?.args);
-    const conversationId = (typeof request?.conversationId === 'string' && request.conversationId.trim())
-      ? request.conversationId.trim()
-      : appContext.services.chatHistoryUI?.getCurrentConversationId?.();
-    if (!conversationId) {
-      throw new Error('当前对话尚未持久化，暂时无法访问会话文件。');
-    }
-
-    const run = async (action, payload, options = {}) => {
-      const result = await executeConversationDocumentAction(action, payload, {
-        conversationId,
-        allowInternalActions: options?.allowInternalActions === true
-      });
-      if (result?.ok === true && result?.change_event) {
-        dispatchConversationDocumentChange(result.change_event);
-      }
-      return result;
-    };
-    const runPublicFileTool = async (action, toolArgs) => {
-      const normalizedArgs = normalizeVirtualFileToolArguments(action, toolArgs, {
-        defaultTargetKind: VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT
-      });
-      if (normalizedArgs.target.kind !== VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT) {
-        throw new Error('files API 只允许访问当前会话文件区。');
-      }
-      return await run(
-        action,
-        buildConversationDocumentActionPayloadFromVirtualFileAction(action, normalizedArgs)
-      );
-    };
-
-    switch (operation) {
-      case 'list':
-        return await runPublicFileTool(CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME, {
-          path_glob: args.glob ?? args.path_glob ?? null
-        });
-      case 'read':
-        return await runPublicFileTool(CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME, {
-          path: args.path,
-          max_chars: args.max_chars,
-          line_range: args.line_range ?? (
-            args.start_line != null && args.end_line != null
-              ? `${args.start_line}:${args.end_line}`
-              : null
-          ),
-          numbered: args.numbered === true || args.include_line_numbers === true
-        });
-      case 'write':
-        return await run(CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION, {
-          file_path: args.path,
-          content: typeof args.content === 'string' ? args.content : String(args.content ?? '')
-        }, { allowInternalActions: true });
-      case 'search':
-        return await runPublicFileTool(CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME, {
-          pattern: args.pattern,
-          regex: args.regex === true,
-          ignore_case: args.ignore_case === true,
-          glob: args.glob ?? args.path_glob ?? null,
-          context: args.context,
-          before: args.before ?? args.context_before,
-          after: args.after ?? args.context_after,
-          limit: args.limit ?? args.max_results
-        });
-      case 'copy':
-        return await runPublicFileTool(CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME, {
-          from: args.from ?? args.source_path,
-          to: args.to ?? args.destination_path
-        });
-      case 'move':
-        return await runPublicFileTool(CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME, {
-          from: args.from ?? args.source_path,
-          to: args.to ?? args.destination_path
-        });
-      case 'delete':
-        return await runPublicFileTool(CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME, {
-          path: args.path
-        });
-      case 'apply_patch':
-        return await runPublicFileTool(CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME, {
-          patch: args.patch
-        });
-      default:
-        throw new Error(`files API 不支持的 operation \`${operation || '(empty)'}\`。`);
-    }
-  }
-  appContext.utils.executeWorkspaceFileBridgeRequest = executeWorkspaceFileBridgeRequest;
-
   /**
    * 在当前侧栏所绑定的网页标签页里执行一段基于 userScripts 的 JS 代码。
    * 第一阶段先提供给调试入口与后续工具层使用，不额外引入复杂 UI。
@@ -1623,12 +1505,7 @@ export function registerSidebarUtilities(appContext) {
         const result = await jsSandboxRuntime.execute({
           code: (typeof code === 'string') ? code : '',
           timeoutMs,
-          signal,
-          workspaceFiles: options?.workspaceFiles === true,
-          handleWorkspaceFileRequest: (request) => executeWorkspaceFileBridgeRequest({
-            ...request,
-            conversationId: options?.conversationId
-          })
+          signal
         });
         return {
           success: true,
@@ -1670,10 +1547,7 @@ export function registerSidebarUtilities(appContext) {
           executionId,
           timeoutMs,
           frameIds: Array.isArray(options?.frameIds) ? options.frameIds : null,
-          injectImmediately: options?.injectImmediately === true,
-          workspaceFiles: options?.workspaceFiles === true,
-          workspaceConversationId: (typeof options?.conversationId === 'string') ? options.conversationId : '',
-          sidebarInstanceId: appContext.state.sidebarInstanceId || ''
+          injectImmediately: options?.injectImmediately === true
         };
       const executePromise = chrome.runtime.sendMessage(executeRequest);
       if (!signal) {

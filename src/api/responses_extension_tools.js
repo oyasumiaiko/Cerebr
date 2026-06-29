@@ -36,7 +36,7 @@ export const RESPONSES_EXTENSION_TOOL_SPECS = Object.freeze([
   createExtensionToolSpec({
     id: 'js_runtime_execute',
     title: 'JS Runtime 执行',
-    description: '允许模型在宿主页 JS 环境或侧栏隔离 sandbox 中执行 JavaScript；开启 workspace_files 参数时可读写当前会话文件区。'
+    description: '允许模型在宿主页 JS 环境或侧栏隔离 sandbox 中执行 JavaScript。'
   }),
   createExtensionToolSpec({
     id: 'apply_patch',

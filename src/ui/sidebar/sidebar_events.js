@@ -1154,27 +1154,6 @@ function setupAddSidebarButton(appContext) {
  * @param {ReturnType<import('./sidebar_app_context.js').createSidebarAppContext>} appContext
  */
 function setupWindowMessageHandlers(appContext) {
-  const postWorkspaceFileResponse = (requestId, payload) => {
-    if (!requestId || !window.parent || window.parent === window) return;
-    try {
-      window.parent.postMessage({
-        source: 'cerebr-sidebar',
-        type: 'JS_RUNTIME_WORKSPACE_FILE_RESPONSE_TO_HOST',
-        requestId,
-        payload
-      }, '*');
-    } catch (_) {}
-  };
-  const normalizeWorkspaceFileError = (error) => ({
-    message: (typeof error?.message === 'string' && error.message.trim())
-      ? error.message.trim()
-      : String(error || '文件桥接操作失败。'),
-    name: (typeof error?.name === 'string' && error.name.trim())
-      ? error.name.trim()
-      : 'WorkspaceFileBridgeError',
-    stack: typeof error?.stack === 'string' ? error.stack : ''
-  });
-
   window.addEventListener('message', (event) => {
     const { data } = event;
     if (!data?.type) {
@@ -1222,31 +1201,6 @@ function setupWindowMessageHandlers(appContext) {
         break;
       case 'FOCUS_INPUT':
         appContext.services.inputController.focusToEnd();
-        break;
-      case 'JS_RUNTIME_WORKSPACE_FILE_REQUEST_FROM_HOST':
-        // 宿主页 JS Runtime 的 files API 只把请求转回当前侧栏，由现有会话文件工具统一执行。
-        (async () => {
-          const requestId = (typeof data.requestId === 'string') ? data.requestId : '';
-          try {
-            if (typeof appContext.utils?.executeWorkspaceFileBridgeRequest !== 'function') {
-              throw new Error('当前侧栏没有可用的 workspace 文件桥接入口。');
-            }
-            const result = await appContext.utils.executeWorkspaceFileBridgeRequest({
-              operation: data.operation,
-              args: data.args,
-              conversationId: data.conversationId
-            });
-            postWorkspaceFileResponse(requestId, {
-              ok: true,
-              result
-            });
-          } catch (error) {
-            postWorkspaceFileResponse(requestId, {
-              ok: false,
-              error: normalizeWorkspaceFileError(error)
-            });
-          }
-        })();
         break;
       case 'URL_CHANGED':
         if (appContext.state.isStandalone) {

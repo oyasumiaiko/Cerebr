@@ -185,38 +185,6 @@ test('buildResponsesJsRuntimeToolOutputText 使用 XML 分块且避免大 JSON �
   assert.doesNotMatch(text, /"items":/);
 });
 
-test('buildResponsesJsRuntimeToolOutputText 会输出 workspace_files 摘要', async () => {
-  const { buildResponsesJsRuntimeToolOutputText } = await loadResponsesToolOutputModule();
-  const text = buildResponsesJsRuntimeToolOutputText({
-    ok: true,
-    tabId: null,
-    value: { changed: true },
-    logs: [],
-    items: [],
-    workspace_files: {
-      enabled: true,
-      operations_count: 2,
-      operation_counts: {
-        read: 1,
-        write: 1
-      },
-      affected_files: {
-        added: ['summary.json'],
-        modified: [],
-        deleted: []
-      },
-      updated_paths: ['summary.json'],
-      deleted_paths: []
-    },
-    error: null
-  });
-
-  assert.match(text, /<workspace_files>/);
-  assert.match(text, /"operations_count": 2/);
-  assert.match(text, /"summary\.json"/);
-  assert.match(text, /<return_value>/);
-});
-
 test('buildResponsesJsRuntimeToolOutputText 会在单 frame 且仅 item.logs 存在时仍显示 console_logs', async () => {
   const { buildResponsesJsRuntimeToolOutputText } = await loadResponsesToolOutputModule();
   const text = buildResponsesJsRuntimeToolOutputText({

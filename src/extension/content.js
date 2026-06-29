@@ -18,7 +18,6 @@ function buildSidebarFrameUrl(instanceId, isPrimary) {
 
 // 统一的 sync 写入入口：优先走写入队列，避免高频触发配额
 const storageWriteQueue = globalThis.CerebrStorageWriteQueue || null;
-const JS_RUNTIME_WORKSPACE_FILE_RESPONSE_TIMEOUT_MS = 30000;
 function queueSyncSet(payload) {
     if (storageWriteQueue?.set) {
         storageWriteQueue.set('sync', payload);
@@ -1535,7 +1534,6 @@ class CerebrSidebarManager {
     this.isAltKeyPressed = false;
     this.nextInstanceSeq = 1;
     this.multiFullscreenRestoreStateById = null;
-    this.pendingWorkspaceFileRequests = new Map();
     this.htmlPreviewWindowInteraction = null;
     // 全屏分栏比例只服务当前页面当前生命周期，不写入 chrome.storage；
     // 这样用户可以临时拖出适合本次阅读/对话的比例，刷新页面后自然回到默认平分。
@@ -1619,77 +1617,6 @@ class CerebrSidebarManager {
 
   getSidebarByWindow(sourceWindow) {
     return this.sidebars.find((item) => item.ownsWindow(sourceWindow)) || null;
-  }
-
-  normalizeWorkspaceFileBridgeError(error) {
-    return {
-      message: (typeof error?.message === 'string' && error.message.trim())
-        ? error.message.trim()
-        : String(error || '文件桥接操作失败。'),
-      name: (typeof error?.name === 'string' && error.name.trim())
-        ? error.name.trim()
-        : 'WorkspaceFileBridgeError',
-      stack: typeof error?.stack === 'string' ? error.stack : ''
-    };
-  }
-
-  requestWorkspaceFileFromSidebar(sidebarInstance, message = {}) {
-    const requestId = (typeof message?.requestId === 'string' && message.requestId.trim())
-      ? message.requestId.trim()
-      : `jsrt_workspace_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    if (!sidebarInstance) {
-      return Promise.resolve({
-        ok: false,
-        error: this.normalizeWorkspaceFileBridgeError(new Error('未找到可处理 workspace 文件请求的侧栏实例。'))
-      });
-    }
-
-    return new Promise((resolve) => {
-      const timeoutId = setTimeout(() => {
-        this.pendingWorkspaceFileRequests.delete(requestId);
-        resolve({
-          ok: false,
-          error: this.normalizeWorkspaceFileBridgeError(new Error(`workspace 文件请求超时（${JS_RUNTIME_WORKSPACE_FILE_RESPONSE_TIMEOUT_MS}ms）。`))
-        });
-      }, JS_RUNTIME_WORKSPACE_FILE_RESPONSE_TIMEOUT_MS);
-
-      this.pendingWorkspaceFileRequests.set(requestId, {
-        sidebarInstanceId: sidebarInstance.instanceId,
-        resolve: (payload) => {
-          clearTimeout(timeoutId);
-          resolve(payload);
-        }
-      });
-
-      const posted = sidebarInstance.postToIframe({
-        type: 'JS_RUNTIME_WORKSPACE_FILE_REQUEST_FROM_HOST',
-        requestId,
-        conversationId: typeof message?.conversationId === 'string' ? message.conversationId : '',
-        operation: typeof message?.operation === 'string' ? message.operation : '',
-        args: message?.args ?? null
-      });
-      if (!posted) {
-        this.pendingWorkspaceFileRequests.delete(requestId);
-        clearTimeout(timeoutId);
-        resolve({
-          ok: false,
-          error: this.normalizeWorkspaceFileBridgeError(new Error('无法把 workspace 文件请求发送到侧栏 iframe。'))
-        });
-      }
-    });
-  }
-
-  resolveWorkspaceFileResponseFromSidebar(sidebarInstance, data = {}) {
-    const requestId = (typeof data?.requestId === 'string') ? data.requestId : '';
-    const pending = this.pendingWorkspaceFileRequests.get(requestId);
-    if (!pending) return false;
-    if (pending.sidebarInstanceId && sidebarInstance?.instanceId !== pending.sidebarInstanceId) return false;
-    this.pendingWorkspaceFileRequests.delete(requestId);
-    pending.resolve(data?.payload || {
-      ok: false,
-      error: this.normalizeWorkspaceFileBridgeError(new Error('侧栏返回了空 workspace 文件响应。'))
-    });
-    return true;
   }
 
   destroySidebar(sidebarInstance) {
@@ -2608,10 +2535,6 @@ class CerebrSidebarManager {
     if (!data?.type) return;
     const sourceSidebar = this.getSidebarByWindow(event.source);
     if (!sourceSidebar) return;
-    if (data.type === 'JS_RUNTIME_WORKSPACE_FILE_RESPONSE_TO_HOST') {
-      this.resolveWorkspaceFileResponseFromSidebar(sourceSidebar, data);
-      return;
-    }
     this.setActiveSidebar(sourceSidebar);
 
     switch (data.type) {
@@ -2750,30 +2673,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!sidebar) {
     console.error('侧边栏实例不存在');
     sendResponse({ success: false, error: 'Sidebar instance not found' });
-    return true;
-  }
-
-  if (message.type === 'JS_RUNTIME_WORKSPACE_FILE_REQUEST_INTERNAL') {
-    const targetSidebar = getSidebarForInternalRequest(message);
-    sidebarManager?.requestWorkspaceFileFromSidebar?.(targetSidebar, message)
-      .then((result) => sendResponse(result || {
-        ok: false,
-        error: {
-          message: 'workspace 文件请求没有返回结果。',
-          name: 'WorkspaceFileBridgeError',
-          stack: ''
-        }
-      }))
-      .catch((error) => {
-        sendResponse({
-          ok: false,
-          error: sidebarManager?.normalizeWorkspaceFileBridgeError?.(error) || {
-            message: error?.message || 'workspace 文件请求失败。',
-            name: error?.name || 'WorkspaceFileBridgeError',
-            stack: typeof error?.stack === 'string' ? error.stack : ''
-          }
-        });
-      });
     return true;
   }
 
