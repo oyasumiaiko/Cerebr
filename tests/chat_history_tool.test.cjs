@@ -9,6 +9,7 @@ async function loadChatHistoryToolModule() {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cerebr-chat-history-tool-'));
   await fs.writeFile(path.join(tempDir, 'package.json'), JSON.stringify({ type: 'module' }), 'utf8');
   await fs.mkdir(path.join(tempDir, 'src', 'utils'), { recursive: true });
+  await fs.mkdir(path.join(tempDir, 'src', 'agent_tools', 'shared'), { recursive: true });
   await fs.mkdir(path.join(tempDir, 'src', 'agent_tools', 'chat_history'), { recursive: true });
   await fs.copyFile(
     path.resolve(__dirname, '../src/utils/chat_history_search_shared.js'),
@@ -17,6 +18,10 @@ async function loadChatHistoryToolModule() {
   await fs.copyFile(
     path.resolve(__dirname, '../src/utils/url_candidates.js'),
     path.join(tempDir, 'src', 'utils', 'url_candidates.js')
+  );
+  await fs.copyFile(
+    path.resolve(__dirname, '../src/agent_tools/shared/model_tool_contract.js'),
+    path.join(tempDir, 'src', 'agent_tools', 'shared', 'model_tool_contract.js')
   );
   await fs.copyFile(
     path.resolve(__dirname, '../src/agent_tools/chat_history/tool.js'),

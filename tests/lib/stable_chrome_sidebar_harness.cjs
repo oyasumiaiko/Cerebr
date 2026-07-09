@@ -102,6 +102,10 @@ function buildPersistentContextLaunchOptions({
       '--no-first-run',
       '--no-default-browser-check',
       '--disable-search-engine-choice-screen',
+      // Chrome Stable 145+ 会把固定 profile 中的 unpacked developer extension 标记为
+      // unsupported，除非显式开启扩展调试。这个开关不指定扩展路径，也不替代固定
+      // profile；它只让已经由 profile 持久化管理的 Cerebr service worker 正常启动。
+      '--enable-unsafe-extension-debugging',
       ...(headless ? [] : ['--window-position=-2400,-2400', '--window-size=1440,960', '--start-minimized'])
     ]
   };
@@ -126,6 +130,34 @@ async function waitForExtensionWorker(context, { timeoutMs = 30_000 } = {}) {
 }
 
 /**
+ * 通过 Chrome 的扩展调试 CDP 域把当前 repo 登记到固定 profile。
+ *
+ * Chrome Stable 145+ 可能在下一次启动时把 unpacked developer extension 标记为
+ * disabled。仅依赖 profile 旧状态会导致 service worker 永远不出现；这里使用固定
+ * profile 本身的浏览器会话重新加载同一路径，不传 `--load-extension`，也不会连接
+ * 或污染用户日常 Chrome profile。
+ *
+ * @param {import('playwright').BrowserContext} context
+ * @param {string} unpackedPath
+ * @returns {Promise<string>}
+ */
+async function loadUnpackedExtensionIntoFixedProfile(context, unpackedPath) {
+  const normalizedPath = typeof unpackedPath === 'string' ? path.resolve(unpackedPath) : '';
+  if (!normalizedPath) return '';
+  const browser = context.browser();
+  if (!browser || typeof browser.newBrowserCDPSession !== 'function') {
+    throw new Error('Stable Chrome context does not expose a browser CDP session.');
+  }
+  const session = await browser.newBrowserCDPSession();
+  try {
+    const result = await session.send('Extensions.loadUnpacked', { path: normalizedPath });
+    return typeof result?.id === 'string' ? result.id : '';
+  } finally {
+    await session.detach().catch(() => null);
+  }
+}
+
+/**
  * 对固定 profile 里的 unpacked 扩展做一次显式 reload，确保当前测试读取到磁盘上的最新源码。
  *
  * 背景：
@@ -134,10 +166,17 @@ async function waitForExtensionWorker(context, { timeoutMs = 30_000 } = {}) {
  * - 这会导致“代码其实已经修好，但 smoke 仍在跑旧扩展”的假失败。
  *
  * @param {import('playwright').BrowserContext} context
- * @param {{timeoutMs?: number, settleMs?: number}} [options]
+ * @param {{timeoutMs?: number, settleMs?: number, unpackedPath?:string}} [options]
  * @returns {Promise<import('playwright').Worker>}
  */
-async function reloadUnpackedExtension(context, { timeoutMs = 30_000, settleMs = 2_000 } = {}) {
+async function reloadUnpackedExtension(context, {
+  timeoutMs = 30_000,
+  settleMs = 2_000,
+  unpackedPath = ''
+} = {}) {
+  if (typeof unpackedPath === 'string' && unpackedPath.trim()) {
+    await loadUnpackedExtensionIntoFixedProfile(context, unpackedPath);
+  }
   const worker = await waitForExtensionWorker(context, { timeoutMs });
   await worker.evaluate(() => {
     chrome.runtime.reload();
@@ -158,6 +197,7 @@ module.exports = {
   buildPersistentContextLaunchOptions,
   buildSendContentMessageExpression,
   launchFixedSidebarContext,
+  loadUnpackedExtensionIntoFixedProfile,
   loadPlaywright,
   reloadUnpackedExtension,
   resolveFixedSidebarProfileDir,

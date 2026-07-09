@@ -15,6 +15,10 @@ async function loadViewImageToolModule() {
     path.join(tempDir, 'src', 'agent_tools', 'shared', 'prompt_image_tool_shared.js')
   );
   await fs.copyFile(
+    path.resolve(__dirname, '../src/agent_tools/shared/model_tool_contract.js'),
+    path.join(tempDir, 'src', 'agent_tools', 'shared', 'model_tool_contract.js')
+  );
+  await fs.copyFile(
     path.resolve(__dirname, '../src/agent_tools/view_image/tool.js'),
     path.join(tempDir, 'src', 'agent_tools', 'view_image', 'tool.js')
   );
@@ -60,10 +64,13 @@ test('buildViewImageFunctionToolDefinition 与 Codex 风格保持一致并声明
   const spec = buildViewImageFunctionToolDefinition();
   assert.equal(spec.type, 'function');
   assert.equal(spec.name, VIEW_IMAGE_TOOL_NAME);
-  assert.equal(spec.strict, false);
+  assert.equal(spec.strict, true);
   assert.equal(spec.parameters.type, 'object');
   assert.equal(spec.parameters.additionalProperties, false);
-  assert.deepEqual(spec.parameters.required, ['path']);
-  assert.match(spec.parameters.properties.path.description, /http\(s\) URLs/);
-  assert.match(spec.parameters.properties.detail.description, /only supported value is `original`/);
+  assert.deepEqual(spec.parameters.required, ['path', 'detail']);
+  assert.match(spec.parameters.properties.path.description, /http\(s\)\/data URL/);
+  assert.deepEqual(spec.parameters.properties.detail.enum, ['original', null]);
+  assert.match(spec.parameters.properties.detail.description, /唯一可选字符串值是 `original`/);
+  assert.match(spec.description, /用户明确指定/);
+  assert.match(spec.description, /input_image/);
 });

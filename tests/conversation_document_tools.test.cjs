@@ -260,23 +260,23 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
   assert.equal(legacyWorkspacePrefixSearch.path_glob, '**/*.md');
 });
 
-test('apply_patch 工具定义承载根路径文件交付提示', async () => {
+test('apply_patch 工具定义聚焦虚拟文件补丁契约，不重复最终交付策略', async () => {
   const {
     buildVirtualFileApplyPatchFunctionToolDefinition
   } = await loadConversationDocumentToolsModule();
 
   const applyPatchDefinition = buildVirtualFileApplyPatchFunctionToolDefinition();
-  assert.match(applyPatchDefinition.description, /纯文本文件/);
+  assert.equal(applyPatchDefinition.strict, true);
+  assert.match(applyPatchDefinition.description, /虚拟文本文件/);
   assert.match(applyPatchDefinition.description, /HTML/);
-  assert.match(applyPatchDefinition.description, /preview\.html/);
-  assert.match(applyPatchDefinition.description, /sandbox iframe/);
-  assert.match(applyPatchDefinition.description, /最终回复应给出 Markdown 相对路径链接/);
-  assert.match(applyPatchDefinition.description, /\[计划\]\(plan\.md\)/);
-  assert.match(applyPatchDefinition.description, /\[预览页面\]\(preview\.html\)/);
+  assert.match(applyPatchDefinition.description, /A\/M\/D/);
+  assert.doesNotMatch(applyPatchDefinition.description, /preview\.html/);
+  assert.doesNotMatch(applyPatchDefinition.description, /最终回复/);
+  assert.deepEqual(applyPatchDefinition.parameters.required, ['target', 'patch']);
   assert.doesNotMatch(applyPatchDefinition.description, /workspace\//);
 });
 
-test('read_file/search_files 工具定义优先暴露 bash 风格参数', async () => {
+test('read_file/search_files 与文件操作工具定义暴露严格且低歧义的参数', async () => {
   const {
     buildVirtualFileCopyFileFunctionToolDefinition,
     buildVirtualFileDeleteFileFunctionToolDefinition,
@@ -286,18 +286,21 @@ test('read_file/search_files 工具定义优先暴露 bash 风格参数', async 
   } = await loadConversationDocumentToolsModule();
 
   const readDefinition = buildVirtualFileReadFileFunctionToolDefinition();
-  assert.match(readDefinition.description, /cat/);
-  assert.match(readDefinition.description, /sed -n/);
+  assert.equal(readDefinition.strict, true);
+  assert.match(readDefinition.description, /全文预览、字符片段或指定行范围/);
+  assert.match(readDefinition.description, /# path/);
   assert.ok(readDefinition.parameters.properties.path);
   assert.ok(readDefinition.parameters.properties.line_range);
   assert.ok(readDefinition.parameters.properties.numbered);
-  assert.deepEqual(readDefinition.parameters.required, ['path']);
+  assert.deepEqual(readDefinition.parameters.required, ['target', 'path', 'max_chars', 'line_range', 'numbered']);
   assert.equal(readDefinition.parameters.properties.file_path, undefined);
   assert.equal(readDefinition.parameters.properties.start_line, undefined);
   assert.equal(readDefinition.parameters.properties.include_line_numbers, undefined);
 
   const searchDefinition = buildVirtualFileSearchFilesFunctionToolDefinition();
-  assert.match(searchDefinition.description, /rg "pattern"/);
+  assert.equal(searchDefinition.strict, true);
+  assert.match(searchDefinition.description, /rg --heading --line-number --column/);
+  assert.match(searchDefinition.description, /smart-case/);
   assert.ok(searchDefinition.parameters.properties.glob);
   assert.ok(searchDefinition.parameters.properties.before);
   assert.ok(searchDefinition.parameters.properties.after);
@@ -305,21 +308,21 @@ test('read_file/search_files 工具定义优先暴露 bash 风格参数', async 
   assert.equal(searchDefinition.parameters.properties.path_glob, undefined);
   assert.equal(searchDefinition.parameters.properties.case_mode, undefined);
   assert.equal(searchDefinition.parameters.properties.max_results, undefined);
-  assert.deepEqual(searchDefinition.parameters.required, ['pattern']);
+  assert.deepEqual(searchDefinition.parameters.required, ['target', 'pattern', 'regex', 'glob', 'ignore_case', 'context', 'before', 'after', 'limit']);
 
   const copyDefinition = buildVirtualFileCopyFileFunctionToolDefinition();
-  assert.match(copyDefinition.description, /cp <from> <to>/);
+  assert.match(copyDefinition.description, /cp from to/);
   assert.ok(copyDefinition.parameters.properties.from);
   assert.ok(copyDefinition.parameters.properties.to);
-  assert.deepEqual(copyDefinition.parameters.required, ['from', 'to']);
+  assert.deepEqual(copyDefinition.parameters.required, ['target', 'from', 'to']);
 
   const moveDefinition = buildVirtualFileMoveFileFunctionToolDefinition();
-  assert.match(moveDefinition.description, /mv <from> <to>/);
-  assert.deepEqual(moveDefinition.parameters.required, ['from', 'to']);
+  assert.match(moveDefinition.description, /mv from to/);
+  assert.deepEqual(moveDefinition.parameters.required, ['target', 'from', 'to']);
 
   const deleteDefinition = buildVirtualFileDeleteFileFunctionToolDefinition();
-  assert.match(deleteDefinition.description, /rm <path>/);
-  assert.deepEqual(deleteDefinition.parameters.required, ['path']);
+  assert.match(deleteDefinition.description, /rm path/);
+  assert.deepEqual(deleteDefinition.parameters.required, ['target', 'path']);
 });
 
 test('apply_patch 遇到同名 Add File 时会按 Windows 语义追加 (2)', async () => {

@@ -343,7 +343,7 @@ const RESPONSES_ADVANCED_FIELD_BASE_SPECS = Object.freeze([
     jsonMode: 'array',
     rows: 6,
     placeholder: '[\n  { \"type\": \"web_search\" }\n]',
-    help: '填写 JSON 数组。若启用 hosted tool_search，Cerebr 内置的大多数本地 function tools 会在发送时自动补成 defer_loading；这里只需要为你额外手写的 function / namespace / MCP server 显式声明 defer_loading。'
+    help: '填写要由 Responses provider 执行的 hosted / MCP / namespace 工具 JSON。不要在这里手写新的 client function：Cerebr 只会执行扩展工具列表中已注册的 function，未知 function 即使被模型调用也会返回 UnsupportedFunctionError。启用 hosted tool_search 后，Cerebr 已注册的本地工具会自动补 defer_loading；额外 hosted/MCP 配置仍需自行声明。'
   }
 ]);
 const RESPONSES_LOCAL_COMPACTION_FIELD_SPECS = Object.freeze([

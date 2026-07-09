@@ -8,18 +8,24 @@ async function readWorkspaceFile(relativePath) {
   return fs.readFile(filePath, 'utf8');
 }
 
-test('message_sender 已注册对话文档顶层工具并接入专用执行分支', async () => {
+test('统一工具注册表已注册对话文档工具，message_sender 保留专用执行分支', async () => {
   const source = await readWorkspaceFile('src/core/message_sender.js');
+  const registrySource = await readWorkspaceFile('src/agent_tools/shared/responses_extension_tool_registry.js');
 
-  assert.match(source, /buildVirtualFileApplyPatchFunctionToolDefinition\(\)/);
-  assert.match(source, /buildVirtualFileListFilesFunctionToolDefinition\(\)/);
-  assert.match(source, /buildVirtualFileReadFileFunctionToolDefinition\(\)/);
-  assert.match(source, /buildVirtualFileSearchFilesFunctionToolDefinition\(\)/);
-  assert.match(source, /buildVirtualFileCopyFileFunctionToolDefinition\(\)/);
-  assert.match(source, /buildVirtualFileMoveFileFunctionToolDefinition\(\)/);
-  assert.match(source, /buildVirtualFileDeleteFileFunctionToolDefinition\(\)/);
-  assert.match(source, /executeResponsesVirtualFileFunction\(functionName \|\| canonicalFunctionName, parsedArgs, options\)/);
-  assert.match(source, /serializeResponsesConversationDocumentFunctionToolOutput\(functionName \|\| canonicalFunctionName, outputPayload\)/);
+  assert.match(source, /buildResponsesExtensionFunctionTools/);
+  for (const builderName of [
+    'buildVirtualFileApplyPatchFunctionToolDefinition',
+    'buildVirtualFileListFilesFunctionToolDefinition',
+    'buildVirtualFileReadFileFunctionToolDefinition',
+    'buildVirtualFileSearchFilesFunctionToolDefinition',
+    'buildVirtualFileCopyFileFunctionToolDefinition',
+    'buildVirtualFileMoveFileFunctionToolDefinition',
+    'buildVirtualFileDeleteFileFunctionToolDefinition'
+  ]) {
+    assert.match(registrySource, new RegExp(`\\b${builderName}\\(`));
+  }
+  assert.match(source, /case 'virtual_file':\s*outputPayload = await executeResponsesVirtualFileFunction\(localFunctionName, parsedArgs, options\)/s);
+  assert.match(source, /case 'virtual_file':\s*serializedOutput = serializeResponsesConversationDocumentFunctionToolOutput\(localFunctionName, outputPayload\)/s);
   assert.match(source, /consumePendingUploadedFileEnvironmentEntries/);
   assert.match(source, /uploadedFiles: uploadedFileEnvironmentEntries/);
 });

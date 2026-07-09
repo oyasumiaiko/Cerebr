@@ -36,6 +36,86 @@ test('RESPONSES_EXTENSION_TOOL_SPECS 以稳定顺序登记扩展提供工具', a
       'page_content_read'
     ]
   );
+  for (const spec of RESPONSES_EXTENSION_TOOL_SPECS) {
+    assert.equal(typeof spec.exposure, 'string');
+    assert.equal(typeof spec.handlerKey, 'string');
+    assert.equal(typeof spec.outputKind, 'string');
+    assert.equal(typeof spec.sideEffect, 'string');
+    assert.equal(typeof spec.deferLoading, 'boolean');
+  }
+  assert.equal(RESPONSES_EXTENSION_TOOL_SPECS.find(spec => spec.id === 'view_image').sideEffect, 'network');
+});
+
+test('manifest 的 handlerKey 与 outputKind 均有 sender 执行和序列化分支', async () => {
+  const { RESPONSES_EXTENSION_TOOL_SPECS } = await loadResponsesExtensionToolsModule();
+  const senderSource = await fs.readFile(
+    path.resolve(__dirname, '../src/core/message_sender.js'),
+    'utf8'
+  );
+  const handlerKeys = new Set(RESPONSES_EXTENSION_TOOL_SPECS.map(spec => spec.handlerKey));
+  const outputKinds = new Set(RESPONSES_EXTENSION_TOOL_SPECS.map(spec => spec.outputKind));
+
+  for (const handlerKey of handlerKeys) {
+    assert.match(senderSource, new RegExp(`case '${handlerKey}':\\s*outputPayload =`, 's'));
+  }
+  for (const outputKind of outputKinds) {
+    assert.match(senderSource, new RegExp(`case '${outputKind}':\\s*serializedOutput =`, 's'));
+  }
+});
+
+test('resolveResponsesExtensionToolSpecForCall 不会把 namespace 内同名函数路由到本地 handler', async () => {
+  const {
+    resolveAuthorizedResponsesExtensionToolSpec,
+    resolveResponsesExtensionToolSpecForCall
+  } = await loadResponsesExtensionToolsModule();
+
+  assert.equal(resolveResponsesExtensionToolSpecForCall('delete_file', '').handlerKey, 'virtual_file');
+  assert.equal(resolveResponsesExtensionToolSpecForCall('delete_file', 'external'), null);
+  assert.equal(resolveResponsesExtensionToolSpecForCall('unknown_tool', ''), null);
+  assert.equal(resolveAuthorizedResponsesExtensionToolSpec('delete_file', '', []), null);
+  assert.equal(
+    resolveAuthorizedResponsesExtensionToolSpec('delete_file', '', [
+      { type: 'function', name: 'delete_file' }
+    ]).handlerKey,
+    'virtual_file'
+  );
+});
+
+test('reconcileResponsesAllowedToolChoice 会同步当前不可用的本地工具', async () => {
+  const { reconcileResponsesAllowedToolChoice } = await loadResponsesExtensionToolsModule();
+  const finalTools = [
+    { type: 'function', name: 'history_search' },
+    { type: 'web_search' }
+  ];
+
+  assert.deepEqual(
+    reconcileResponsesAllowedToolChoice({
+      type: 'allowed_tools',
+      mode: 'auto',
+      tools: ['page_content_read', 'history_search', 'web_search']
+    }, finalTools),
+    {
+      type: 'allowed_tools',
+      mode: 'auto',
+      tools: ['history_search', 'web_search']
+    }
+  );
+  assert.equal(
+    reconcileResponsesAllowedToolChoice({
+      type: 'allowed_tools',
+      mode: 'auto',
+      tools: [{ type: 'function', name: 'page_content_read' }]
+    }, finalTools),
+    'none'
+  );
+  assert.throws(
+    () => reconcileResponsesAllowedToolChoice({
+      type: 'allowed_tools',
+      mode: 'required',
+      tools: ['page_content_read']
+    }, finalTools),
+    /当前不可用的本地工具：page_content_read/
+  );
 });
 
 test('isResponsesExtensionToolEnabled 默认全开，只有显式 false 才关闭', async () => {
@@ -98,4 +178,26 @@ test('filterResponsesExtensionFunctionTools 会过滤被关闭的同名 function
     ]
   );
   assert.notEqual(filtered[0], tools[1]);
+});
+
+test('filterUnavailableResponsesExtensionFunctionTools 会阻止手写同名函数绕过本轮暴露环境', async () => {
+  const { filterUnavailableResponsesExtensionFunctionTools } = await loadResponsesExtensionToolsModule();
+  const tools = [
+    { type: 'function', name: 'page_content_read', description: 'raw collision' },
+    { type: 'function', name: 'history_search', description: 'raw collision' },
+    { type: 'function', name: 'external_custom', description: 'user handler' },
+    { type: 'web_search' }
+  ];
+  const available = [
+    { type: 'function', name: 'history_search', description: 'cerebr definition' }
+  ];
+
+  assert.deepEqual(
+    filterUnavailableResponsesExtensionFunctionTools(tools, available),
+    [
+      { type: 'function', name: 'history_search', description: 'raw collision' },
+      { type: 'function', name: 'external_custom', description: 'user handler' },
+      { type: 'web_search' }
+    ]
+  );
 });

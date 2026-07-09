@@ -2745,6 +2745,7 @@ function buildPageContentReadResultForTransport(pageContent, rawArgs) {
       omitted_pct: formatPercent(omittedChars, totalChars),
       truncated: omittedChars > 0,
       has_more_after_range: end < totalChars,
+      next_skip_chars: end < totalChars ? end : null,
       include_image_urls: includeImageUrls,
       image_reference_count: appendixResult.imageReferenceCount,
       content: appendixResult.content
@@ -2773,6 +2774,7 @@ function buildPageContentReadResultForTransport(pageContent, rawArgs) {
     omitted_pct: formatPercent(omittedChars, totalChars),
     truncated: omittedChars > 0,
     has_more_after_range: end < totalChars,
+    next_skip_chars: end < totalChars ? end : null,
     include_image_urls: includeImageUrls,
     image_reference_count: appendixResult.imageReferenceCount,
     content: appendixResult.content
@@ -3050,6 +3052,7 @@ function buildPdfContentReadResultForTransport(pageContent, rawArgs) {
     is_pdf: true,
     total_chars: totalChars,
     max_chars: args.maxChars,
+    outline_chunk_chars: args.includeOutline ? args.maxChars : undefined,
     chunk_index: sliced.chunk_index,
     returned_chars: sliced.returned_chars,
     total_chunks: sliced.total_chunks,
@@ -3057,6 +3060,7 @@ function buildPdfContentReadResultForTransport(pageContent, rawArgs) {
     has_next_chunk: sliced.has_next_chunk,
     prev_chunk_index: sliced.prev_chunk_index,
     next_chunk_index: sliced.next_chunk_index,
+    outline: args.includeOutline ? outline : undefined,
     content: sliced.content
   };
 }

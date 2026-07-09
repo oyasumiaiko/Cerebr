@@ -1,13 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs/promises');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 async function loadPdfContentReadToolModule() {
   const filePath = path.resolve(__dirname, '../src/agent_tools/pdf_content_read/tool.js');
-  const source = await fs.readFile(filePath, 'utf8');
-  const dataUrl = `data:text/javascript;base64,${Buffer.from(source, 'utf8').toString('base64')}`;
-  return import(dataUrl);
+  return import(`${pathToFileURL(filePath).href}?test=${Date.now()}`);
 }
 
 test('buildPdfContentReadResult 默认返回 PDF 章节索引 overview', async () => {

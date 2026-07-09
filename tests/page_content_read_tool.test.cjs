@@ -1,13 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs/promises');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 async function loadPageContentReadToolModule() {
   const filePath = path.resolve(__dirname, '../src/agent_tools/page_content_read/tool.js');
-  const source = await fs.readFile(filePath, 'utf8');
-  const dataUrl = `data:text/javascript;base64,${Buffer.from(source, 'utf8').toString('base64')}`;
-  return import(dataUrl);
+  return import(`${pathToFileURL(filePath).href}?test=${Date.now()}`);
 }
 
 test('normalizePageContentReadText 会折叠多行与多余空白', async () => {
@@ -19,9 +17,14 @@ test('normalizePageContentReadText 会折叠多行与多余空白', async () => 
 test('buildPageContentReadFunctionToolDefinition 声明可选图片 URL 参数且默认由模型显式开启', async () => {
   const { buildPageContentReadFunctionToolDefinition } = await loadPageContentReadToolModule();
   const spec = buildPageContentReadFunctionToolDefinition();
+  assert.equal(spec.strict, true);
   assert.equal(spec.parameters.properties.include_image_urls.type[0], 'boolean');
   assert.ok(spec.parameters.required.includes('include_image_urls'));
-  assert.match(spec.parameters.properties.include_image_urls.description, /默认 false/);
+  assert.match(spec.parameters.properties.include_image_urls.description, /false 或 null/);
+  assert.equal(Object.hasOwn(spec.parameters.properties.max_chars, 'maximum'), false);
+  assert.match(spec.parameters.properties.max_chars.description, /1-50000/);
+  assert.match(spec.description, /用途：/);
+  assert.match(spec.description, /next_skip_chars/);
 });
 
 test('buildPageContentReadResult 默认返回安全预览而不是整篇正文', async () => {
@@ -40,6 +43,7 @@ test('buildPageContentReadResult 默认返回安全预览而不是整篇正文',
   assert.equal(result.omitted_chars, 2000);
   assert.equal(result.omitted_pct, 16.67);
   assert.equal(result.has_more_after_range, true);
+  assert.equal(result.next_skip_chars, 10000);
   assert.equal(result.content.length, 10000);
 });
 
@@ -60,6 +64,7 @@ test('buildPageContentReadResult 支持 skip_chars + max_chars 连续读取', as
   assert.equal(result.max_chars, 6);
   assert.equal(result.content, '56789A');
   assert.equal(result.has_more_after_range, true);
+  assert.equal(result.next_skip_chars, 11);
 });
 
 test('buildPageContentReadResult 默认不包含图片引用附录', async () => {

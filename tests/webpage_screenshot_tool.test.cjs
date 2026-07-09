@@ -15,6 +15,10 @@ async function loadWebpageScreenshotToolModule() {
     path.join(tempDir, 'src', 'agent_tools', 'shared', 'prompt_image_tool_shared.js')
   );
   await fs.copyFile(
+    path.resolve(__dirname, '../src/agent_tools/shared/model_tool_contract.js'),
+    path.join(tempDir, 'src', 'agent_tools', 'shared', 'model_tool_contract.js')
+  );
+  await fs.copyFile(
     path.resolve(__dirname, '../src/agent_tools/webpage_screenshot/tool.js'),
     path.join(tempDir, 'src', 'agent_tools', 'webpage_screenshot', 'tool.js')
   );
@@ -56,10 +60,14 @@ test('buildWebpageScreenshotFunctionToolDefinition 与 Codex 风格保持一致'
   const spec = buildWebpageScreenshotFunctionToolDefinition();
   assert.equal(spec.type, 'function');
   assert.equal(spec.name, WEBPAGE_SCREENSHOT_TOOL_NAME);
-  assert.equal(spec.strict, false);
-  assert.match(spec.description, /Capture a screenshot of the currently bound webpage/);
+  assert.equal(spec.strict, true);
+  assert.match(spec.description, /用途：/);
+  assert.match(spec.description, /可见区域/);
+  assert.match(spec.description, /input_image/);
   assert.equal(spec.parameters.type, 'object');
   assert.equal(spec.parameters.additionalProperties, false);
   assert.equal(Array.isArray(spec.parameters.properties.detail.type), true);
-  assert.match(spec.parameters.properties.detail.description, /only supported value is `original`/);
+  assert.deepEqual(spec.parameters.required, ['detail']);
+  assert.deepEqual(spec.parameters.properties.detail.enum, ['original', null]);
+  assert.match(spec.parameters.properties.detail.description, /唯一可选字符串值是 `original`/);
 });

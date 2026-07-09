@@ -1,4 +1,5 @@
 import { normalizeSkillName } from '../skill/registry_tool.js';
+import { buildStrictObjectSchema } from '../shared/model_tool_contract.js';
 import {
   ensurePlainObject,
   normalizeOptionalString,
@@ -46,25 +47,24 @@ export function normalizeVirtualFileTarget(rawTarget, options = {}) {
 
 export function buildVirtualFileTargetSchemaDescription(options = {}) {
   const requireSkillName = options?.requireSkillName === true;
-  return {
-    type: ['object', 'null'],
-    description: requireSkillName
-      ? '可选。文件目标作用域。默认当前对话文件区；若 `kind="skill"` 则必须提供 `name`。本地映射不使用 target.kind，而是直接使用 `local/...` 路径。'
-      : '可选。文件目标作用域。默认当前对话文件区；当 `kind="skill"` 时可用 `name` 指定单个技能。本地映射不使用 target.kind，而是直接使用 `local/...` 路径。',
-    additionalProperties: false,
-    properties: {
-      kind: {
-        type: ['string', 'null'],
-        description: '可选。支持默认会话文件目标与 `skill`；省略时使用会话文件目标。'
-      },
-      name: {
-        type: ['string', 'null'],
-        description: requireSkillName
-          ? '当 `kind="skill"` 时必填。skill 的稳定 key。'
-          : '当 `kind="skill"` 时可选。skill 的稳定 key；省略时表示跨全部 skill。'
-      }
+  return buildStrictObjectSchema({
+    kind: {
+      type: ['string', 'null'],
+      enum: [VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT, VIRTUAL_FILE_TARGET_KIND_SKILL, null],
+      description: '目标类型。传 null 或 `workspace` 表示当前对话文件区；传 `skill` 表示 skill 文件区。'
+    },
+    name: {
+      type: ['string', 'null'],
+      description: requireSkillName
+        ? '当 kind=`skill` 时必须填写单个 skill 的稳定 key；kind 为 null/`workspace` 时必须传 null。'
+        : 'kind=`skill` 时可填写单个 skill 的稳定 key；传 null 表示跨全部 skill。kind 为 null/`workspace` 时必须传 null。'
     }
-  };
+  }, {
+    nullable: true,
+    description: requireSkillName
+      ? '目标作用域。传 null 表示当前对话文件区；操作 skill 时传 {"kind":"skill","name":"<skill-key>"}。本地只读映射不用 target，而是直接使用 `local/...` 路径。'
+      : '目标作用域。传 null 表示当前对话文件区；搜索/列出 skill 时传 kind=`skill`，name=null 可跨全部 skill。本地只读映射不用 target，而是直接使用 `local/...` 路径。'
+  });
 }
 
 export function buildVirtualFileTargetSummary(target) {

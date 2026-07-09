@@ -1,13 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const fs = require('node:fs/promises');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 async function loadAskOtherAiToolModule() {
   const filePath = path.resolve(__dirname, '../src/agent_tools/ask_other_ai/tool.js');
-  const source = await fs.readFile(filePath, 'utf8');
-  const dataUrl = `data:text/javascript;base64,${Buffer.from(source, 'utf8').toString('base64')}`;
-  return import(dataUrl);
+  return import(`${pathToFileURL(filePath).href}?test=${Date.now()}`);
 }
 
 test('buildAskOtherAiCatalog 只返回偏好设置中显式选中的且配置完整的候选模型', async () => {
@@ -60,8 +58,13 @@ test('buildAskOtherAiFunctionToolDefinition 包含更明确的使用边界说明
   const askSpec = buildAskOtherAiFunctionToolDefinition();
   assert.equal(askSpec.type, 'function');
   assert.equal(askSpec.name, ASK_OTHER_AI_TOOL_NAME);
-  assert.match(askSpec.description, /何时使用/);
-  assert.match(askSpec.description, /不该怎么用/);
+  assert.equal(askSpec.strict, true);
+  assert.match(askSpec.description, /用途：/);
+  assert.match(askSpec.description, /不要用于：/);
+  assert.match(askSpec.description, /外部网络请求/);
+  assert.equal(Object.hasOwn(askSpec.parameters.properties.requests, 'minItems'), false);
+  assert.equal(Object.hasOwn(askSpec.parameters.properties.requests, 'maxItems'), false);
+  assert.match(askSpec.parameters.properties.requests.description, /建议每批不超过 4 条/);
 
   const listSpec = buildListAskableModelsFunctionToolDefinition();
   assert.equal(listSpec.name, LIST_ASKABLE_MODELS_TOOL_NAME);
@@ -85,6 +88,9 @@ test('normalizeAskOtherAiArguments 支持多 request 且严格校验必填字段
   });
 
   assert.throws(() => normalizeAskOtherAiArguments({ requests: [] }), /至少需要 1 条/);
+  assert.equal(normalizeAskOtherAiArguments({
+    requests: Array.from({ length: 5 }, (_, index) => ({ config_id: `cfg-${index}`, question: 'x' }))
+  }).requests.length, 5);
   assert.throws(() => normalizeAskOtherAiArguments({ requests: [{ config_id: '', question: 'x' }] }), /config_id/);
   assert.throws(() => normalizeAskOtherAiArguments({ requests: [{ config_id: 'cfg', question: '   ' }] }), /question/);
 });

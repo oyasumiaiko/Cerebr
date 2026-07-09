@@ -153,7 +153,7 @@ function createMessageItem(id, text) {
 function createFunctionCallItem(imageUrl) {
   const toolArguments = requestedDetail === 'original'
     ? { path: imageUrl, detail: 'original' }
-    : { path: imageUrl };
+    : { path: imageUrl, detail: null };
   return {
     id: `fc_${VIEW_IMAGE_CALL_ID}`,
     type: 'function_call',

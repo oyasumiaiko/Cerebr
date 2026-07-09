@@ -132,6 +132,7 @@ function createFunctionCallItem(callId, codeText) {
     name: 'js_runtime_execute',
     arguments: JSON.stringify({
       code: codeText,
+      timeout_ms: null,
       frame_ids: null
     }),
     status: 'completed'

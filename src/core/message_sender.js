@@ -83,7 +83,14 @@ import {
   hasResponsesHostedToolSearchTool
 } from '../agent_tools/shared/responses_custom_tool_search.js';
 import {
-  filterResponsesExtensionFunctionTools
+  RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES,
+  buildResponsesExtensionFunctionTools
+} from '../agent_tools/shared/responses_extension_tool_registry.js';
+import {
+  filterResponsesExtensionFunctionTools,
+  filterUnavailableResponsesExtensionFunctionTools,
+  reconcileResponsesAllowedToolChoice,
+  resolveAuthorizedResponsesExtensionToolSpec
 } from '../api/responses_extension_tools.js';
 import {
   ensureResponsesReplayOutputItemsIncludeFunctionCalls
@@ -94,77 +101,32 @@ import {
   mergeResponsesImageGenerationAnswerImages
 } from '../utils/responses_image_generation_answer.js';
 import {
-  JS_RUNTIME_EXECUTE_TOOL_NAME,
-  buildJsRuntimeExecuteFunctionToolDefinition,
   normalizeJsRuntimeExecuteToolArguments
 } from '../agent_tools/js_runtime_execute/tool.js';
 import {
-  PAGE_CONTENT_READ_TOOL_NAME,
-  buildPageContentReadFunctionToolDefinition
-} from '../agent_tools/page_content_read/tool.js';
-import {
-  PDF_CONTENT_READ_TOOL_NAME,
-  buildPdfContentReadFunctionToolDefinition
-} from '../agent_tools/pdf_content_read/tool.js';
-import {
-  WEBPAGE_SCREENSHOT_TOOL_NAME,
-  buildWebpageScreenshotFunctionToolDefinition
-} from '../agent_tools/webpage_screenshot/tool.js';
-import {
-  VIEW_IMAGE_TOOL_NAME,
-  buildViewImageFunctionToolDefinition
-} from '../agent_tools/view_image/tool.js';
-import {
-  HISTORY_READ_TOOL_NAME,
-  HISTORY_SEARCH_TOOL_NAME,
   buildConversationReferenceSnapshot,
-  buildHistoryReadFunctionToolDefinition,
-  buildHistorySearchFunctionToolDefinition,
   executeHistoryReadTool,
   executeHistorySearchTool
 } from '../agent_tools/chat_history/tool.js';
 import {
-  ASK_OTHER_AI_TOOL_NAME,
-  LIST_ASKABLE_MODELS_TOOL_NAME,
   buildAskOtherAiCatalog,
-  buildAskOtherAiFunctionToolDefinition,
   buildAskOtherAiUserMessage,
-  buildListAskableModelsFunctionToolDefinition,
   normalizeAskOtherAiArguments
 } from '../agent_tools/ask_other_ai/tool.js';
 import {
-  REQUEST_USER_INPUT_TOOL_NAME,
-  buildRequestUserInputFunctionToolDefinition,
   buildRequestUserInputResult,
   normalizeRequestUserInputArguments
 } from '../agent_tools/request_user_input/tool.js';
 import {
-  SKILL_READ_MAX_CHARS,
-  SKILL_REGISTRY_TOOL_NAME,
-  buildSkillRegistryFunctionToolDefinition
+  SKILL_READ_MAX_CHARS
 } from '../agent_tools/skill/registry_tool.js';
 import {
-  CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
   CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME,
-  CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
-  CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME,
-  CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
-  CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME,
-  CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
-  CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
   VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
   VIRTUAL_FILE_TARGET_KIND_SKILL,
   buildConversationDocumentActionPayloadFromVirtualFileAction,
   buildSkillRegistryFileActionPayloadFromVirtualFileAction,
-  buildVirtualFileApplyPatchFunctionToolDefinition,
-  buildVirtualFileCopyFileFunctionToolDefinition,
-  buildVirtualFileDeleteFileFunctionToolDefinition,
-  buildVirtualFileListFilesFunctionToolDefinition,
-  buildVirtualFileMoveFileFunctionToolDefinition,
-  buildVirtualFileReadFileFunctionToolDefinition,
-  buildVirtualFileSearchFilesFunctionToolDefinition,
   executeConversationDocumentAction,
-  isVirtualFileToolAction,
   normalizeVirtualFileResultFromSkillRegistryAction,
   normalizeVirtualFileToolArguments
 } from '../agent_tools/virtual_file_io/index.js';
@@ -207,44 +169,6 @@ import {
   getConversationsByIds
 } from '../storage/indexeddb_helper.js';
 
-const RESPONSES_JS_RUNTIME_TOOL_NAME = JS_RUNTIME_EXECUTE_TOOL_NAME;
-const RESPONSES_PAGE_CONTENT_TOOL_NAME = PAGE_CONTENT_READ_TOOL_NAME;
-const RESPONSES_PDF_CONTENT_TOOL_NAME = PDF_CONTENT_READ_TOOL_NAME;
-const RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME = WEBPAGE_SCREENSHOT_TOOL_NAME;
-const RESPONSES_VIEW_IMAGE_TOOL_NAME = VIEW_IMAGE_TOOL_NAME;
-const RESPONSES_HISTORY_SEARCH_TOOL_NAME = HISTORY_SEARCH_TOOL_NAME;
-const RESPONSES_HISTORY_READ_TOOL_NAME = HISTORY_READ_TOOL_NAME;
-const RESPONSES_REQUEST_USER_INPUT_TOOL_NAME = REQUEST_USER_INPUT_TOOL_NAME;
-const RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME = LIST_ASKABLE_MODELS_TOOL_NAME;
-const RESPONSES_ASK_OTHER_AI_TOOL_NAME = ASK_OTHER_AI_TOOL_NAME;
-const RESPONSES_SKILL_REGISTRY_TOOL_NAME = SKILL_REGISTRY_TOOL_NAME;
-const RESPONSES_VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME = CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME;
-const RESPONSES_VIRTUAL_FILE_LIST_FILES_TOOL_NAME = CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME;
-const RESPONSES_VIRTUAL_FILE_READ_FILE_TOOL_NAME = CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME;
-const RESPONSES_VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME = CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME;
-const RESPONSES_VIRTUAL_FILE_COPY_FILE_TOOL_NAME = CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME;
-const RESPONSES_VIRTUAL_FILE_MOVE_FILE_TOOL_NAME = CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME;
-const RESPONSES_VIRTUAL_FILE_DELETE_FILE_TOOL_NAME = CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME;
-const RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES = Object.freeze([
-  RESPONSES_JS_RUNTIME_TOOL_NAME,
-  RESPONSES_PAGE_CONTENT_TOOL_NAME,
-  RESPONSES_PDF_CONTENT_TOOL_NAME,
-  RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME,
-  RESPONSES_VIEW_IMAGE_TOOL_NAME,
-  RESPONSES_HISTORY_SEARCH_TOOL_NAME,
-  RESPONSES_HISTORY_READ_TOOL_NAME,
-  RESPONSES_REQUEST_USER_INPUT_TOOL_NAME,
-  RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME,
-  RESPONSES_ASK_OTHER_AI_TOOL_NAME,
-  RESPONSES_SKILL_REGISTRY_TOOL_NAME,
-  RESPONSES_VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
-  RESPONSES_VIRTUAL_FILE_LIST_FILES_TOOL_NAME,
-  RESPONSES_VIRTUAL_FILE_READ_FILE_TOOL_NAME,
-  RESPONSES_VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME,
-  RESPONSES_VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
-  RESPONSES_VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
-  RESPONSES_VIRTUAL_FILE_DELETE_FILE_TOOL_NAME
-]);
 const RESPONSES_LOCAL_COMPACTION_MARKER_TEXT = '已压缩上下文（基于上一轮上下文大小）';
 const RESPONSES_LOCAL_COMPACTION_PENDING_TEXT = '上下文压缩中';
 const RESPONSES_LOCAL_COMPACTION_ERROR_TEXT = '上下文压缩失败';
@@ -8455,10 +8379,8 @@ export function createMessageSender(appContext) {
    *
    * 当前工具暴露规则：
    * - 仅在 Responses API 场景下注入；
-   * - 页面读取工具只在“宿主页增强模式”下注入；普通网页注入 `page_content_read`，PDF 页面注入 `pdf_content_read`；
-   * - `js_runtime_execute` 始终可以注入，但会根据当前模式切换到：
-   *   1. 宿主页 JS 环境；
-   *   2. 或侧栏内部隔离 sandbox。
+   * - 工具稳定顺序、页面模式暴露条件与 definition builder 统一由扩展工具注册表决定；
+   * - sender 只补充本轮 JS Runtime 是否真的存在，并应用当前 API 配置的显式关闭项。
    *
    * @param {Object|null|undefined} usedApiConfig
    * @param {ReturnType<typeof resolvePageToolEnvironment>} pageToolEnvironment
@@ -8466,33 +8388,10 @@ export function createMessageSender(appContext) {
    */
   function getResponsesCustomFunctionTools(usedApiConfig, pageToolEnvironment = resolveResponsesPageToolEnvironment()) {
     if (!isOpenAIResponsesApiConfig(usedApiConfig)) return [];
-    const tools = [
-      buildVirtualFileApplyPatchFunctionToolDefinition(),
-      buildVirtualFileListFilesFunctionToolDefinition(),
-      buildVirtualFileReadFileFunctionToolDefinition(),
-      buildVirtualFileSearchFilesFunctionToolDefinition(),
-      buildVirtualFileCopyFileFunctionToolDefinition(),
-      buildVirtualFileMoveFileFunctionToolDefinition(),
-      buildVirtualFileDeleteFileFunctionToolDefinition(),
-      buildSkillRegistryFunctionToolDefinition(pageToolEnvironment),
-      buildRequestUserInputFunctionToolDefinition(),
-      buildViewImageFunctionToolDefinition(),
-      buildListAskableModelsFunctionToolDefinition(),
-      buildAskOtherAiFunctionToolDefinition(),
-      buildHistorySearchFunctionToolDefinition(),
-      buildHistoryReadFunctionToolDefinition()
-    ];
-    if (pageToolEnvironment?.exposeHostPageTools) {
-      tools.push(buildWebpageScreenshotFunctionToolDefinition());
-    }
-    if (pageToolEnvironment?.exposePdfContentTool) {
-      tools.push(buildPdfContentReadFunctionToolDefinition());
-    } else if (pageToolEnvironment?.exposePageContentTool) {
-      tools.push(buildPageContentReadFunctionToolDefinition());
-    }
-    if (typeof utils?.executeJsRuntime === 'function') {
-      tools.unshift(buildJsRuntimeExecuteFunctionToolDefinition(pageToolEnvironment));
-    }
+    const tools = buildResponsesExtensionFunctionTools({
+      pageToolEnvironment,
+      hasJsRuntime: typeof utils?.executeJsRuntime === 'function'
+    });
     return filterResponsesExtensionFunctionTools(
       tools,
       usedApiConfig?.responsesApiSettings
@@ -8570,9 +8469,13 @@ export function createMessageSender(appContext) {
         searchableToolNames: RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES
       }
     );
-    if (!Array.isArray(customTools) || customTools.length <= 0) return nextBody;
-
-    nextBody.tools = mergeResponsesRequestTools(nextBody.tools, customTools);
+    nextBody.tools = filterUnavailableResponsesExtensionFunctionTools(nextBody.tools, customTools);
+    if (Array.isArray(customTools) && customTools.length > 0) {
+      nextBody.tools = mergeResponsesRequestTools(nextBody.tools, customTools);
+    }
+    if (Object.prototype.hasOwnProperty.call(nextBody, 'tool_choice')) {
+      nextBody.tool_choice = reconcileResponsesAllowedToolChoice(nextBody.tool_choice, nextBody.tools);
+    }
     return nextBody;
   }
 
@@ -8607,17 +8510,18 @@ export function createMessageSender(appContext) {
    * 将本地工具执行异常压成稳定结构，便于作为 function_call_output 返回给模型。
    *
    * @param {any} error
-   * @returns {{message:string, name:string, stack:string}}
+   * @returns {{message:string, name:string, code?:string, retryable?:boolean}}
    */
   function normalizeResponsesCustomToolError(error) {
     return {
+      ...((typeof error?.code === 'string' && error.code.trim()) ? { code: error.code.trim() } : {}),
       message: (typeof error?.message === 'string' && error.message.trim())
         ? error.message.trim()
         : String(error || '未知工具错误'),
       name: (typeof error?.name === 'string' && error.name.trim())
         ? error.name.trim()
         : 'Error',
-      stack: (typeof error?.stack === 'string') ? error.stack : ''
+      ...(typeof error?.retryable === 'boolean' ? { retryable: error.retryable } : {})
     };
   }
 
@@ -8836,17 +8740,19 @@ export function createMessageSender(appContext) {
         items: [],
         error: {
           message: '当前客户端没有可用的 JS Runtime 执行入口。',
-          name: 'UnavailableError',
-          stack: ''
+          name: 'UnavailableError'
         }
       };
     }
 
     try {
-      const normalizedArgs = normalizeJsRuntimeExecuteToolArguments(rawArgs);
       const runtimeEnvironment = (typeof options?.runtimeEnvironment === 'string' && options.runtimeEnvironment)
         ? options.runtimeEnvironment
         : resolveResponsesPageToolEnvironment(options?.attemptState).jsRuntimeEnvironment;
+      const normalizedArgs = normalizeJsRuntimeExecuteToolArguments(rawArgs, {
+        allowLegacy: false,
+        allowFrameIds: runtimeEnvironment !== JS_RUNTIME_ENV_ISOLATED_SANDBOX
+      });
       const result = await utils.executeJsRuntime(normalizedArgs.code, {
         timeoutMs: normalizedArgs.timeoutMs,
         frameIds: normalizedArgs.frameIds,
@@ -8865,8 +8771,7 @@ export function createMessageSender(appContext) {
             message: (typeof result?.error === 'string' && result.error.trim())
               ? result.error.trim()
               : 'JS Runtime 执行失败',
-            name: 'RuntimeExecutionError',
-            stack: ''
+            name: 'RuntimeExecutionError'
           }
         });
       }
@@ -9629,6 +9534,14 @@ export function createMessageSender(appContext) {
     const functionName = (typeof toolCallRecord?.name === 'string') ? toolCallRecord.name.trim() : '';
     const functionNamespace = (typeof toolCallRecord?.namespace === 'string') ? toolCallRecord.namespace.trim() : '';
     const canonicalFunctionName = buildNamespacedResponsesFunctionName(functionName, functionNamespace);
+    // Cerebr 的本地工具全部以顶层 function 暴露。带 namespace 的同名函数属于外部
+    // 协议，绝不能因为裸 name 相同就误执行本地写文件、网络或代码执行 handler。
+    const localToolSpec = resolveAuthorizedResponsesExtensionToolSpec(
+      functionName,
+      functionNamespace,
+      options?.requestBody?.tools
+    );
+    const localFunctionName = localToolSpec?.id || '';
     if (!callId) {
       throw new Error(`Responses function_call 缺少 call_id，无法回传工具结果（${functionName || 'unknown'}）。`);
     }
@@ -9655,75 +9568,103 @@ export function createMessageSender(appContext) {
     }
 
     let outputPayload = null;
-    if (functionName === RESPONSES_JS_RUNTIME_TOOL_NAME || canonicalFunctionName === RESPONSES_JS_RUNTIME_TOOL_NAME) {
-      outputPayload = await executeResponsesJsRuntimeFunction(parsedArgs, options);
-    } else if (isVirtualFileToolAction(functionName) || isVirtualFileToolAction(canonicalFunctionName)) {
-      outputPayload = await executeResponsesVirtualFileFunction(functionName || canonicalFunctionName, parsedArgs, options);
-    } else if (
-      functionName === RESPONSES_SKILL_REGISTRY_TOOL_NAME
-      || canonicalFunctionName === RESPONSES_SKILL_REGISTRY_TOOL_NAME
-    ) {
-      outputPayload = await executeResponsesSkillRegistryFunction(parsedArgs, options);
-    } else if (functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME || canonicalFunctionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME) {
-      outputPayload = await executeResponsesRequestUserInputFunction(parsedArgs, options);
-    } else if (functionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME || canonicalFunctionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME) {
-      outputPayload = await executeResponsesListAskableModelsFunction(parsedArgs, options);
-    } else if (functionName === RESPONSES_ASK_OTHER_AI_TOOL_NAME || canonicalFunctionName === RESPONSES_ASK_OTHER_AI_TOOL_NAME) {
-      outputPayload = await executeResponsesAskOtherAiFunction(parsedArgs, options);
-    } else if (functionName === RESPONSES_PAGE_CONTENT_TOOL_NAME || canonicalFunctionName === RESPONSES_PAGE_CONTENT_TOOL_NAME) {
-      outputPayload = await executeResponsesPageContentFunction(parsedArgs);
-    } else if (functionName === RESPONSES_PDF_CONTENT_TOOL_NAME || canonicalFunctionName === RESPONSES_PDF_CONTENT_TOOL_NAME) {
-      outputPayload = await executeResponsesPdfContentFunction(parsedArgs);
-    } else if (functionName === RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME || canonicalFunctionName === RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME) {
-      outputPayload = await executeResponsesWebpageScreenshotFunction(parsedArgs);
-    } else if (functionName === RESPONSES_VIEW_IMAGE_TOOL_NAME || canonicalFunctionName === RESPONSES_VIEW_IMAGE_TOOL_NAME) {
-      outputPayload = await executeResponsesViewImageFunction(parsedArgs);
-    } else if (functionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME || canonicalFunctionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME) {
-      outputPayload = await executeResponsesHistorySearchFunction(parsedArgs, options);
-    } else if (functionName === RESPONSES_HISTORY_READ_TOOL_NAME || canonicalFunctionName === RESPONSES_HISTORY_READ_TOOL_NAME) {
-      outputPayload = await executeResponsesHistoryReadFunction(parsedArgs, options);
-    } else {
-      outputPayload = {
-        ok: false,
-        value: null,
-        items: [],
-        error: {
-          message: `当前客户端尚未实现自定义函数 ${canonicalFunctionName || functionName || '(unnamed)'}。`,
-          name: 'UnsupportedFunctionError',
-          stack: ''
-        }
-      };
+    switch (localToolSpec?.handlerKey) {
+      case 'js_runtime_execute':
+        outputPayload = await executeResponsesJsRuntimeFunction(parsedArgs, options);
+        break;
+      case 'virtual_file':
+        outputPayload = await executeResponsesVirtualFileFunction(localFunctionName, parsedArgs, options);
+        break;
+      case 'skill_registry':
+        outputPayload = await executeResponsesSkillRegistryFunction(parsedArgs, options);
+        break;
+      case 'request_user_input':
+        outputPayload = await executeResponsesRequestUserInputFunction(parsedArgs, options);
+        break;
+      case 'list_askable_models':
+        outputPayload = await executeResponsesListAskableModelsFunction(parsedArgs, options);
+        break;
+      case 'ask_other_ai':
+        outputPayload = await executeResponsesAskOtherAiFunction(parsedArgs, options);
+        break;
+      case 'page_content_read':
+        outputPayload = await executeResponsesPageContentFunction(parsedArgs);
+        break;
+      case 'pdf_content_read':
+        outputPayload = await executeResponsesPdfContentFunction(parsedArgs);
+        break;
+      case 'webpage_screenshot':
+        outputPayload = await executeResponsesWebpageScreenshotFunction(parsedArgs);
+        break;
+      case 'view_image':
+        outputPayload = await executeResponsesViewImageFunction(parsedArgs);
+        break;
+      case 'history_search':
+        outputPayload = await executeResponsesHistorySearchFunction(parsedArgs, options);
+        break;
+      case 'history_read':
+        outputPayload = await executeResponsesHistoryReadFunction(parsedArgs, options);
+        break;
+      default:
+        outputPayload = {
+          ok: false,
+          value: null,
+          items: [],
+          error: {
+            message: `当前客户端尚未实现自定义函数 ${canonicalFunctionName || functionName || '(unnamed)'}。`,
+            name: 'UnsupportedFunctionError'
+          }
+        };
+        break;
+    }
+
+    let serializedOutput = null;
+    switch (localToolSpec?.outputKind) {
+      case 'js_runtime':
+        serializedOutput = serializeResponsesJsRuntimeFunctionToolOutput(outputPayload);
+        break;
+      case 'virtual_file':
+        serializedOutput = serializeResponsesConversationDocumentFunctionToolOutput(localFunctionName, outputPayload);
+        break;
+      case 'skill_registry':
+        serializedOutput = serializeResponsesSkillRegistryFunctionToolOutput(outputPayload);
+        break;
+      case 'request_user_input':
+        serializedOutput = serializeResponsesRequestUserInputFunctionToolOutput(outputPayload);
+        break;
+      case 'askable_models':
+        serializedOutput = serializeResponsesListAskableModelsFunctionToolOutput(outputPayload);
+        break;
+      case 'ask_other_ai':
+        serializedOutput = serializeResponsesAskOtherAiFunctionToolOutput(outputPayload);
+        break;
+      case 'page_content':
+        serializedOutput = serializeResponsesPageContentFunctionToolOutput(outputPayload);
+        break;
+      case 'pdf_content':
+        serializedOutput = serializeResponsesPdfContentFunctionToolOutput(outputPayload);
+        break;
+      case 'webpage_screenshot':
+        serializedOutput = serializeResponsesWebpageScreenshotFunctionToolOutput(outputPayload);
+        break;
+      case 'view_image':
+        serializedOutput = serializeResponsesViewImageFunctionToolOutput(outputPayload);
+        break;
+      case 'history_search':
+        serializedOutput = serializeResponsesHistorySearchFunctionToolOutput(outputPayload);
+        break;
+      case 'history_read':
+        serializedOutput = serializeResponsesHistoryReadFunctionToolOutput(outputPayload);
+        break;
+      default:
+        serializedOutput = serializeResponsesFunctionToolOutput(outputPayload);
+        break;
     }
 
     return {
       type: 'function_call_output',
       call_id: callId,
-      output:
-        functionName === RESPONSES_JS_RUNTIME_TOOL_NAME || canonicalFunctionName === RESPONSES_JS_RUNTIME_TOOL_NAME
-            ? serializeResponsesJsRuntimeFunctionToolOutput(outputPayload)
-          : (isVirtualFileToolAction(functionName) || isVirtualFileToolAction(canonicalFunctionName))
-            ? serializeResponsesConversationDocumentFunctionToolOutput(functionName || canonicalFunctionName, outputPayload)
-          : functionName === RESPONSES_SKILL_REGISTRY_TOOL_NAME || canonicalFunctionName === RESPONSES_SKILL_REGISTRY_TOOL_NAME
-            ? serializeResponsesSkillRegistryFunctionToolOutput(outputPayload)
-          : functionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME || canonicalFunctionName === RESPONSES_REQUEST_USER_INPUT_TOOL_NAME
-            ? serializeResponsesRequestUserInputFunctionToolOutput(outputPayload)
-          : functionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME || canonicalFunctionName === RESPONSES_LIST_ASKABLE_MODELS_TOOL_NAME
-            ? serializeResponsesListAskableModelsFunctionToolOutput(outputPayload)
-            : functionName === RESPONSES_ASK_OTHER_AI_TOOL_NAME || canonicalFunctionName === RESPONSES_ASK_OTHER_AI_TOOL_NAME
-              ? serializeResponsesAskOtherAiFunctionToolOutput(outputPayload)
-          : functionName === RESPONSES_PAGE_CONTENT_TOOL_NAME || canonicalFunctionName === RESPONSES_PAGE_CONTENT_TOOL_NAME
-            ? serializeResponsesPageContentFunctionToolOutput(outputPayload)
-            : functionName === RESPONSES_PDF_CONTENT_TOOL_NAME || canonicalFunctionName === RESPONSES_PDF_CONTENT_TOOL_NAME
-              ? serializeResponsesPdfContentFunctionToolOutput(outputPayload)
-              : functionName === RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME || canonicalFunctionName === RESPONSES_WEBPAGE_SCREENSHOT_TOOL_NAME
-                ? serializeResponsesWebpageScreenshotFunctionToolOutput(outputPayload)
-              : functionName === RESPONSES_VIEW_IMAGE_TOOL_NAME || canonicalFunctionName === RESPONSES_VIEW_IMAGE_TOOL_NAME
-                ? serializeResponsesViewImageFunctionToolOutput(outputPayload)
-            : functionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME || canonicalFunctionName === RESPONSES_HISTORY_SEARCH_TOOL_NAME
-              ? serializeResponsesHistorySearchFunctionToolOutput(outputPayload)
-              : functionName === RESPONSES_HISTORY_READ_TOOL_NAME || canonicalFunctionName === RESPONSES_HISTORY_READ_TOOL_NAME
-                ? serializeResponsesHistoryReadFunctionToolOutput(outputPayload)
-                : serializeResponsesFunctionToolOutput(outputPayload)
+      output: serializedOutput
     };
   }
 
@@ -10269,7 +10210,8 @@ export function createMessageSender(appContext) {
         }
         functionCallOutputs.push(await executeResponsesCustomFunctionToolCall(toolCall, {
           attemptState,
-          usedApiConfig
+          usedApiConfig,
+          requestBody: currentRequestBody
         }));
       }
       const replayOutputItemsForFollowUp = ensureResponsesReplayOutputItemsIncludeFunctionCalls(

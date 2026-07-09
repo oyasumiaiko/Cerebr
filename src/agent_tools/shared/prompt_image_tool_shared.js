@@ -32,5 +32,5 @@ export function normalizePromptImageDetail(rawDetail, toolName) {
 }
 
 export function buildPromptImageDetailSchemaDescription() {
-  return 'Optional detail override. The only supported value is `original`; omit this field for default compressed behavior.';
+  return '图片细节模式。传 null 使用默认压缩 JPEG；唯一可选字符串值是 `original`，表示保留原始分辨率。';
 }

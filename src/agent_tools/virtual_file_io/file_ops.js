@@ -8,6 +8,10 @@ import {
 } from './shared.js';
 import { normalizeConversationDocumentPath } from './document_path.js';
 import { buildVirtualFileTargetSchemaDescription } from './target.js';
+import {
+  buildModelToolDescription,
+  buildStrictFunctionToolDefinition
+} from '../shared/model_tool_contract.js';
 
 function normalizeOperationPath(value, target, label) {
   const path = normalizeString(value);
@@ -50,74 +54,71 @@ export function normalizeVirtualFileDeleteFileArguments(args, target) {
 }
 
 export function buildVirtualFileCopyFileFunctionToolDefinition() {
-  return {
-    type: 'function',
+  return buildStrictFunctionToolDefinition({
     name: VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
-    description: '复制虚拟文件，接近 `cp <from> <to>`。可把 `local/...` 只读映射复制成普通会话文件副本；如果目标已存在会失败，不会覆盖。',
-    strict: false,
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        target: buildMutationTargetDescription(),
-        from: {
-          type: 'string',
-          description: '必填。源文件路径，等价于 `cp <from> <to>` 的 from。'
-        },
-        to: {
-          type: 'string',
-          description: '必填。目标文件路径，等价于 `cp <from> <to>` 的 to；目标已存在时会报错。'
-        }
+    description: buildModelToolDescription({
+      purpose: '复制一个虚拟文件到同一目标作用域中的新路径，等价于不覆盖的 `cp from to`。',
+      useWhen: '需要保留源文件，或把 `local/...` 只读映射复制成当前对话文件区中的可写副本。',
+      avoidWhen: '需要重命名且不保留源文件时使用 move_file；目标路径已存在时不要调用，因为不会覆盖。',
+      input: 'target=null 时，to 是当前对话文件路径，from 既可指向当前对话文件，也可指向 `local/...` 只读映射；target=skill 时 from/to 都相对同一个 skill。',
+      output: '成功返回 `copy <from> -> <to>`；失败只返回 Error。'
+    }),
+    properties: {
+      target: buildMutationTargetDescription(),
+      from: {
+        type: 'string',
+        description: '源文件路径。允许从 `local/...` 只读映射读取。'
       },
-      required: ['from', 'to']
+      to: {
+        type: 'string',
+        description: '新目标路径。必须不存在；`local/...` 不能作为可写目标。'
+      }
     }
-  };
+  });
 }
 
 export function buildVirtualFileMoveFileFunctionToolDefinition() {
-  return {
-    type: 'function',
+  return buildStrictFunctionToolDefinition({
     name: VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
-    description: '移动或重命名可写虚拟文件，接近 `mv <from> <to>`。只支持当前对话文件或 skill，不会移动真实本机文件；如果目标已存在会失败，不会覆盖。',
-    strict: false,
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        target: buildMutationTargetDescription(),
-        from: {
-          type: 'string',
-          description: '必填。源文件路径，等价于 `mv <from> <to>` 的 from。'
-        },
-        to: {
-          type: 'string',
-          description: '必填。目标文件路径，等价于 `mv <from> <to>` 的 to；目标已存在时会报错。'
-        }
+    description: buildModelToolDescription({
+      purpose: '移动或重命名一个可写虚拟文件，等价于不覆盖的 `mv from to`。',
+      useWhen: '需要改变当前对话文件或 skill 文件的路径，并且不需要保留源路径。',
+      avoidWhen: '不要移动 `local/...` 真实本机映射；需要保留源文件时使用 copy_file；目标已存在时不会覆盖。',
+      input: 'target=null 操作当前对话文件区；操作 skill 时指定 target.name。from 与 to 必须属于同一可写目标作用域。',
+      output: '成功返回 `move <from> -> <to>`；失败只返回 Error。'
+    }),
+    properties: {
+      target: buildMutationTargetDescription(),
+      from: {
+        type: 'string',
+        description: '现有可写虚拟文件路径。不能是 `local/...`。'
       },
-      required: ['from', 'to']
+      to: {
+        type: 'string',
+        description: '新路径。必须不存在，且不能是 `local/...`。'
+      }
     }
-  };
+  });
 }
 
 export function buildVirtualFileDeleteFileFunctionToolDefinition() {
-  return {
-    type: 'function',
+  return buildStrictFunctionToolDefinition({
     name: VIRTUAL_FILE_DELETE_FILE_TOOL_NAME,
-    description: '删除可写虚拟文件，接近 `rm <path>`。只支持当前对话文件或 skill，不会删除真实本机文件。',
-    strict: false,
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        target: buildMutationTargetDescription(),
-        path: {
-          type: 'string',
-          description: '必填。要删除的虚拟文件路径，等价于 `rm <path>` 的 path。'
-        }
-      },
-      required: ['path']
+    description: buildModelToolDescription({
+      purpose: '删除一个可写虚拟文件，等价于单文件 `rm path`。',
+      useWhen: '用户目标明确要求移除当前对话文件或 skill 文件，且该路径已确认。',
+      avoidWhen: '不要删除 `local/...` 真实本机映射；路径不确定时先 list_files/read_file；这不是递归目录删除。',
+      input: 'target=null 操作当前对话文件区；删除 skill 文件时指定 target.name。path 必须是单个现有文件。',
+      output: '成功返回 `delete <path>`；失败只返回 Error。'
+    }),
+    properties: {
+      target: buildMutationTargetDescription(),
+      path: {
+        type: 'string',
+        description: '要删除的单个可写虚拟文件路径。不能是 `local/...`。'
+      }
     }
-  };
+  });
 }
 
 export function buildConversationDocumentCopyFileFunctionToolDefinition() {

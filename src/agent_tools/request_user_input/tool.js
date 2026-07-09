@@ -12,7 +12,17 @@
  * - `codex-rs/core/tests/suite/request_user_input.rs`
  */
 
+import {
+  buildModelToolDescription,
+  buildStrictFunctionToolDefinition,
+  buildStrictObjectSchema
+} from '../shared/model_tool_contract.js';
+
 export const REQUEST_USER_INPUT_TOOL_NAME = 'request_user_input';
+export const REQUEST_USER_INPUT_MAX_QUESTIONS = 3;
+export const REQUEST_USER_INPUT_MIN_OPTIONS = 2;
+export const REQUEST_USER_INPUT_MAX_OPTIONS = 3;
+const REQUEST_USER_INPUT_ID_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 
 function normalizeString(value) {
   return (typeof value === 'string') ? value.trim() : '';
@@ -45,7 +55,7 @@ function normalizeQuestionOption(rawOption, questionIndex, optionIndex) {
   return { label, description };
 }
 
-function normalizeQuestion(rawQuestion, questionIndex) {
+function normalizeQuestion(rawQuestion, questionIndex, options = {}) {
   const question = (rawQuestion && typeof rawQuestion === 'object' && !Array.isArray(rawQuestion))
     ? rawQuestion
     : {};
@@ -63,22 +73,28 @@ function normalizeQuestion(rawQuestion, questionIndex) {
   if (!prompt) {
     throw new Error(`request_user_input 参数错误：问题 ${header} 缺少非空 question。`);
   }
-  if (rawOptions.length <= 0) {
-    throw new Error(`request_user_input 参数错误：问题 ${header} 需要提供非空 options。`);
+  const allowLegacy = options?.allowLegacy === true;
+  const minimumOptions = allowLegacy ? 1 : REQUEST_USER_INPUT_MIN_OPTIONS;
+  const maximumOptions = allowLegacy ? Number.POSITIVE_INFINITY : REQUEST_USER_INPUT_MAX_OPTIONS;
+  if (rawOptions.length < minimumOptions || rawOptions.length > maximumOptions) {
+    throw new Error(`request_user_input 参数错误：问题 ${header} 必须提供 ${REQUEST_USER_INPUT_MIN_OPTIONS}-${REQUEST_USER_INPUT_MAX_OPTIONS} 个选项。`);
+  }
+  if (!allowLegacy && !REQUEST_USER_INPUT_ID_PATTERN.test(id)) {
+    throw new Error(`request_user_input 参数错误：问题 ${header} 的 id 必须是 snake_case，且以小写字母开头。`);
   }
 
-  const options = rawOptions.map((option, optionIndex) => normalizeQuestionOption(option, questionIndex, optionIndex));
+  const normalizedOptions = rawOptions.map((option, optionIndex) => normalizeQuestionOption(option, questionIndex, optionIndex));
 
   return {
     header,
     id,
     question: prompt,
     is_other: true,
-    options
+    options: normalizedOptions
   };
 }
 
-export function normalizeRequestUserInputArguments(rawArgs) {
+export function normalizeRequestUserInputArguments(rawArgs, options = {}) {
   const args = (rawArgs && typeof rawArgs === 'object' && !Array.isArray(rawArgs))
     ? rawArgs
     : {};
@@ -87,75 +103,81 @@ export function normalizeRequestUserInputArguments(rawArgs) {
   if (rawQuestions.length <= 0) {
     throw new Error('request_user_input 参数错误：questions 需要至少提供 1 个问题。');
   }
+  const allowLegacy = options?.allowLegacy === true;
+  if (!allowLegacy && rawQuestions.length > REQUEST_USER_INPUT_MAX_QUESTIONS) {
+    throw new Error(`request_user_input 参数错误：questions 最多提供 ${REQUEST_USER_INPUT_MAX_QUESTIONS} 个问题。`);
+  }
 
-  const questions = rawQuestions.map((question, index) => normalizeQuestion(question, index));
+  const questions = rawQuestions.map((question, index) => normalizeQuestion(question, index, { allowLegacy }));
+  const uniqueIds = new Set(questions.map(question => question.id));
+  if (!allowLegacy && uniqueIds.size !== questions.length) {
+    throw new Error('request_user_input 参数错误：每个问题的 id 必须唯一。');
+  }
 
   return { questions };
 }
 
 export function buildRequestUserInputToolDescription() {
-  return 'Request user input for questions and wait for the response.';
+  return buildModelToolDescription({
+    purpose: `向用户展示 1-${REQUEST_USER_INPUT_MAX_QUESTIONS} 个结构化选择题，并暂停当前工具链等待回答。`,
+    useWhen: '缺失的用户选择会实质改变结果、权限或安全边界，无法用现有上下文和合理默认值继续时。',
+    avoidWhen: [
+      '信息只是有帮助但不阻塞时，应采用合理假设继续',
+      '不要询问密码、API key、验证码或其他秘密',
+      '不要用它征求泛泛确认或把本可直接完成的工作推回给用户'
+    ],
+    input: `questions 必须有 1-${REQUEST_USER_INPUT_MAX_QUESTIONS} 项；每项使用唯一 snake_case id、短 header、单句 question 和 ${REQUEST_USER_INPUT_MIN_OPTIONS}-${REQUEST_USER_INPUT_MAX_OPTIONS} 个互斥选项。不要手工添加 Other，客户端会自动提供自由填写项。`,
+    output: '返回 JSON：status 为 answered/cancelled/incomplete，answers 按问题 id 映射；cancelled 不是执行错误。'
+  });
 }
 
 export function buildRequestUserInputFunctionToolDefinition() {
   const optionProperties = {
     label: {
       type: 'string',
-      description: 'User-facing label (1-5 words).'
+      description: '显示给用户的简短选项标签，建议 1-5 个词。'
     },
     description: {
       type: 'string',
-      description: 'One short sentence explaining impact/tradeoff if selected.'
+      description: '一句话说明选择该项的影响或取舍。'
     }
   };
   const questionProperties = {
     id: {
       type: 'string',
-      description: 'Stable identifier for mapping answers (snake_case).'
+      pattern: '^[a-z][a-z0-9_]{0,63}$',
+      description: '用于答案映射的唯一 snake_case 标识；以小写字母开头。'
     },
     header: {
       type: 'string',
-      description: 'Short header label shown in the UI (12 or fewer chars).'
+      description: '显示在 UI 中的短标签，建议不超过 12 个字符。'
     },
     question: {
       type: 'string',
-      description: 'Single-sentence prompt shown to the user.'
+      description: '直接展示给用户的单句问题。'
     },
     options: {
       type: 'array',
-      description: 'Provide 2-3 mutually exclusive choices. Do not include an "Other" option in this list; the client will add a free-form "Other" option automatically.',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        properties: optionProperties,
-        required: Object.keys(optionProperties)
-      }
+      minItems: REQUEST_USER_INPUT_MIN_OPTIONS,
+      maxItems: REQUEST_USER_INPUT_MAX_OPTIONS,
+      description: `互斥选项，必须有 ${REQUEST_USER_INPUT_MIN_OPTIONS}-${REQUEST_USER_INPUT_MAX_OPTIONS} 项。推荐项放第一位，并可在 label 后标记 \`(Recommended)\`；不要添加 Other。`,
+      items: buildStrictObjectSchema(optionProperties)
     }
   };
 
-  return {
-    type: 'function',
+  return buildStrictFunctionToolDefinition({
     name: REQUEST_USER_INPUT_TOOL_NAME,
     description: buildRequestUserInputToolDescription(),
-    strict: false,
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        questions: {
-          type: 'array',
-          description: 'Questions to show the user.',
-          items: {
-            type: 'object',
-            additionalProperties: false,
-            properties: questionProperties,
-            required: Object.keys(questionProperties)
-          }
-        }
-      },
-      required: ['questions']
+    properties: {
+      questions: {
+        type: 'array',
+        minItems: 1,
+        maxItems: REQUEST_USER_INPUT_MAX_QUESTIONS,
+        description: `按显示顺序提交 1-${REQUEST_USER_INPUT_MAX_QUESTIONS} 个问题。优先只问一个真正阻塞的问题。`,
+        items: buildStrictObjectSchema(questionProperties)
+      }
     }
-  };
+  });
 }
 
 /**
@@ -216,6 +238,9 @@ export function buildRequestUserInputResult(questions, rawAnswersById, options =
 
   const result = {
     ok: !cancelled && normalizedQuestions.length > 0 && answeredCount === normalizedQuestions.length,
+    status: cancelled
+      ? 'cancelled'
+      : (normalizedQuestions.length > 0 && answeredCount === normalizedQuestions.length ? 'answered' : 'incomplete'),
     cancelled,
     question_count: normalizedQuestions.length,
     answered_count: answeredCount,

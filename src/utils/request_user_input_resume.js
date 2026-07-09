@@ -42,7 +42,9 @@ function parseRequestUserInputQuestions(rawArguments) {
   if (!text) return [];
   try {
     const parsed = JSON.parse(text);
-    return normalizeRequestUserInputArguments(parsed).questions;
+    // 历史会话可能来自严格 schema 上线前，允许旧的题数、选项数和 id 形状继续恢复；
+    // 新模型调用仍由默认严格校验路径约束，二者不要混为一谈。
+    return normalizeRequestUserInputArguments(parsed, { allowLegacy: true }).questions;
   } catch (_) {
     return [];
   }

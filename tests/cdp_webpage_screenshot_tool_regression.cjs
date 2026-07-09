@@ -301,7 +301,7 @@ function createMessageItem(id, text) {
 function createFunctionCallItem() {
   const toolArguments = requestedDetail === 'original'
     ? { detail: 'original' }
-    : {};
+    : { detail: null };
   return {
     id: `fc_${SCREENSHOT_CALL_ID}`,
     type: 'function_call',
@@ -543,7 +543,10 @@ async function main() {
       result.steps.push('page_loaded');
       extensionWorker = await waitForWorktreeExtensionWorker(context, { timeoutMs: 30_000 });
     } else {
-      extensionWorker = await reloadUnpackedExtension(context, { timeoutMs: 30_000 });
+      extensionWorker = await reloadUnpackedExtension(context, {
+        timeoutMs: 30_000,
+        unpackedPath: repoRoot
+      });
       await page.goto(`${mockServer.origin}/`, { waitUntil: 'domcontentloaded' });
       result.steps.push('page_loaded');
     }

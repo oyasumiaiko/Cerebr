@@ -22,10 +22,9 @@ test('js_runtime_execute 暴露 timeout_ms 并把它接到 sidebar 与 backgroun
   const toolDefinition = jsRuntimeToolModule.buildJsRuntimeExecuteFunctionToolDefinition();
 
   assert.equal(toolDefinition.name, 'js_runtime_execute');
-  assert.equal(
-    toolDefinition.parameters.properties.timeout_ms.description,
-    'The timeout for the execution in milliseconds.'
-  );
+  assert.equal(toolDefinition.strict, true);
+  assert.match(toolDefinition.parameters.properties.timeout_ms.description, /超时毫秒数/);
+  assert.equal(Object.hasOwn(toolDefinition.parameters.properties.timeout_ms, 'minimum'), false);
   assert.deepEqual(toolDefinition.parameters.required, ['code', 'timeout_ms', 'frame_ids']);
   assert.deepEqual(
     jsRuntimeToolModule.normalizeJsRuntimeExecuteToolArguments({
@@ -38,6 +37,22 @@ test('js_runtime_execute 暴露 timeout_ms 并把它接到 sidebar 与 backgroun
       timeoutMs: 1234,
       frameIds: [1, 2]
     }
+  );
+  assert.throws(
+    () => jsRuntimeToolModule.normalizeJsRuntimeExecuteToolArguments({
+      code: 'return 1;',
+      timeout_ms: null,
+      frame_ids: [1, '2']
+    }, { allowLegacy: false, allowFrameIds: true }),
+    /非负安全整数/
+  );
+  assert.throws(
+    () => jsRuntimeToolModule.normalizeJsRuntimeExecuteToolArguments({
+      code: 'return 1;',
+      timeout_ms: null,
+      frame_ids: [1]
+    }, { allowLegacy: false, allowFrameIds: false }),
+    /隔离模式不支持 frame_ids/
   );
   assert.throws(
     () => jsRuntimeToolModule.normalizeJsRuntimeExecuteToolArguments({ code: 'return 1;', timeout_ms: 0 }),
@@ -74,9 +89,9 @@ test('js_runtime_execute 在纯对话模式下的工具说明不再指向宿主�
     exposeHostPageTools: false
   });
 
-  assert.match(toolDefinition.description, /纯对话\/隔离模式/);
-  assert.match(toolDefinition.description, /不能访问宿主页 DOM、URL、标题或 frame/);
-  assert.match(toolDefinition.parameters.properties.frame_ids.description, /忽略宿主页 frame/);
+  assert.match(toolDefinition.description, /侧栏内部隔离沙箱/);
+  assert.match(toolDefinition.description, /不要用它读取当前网页、URL、标题或 frame/);
+  assert.match(toolDefinition.parameters.properties.frame_ids.description, /不绑定宿主页 frame/);
   assert.doesNotMatch(toolDefinition.description, /当前页面是单页应用/);
 });
 

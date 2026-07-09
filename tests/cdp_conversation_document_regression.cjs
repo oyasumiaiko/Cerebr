@@ -78,6 +78,7 @@ const { chromium } = loadPlaywright(repoRoot);
 
 function createApplyPatchPayload() {
   return {
+    target: null,
     patch: [
       '*** Begin Patch',
       `*** Add File: ${MD_DOC_PATH}`,

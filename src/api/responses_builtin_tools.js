@@ -263,7 +263,7 @@ export const RESPONSES_BUILTIN_TOOL_SPECS = Object.freeze([
   createBuiltinToolSpec({
     id: 'tool_search',
     title: '工具搜索',
-    description: '这里单独管理 Responses API 的 hosted tool_search；开启后会自动附加 `{ type: "tool_search" }`。Cerebr 内置的大多数本地 function tools 会在发送时自动补成 `defer_loading`；若你手写额外工具 JSON，仍需自行声明其 defer_loading / namespace。',
+    description: '这里单独管理 Responses API 的 hosted tool_search；开启后会自动附加 `{ type: "tool_search" }`。Cerebr 已注册的本地 function tools 会自动补 `defer_loading`；额外 hosted/MCP 工具仍需自行声明。未知 client function 没有本地执行器，不能只靠 Tools JSON 新增。',
     sectionToggleSpec: {
       path: ['builtin_tools', 'tool_search', 'enabled'],
       key: 'builtin_tools.tool_search.enabled',
