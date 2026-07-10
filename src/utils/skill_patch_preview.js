@@ -10,6 +10,7 @@ const EOF_MARKER = '*** End of File';
 const DEFAULT_MAX_FILES = 12;
 const DEFAULT_MAX_LINES_PER_FILE = 160;
 const DEFAULT_MAX_TOTAL_LINES = 320;
+const OPENAI_APPLY_PATCH_SKILL_PATH_PREFIX = '@skill/';
 
 function normalizePatchPath(value) {
   return typeof value === 'string' ? value.trim() : '';
@@ -286,6 +287,160 @@ function finalizeFilePreview(file, options = {}) {
     lines: lineResult.lines,
     truncated: lineResult.truncated,
     omittedLineCount: lineResult.omittedLineCount
+  };
+}
+
+function normalizeOpenAIApplyPatchPreviewOperation(rawOperation) {
+  const operation = (rawOperation && typeof rawOperation === 'object' && !Array.isArray(rawOperation))
+    ? rawOperation
+    : null;
+  if (!operation) return null;
+
+  const type = String(operation.type || '').trim().toLowerCase();
+  if (!['create_file', 'update_file', 'delete_file'].includes(type)) return null;
+
+  const path = normalizePatchPath(operation.path).replace(/\\/g, '/');
+  if (!path) return null;
+  if (type !== 'delete_file' && typeof operation.diff !== 'string') return null;
+
+  return {
+    type,
+    path,
+    diff: type === 'delete_file' ? '' : operation.diff
+  };
+}
+
+function resolveOpenAIApplyPatchPreviewPath(path) {
+  const normalizedPath = normalizePatchPath(path).replace(/\\/g, '/');
+  if (!normalizedPath.startsWith(OPENAI_APPLY_PATCH_SKILL_PATH_PREFIX)) {
+    return {
+      path: normalizedPath,
+      skillName: ''
+    };
+  }
+
+  const remainder = normalizedPath.slice(OPENAI_APPLY_PATCH_SKILL_PATH_PREFIX.length);
+  const separatorIndex = remainder.indexOf('/');
+  if (separatorIndex <= 0 || separatorIndex >= remainder.length - 1) {
+    return {
+      path: normalizedPath,
+      skillName: ''
+    };
+  }
+
+  return {
+    path: remainder.slice(separatorIndex + 1),
+    skillName: remainder.slice(0, separatorIndex)
+  };
+}
+
+function buildOpenAIApplyPatchDiffLines(operation) {
+  if (operation.type === 'delete_file') {
+    return {
+      additions: 0,
+      deletions: 0,
+      lines: [createLine('meta', '已删除文件')]
+    };
+  }
+
+  const lines = operation.diff.replace(/\r\n?/g, '\n').split('\n');
+  let additions = 0;
+  let deletions = 0;
+  const previewLines = [];
+
+  lines.forEach((line) => {
+    if (operation.type === 'create_file') {
+      if (line.startsWith('+')) {
+        additions += 1;
+        previewLines.push(createLine('add', line.slice(1)));
+      } else if (line) {
+        // 官方 create_file 的 V4A diff 正常只包含 `+` 行；异常片段仍以 meta
+        // 显示，便于用户看清模型实际返回了什么，而不是静默隐藏整次调用。
+        previewLines.push(createLine('meta', line));
+      }
+      return;
+    }
+
+    if (line.startsWith(HUNK_MARKER)) {
+      previewLines.push(createLine('hunk', line));
+      return;
+    }
+    if (line === EOF_MARKER) {
+      previewLines.push(createLine('meta', line));
+      return;
+    }
+    if (line.startsWith('+')) {
+      additions += 1;
+      previewLines.push(createLine('add', line.slice(1)));
+      return;
+    }
+    if (line.startsWith('-')) {
+      deletions += 1;
+      previewLines.push(createLine('delete', line.slice(1)));
+      return;
+    }
+    if (line.startsWith(' ')) {
+      previewLines.push(createLine('context', line.slice(1)));
+      return;
+    }
+    if (line) {
+      previewLines.push(createLine('meta', line));
+    }
+  });
+
+  return {
+    additions,
+    deletions,
+    lines: previewLines
+  };
+}
+
+/**
+ * 把 Responses API 官方 `apply_patch_call.operation` 转成现有 diff 视图模型。
+ *
+ * 官方工具每个 call 只描述一个文件，并且不再携带自定义 function arguments：
+ * - create_file：`diff` 是逐行 `+` 的新文件正文；
+ * - update_file：`diff` 是 V4A hunk；
+ * - delete_file：没有 `diff`，只展示删除元信息。
+ *
+ * skill 文件通过保留路径 `@skill/<skill-key>/<path>` 定位。预览层会拆掉该
+ * 前缀，把 skill 名放到摘要元信息中，保持与旧 skill_registry 预览一致。
+ */
+export function buildOpenAIApplyPatchOperationPreview(rawOperation, options = {}) {
+  const operation = normalizeOpenAIApplyPatchPreviewOperation(rawOperation);
+  if (!operation) return null;
+
+  const resolvedPath = resolveOpenAIApplyPatchPreviewPath(operation.path);
+  const diffPreview = buildOpenAIApplyPatchDiffLines(operation);
+  const maxLinesPerFile = Number.isFinite(Number(options.maxLinesPerFile))
+    ? Math.max(0, Math.trunc(Number(options.maxLinesPerFile)))
+    : DEFAULT_MAX_LINES_PER_FILE;
+  const maxTotalLines = Number.isFinite(Number(options.maxTotalLines))
+    ? Math.max(0, Math.trunc(Number(options.maxTotalLines)))
+    : DEFAULT_MAX_TOTAL_LINES;
+  const preview = finalizeFilePreview({
+    path: resolvedPath.path,
+    operation: operation.type === 'create_file'
+      ? 'add'
+      : (operation.type === 'delete_file' ? 'delete' : 'update'),
+    additions: diffPreview.additions,
+    deletions: diffPreview.deletions,
+    lines: diffPreview.lines
+  }, {
+    maxLinesPerFile: Math.min(maxLinesPerFile, maxTotalLines)
+  });
+  if (!preview) return null;
+
+  return {
+    skillName: resolvedPath.skillName,
+    totalFiles: 1,
+    discoveredFileCount: 1,
+    totalAdditions: diffPreview.additions,
+    totalDeletions: diffPreview.deletions,
+    files: [preview],
+    truncatedFiles: 0,
+    patchComplete: true,
+    isPartial: false
   };
 }
 

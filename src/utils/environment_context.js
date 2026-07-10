@@ -2,23 +2,44 @@
  * @file 生成与 Codex 风格对齐的隐藏 environment_context。
  *
  * 设计目标：
- * - 只承载“当前日期 + 时区”这类稳定但有时效性的环境信息；
+ * - 承载“当前日期 + 时区”以及不适合塞进单把工具 description 的跨工具文件策略；
  * - 作为独立隐藏 contextual item 挂到用户消息之前，不污染用户正文；
- * - 采用“只有变化时才追加”的策略，避免每轮重复发送相同前缀。
+ * - 采用“日期、文件清单或策略版本变化时才追加”的策略，避免每轮重复发送相同前缀。
  */
+
+// 策略文字发生语义变化时提升版本，使同一天内已存在的会话也能收到新版规则。
+const ENVIRONMENT_CONTEXT_POLICY_REVISION = 'official-apply-patch-v2';
 
 const USER_UPLOADED_FILE_POLICY_RULES = [
   '这些文件是用户上传到当前对话里的文件。',
   '如果用户上传时没有提供文件名，则默认文件名是 untitled，且没有扩展名。',
-  '如果后续需要更合适的文件名或扩展名，请先用文件工具改名后再继续修改或交付；当前可用 apply_patch 的 *** Move to: 完成改名。',
+  '如果后续需要更合适的文件名或扩展名，请先用 move_file 改名后再继续修改或交付。',
   '如果用户要求把内容输出、整理或下载成文件，应产出当前对话下的文件，并在 final channel 里给出该文件的 Markdown 相对路径链接。',
   '长代码块、长报告或其他自包含且可能反复修改的内容，默认优先作为文件处理。'
+];
+
+const VIRTUAL_FILE_COMMON_POLICY_RULES = [
+  '复制文件使用 copy_file；移动或重命名文件使用 move_file。copy_file 和 move_file 仍使用各自的 target 参数。',
+  'local/... 是只读映射；需要处理本地内容时先用 copy_file 复制成普通会话文件。'
+];
+
+const VIRTUAL_FILE_APPLY_PATCH_POLICY_RULES = [
+  'apply_patch 使用 OpenAI Responses API 官方协议：工具声明没有自定义 name、description、parameters 或 strict schema；不要给它虚构 target、patch 等参数。',
+  'apply_patch_call 的 operation.path 为普通相对路径时，目标是当前对话虚拟文件区，例如 plan.md 或 src/main.js。',
+  '修改 skill 文件时必须把 operation.path 写成 @skill/<skill-key>/<relative-path>，例如 @skill/my-skill/SKILL.md；不要依赖最近一次 read_file 的 target。',
+  'apply_patch operation 只使用 create_file、update_file 或 delete_file；删除文件通过 delete_file operation 完成，没有单独的顶层 delete_file 工具。',
+  '需要修改 local/... 内容时，先用 copy_file 复制成普通会话文件，再对副本使用 apply_patch。'
+];
+
+const VIRTUAL_FILE_NO_APPLY_PATCH_POLICY_RULES = [
+  '当前请求没有暴露官方 apply_patch；不要虚构或尝试调用 apply_patch、apply_patch_call 或顶层 delete_file。',
+  '当前可用文件能力仅限请求 tools 中实际存在的 list_files、read_file、search_files、copy_file、move_file；若任务必须写入文件，应明确说明当前模型或端点未启用官方 apply_patch。'
 ];
 
 const LOCAL_FILE_MOUNT_POLICY_RULES = [
   '这些路径是用户显式添加的本机文件或文件夹映射，位于 local/... 虚拟路径下。',
   'local/... 内容不会预先复制进对话存储，读取时由文件工具实时读取本机当前内容。',
-  'local/... 是只读映射，不允许 apply_patch、move_file 或 delete_file 直接修改。',
+  'local/... 是只读映射，不允许 apply_patch 或 move_file 直接修改。',
   '如果需要修改本地映射内容，请先用 copy_file 把 local/... 复制成普通会话文件，后续只修改该副本。',
   '读取文件夹时优先用 list_files 或 search_files 缩小范围，不要假设整个文件夹内容已经在上下文中。'
 ];
@@ -164,7 +185,8 @@ function normalizeLocalMounts(entries) {
  *   currentDate?: string|null,
  *   now?: number|Date|null,
  *   uploadedFiles?: Array<Object>|null,
- *   localMounts?: Array<Object>|null
+ *   localMounts?: Array<Object>|null,
+ *   applyPatchAvailable?: boolean
  * }} [options]
  * @returns {{type:'environment_context', current_date:string, timezone:string, uploaded_files?:Array<Object>, local_mounts?:Array<Object>}}
  */
@@ -179,7 +201,8 @@ export function buildEnvironmentContextPayload(options = {}) {
   const payload = {
     type: 'environment_context',
     current_date: currentDate,
-    timezone
+    timezone,
+    apply_patch_available: options?.applyPatchAvailable === true
   };
   if (uploadedFiles.length > 0) {
     payload.uploaded_files = uploadedFiles;
@@ -199,7 +222,10 @@ export function buildEnvironmentContextPayload(options = {}) {
 export function buildEnvironmentContextSignature(payload) {
   if (!payload || typeof payload !== 'object') return '';
   try {
-    return JSON.stringify(payload);
+    return JSON.stringify({
+      policy_revision: ENVIRONMENT_CONTEXT_POLICY_REVISION,
+      payload
+    });
   } catch (_) {
     return '';
   }
@@ -218,12 +244,26 @@ export function buildEnvironmentContextInputItems(payload) {
   if (!currentDate || !timezone) return [];
   const uploadedFiles = normalizeUploadedFiles(payload.uploaded_files);
   const localMounts = normalizeLocalMounts(payload.local_mounts);
+  const applyPatchAvailable = payload.apply_patch_available === true;
 
   const lines = [
     '<environment_context>',
     `  <current_date>${escapeXmlText(currentDate)}</current_date>`,
-    `  <timezone>${escapeXmlText(timezone)}</timezone>`
+    `  <timezone>${escapeXmlText(timezone)}</timezone>`,
+    `  <apply_patch_available>${applyPatchAvailable ? 'true' : 'false'}</apply_patch_available>`
   ];
+  // 文件协议规则必须每次随 environment_context 提供，不能只在用户恰好上传或挂载文件时出现。
+  // 这样模型在新建普通会话文件或编辑 skill 时，也能稳定区分官方 apply_patch 与自定义 function。
+  lines.push('  <virtual_file_tool_policy>');
+  const virtualFilePolicyRules = VIRTUAL_FILE_COMMON_POLICY_RULES.concat(
+    applyPatchAvailable
+      ? VIRTUAL_FILE_APPLY_PATCH_POLICY_RULES
+      : VIRTUAL_FILE_NO_APPLY_PATCH_POLICY_RULES
+  );
+  virtualFilePolicyRules.forEach((rule) => {
+    lines.push(`    <rule>${escapeXmlText(rule)}</rule>`);
+  });
+  lines.push('  </virtual_file_tool_policy>');
   if (uploadedFiles.length > 0) {
     lines.push('  <user_uploaded_files>');
     uploadedFiles.forEach((file) => {

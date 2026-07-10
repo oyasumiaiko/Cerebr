@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-const EXPECTED_MODEL_TOOL_NAMES = Object.freeze([
+const EXPECTED_EXTENSION_TOOL_IDS = Object.freeze([
   'js_runtime_execute',
   'apply_patch',
   'list_files',
@@ -11,7 +11,6 @@ const EXPECTED_MODEL_TOOL_NAMES = Object.freeze([
   'search_files',
   'copy_file',
   'move_file',
-  'delete_file',
   'skill_registry',
   'request_user_input',
   'view_image',
@@ -23,6 +22,10 @@ const EXPECTED_MODEL_TOOL_NAMES = Object.freeze([
   'pdf_content_read',
   'page_content_read'
 ]);
+
+const EXPECTED_FUNCTION_TOOL_NAMES = Object.freeze(
+  EXPECTED_EXTENSION_TOOL_IDS.filter(toolId => toolId !== 'apply_patch')
+);
 
 function importSourceModule(relativePath) {
   const filePath = path.resolve(__dirname, '..', relativePath);
@@ -93,13 +96,11 @@ function buildAllModelToolDefinitions(modules, pageToolEnvironment = null) {
 
   return [
     jsRuntime.buildJsRuntimeExecuteFunctionToolDefinition(pageToolEnvironment),
-    virtualFiles.buildVirtualFileApplyPatchFunctionToolDefinition(),
     virtualFiles.buildVirtualFileListFilesFunctionToolDefinition(),
     virtualFiles.buildVirtualFileReadFileFunctionToolDefinition(),
     virtualFiles.buildVirtualFileSearchFilesFunctionToolDefinition(),
     virtualFiles.buildVirtualFileCopyFileFunctionToolDefinition(),
     virtualFiles.buildVirtualFileMoveFileFunctionToolDefinition(),
-    virtualFiles.buildVirtualFileDeleteFileFunctionToolDefinition(),
     skillRegistry.buildSkillRegistryFunctionToolDefinition(pageToolEnvironment),
     requestUserInput.buildRequestUserInputFunctionToolDefinition(),
     viewImage.buildViewImageFunctionToolDefinition(),
@@ -198,13 +199,13 @@ function assertPortableFineTunedSchemaRecursively(schema, schemaPath, options = 
   }
 }
 
-test('全部 18 个模型工具具有唯一稳定名称和可独立判读的描述', async () => {
+test('全部 16 个本地 function tool 具有唯一稳定名称和可独立判读的描述', async () => {
   const modules = await loadModelToolModules();
   const definitions = buildAllModelToolDefinitions(modules);
   const names = definitions.map(definition => definition.name);
 
-  assert.equal(definitions.length, 18);
-  assert.deepEqual(names, EXPECTED_MODEL_TOOL_NAMES);
+  assert.equal(definitions.length, 16);
+  assert.deepEqual(names, EXPECTED_FUNCTION_TOOL_NAMES);
   assert.equal(new Set(names).size, definitions.length, '模型工具名称不得重复');
 
   for (const definition of definitions) {
@@ -234,13 +235,11 @@ test('关键枚举保持闭合，范围与数量通过 description 暴露且不�
   assert.match(propertiesOf('js_runtime_execute').frame_ids.description, /非负 frame ID/);
 
   for (const name of [
-    'apply_patch',
     'list_files',
     'read_file',
     'search_files',
     'copy_file',
-    'move_file',
-    'delete_file'
+    'move_file'
   ]) {
     assert.deepEqual(
       propertiesOf(name).target.properties.kind.enum,
@@ -248,6 +247,9 @@ test('关键枚举保持闭合，范围与数量通过 description 暴露且不�
       `${name}.target.kind 的作用域枚举发生漂移`
     );
   }
+
+  assert.match(propertiesOf('read_file').target.description, /官方 apply_patch 没有 target/);
+  assert.match(propertiesOf('search_files').target.description, /@skill\/<skill-key>\/<relative-path>/);
 
   assert.match(propertiesOf('read_file').max_chars.description, /1-50000/);
   assert.match(propertiesOf('search_files').context.description, /0-10/);
@@ -329,7 +331,7 @@ test('js_runtime_execute 与 skill_registry 明确区分宿主页和隔离沙箱
   );
 });
 
-test('统一 registry 与 18 个 definition builder 和 manifest 保持逐项一致', async () => {
+test('统一 registry 的 17 个能力与 16 个 function definition builder 保持逐项一致', async () => {
   const modules = await loadModelToolModules();
   const {
     RESPONSES_EXTENSION_TOOL_SPECS
@@ -346,11 +348,12 @@ test('统一 registry 与 18 个 definition builder 和 manifest 保持逐项一
   const manifestNames = RESPONSES_EXTENSION_TOOL_SPECS.map(spec => spec.id);
   const registryNames = Object.keys(definitionBuildersById);
 
-  assert.deepEqual(manifestNames, EXPECTED_MODEL_TOOL_NAMES);
-  assert.deepEqual(registryNames, EXPECTED_MODEL_TOOL_NAMES);
-  assert.equal(new Set(registryNames).size, 18);
+  assert.deepEqual(manifestNames, EXPECTED_EXTENSION_TOOL_IDS);
+  assert.deepEqual(registryNames, EXPECTED_FUNCTION_TOOL_NAMES);
+  assert.equal(new Set(manifestNames).size, 17);
+  assert.equal(new Set(registryNames).size, 16);
 
-  for (const toolName of EXPECTED_MODEL_TOOL_NAMES) {
+  for (const toolName of EXPECTED_FUNCTION_TOOL_NAMES) {
     const registryDefinition = definitionBuildersById[toolName]({
       pageToolEnvironment: htmlEnvironment
     });
@@ -361,12 +364,19 @@ test('统一 registry 与 18 个 definition builder 和 manifest 保持逐项一
       `${toolName} registry builder 与工具模块公开 builder 发生漂移`
     );
   }
+
+  const applyPatchSpec = RESPONSES_EXTENSION_TOOL_SPECS.find(spec => spec.id === 'apply_patch');
+  assert.equal(applyPatchSpec.protocol, 'apply_patch');
+  assert.equal(applyPatchSpec.deferLoading, false);
+  assert.equal(Object.hasOwn(definitionBuildersById, 'apply_patch'), false);
+  assert.equal(manifestNames.includes('delete_file'), false);
 });
 
 test('统一 registry 为 HTML、PDF 与隔离模式暴露精确且互斥的工具集合', async () => {
   const modules = await loadModelToolModules();
   const {
-    buildResponsesExtensionFunctionTools
+    buildResponsesExtensionFunctionTools,
+    buildResponsesExtensionProtocolTools
   } = modules.extensionToolRegistry;
   const {
     resolvePageToolEnvironment
@@ -381,13 +391,11 @@ test('统一 registry 为 HTML、PDF 与隔离模式暴露精确且互斥的工�
   }));
   assert.deepEqual(htmlNames, [
     'js_runtime_execute',
-    'apply_patch',
     'list_files',
     'read_file',
     'search_files',
     'copy_file',
     'move_file',
-    'delete_file',
     'skill_registry',
     'request_user_input',
     'view_image',
@@ -404,13 +412,11 @@ test('统一 registry 为 HTML、PDF 与隔离模式暴露精确且互斥的工�
   }));
   assert.deepEqual(pdfNames, [
     'js_runtime_execute',
-    'apply_patch',
     'list_files',
     'read_file',
     'search_files',
     'copy_file',
     'move_file',
-    'delete_file',
     'skill_registry',
     'request_user_input',
     'view_image',
@@ -428,13 +434,11 @@ test('统一 registry 为 HTML、PDF 与隔离模式暴露精确且互斥的工�
   }));
   assert.deepEqual(isolatedNames, [
     'js_runtime_execute',
-    'apply_patch',
     'list_files',
     'read_file',
     'search_files',
     'copy_file',
     'move_file',
-    'delete_file',
     'skill_registry',
     'request_user_input',
     'view_image',
@@ -443,6 +447,15 @@ test('统一 registry 为 HTML、PDF 与隔离模式暴露精确且互斥的工�
     'history_search',
     'history_read'
   ]);
+
+  const protocolTools = buildResponsesExtensionProtocolTools({
+    pageToolEnvironment: resolvePageToolEnvironment({ isPdfPage: false }),
+    hasJsRuntime: true
+  });
+  assert.deepEqual(protocolTools, [{ type: 'apply_patch' }]);
+  assert.equal(htmlNames.length + protocolTools.length, 16);
+  assert.equal(pdfNames.length + protocolTools.length, 16);
+  assert.equal(isolatedNames.length + protocolTools.length, 14);
 
   assert.equal(htmlNames.includes('pdf_content_read'), false);
   assert.equal(pdfNames.includes('page_content_read'), false);
@@ -469,10 +482,12 @@ test('hosted tool_search 的 searchable names 完整派生自 deferLoading manif
   );
   assert.deepEqual(
     RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES,
-    EXPECTED_MODEL_TOOL_NAMES
+    EXPECTED_FUNCTION_TOOL_NAMES
   );
   assert.equal(
     new Set(RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES).size,
-    EXPECTED_MODEL_TOOL_NAMES.length
+    EXPECTED_FUNCTION_TOOL_NAMES.length
   );
+  assert.equal(RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES.includes('apply_patch'), false);
+  assert.equal(RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES.includes('delete_file'), false);
 });

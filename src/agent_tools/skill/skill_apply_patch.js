@@ -1,22 +1,14 @@
 /**
- * 将 Codex `apply_patch` 的核心解析与文本替换逻辑移植到skill 的虚拟文件模型中。
+ * OpenAI Responses API 官方 apply_patch operation 的 skill 包执行器。
  *
- * 这里刻意保留 Codex 原始补丁格式：
- * - `*** Begin Patch` / `*** End Patch`
- * - `*** Add File:` / `*** Delete File:` / `*** Update File:`
- * - `*** Move to:`
- * - `@@` 更新块与 `+` / `-` / ` ` 行前缀
- *
- * 在 Cerebr 里，文件用途不再靠额外枚举驱动，而是靠：
- * - manifest 指针：`instruction.path`、`runtime.entry_path`
- * - 路径约定：例如 `src/`、`templates/`、`references/`
- *
- * 因此这里不再额外引入 `File Kind` 之类的扩展指令，尽量让模型直接复用
- * Codex 原生 patch 心智模型。
+ * 这里不定义模型工具 schema，也不解析旧 `*** Begin Patch` 多文件格式。模型侧只会
+ * 收到官方 `{ type: "apply_patch" }`；本模块负责把单文件 V4A operation 原子地应用到
+ * 已持久化的 skill 虚拟文件包。
  */
 
 import {
   buildStoredSkillRecord,
+  inferSkillFileKindForPath,
   SKILL_VIRTUAL_MANIFEST_PATH,
   normalizeSkillFilePath,
   parseSkillVirtualManifestContent,
@@ -26,16 +18,9 @@ import {
   serializeSkillVirtualManifest
 } from './registry_tool.js';
 import {
-  derivePatchedFileContent,
-  parseApplyPatch,
-  seekSequence
-} from '../shared/apply_patch_core.js';
-
-export function parseSkillApplyPatch(patch, options = {}) {
-  return parseApplyPatch(patch, options);
-}
-
-export { seekSequence };
+  applyOpenAIApplyPatchDiff,
+  normalizeOpenAIApplyPatchOperation
+} from '../virtual_file_io/openai_apply_patch.js';
 
 function cloneFiles(files) {
   return (Array.isArray(files) ? files : []).map((file) => ({ ...file }));
@@ -45,163 +30,109 @@ function findFileIndex(files, filePath) {
   return files.findIndex((file) => file.path === filePath);
 }
 
-function upsertFilePreservingOrder(files, file, existingIndex = null) {
-  const resolvedIndex = Number.isInteger(existingIndex) ? existingIndex : findFileIndex(files, file.path);
-  if (resolvedIndex >= 0) {
-    files[resolvedIndex] = file;
-  } else {
-    files.push(file);
-  }
-}
-
-export function applySkillPackagePatch(record, patch) {
+/**
+ * 将一个官方单文件 operation 应用到 skill 包快照。
+ *
+ * - manifest.json 只能 update，不能 create/delete；
+ * - create 遇到同名文件严格失败；
+ * - update 使用 OpenAI 官方 V4A applyDiff；
+ * - delete 会同步修正 instruction/runtime 指针，并禁止删除最后一个真实文件。
+ */
+export function applyOpenAIApplyPatchOperationToSkillPackage(record, rawOperation) {
   const skill = normalizeStoredSkillRecord(record);
   if (!skill) {
-    throw new Error('Cannot apply patch to an invalid skill record.');
+    throw new Error('Cannot apply OpenAI patch operation to an invalid skill record.');
   }
 
-  const { hunks } = parseSkillApplyPatch(patch, { mode: 'strict' });
-  if (hunks.length <= 0) {
-    throw new Error('No files were modified.');
-  }
-
+  const operation = normalizeOpenAIApplyPatchOperation(rawOperation);
+  const path = normalizeSkillFilePath(operation.path);
+  const normalizedOperation = { ...operation, path };
   const nextFiles = cloneFiles(skill.files);
-  let instructionPath = skill.instruction.path;
-  let runtimeEntryPath = skill.runtime.entry_path;
-  let manifestInput = null;
-  let manifestContent = serializeSkillVirtualManifest(skill);
   const affectedFiles = {
     added: [],
     modified: [],
     deleted: []
   };
 
-  for (const hunk of hunks) {
-    const normalizedHunkPath = normalizeSkillFilePath(hunk.path);
-    const isManifestHunk = normalizedHunkPath === SKILL_VIRTUAL_MANIFEST_PATH;
-
-    if (isManifestHunk && hunk.type === 'add_file') {
-      throw new Error('manifest.json 是保留虚拟文件，不支持 Add File。');
+  if (path === SKILL_VIRTUAL_MANIFEST_PATH) {
+    if (operation.type !== 'update_file') {
+      throw new Error('manifest.json 是保留虚拟文件，只支持 update_file。');
     }
-    if (isManifestHunk && hunk.type === 'delete_file') {
-      throw new Error('manifest.json 是保留虚拟文件，不支持 Delete File。');
-    }
-
-    if (hunk.type === 'add_file') {
-      const normalizedPath = normalizedHunkPath;
-      const existingIndex = findFileIndex(nextFiles, normalizedPath);
-      const existingFile = existingIndex >= 0 ? nextFiles[existingIndex] : null;
-      upsertFilePreservingOrder(nextFiles, {
-        path: normalizedPath,
-        kind: existingFile?.kind || null,
-        content: hunk.contents
-      }, existingIndex);
-      if (existingFile) {
-        affectedFiles.modified.push(normalizedPath);
-      } else {
-        affectedFiles.added.push(normalizedPath);
-      }
-      continue;
-    }
-
-    if (hunk.type === 'delete_file') {
-      const normalizedPath = normalizedHunkPath;
-      const existingIndex = findFileIndex(nextFiles, normalizedPath);
-      if (existingIndex < 0) {
-        throw new Error(`Failed to delete file ${normalizedPath}`);
-      }
-      nextFiles.splice(existingIndex, 1);
-      if (instructionPath === normalizedPath) instructionPath = null;
-      if (runtimeEntryPath === normalizedPath) runtimeEntryPath = null;
-      affectedFiles.deleted.push(normalizedPath);
-      continue;
-    }
-
-    if (hunk.type === 'update_file') {
-      const sourcePath = normalizedHunkPath;
-      if (sourcePath === SKILL_VIRTUAL_MANIFEST_PATH) {
-        if (hunk.move_path) {
-          throw new Error('manifest.json 是保留虚拟文件，不支持 Move to。');
-        }
-        manifestContent = derivePatchedFileContent(manifestContent, sourcePath, hunk.chunks);
-        manifestInput = parseSkillVirtualManifestContent(manifestContent, skill);
-        if (manifestInput?.instruction?.path) {
-          instructionPath = manifestInput.instruction.path;
-        }
-        if (Object.prototype.hasOwnProperty.call(manifestInput?.runtime || {}, 'entry_path')) {
-          runtimeEntryPath = manifestInput.runtime.entry_path;
-        }
-        affectedFiles.modified.push(sourcePath);
-        continue;
-      }
-      const sourceIndex = findFileIndex(nextFiles, sourcePath);
-      if (sourceIndex < 0) {
-        throw new Error(`Failed to read file to update ${sourcePath}`);
-      }
-
-      const sourceFile = nextFiles[sourceIndex];
-      const nextContent = derivePatchedFileContent(sourceFile.content, sourcePath, hunk.chunks);
-      const targetPath = hunk.move_path ? normalizeSkillFilePath(hunk.move_path) : sourcePath;
-
-      if (targetPath === sourcePath) {
-        nextFiles[sourceIndex] = {
-          path: sourcePath,
-          kind: sourceFile.kind,
-          content: nextContent
-        };
-      } else {
-        const targetIndex = findFileIndex(nextFiles, targetPath);
-        if (targetIndex >= 0 && targetIndex !== sourceIndex) {
-          nextFiles[targetIndex] = {
-            path: targetPath,
-            kind: sourceFile.kind,
-            content: nextContent
-          };
-          nextFiles.splice(sourceIndex, 1);
-        } else {
-          nextFiles[sourceIndex] = {
-            path: targetPath,
-            kind: sourceFile.kind,
-            content: nextContent
-          };
-        }
-        if (instructionPath === sourcePath) instructionPath = targetPath;
-        if (runtimeEntryPath === sourcePath) runtimeEntryPath = targetPath;
-      }
-      affectedFiles.modified.push(targetPath);
-      continue;
-    }
+    const currentManifest = serializeSkillVirtualManifest(skill);
+    const nextManifest = applyOpenAIApplyPatchDiff(currentManifest, normalizedOperation);
+    const manifestInput = parseSkillVirtualManifestContent(nextManifest, skill);
+    const nextRecord = buildStoredSkillRecord({
+      ...skill,
+      ...manifestInput,
+      files: nextFiles
+    }, skill);
+    affectedFiles.modified.push(path);
+    return {
+      operation: normalizedOperation,
+      affected_files: affectedFiles,
+      record: nextRecord
+    };
   }
 
-  if (instructionPath && findFileIndex(nextFiles, instructionPath) < 0) {
-    instructionPath = pickDefaultSkillInstructionPath(nextFiles);
-  }
-  if (runtimeEntryPath && findFileIndex(nextFiles, runtimeEntryPath) < 0) {
-    runtimeEntryPath = pickDefaultSkillRuntimeEntryPath(nextFiles);
+  const existingIndex = findFileIndex(nextFiles, path);
+  let instructionPath = skill.instruction.path;
+  let runtimeEntryPath = skill.runtime.entry_path;
+
+  if (operation.type === 'create_file') {
+    if (existingIndex >= 0) {
+      throw new Error(`技能 ${skill.name} 中已存在文件 ${path}，无法 create_file。`);
+    }
+    const content = applyOpenAIApplyPatchDiff('', normalizedOperation);
+    nextFiles.push({
+      path,
+      kind: inferSkillFileKindForPath(path, {
+        instructionPath,
+        runtimeEntryPath
+      }),
+      content
+    });
+    affectedFiles.added.push(path);
+  } else if (operation.type === 'update_file') {
+    if (existingIndex < 0) {
+      throw new Error(`技能 ${skill.name} 中不存在文件 ${path}，无法 update_file。`);
+    }
+    const existingFile = nextFiles[existingIndex];
+    nextFiles[existingIndex] = {
+      ...existingFile,
+      content: applyOpenAIApplyPatchDiff(existingFile.content, normalizedOperation)
+    };
+    affectedFiles.modified.push(path);
+  } else {
+    if (existingIndex < 0) {
+      throw new Error(`技能 ${skill.name} 中不存在文件 ${path}，无法 delete_file。`);
+    }
+    if (nextFiles.length <= 1) {
+      throw new Error(`技能 ${skill.name} 只剩最后一个文件，不能删除。`);
+    }
+    nextFiles.splice(existingIndex, 1);
+    if (instructionPath === path) {
+      instructionPath = pickDefaultSkillInstructionPath(nextFiles);
+    }
+    if (runtimeEntryPath === path) {
+      runtimeEntryPath = pickDefaultSkillRuntimeEntryPath(nextFiles);
+    }
+    affectedFiles.deleted.push(path);
   }
 
   const nextRecord = buildStoredSkillRecord({
     ...skill,
-    ...(manifestInput || {}),
     instruction: {
-      path: manifestInput?.instruction?.path ?? instructionPath
+      path: instructionPath || pickDefaultSkillInstructionPath(nextFiles)
     },
     runtime: {
-      entry_path: Object.prototype.hasOwnProperty.call(manifestInput?.runtime || {}, 'entry_path')
-        ? manifestInput.runtime.entry_path
-        : runtimeEntryPath
+      entry_path: runtimeEntryPath
     },
     files: nextFiles
   }, skill);
 
   return {
-    patch: String(patch || ''),
-    hunks,
-    affected_files: {
-      added: Array.from(new Set(affectedFiles.added)),
-      modified: Array.from(new Set(affectedFiles.modified)),
-      deleted: Array.from(new Set(affectedFiles.deleted))
-    },
+    operation: normalizedOperation,
+    affected_files: affectedFiles,
     record: nextRecord
   };
 }

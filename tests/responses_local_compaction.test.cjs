@@ -99,7 +99,7 @@ test('buildResponsesCompactRequestBody 只保留 compact allow-list 字段', asy
   );
 });
 
-test('buildResponsesCompactRequestBody 保留 function/custom tool output 原文，不再做强制预算截断', async () => {
+test('buildResponsesCompactRequestBody 保留 function/custom/apply_patch output 原文，不再做强制预算截断', async () => {
   const { buildResponsesCompactRequestBody } = await loadResponsesLocalCompactionModule();
 
   const largeOutput = 'A'.repeat(12000) + 'tail';
@@ -131,6 +131,12 @@ test('buildResponsesCompactRequestBody 保留 function/custom tool output 原文
           text: largeOutput
         }
       },
+      {
+        type: 'apply_patch_call_output',
+        call_id: 'call_patch',
+        status: 'completed',
+        output: largeOutput
+      },
       ...Array.from({ length: 2 }, (_unused, index) => ({
         type: 'function_call_output',
         call_id: `call_extra_${index}`,
@@ -154,6 +160,8 @@ test('buildResponsesCompactRequestBody 保留 function/custom tool output 原文
     status: 'ok',
     text: largeOutput
   });
+  assert.equal(compactBody.input[3].output, largeOutput);
+  assert.equal(compactBody.input[3].status, 'completed');
   assert.equal(compactBody.input.length, requestBody.input.length);
 });
 

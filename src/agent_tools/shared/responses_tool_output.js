@@ -1122,15 +1122,11 @@ function buildResponsesFileOperationToolOutputText(rootTag, result, options = {}
   const destinationPath = typeof normalized.destination_path === 'string'
     ? normalized.destination_path.trim()
     : (typeof normalized.destination_file_path === 'string' ? normalized.destination_file_path.trim() : '');
-  const deletedPath = typeof normalized.deleted_path === 'string'
-    ? normalized.deleted_path.trim()
-    : (typeof normalized.deleted_file_path === 'string' ? normalized.deleted_file_path.trim() : '');
   const errorText = normalized.error ? formatResponsesJsRuntimeErrorText(normalized.error) : '';
   if (errorText) return `Error: ${errorText}`;
   const resultLine = (() => {
     if (action === 'copy_file') return sourcePath && destinationPath ? `copy ${sourcePath} -> ${destinationPath}` : 'copy complete';
     if (action === 'move_file') return sourcePath && destinationPath ? `move ${sourcePath} -> ${destinationPath}` : 'move complete';
-    if (action === 'delete_file') return deletedPath ? `delete ${deletedPath}` : 'delete complete';
     return 'file operation complete';
   })();
   return resultLine;
@@ -1817,9 +1813,6 @@ function buildSkillMutationSummaryText(result) {
     ? normalized.skill.name.trim()
     : (typeof normalized.skill_name === 'string' ? normalized.skill_name.trim() : '');
   const revision = Number.isFinite(Number(normalized?.skill?.revision)) ? Number(normalized.skill.revision) : null;
-  const filePath = typeof normalized?.file?.path === 'string'
-    ? normalized.file.path.trim()
-    : (typeof normalized.deleted_file_path === 'string' ? normalized.deleted_file_path.trim() : '');
   const totalFiles = Number.isFinite(Number(normalized?.files?.total_count)) ? Number(normalized.files.total_count) : null;
   const activeSkillNames = extractSkillActiveSkillNames(normalized.refresh_result);
 
@@ -1827,11 +1820,6 @@ function buildSkillMutationSummaryText(result) {
   switch (action) {
     case 'apply_patch':
       summary = buildSkillApplyPatchSummaryText(normalized);
-      break;
-    case 'delete_file':
-      summary = filePath
-        ? `Deleted file ${filePath}${skillName ? ` from skill ${skillName}` : ''}${revision ? ` (revision ${revision})` : ''}.`
-        : `Deleted file from skill ${skillName || '(unknown)'}.`;
       break;
     case 'create':
     case 'create_skill':
@@ -1917,7 +1905,7 @@ export function buildResponsesSkillRegistryToolOutputContentItems(result, option
       options
     );
   }
-  if (['copy_file', 'move_file', 'delete_file'].includes(String(normalized.action || '').trim())) {
+  if (['copy_file', 'move_file'].includes(String(normalized.action || '').trim())) {
     return buildResponsesXmlToolOutputContentItems(
       buildResponsesFileOperationToolOutputText('skill_registry_result', normalized, {
         defaultTargetKind: 'skill',
@@ -1969,9 +1957,7 @@ export function buildResponsesConversationDocumentToolOutputContentItems(toolNam
       options
     );
   }
-  if (
-    ['copy_file', 'move_file', 'delete_file'].includes(normalizedToolName)
-  ) {
+  if (['copy_file', 'move_file'].includes(normalizedToolName)) {
     return buildResponsesXmlToolOutputContentItems(
       buildResponsesFileOperationToolOutputText(rootTag, normalized, {
         toolName: normalizedToolName

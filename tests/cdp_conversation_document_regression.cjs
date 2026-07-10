@@ -24,8 +24,15 @@ const MD_DOC_PATH = '随笔-关于学习与判断.md';
 const TXT_DOC_PATH = '文本文档.txt';
 const CODE_DOC_PATH = 'snippets/example.js';
 const HTML_DOC_PATH = 'preview.html';
-const PATCH_CALL_ID = 'call_conversation_document_apply_patch_1';
+const PATCH_CALL_IDS = Object.freeze([
+  'call_conversation_document_apply_patch_md',
+  'call_conversation_document_apply_patch_txt',
+  'call_conversation_document_apply_patch_code',
+  'call_conversation_document_apply_patch_html',
+  'call_conversation_document_apply_patch_md_update'
+]);
 const EXPECTED_FINAL_MARKER = 'CONVERSATION_DOCUMENT_TOOL_OK_20260413';
+const CREATED_MD_DOC_CONTENT = '# 随笔\n\n第一版草稿。\n';
 const INITIAL_MD_DOC_CONTENT = '# 随笔\n\n第一版内容。\n';
 const INITIAL_TXT_DOC_CONTENT = '# 文本标题\n\n这是一段可以切换为 Markdown 渲染的 txt 内容。\n';
 const INITIAL_CODE_DOC_CONTENT = 'const answer = 42;\nconsole.log(answer);\n';
@@ -58,7 +65,7 @@ const INITIAL_HTML_DOC_CONTENT = [
   '</html>'
 ].join('\n');
 const EDITED_MD_DOC_CONTENT = '# 随笔\n\n第二版内容。\n';
-const EXPECTED_DOWNLOAD_NAME = 'workspace__随笔-关于学习与判断.md';
+const EXPECTED_DOWNLOAD_NAME = MD_DOC_PATH;
 
 const [rawRepoRoot, outputDir, rawArg3 = '', rawArg4 = ''] = process.argv.slice(2);
 const repoRoot = rawRepoRoot ? path.resolve(rawRepoRoot) : '';
@@ -76,22 +83,8 @@ if (!repoRoot || !outputDir || (launchMode === 'stable' && !chromePath)) {
 const runHeadless = shouldRunHeadless();
 const { chromium } = loadPlaywright(repoRoot);
 
-function createApplyPatchPayload() {
-  return {
-    target: null,
-    patch: [
-      '*** Begin Patch',
-      `*** Add File: ${MD_DOC_PATH}`,
-      ...INITIAL_MD_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
-      `*** Add File: ${TXT_DOC_PATH}`,
-      ...INITIAL_TXT_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
-      `*** Add File: ${CODE_DOC_PATH}`,
-      ...INITIAL_CODE_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
-      `*** Add File: ${HTML_DOC_PATH}`,
-      ...INITIAL_HTML_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
-      '*** End Patch'
-    ].join('\n')
-  };
+function createFileDiff(content) {
+  return String(content).split('\n').map((line) => `+${line}`).join('\n');
 }
 
 function createPageHtml() {
@@ -189,6 +182,11 @@ function buildStorageSeed(baseUrl) {
         web_search: {
           enabled: false
         }
+      },
+      extension_tools: {
+        apply_patch: {
+          enabled: true
+        }
       }
     }
   };
@@ -214,15 +212,40 @@ function writeSseEvent(res, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
-function createFunctionCallItem() {
-  return {
-    id: `fc_${PATCH_CALL_ID}`,
-    type: 'function_call',
-    call_id: PATCH_CALL_ID,
-    name: 'apply_patch',
-    arguments: JSON.stringify(createApplyPatchPayload()),
-    status: 'completed'
-  };
+function createApplyPatchCallItems() {
+  return [
+    [PATCH_CALL_IDS[0], MD_DOC_PATH, CREATED_MD_DOC_CONTENT],
+    [PATCH_CALL_IDS[1], TXT_DOC_PATH, INITIAL_TXT_DOC_CONTENT],
+    [PATCH_CALL_IDS[2], CODE_DOC_PATH, INITIAL_CODE_DOC_CONTENT],
+    [PATCH_CALL_IDS[3], HTML_DOC_PATH, INITIAL_HTML_DOC_CONTENT]
+  ].map(([callId, filePath, content]) => ({
+    id: `ap_${callId}`,
+    type: 'apply_patch_call',
+    call_id: callId,
+    status: 'completed',
+    operation: {
+      type: 'create_file',
+      path: filePath,
+      diff: createFileDiff(content)
+    }
+  })).concat({
+    id: `ap_${PATCH_CALL_IDS[4]}`,
+    type: 'apply_patch_call',
+    call_id: PATCH_CALL_IDS[4],
+    status: 'completed',
+    operation: {
+      type: 'update_file',
+      path: MD_DOC_PATH,
+      // 首行故意从 V4A context 前缀空格开始；若 timeline 对 diff 做 trim，本调用会失败。
+      diff: [
+        ' # 随笔',
+        ' ',
+        '-第一版草稿。',
+        '+第一版内容。',
+        '*** End of File'
+      ].join('\n')
+    }
+  });
 }
 
 function createMessageItem(id, text) {
@@ -241,7 +264,8 @@ function createMessageItem(id, text) {
   };
 }
 
-function collectFunctionOutputText(outputItem) {
+function collectToolOutputText(outputItem) {
+  if (typeof outputItem?.output === 'string') return outputItem.output;
   const output = Array.isArray(outputItem?.output) ? outputItem.output : [];
   return output
     .map((part) => {
@@ -265,8 +289,9 @@ async function writeResultSnapshot(outputDir, result) {
 
 async function runMockResponsesServer() {
   const requestLog = [];
+  let firstRequestTools = [];
   let firstRequestToolNames = [];
-  let functionCallOutputText = '';
+  let applyPatchCallOutputText = '';
   const pageHtml = createPageHtml();
 
   const server = http.createServer(async (req, res) => {
@@ -297,14 +322,15 @@ async function runMockResponsesServer() {
 
           requestLog.push(parsed);
           if (requestLog.length === 1) {
-            firstRequestToolNames = (Array.isArray(parsed?.tools) ? parsed.tools : [])
+            firstRequestTools = Array.isArray(parsed?.tools) ? parsed.tools : [];
+            firstRequestToolNames = firstRequestTools
               .map((tool) => (tool?.type === 'function' ? tool?.name : tool?.type))
               .filter(Boolean);
           }
 
           const inputItems = Array.isArray(parsed?.input) ? parsed.input : [];
-          const functionOutput = inputItems.find((item) => (
-            item?.type === 'function_call_output' && item?.call_id === PATCH_CALL_ID
+          const applyPatchOutputs = inputItems.filter((item) => (
+            item?.type === 'apply_patch_call_output' && PATCH_CALL_IDS.includes(item?.call_id)
           ));
 
           res.writeHead(200, {
@@ -314,17 +340,19 @@ async function runMockResponsesServer() {
             'access-control-allow-origin': '*'
           });
 
-          if (!functionOutput) {
-            const functionCall = createFunctionCallItem();
+          if (applyPatchOutputs.length < PATCH_CALL_IDS.length) {
+            const patchCalls = createApplyPatchCallItems();
             writeSseEvent(res, { type: 'response.created', response: { id: 'resp_1' } });
             writeSseEvent(res, { type: 'response.in_progress', response: { id: 'resp_1' } });
-            writeSseEvent(res, { type: 'response.output_item.added', item: functionCall });
-            writeSseEvent(res, { type: 'response.output_item.done', item: functionCall });
+            patchCalls.forEach((patchCall) => {
+              writeSseEvent(res, { type: 'response.output_item.added', item: patchCall });
+              writeSseEvent(res, { type: 'response.output_item.done', item: patchCall });
+            });
             writeSseEvent(res, {
               type: 'response.completed',
               response: {
                 id: 'resp_1',
-                output: [functionCall],
+                output: patchCalls,
                 usage: {
                   input_tokens: 90,
                   output_tokens: 12,
@@ -339,7 +367,9 @@ async function runMockResponsesServer() {
             return;
           }
 
-          functionCallOutputText = collectFunctionOutputText(functionOutput);
+          applyPatchCallOutputText = applyPatchOutputs
+            .map((outputItem) => collectToolOutputText(outputItem))
+            .join('\n');
           const finalText = [
             EXPECTED_FINAL_MARKER,
             '',
@@ -408,8 +438,11 @@ async function runMockResponsesServer() {
     getFirstRequestToolNames() {
       return firstRequestToolNames.slice();
     },
-    getFunctionCallOutputText() {
-      return functionCallOutputText;
+    getFirstRequestTools() {
+      return JSON.parse(JSON.stringify(firstRequestTools));
+    },
+    getApplyPatchCallOutputText() {
+      return applyPatchCallOutputText;
     },
     async close() {
       await new Promise((resolve) => server.close(() => resolve()));
@@ -536,7 +569,10 @@ async function main() {
       await page.goto(`${mockServer.origin}/`, { waitUntil: 'domcontentloaded' });
       result.steps.push('page_loaded');
     } else {
-      await reloadUnpackedExtension(context, { timeoutMs: 30_000 });
+      await reloadUnpackedExtension(context, {
+        timeoutMs: 30_000,
+        unpackedPath: repoRoot
+      });
       await page.goto(`${mockServer.origin}/`, { waitUntil: 'domcontentloaded' });
       result.steps.push('page_loaded');
     }
@@ -572,18 +608,29 @@ async function main() {
     });
     result.steps.push('tool_followup_observed');
 
+    result.firstRequestTools = mockServer.getFirstRequestTools();
     result.firstRequestToolNames = mockServer.getFirstRequestToolNames();
-    result.functionCallOutputText = mockServer.getFunctionCallOutputText();
+    result.applyPatchCallOutputText = mockServer.getApplyPatchCallOutputText();
 
-    const expectedTools = ['apply_patch', 'list_files', 'read_file', 'search_files', 'copy_file', 'move_file', 'delete_file'];
+    const expectedTools = ['apply_patch', 'list_files', 'read_file', 'search_files', 'copy_file', 'move_file'];
     for (const toolName of expectedTools) {
       if (!result.firstRequestToolNames.includes(toolName)) {
         throw new Error(`first request missing tool ${toolName}: ${JSON.stringify(result.firstRequestToolNames)}`);
       }
     }
+    if (result.firstRequestToolNames.includes('delete_file')) {
+      throw new Error(`first request unexpectedly exposed retired delete_file: ${JSON.stringify(result.firstRequestToolNames)}`);
+    }
+    const officialApplyPatchTools = result.firstRequestTools.filter((tool) => tool?.type === 'apply_patch');
+    if (officialApplyPatchTools.length !== 1 || Object.keys(officialApplyPatchTools[0]).join(',') !== 'type') {
+      throw new Error(`apply_patch must use the official schema-only declaration: ${JSON.stringify(officialApplyPatchTools)}`);
+    }
+    if (result.firstRequestTools.some((tool) => tool?.type === 'function' && tool?.name === 'apply_patch')) {
+      throw new Error('first request still exposed the retired custom apply_patch function.');
+    }
     for (const requiredPath of [MD_DOC_PATH, TXT_DOC_PATH, CODE_DOC_PATH, HTML_DOC_PATH]) {
-      if (!result.functionCallOutputText.includes(requiredPath)) {
-        throw new Error(`apply_patch follow-up output missing ${requiredPath}: ${result.functionCallOutputText}`);
+      if (!result.applyPatchCallOutputText.includes(requiredPath)) {
+        throw new Error(`apply_patch follow-up output missing ${requiredPath}: ${result.applyPatchCallOutputText}`);
       }
     }
 

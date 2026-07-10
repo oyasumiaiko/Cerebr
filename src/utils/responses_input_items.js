@@ -33,6 +33,31 @@ function cloneDataSafely(value) {
 }
 
 /**
+ * 这些 Responses item 的 `status` 不是一次响应内的展示噪音，而是无状态重放协议的
+ * 必需字段。普通 message / function_call 等 item 仍沿用旧策略移除 status，避免扩大
+ * 历史体积；官方 apply_patch call/output 则必须原样保留，才能再次放回 `/responses.input`。
+ */
+const RESPONSES_REPLAY_ITEM_TYPES_WITH_REQUIRED_STATUS = new Set([
+  'apply_patch_call',
+  'apply_patch_call_output'
+]);
+
+/**
+ * 本地负责闭环的 Responses 工具协议。
+ *
+ * family 用于避免极端情况下不同协议复用同一个 call_id 时互相误配；side 则统一描述
+ * call/output 两端，让未闭环过滤不再随着每种工具新增一组布尔字段。
+ */
+const RESPONSES_REPLAY_TOOL_PAIR_DESCRIPTOR_BY_TYPE = Object.freeze({
+  function_call: Object.freeze({ family: 'function', side: 'call' }),
+  function_call_output: Object.freeze({ family: 'function', side: 'output' }),
+  custom_tool_call: Object.freeze({ family: 'custom_tool', side: 'call' }),
+  custom_tool_call_output: Object.freeze({ family: 'custom_tool', side: 'output' }),
+  apply_patch_call: Object.freeze({ family: 'apply_patch', side: 'call' }),
+  apply_patch_call_output: Object.freeze({ family: 'apply_patch', side: 'output' })
+});
+
+/**
  * 为可重放 item 生成稳定去重键。
  *
  * 优先级：
@@ -80,7 +105,8 @@ export function getResponsesReplayItemKey(item, fallbackIndex = 0) {
  * 清洗一个可重放 item。
  *
  * 当前策略：
- * - 删除 `id` / `item_id` / `status` 这类服务端运行态字段；
+ * - 删除 `id` / `item_id` 这类服务端运行态字段；
+ * - 普通 item 删除 `status`，但官方 apply_patch call/output 必须保留协议要求的 status；
  * - 保留 `call_id` / `name` / `arguments` / `output` 等真正有上下文意义的字段；
  * - 丢弃“完全空”的 reasoning item，避免把无意义占位继续带进后续 prompt。
  *
@@ -97,11 +123,17 @@ export function sanitizeResponsesReplayItem(item) {
     return null;
   }
 
+  const type = String(cloned.type || '').trim().toLowerCase();
   delete cloned.id;
   delete cloned.item_id;
-  delete cloned.status;
+  if (!RESPONSES_REPLAY_ITEM_TYPES_WITH_REQUIRED_STATUS.has(type)) {
+    delete cloned.status;
+  }
+  if (type === 'apply_patch_call' || type === 'apply_patch_call_output') {
+    // created_by 只存在于服务端输出 item，不属于 ResponseInputItem 的官方输入形状。
+    delete cloned.created_by;
+  }
 
-  const type = String(cloned.type || '').trim().toLowerCase();
   if (type === 'image_generation_call') {
     // 生图结果本身可能是很大的 base64 PNG，也可能已被本地化成 file:// 引用；
     // 历史重放不保存图片字节，但保留本地化引用，供请求构造阶段在同一个
@@ -190,6 +222,48 @@ function getNormalizedResponsesReplayItemType(item) {
     : '';
 }
 
+function isValidApplyPatchReplayItem(item, type) {
+  const status = (typeof item?.status === 'string') ? item.status.trim().toLowerCase() : '';
+  if (type === 'apply_patch_call_output') {
+    const hasValidStatus = status === 'completed' || status === 'failed';
+    const hasValidOutput = !Object.prototype.hasOwnProperty.call(item || {}, 'output')
+      || item.output == null
+      || typeof item.output === 'string';
+    return hasValidStatus && hasValidOutput;
+  }
+  if (type !== 'apply_patch_call') return true;
+  if (status !== 'in_progress' && status !== 'completed') return false;
+
+  const operation = item?.operation;
+  if (!operation || typeof operation !== 'object' || Array.isArray(operation)) return false;
+  const operationType = (typeof operation.type === 'string') ? operation.type.trim().toLowerCase() : '';
+  const operationPath = (typeof operation.path === 'string') ? operation.path.trim() : '';
+  if (!operationPath || !['create_file', 'update_file', 'delete_file'].includes(operationType)) {
+    return false;
+  }
+  if ((operationType === 'create_file' || operationType === 'update_file') && typeof operation.diff !== 'string') {
+    return false;
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(item, 'caller')
+    && item.caller != null
+    && (
+      typeof item.caller !== 'object'
+      || Array.isArray(item.caller)
+      || String(item.caller.type || '').trim().toLowerCase() !== 'direct'
+    )
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function isValidResponsesReplayClientToolItem(item, type, descriptor) {
+  if (!descriptor) return true;
+  if (!getNormalizedResponsesReplayCallId(item)) return false;
+  return descriptor.family !== 'apply_patch' || isValidApplyPatchReplayItem(item, type);
+}
+
 /**
  * 过滤“跨 turn 历史重放”里未闭环的本地工具调用 item。
  *
@@ -208,63 +282,47 @@ function getNormalizedResponsesReplayItemType(item) {
  * @param {any} items
  * @returns {Array<Object>}
  */
-export function filterIncompleteResponsesToolCallReplayItems(items) {
+export function filterIncompleteResponsesClientToolReplayItems(items) {
   const normalizedItems = cloneResponsesInputItems(items);
   if (normalizedItems.length <= 0) {
     return [];
   }
 
-  const callPairStateById = new Map();
+  const callPairStateByKey = new Map();
   normalizedItems.forEach((item) => {
     const type = getNormalizedResponsesReplayItemType(item);
+    const descriptor = RESPONSES_REPLAY_TOOL_PAIR_DESCRIPTOR_BY_TYPE[type];
+    if (!descriptor || !isValidResponsesReplayClientToolItem(item, type, descriptor)) return;
     const callId = getNormalizedResponsesReplayCallId(item);
-    if (!callId) return;
 
-    if (
-      type !== 'function_call'
-      && type !== 'function_call_output'
-      && type !== 'custom_tool_call'
-      && type !== 'custom_tool_call_output'
-    ) {
-      return;
-    }
-
-    const pairState = callPairStateById.get(callId) || {
-      hasFunctionCall: false,
-      hasFunctionCallOutput: false,
-      hasCustomToolCall: false,
-      hasCustomToolCallOutput: false
+    const pairKey = `${descriptor.family}:${callId}`;
+    const pairState = callPairStateByKey.get(pairKey) || {
+      hasCall: false,
+      hasOutput: false
     };
-
-    if (type === 'function_call') {
-      pairState.hasFunctionCall = true;
-    } else if (type === 'function_call_output') {
-      pairState.hasFunctionCallOutput = true;
-    } else if (type === 'custom_tool_call') {
-      pairState.hasCustomToolCall = true;
-    } else if (type === 'custom_tool_call_output') {
-      pairState.hasCustomToolCallOutput = true;
+    if (descriptor.side === 'call') {
+      pairState.hasCall = true;
+    } else {
+      pairState.hasOutput = true;
     }
-
-    callPairStateById.set(callId, pairState);
+    callPairStateByKey.set(pairKey, pairState);
   });
 
   return normalizedItems.filter((item) => {
     const type = getNormalizedResponsesReplayItemType(item);
+    const descriptor = RESPONSES_REPLAY_TOOL_PAIR_DESCRIPTOR_BY_TYPE[type];
+    if (!descriptor) return true;
+    if (!isValidResponsesReplayClientToolItem(item, type, descriptor)) return false;
     const callId = getNormalizedResponsesReplayCallId(item);
-    if (!callId) return true;
-
-    const pairState = callPairStateById.get(callId);
-    if (!pairState) return true;
-
-    if (type === 'function_call' || type === 'function_call_output') {
-      return pairState.hasFunctionCall && pairState.hasFunctionCallOutput;
-    }
-
-    if (type === 'custom_tool_call' || type === 'custom_tool_call_output') {
-      return pairState.hasCustomToolCall && pairState.hasCustomToolCallOutput;
-    }
-
-    return true;
+    const pairState = callPairStateByKey.get(`${descriptor.family}:${callId}`);
+    return !!(pairState?.hasCall && pairState?.hasOutput);
   });
+}
+
+/**
+ * 旧导出名继续保留，避免 API 请求构建链与第三方调用方在协议扩展后被迫同步改名。
+ * 实际过滤范围已经覆盖 function/custom/apply_patch 三类客户端工具闭环。
+ */
+export function filterIncompleteResponsesToolCallReplayItems(items) {
+  return filterIncompleteResponsesClientToolReplayItems(items);
 }

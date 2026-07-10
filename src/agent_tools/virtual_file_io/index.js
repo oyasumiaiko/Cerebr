@@ -2,7 +2,7 @@
  * 统一虚拟文件工具。
  *
  * 说明：
- * - 顶层公开给模型的文件工具统一为 `apply_patch` / `list_files` / `read_file` / `search_files`；
+ * - 顶层 function 文件工具只负责列出、读取、搜索、复制和移动；写入统一走 Responses 官方 apply_patch 协议；
  * - 文件工具通过结构化 `target` 选择 skill，默认当前对话文件区；本地映射通过 `local/...` 路径进入；
  * - 会话文件仍在侧栏本地 IndexedDB 执行；local 文件实时读取用户授权 handle；skill 文件复用现有 skill package / background 执行链路；
  * - UI 为了编辑对话文档与完整查看，会额外复用 `write_file` / `read_file_full` 两个内部 action。
@@ -13,7 +13,6 @@
  * - 这样既能保持外部调用稳定，也能让 tool-family 内部不再继续扁平堆叠。
  */
 
-import { derivePatchedFileContent, parseApplyPatch } from '../shared/apply_patch_core.js';
 import {
   getConversationDocument,
   listConversationDocuments,
@@ -22,10 +21,8 @@ import {
 } from '../../storage/conversation_document_store.js';
 import { listLocalFileMounts } from '../../storage/local_file_mount_store.js';
 import {
-  CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
   CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME,
   CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
-  CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_INTERNAL_READ_FILE_FULL_ACTION,
   CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION,
   CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
@@ -36,9 +33,7 @@ import {
   CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS,
   CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
   CONVERSATION_DOCUMENT_SEARCH_MAX_RESULTS,
-  VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
   VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
-  VIRTUAL_FILE_DELETE_FILE_TOOL_NAME,
   VIRTUAL_FILE_INTERNAL_ACTIONS,
   VIRTUAL_FILE_LIST_FILES_TOOL_NAME,
   VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
@@ -69,11 +64,6 @@ import {
   normalizeConversationDocumentPath
 } from './document_path.js';
 import {
-  buildConversationDocumentApplyPatchFunctionToolDefinition,
-  buildVirtualFileApplyPatchFunctionToolDefinition,
-  normalizeVirtualFileApplyPatchArguments
-} from './apply_patch.js';
-import {
   buildConversationDocumentListFilesFunctionToolDefinition,
   buildVirtualFileListFilesFunctionToolDefinition,
   normalizeVirtualFileListFilesArguments
@@ -90,28 +80,27 @@ import {
 } from './search_files.js';
 import {
   buildConversationDocumentCopyFileFunctionToolDefinition,
-  buildConversationDocumentDeleteFileFunctionToolDefinition,
   buildConversationDocumentMoveFileFunctionToolDefinition,
   buildVirtualFileCopyFileFunctionToolDefinition,
-  buildVirtualFileDeleteFileFunctionToolDefinition,
   buildVirtualFileMoveFileFunctionToolDefinition,
   normalizeVirtualFileCopyFileArguments,
-  normalizeVirtualFileDeleteFileArguments,
   normalizeVirtualFileMoveFileArguments
 } from './file_ops.js';
 import {
-  assertPatchDoesNotTouchLocalPaths,
   assertWritableWorkspacePath,
   isLocalVirtualPath,
   listLocalVirtualFileDocuments,
   readLocalVirtualFileDocument
 } from './local_mount.js';
+import {
+  OPENAI_APPLY_PATCH_TOOL_TYPE,
+  applyOpenAIApplyPatchDiff,
+  normalizeOpenAIApplyPatchOperation
+} from './openai_apply_patch.js';
 
 export {
-  CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
   CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME,
   CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
-  CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_INTERNAL_READ_FILE_FULL_ACTION,
   CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION,
   CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
@@ -122,9 +111,7 @@ export {
   CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS,
   CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
   CONVERSATION_DOCUMENT_SEARCH_MAX_RESULTS,
-  VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
   VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
-  VIRTUAL_FILE_DELETE_FILE_TOOL_NAME,
   VIRTUAL_FILE_LIST_FILES_TOOL_NAME,
   VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
   VIRTUAL_FILE_READ_FILE_TOOL_NAME,
@@ -140,8 +127,6 @@ export {
   normalizeConversationDocumentPath,
   normalizeConversationDocumentHrefPath,
   buildConversationDocumentCollisionPath,
-  buildVirtualFileApplyPatchFunctionToolDefinition,
-  buildConversationDocumentApplyPatchFunctionToolDefinition,
   buildVirtualFileListFilesFunctionToolDefinition,
   buildConversationDocumentListFilesFunctionToolDefinition,
   buildVirtualFileReadFileFunctionToolDefinition,
@@ -151,9 +136,7 @@ export {
   buildVirtualFileCopyFileFunctionToolDefinition,
   buildConversationDocumentCopyFileFunctionToolDefinition,
   buildVirtualFileMoveFileFunctionToolDefinition,
-  buildConversationDocumentMoveFileFunctionToolDefinition,
-  buildVirtualFileDeleteFileFunctionToolDefinition,
-  buildConversationDocumentDeleteFileFunctionToolDefinition
+  buildConversationDocumentMoveFileFunctionToolDefinition
 };
 
 function normalizeConversationId(value) {
@@ -627,102 +610,6 @@ function findDocumentIndex(documents, path) {
   return documents.findIndex((doc) => doc.path === path);
 }
 
-function applyConversationDocumentPatch(documents, patch) {
-  const { hunks } = parseApplyPatch(patch, { mode: 'strict' });
-  if (hunks.length <= 0) {
-    throw new Error('No files were modified.');
-  }
-
-  const nextDocuments = normalizeDocumentRecords(documents);
-  const affectedFiles = {
-    added: [],
-    modified: [],
-    deleted: []
-  };
-  const renamedTargets = [];
-  const patchTime = new Date().toISOString();
-
-  for (const hunk of hunks) {
-    if (hunk.type === 'add_file') {
-      const requestedPath = normalizeConversationDocumentPath(hunk.path);
-      const finalPath = buildConversationDocumentCollisionPath(
-        requestedPath,
-        nextDocuments.map((doc) => doc.path)
-      );
-      nextDocuments.push(normalizeDocumentRecord({
-        path: finalPath,
-        content: hunk.contents,
-        updated_at: patchTime
-      }, patchTime));
-      nextDocuments.sort((left, right) => left.path.localeCompare(right.path));
-      affectedFiles.added.push(finalPath);
-      if (finalPath !== requestedPath) {
-        renamedTargets.push({
-          requested_path: requestedPath,
-          final_path: finalPath,
-          reason: 'collision'
-        });
-      }
-      continue;
-    }
-
-    if (hunk.type === 'delete_file') {
-      const targetPath = normalizeConversationDocumentPath(hunk.path);
-      const existingIndex = findDocumentIndex(nextDocuments, targetPath);
-      if (existingIndex < 0) {
-        throw new Error(`Failed to delete file ${targetPath}`);
-      }
-      nextDocuments.splice(existingIndex, 1);
-      affectedFiles.deleted.push(targetPath);
-      continue;
-    }
-
-    if (hunk.type === 'update_file') {
-      const sourcePath = normalizeConversationDocumentPath(hunk.path);
-      const sourceIndex = findDocumentIndex(nextDocuments, sourcePath);
-      if (sourceIndex < 0) {
-        throw new Error(`Failed to read file to update ${sourcePath}`);
-      }
-      const sourceDocument = nextDocuments[sourceIndex];
-      const nextContent = derivePatchedFileContent(sourceDocument.content, sourcePath, hunk.chunks);
-      const requestedTargetPath = hunk.move_path
-        ? normalizeConversationDocumentPath(hunk.move_path)
-        : sourcePath;
-      const finalTargetPath = buildConversationDocumentCollisionPath(
-        requestedTargetPath,
-        nextDocuments.map((doc) => doc.path),
-        { excludedPath: sourcePath }
-      );
-      const nextRecord = normalizeDocumentRecord({
-        path: finalTargetPath,
-        content: nextContent,
-        updated_at: patchTime
-      }, patchTime);
-
-      nextDocuments[sourceIndex] = nextRecord;
-      nextDocuments.sort((left, right) => left.path.localeCompare(right.path));
-      affectedFiles.modified.push(finalTargetPath);
-      if (finalTargetPath !== requestedTargetPath) {
-        renamedTargets.push({
-          requested_path: requestedTargetPath,
-          final_path: finalTargetPath,
-          reason: 'collision'
-        });
-      }
-    }
-  }
-
-  return {
-    documents: nextDocuments,
-    affected_files: {
-      added: Array.from(new Set(affectedFiles.added)),
-      modified: Array.from(new Set(affectedFiles.modified)),
-      deleted: Array.from(new Set(affectedFiles.deleted))
-    },
-    renamed_targets: renamedTargets
-  };
-}
-
 function buildChangeEventPayload(conversationId, action, options = {}) {
   const updatedPaths = Array.isArray(options.updated_paths)
     ? Array.from(new Set(options.updated_paths.map((value) => {
@@ -767,6 +654,66 @@ function ensureStore(store = null) {
     throw new Error(`当前环境没有可用的 conversation file store，缺少方法：${missing.join(', ')}`);
   }
   return resolved;
+}
+
+/**
+ * 将一个官方 apply_patch 单文件 operation 纯函数式地应用到会话文档快照。
+ *
+ * 与旧 Codex 多文件 patch 的重要差异：
+ * - create_file 遇到同名目标必须失败，不能静默生成 `name (2).ext`；
+ * - update_file 使用 OpenAI 官方 V4A 算法，不强制补尾换行；
+ * - 每个 operation 自身原子，只有全部校验和 diff 应用成功后才返回新快照。
+ */
+export function applyOpenAIApplyPatchOperationToConversationDocuments(documents, rawOperation, options = {}) {
+  const operation = normalizeOpenAIApplyPatchOperation(rawOperation);
+  const path = normalizeConversationDocumentPath(operation.path);
+  const nextDocuments = normalizeDocumentRecords(documents);
+  const existingIndex = findDocumentIndex(nextDocuments, path);
+  const patchTime = toIsoTimestamp(options?.now) || new Date().toISOString();
+  const affectedFiles = {
+    added: [],
+    modified: [],
+    deleted: []
+  };
+
+  if (operation.type === 'create_file') {
+    if (existingIndex >= 0) {
+      throw new Error(`当前对话中已存在文件 ${path}，无法 create_file。`);
+    }
+    const content = applyOpenAIApplyPatchDiff('', { ...operation, path });
+    nextDocuments.push(normalizeDocumentRecord({
+      path,
+      content,
+      updated_at: patchTime
+    }, patchTime));
+    affectedFiles.added.push(path);
+  } else if (operation.type === 'update_file') {
+    if (existingIndex < 0) {
+      throw new Error(`当前对话中不存在文件 ${path}，无法 update_file。`);
+    }
+    const existing = nextDocuments[existingIndex];
+    const content = applyOpenAIApplyPatchDiff(existing.content, { ...operation, path });
+    nextDocuments[existingIndex] = normalizeDocumentRecord({
+      ...existing,
+      path,
+      content,
+      updated_at: patchTime
+    }, patchTime);
+    affectedFiles.modified.push(path);
+  } else {
+    if (existingIndex < 0) {
+      throw new Error(`当前对话中不存在文件 ${path}，无法 delete_file。`);
+    }
+    nextDocuments.splice(existingIndex, 1);
+    affectedFiles.deleted.push(path);
+  }
+
+  nextDocuments.sort((left, right) => left.path.localeCompare(right.path));
+  return {
+    operation: { ...operation, path },
+    documents: nextDocuments,
+    affected_files: affectedFiles
+  };
 }
 
 function createDefaultLocalFileMountStore() {
@@ -851,10 +798,8 @@ export function isConversationDocumentToolAction(action) {
 
 export function isConversationDocumentMutationAction(action) {
   const normalized = normalizeString(action).toLowerCase();
-  return normalized === VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME
-    || normalized === VIRTUAL_FILE_COPY_FILE_TOOL_NAME
+  return normalized === VIRTUAL_FILE_COPY_FILE_TOOL_NAME
     || normalized === VIRTUAL_FILE_MOVE_FILE_TOOL_NAME
-    || normalized === VIRTUAL_FILE_DELETE_FILE_TOOL_NAME
     || normalized === CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION;
 }
 
@@ -865,10 +810,8 @@ export function normalizeVirtualFileToolArguments(action, rawArgs, options = {})
     throw new Error(`virtual_file 参数错误：不支持的 action \`${action}\`。`);
   }
 
-  const requireSkillName = normalizedAction === VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME
-    || normalizedAction === VIRTUAL_FILE_COPY_FILE_TOOL_NAME
+  const requireSkillName = normalizedAction === VIRTUAL_FILE_COPY_FILE_TOOL_NAME
     || normalizedAction === VIRTUAL_FILE_MOVE_FILE_TOOL_NAME
-    || normalizedAction === VIRTUAL_FILE_DELETE_FILE_TOOL_NAME
     || normalizedAction === VIRTUAL_FILE_READ_FILE_TOOL_NAME;
   const target = normalizeVirtualFileTarget(args.target, {
     defaultKind: options?.defaultTargetKind || VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
@@ -876,8 +819,6 @@ export function normalizeVirtualFileToolArguments(action, rawArgs, options = {})
   });
 
   switch (normalizedAction) {
-    case VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME:
-      return normalizeVirtualFileApplyPatchArguments(args, target);
     case VIRTUAL_FILE_LIST_FILES_TOOL_NAME:
       return normalizeVirtualFileListFilesArguments(args, target);
     case VIRTUAL_FILE_READ_FILE_TOOL_NAME:
@@ -888,8 +829,6 @@ export function normalizeVirtualFileToolArguments(action, rawArgs, options = {})
       return normalizeVirtualFileCopyFileArguments(args, target);
     case VIRTUAL_FILE_MOVE_FILE_TOOL_NAME:
       return normalizeVirtualFileMoveFileArguments(args, target);
-    case VIRTUAL_FILE_DELETE_FILE_TOOL_NAME:
-      return normalizeVirtualFileDeleteFileArguments(args, target);
     default:
       throw new Error(`virtual_file 参数错误：未处理的 action \`${action}\`。`);
   }
@@ -898,8 +837,6 @@ export function normalizeVirtualFileToolArguments(action, rawArgs, options = {})
 export function buildConversationDocumentActionPayloadFromVirtualFileAction(action, normalizedArgs) {
   const input = ensurePlainObject(normalizedArgs);
   switch (normalizeString(action).toLowerCase()) {
-    case VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME:
-      return { patch: input.patch || '' };
     case VIRTUAL_FILE_LIST_FILES_TOOL_NAME:
       return { path_glob: input.path_glob || null };
     case VIRTUAL_FILE_READ_FILE_TOOL_NAME:
@@ -928,10 +865,6 @@ export function buildConversationDocumentActionPayloadFromVirtualFileAction(acti
         source_path: input.source_path,
         destination_path: input.destination_path
       };
-    case VIRTUAL_FILE_DELETE_FILE_TOOL_NAME:
-      return {
-        file_path: input.file_path
-      };
     default:
       throw new Error(`virtual_file 参数错误：未处理的会话文件 action \`${action}\`。`);
   }
@@ -944,12 +877,6 @@ export function buildSkillRegistryFileActionPayloadFromVirtualFileAction(action,
     skill_name: normalizeOptionalString(target.name)
   };
   switch (normalizeString(action).toLowerCase()) {
-    case VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME:
-      return {
-        action: 'apply_patch',
-        ...payload,
-        patch: input.patch || ''
-      };
     case VIRTUAL_FILE_LIST_FILES_TOOL_NAME:
       return {
         action: 'list_files',
@@ -990,12 +917,6 @@ export function buildSkillRegistryFileActionPayloadFromVirtualFileAction(action,
         source_file_path: input.source_path,
         destination_file_path: input.destination_path
       };
-    case VIRTUAL_FILE_DELETE_FILE_TOOL_NAME:
-      return {
-        action: 'delete_file',
-        ...payload,
-        file_path: input.file_path
-      };
     default:
       throw new Error(`virtual_file 参数错误：未处理的 skill action \`${action}\`。`);
   }
@@ -1019,25 +940,6 @@ function normalizeActionArgs(action, rawArgs, options = {}) {
   };
 
   switch (normalizedAction) {
-    case CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME:
-      if (!normalizeString(args.patch)) {
-        throw new Error('virtual_file 参数错误：apply_patch 需要 patch。');
-      }
-      return {
-        action: normalizedAction,
-        patch: String(args.patch || ''),
-        file_path: null,
-        pattern: null,
-        read_options: null,
-        include_line_numbers: false,
-        path_glob: null,
-        regex: false,
-        case_mode: 'smart',
-        context_before: 0,
-        context_after: 0,
-        max_results: CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS,
-        content: null
-      };
     case CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME:
       return {
         action: normalizedAction,
@@ -1114,24 +1016,6 @@ function normalizeActionArgs(action, rawArgs, options = {}) {
         file_path: null,
         source_path: normalizeConversationDocumentPath(args.source_path),
         destination_path: normalizeConversationDocumentPath(args.destination_path),
-        pattern: null,
-        read_options: null,
-        include_line_numbers: false,
-        path_glob: null,
-        regex: false,
-        case_mode: 'smart',
-        context_before: 0,
-        context_after: 0,
-        max_results: CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS,
-        content: null
-      };
-    case CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME:
-      return {
-        action: normalizedAction,
-        patch: null,
-        file_path: normalizeConversationDocumentPath(args.file_path),
-        source_path: null,
-        destination_path: null,
         pattern: null,
         read_options: null,
         include_line_numbers: false,
@@ -1466,34 +1350,6 @@ export async function executeConversationDocumentAction(action, rawArgs, options
         })
       };
     }
-    case CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME: {
-      assertWritableWorkspacePath(normalizedArgs.file_path, 'delete_file');
-      const existingDocuments = normalizeDocumentRecords(await store.listDocuments(conversationId));
-      findRequiredConversationDocument(
-        existingDocuments,
-        normalizedArgs.file_path,
-        'delete_file'
-      );
-      const persistedDocuments = await store.replaceDocuments(
-        conversationId,
-        existingDocuments.filter((doc) => doc.path !== normalizedArgs.file_path)
-      );
-      return {
-        ok: true,
-        action: normalizedAction,
-        conversation_id: conversationId,
-        deleted_path: normalizedArgs.file_path,
-        files: buildDocumentManifest(persistedDocuments),
-        affected_files: {
-          added: [],
-          modified: [],
-          deleted: [normalizedArgs.file_path]
-        },
-        change_event: buildChangeEventPayload(conversationId, normalizedAction, {
-          deleted_paths: [normalizedArgs.file_path]
-        })
-      };
-    }
     case CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION: {
       assertWritableWorkspacePath(normalizedArgs.file_path, 'write_file');
       const nextRecord = await store.putDocument(conversationId, {
@@ -1517,30 +1373,47 @@ export async function executeConversationDocumentAction(action, rawArgs, options
         })
       };
     }
-    case CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME: {
-      assertPatchDoesNotTouchLocalPaths(normalizedArgs.patch);
-      const existingDocuments = await store.listDocuments(conversationId);
-      const patched = applyConversationDocumentPatch(existingDocuments, normalizedArgs.patch);
-      const persistedDocuments = await store.replaceDocuments(conversationId, patched.documents);
-      return {
-        ok: true,
-        action: normalizedAction,
-        conversation_id: conversationId,
-        files: buildDocumentManifest(persistedDocuments),
-        affected_files: patched.affected_files,
-        renamed_targets: patched.renamed_targets,
-        change_event: buildChangeEventPayload(conversationId, normalizedAction, {
-          updated_paths: [
-            ...patched.affected_files.added,
-            ...patched.affected_files.modified
-          ],
-          deleted_paths: patched.affected_files.deleted
-        })
-      };
-    }
     default:
       throw new Error(`virtual_file 参数错误：未处理的 action \`${action}\`。`);
   }
+}
+
+/**
+ * 执行一个 Responses API 官方 apply_patch operation。
+ *
+ * 这条入口刻意独立于旧的 function `apply_patch` action：官方协议一次只处理一个
+ * operation，并要求客户端逐 call_id 回传 completed/failed。存储写入仍复用会话文档
+ * store 的整表替换，从而保证单 operation 原子提交。
+ */
+export async function executeConversationDocumentOpenAIApplyPatchOperation(rawOperation, options = {}) {
+  const conversationId = normalizeConversationId(options?.conversationId);
+  const store = ensureStore(options?.store || null);
+  const existingDocuments = await store.listDocuments(conversationId);
+  const patched = applyOpenAIApplyPatchOperationToConversationDocuments(
+    existingDocuments,
+    rawOperation,
+    { now: options?.now }
+  );
+  const persistedDocuments = await store.replaceDocuments(conversationId, patched.documents);
+  return {
+    ok: true,
+    action: OPENAI_APPLY_PATCH_TOOL_TYPE,
+    conversation_id: conversationId,
+    target: {
+      kind: VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
+      name: null
+    },
+    operation: patched.operation,
+    files: buildDocumentManifest(persistedDocuments),
+    affected_files: patched.affected_files,
+    change_event: buildChangeEventPayload(conversationId, OPENAI_APPLY_PATCH_TOOL_TYPE, {
+      updated_paths: [
+        ...patched.affected_files.added,
+        ...patched.affected_files.modified
+      ],
+      deleted_paths: patched.affected_files.deleted
+    })
+  };
 }
 
 function normalizeSkillRegistryFileRecord(file, fallbackSkillName = null) {
@@ -1642,33 +1515,6 @@ export function normalizeVirtualFileResultFromSkillRegistryAction(action, rawRes
       target,
       source_path: normalizeOptionalString(result.source_file_path || normalizedArgs?.source_path) || '',
       destination_path: normalizeOptionalString(result.destination_file_path || normalizedArgs?.destination_path) || '',
-      affected_files: ensurePlainObject(result.affected_files),
-      files: ensurePlainObject(result.files),
-      skill: ensurePlainObject(result.skill),
-      refreshed_current_document: result.refreshed_current_document === true,
-      refresh_result: result.refresh_result || null
-    };
-  }
-
-  if (normalizedAction === VIRTUAL_FILE_DELETE_FILE_TOOL_NAME) {
-    return {
-      ok: true,
-      action: normalizedAction,
-      target,
-      deleted_path: normalizeOptionalString(result.deleted_file_path || normalizedArgs?.file_path) || '',
-      affected_files: ensurePlainObject(result.affected_files),
-      files: ensurePlainObject(result.files),
-      skill: ensurePlainObject(result.skill),
-      refreshed_current_document: result.refreshed_current_document === true,
-      refresh_result: result.refresh_result || null
-    };
-  }
-
-  if (normalizedAction === VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME) {
-    return {
-      ok: true,
-      action: normalizedAction,
-      target,
       affected_files: ensurePlainObject(result.affected_files),
       files: ensurePlainObject(result.files),
       skill: ensurePlainObject(result.skill),

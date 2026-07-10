@@ -72,7 +72,11 @@ function sanitizeCompactReplayInputItem(item) {
   if (!cloned || typeof cloned !== 'object' || Array.isArray(cloned)) return null;
 
   const type = String(cloned.type || '').trim().toLowerCase();
-  if (type === 'function_call_output' || type === 'custom_tool_call_output') {
+  if (
+    type === 'function_call_output'
+    || type === 'custom_tool_call_output'
+    || type === 'apply_patch_call_output'
+  ) {
     cloned.output = sanitizeCompactFunctionOutputPayload(cloned.output);
   }
   return cloned;
@@ -95,7 +99,11 @@ function buildCompactRequestSummaryObject(requestBody) {
 
   input.forEach((item) => {
     const type = String(item?.type || '').trim().toLowerCase();
-    if (type !== 'function_call_output' && type !== 'custom_tool_call_output') return;
+    if (
+      type !== 'function_call_output'
+      && type !== 'custom_tool_call_output'
+      && type !== 'apply_patch_call_output'
+    ) return;
     functionCallOutputCount += 1;
     const size = estimateJsonSerializedBytes(item?.output);
     if (!Number.isFinite(size) || size <= 0) return;

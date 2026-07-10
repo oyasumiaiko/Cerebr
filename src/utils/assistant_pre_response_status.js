@@ -195,7 +195,12 @@ export function deriveAssistantPreResponseStatusFromResponsesSse(eventType, data
       );
     }
 
-    if (itemType === 'function_call' || itemType === 'web_search_call' || itemType === 'tool_search_call') {
+    if (
+      itemType === 'function_call'
+      || itemType === 'apply_patch_call'
+      || itemType === 'web_search_call'
+      || itemType === 'tool_search_call'
+    ) {
       return createAssistantPreResponseStatus(
         '模型正在准备工具调用...',
         'responses_tool_call'

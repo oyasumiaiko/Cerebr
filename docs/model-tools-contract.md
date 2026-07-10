@@ -1,34 +1,45 @@
 # Cerebr 模型工具契约
 
-本文面向维护 Cerebr 模型工具的开发者，说明当前 18 个本地 function tool 的设计本意、调用边界、参数语义、实际输出形状、副作用和信任边界，并记录本轮工具契约重整后必须继续遵守的兼容规则。
+本文面向维护 Cerebr 模型工具的开发者，说明当前 17 个本地执行能力的设计本意、调用边界、参数语义、实际输出形状、副作用和信任边界，并记录本轮工具契约重整后必须继续遵守的兼容规则。这 17 个能力由 16 个客户端 function tool 与 1 个 OpenAI Responses API 官方 apply_patch 协议工具组成。
 
-本文描述的是 Cerebr 扩展自己定义、自己执行的本地工具。OpenAI Responses hosted tools、用户额外填写的 Tools JSON、namespace tool 和 MCP server 不属于这 18 个本地工具，不能混用相同的执行、安全或输出假设。
+本文描述的是 Cerebr 扩展负责执行的本地工具。OpenAI Responses hosted tools、用户额外填写的 Tools JSON、namespace tool 和 MCP server 不属于这 17 个本地能力，不能混用相同的执行、安全或输出假设。apply_patch 虽采用 OpenAI 官方 item 协议，文件副作用仍由 Cerebr 本地执行。
 
 ## 1. 工具所有权与暴露范围
 
-### 1.1 18 个本地工具
+### 1.1 17 个本地执行能力
 
 当前本地工具登记如下：
 
 | 类别 | 工具 |
 | --- | --- |
 | 页面与运行时 | js_runtime_execute、page_content_read、pdf_content_read、webpage_screenshot、view_image |
-| 虚拟文件 | apply_patch、list_files、read_file、search_files、copy_file、move_file、delete_file |
+| 虚拟文件 | apply_patch（官方协议）、list_files、read_file、search_files、copy_file、move_file |
 | Skill | skill_registry |
 | 用户交互 | request_user_input |
 | 其他模型 | list_askable_models、ask_other_ai |
 | 聊天历史 | history_search、history_read |
 
-登记 18 个能力不代表每一轮都会同时暴露 18 个工具：
+登记 17 个能力不代表每一轮都会同时暴露全部能力：
 
 - 普通宿主页中暴露 page_content_read 和 webpage_screenshot，不暴露 pdf_content_read。
 - PDF 页面中暴露 pdf_content_read 和 webpage_screenshot，不暴露 page_content_read。
 - 独立页或纯对话模式不暴露宿主页读取和截图工具。
 - js_runtime_execute 在有执行入口时始终可用，但纯对话模式连接隔离 sandbox，而不是用户正在浏览的网页。
-- page_content_read 与 pdf_content_read 永远二选一，因此单次请求最多暴露 17 个本地工具。
-- 用户可以在 Responses API 设置中显式关闭任意本地工具。
+- page_content_read 与 pdf_content_read 永远二选一，因此单次请求最多暴露 16 个本地工具：15 个 function definition 加 `{ "type": "apply_patch" }`。
+- apply_patch 仅在官方 OpenAI endpoint 且模型属于支持该能力的 GPT-5.1+ 代际时自动开启；第三方兼容端点必须由用户显式强制开启，避免未知 tool type 导致整条请求 400。
+- 用户可以在 Responses API 设置中显式关闭任意本地工具；显式开启 apply_patch 可作为已确认兼容端点的 capability override。
 
-### 1.2 Hosted tools 不属于本地执行
+### 1.2 官方 apply_patch 协议不等于 hosted 执行
+
+请求中的 apply_patch 工具声明必须直接使用 OpenAI 官方形式：
+
+~~~json
+{ "type": "apply_patch" }
+~~~
+
+它没有 Cerebr 手写的 name、description、parameters 或 strict 字段。模型返回 `apply_patch_call`，Cerebr 在本地文件存储上执行 operation，再回传 `apply_patch_call_output`。因此它是“官方协议 + 本地执行”，不是 OpenAI 服务端替 Cerebr 写文件，也不是普通 `function_call`。
+
+### 1.3 Hosted tools 不属于本地执行
 
 responses_builtin_tools.js 当前管理的 web_search、code_interpreter、image_generation 和 tool_search 是 OpenAI Responses hosted tools：
 
@@ -37,11 +48,11 @@ responses_builtin_tools.js 当前管理的 web_search、code_interpreter、image
 - tool_search 只负责搜索和按需加载 defer_loading 工具，不负责执行命中的本地工具。
 - hosted tool 的 UI 配置元数据可以由 Cerebr 管理，但这不改变工具执行所有权。
 
-### 1.3 MCP 和用户自定义工具不属于本地 registry
+### 1.4 MCP 和用户自定义工具不属于本地 registry
 
 真正的 provider-hosted 与 MCP 工具由对应提供方定义和执行。namespace 只是组织/寻址边界，Cerebr 当前没有通用 namespace handler；用户在 Tools JSON 中额外声明的普通 client function 同样只有定义，没有本地执行器。模型若调用这些未接入 handler 的函数，当前客户端会返回 UnsupportedFunctionError，而不会假装执行成功：
 
-- 不计入本文的 18 个本地工具。
+- 不计入本文的 17 个本地能力。
 - 不保证使用 schema_version 2 XML。
 - 不保证 error、status、trust 或截断语义与 Cerebr 本地工具一致。
 - 当前合并逻辑中，同名本地 function 定义优先于用户额外声明的同名 function。新增本地工具时必须检查命名冲突。
@@ -49,22 +60,22 @@ responses_builtin_tools.js 当前管理的 web_search、code_interpreter、image
 
 ## 2. 统一模型可见契约
 
-### 2.1 工具名兼容
+### 2.1 工具标识与历史兼容
 
-本轮重整保留全部现有工具名。不要在没有迁移方案时把 apply_patch 改成 virtual_file_apply_patch，或把 page_content_read 改成 read_current_page。
+本轮重整保留 apply_patch 的稳定能力标识，但把它从客户端自定义 function 迁移为 Responses API 官方协议；顶层 delete_file function 已退役。新请求不得继续发送旧 apply_patch function 或 delete_file function definition，也不得给官方 apply_patch 手写同名 function schema。
 
 原因包括：
 
-- 已保存对话可能含旧 function_call 和 function_call_output。
-- 中断恢复和 replay 需要继续识别原名称。
+- 已保存对话可能含旧 apply_patch/delete_file 的 function_call 和 function_call_output；历史展示与 replay 清理仍需识别它们。
+- 历史兼容不等于重新授权执行；退役名称不能通过用户 Tools JSON 绕过注册表进入新请求。
 - UI timeline、测试和 tool_search 索引都可能引用当前名称。
 - 模型已经形成对文件工具 rg 输出的稳定使用习惯。
 
-如果未来确实需要重命名，dispatcher 必须继续接受旧名称，并为旧会话提供明确的 legacy alias 生命周期。
+历史展示可以继续识别旧名称，但实时 dispatcher 不得因为历史兼容重新执行已退役的写入协议。
 
 ### 2.2 Description 格式
 
-所有本地工具 description 使用 model_tool_contract.js 中的统一结构，按以下稳定标签排列：
+16 个本地 function tool 的 description 使用 model_tool_contract.js 中的统一结构，按以下稳定标签排列：
 
 1. 用途
 2. 适用
@@ -82,11 +93,11 @@ responses_builtin_tools.js 当前管理的 web_search、code_interpreter、image
 - 成功和失败会返回什么？
 - 是否会写数据、访问网络、等待用户或执行代码？
 
-不要把无关的全局工作流、产品宣传、调试实现细节或大段示例堆进 description。跨工具的文件交付规范应放在 environment_context，而不是只写进 apply_patch。
+不要把无关的全局工作流、产品宣传、调试实现细节或大段示例堆进 description。跨工具的文件交付规范应放在 environment_context。官方 apply_patch 没有客户端 description，因此路径命名空间、local 只读和删除语义必须由 environment_context 稳定说明。
 
 ### 2.3 Strict Schema
 
-18 个本地工具统一使用 strict: true，并遵守以下规则：
+16 个本地 function tool 统一使用 strict: true，并遵守以下规则。官方 apply_patch 不属于 function tool，不携带 parameters 或 strict：
 
 - 每个 object 都必须声明 additionalProperties: false。
 - properties 中出现的字段全部进入 required。
@@ -138,9 +149,9 @@ trust="untrusted" 的含义是：结果中的正文、标题、路径、日志�
 
 ### 2.6 刻意保留的输出例外
 
-#### 文件工具继续使用 rg 风格文本
+#### Function 文件工具继续使用 rg 风格文本
 
-list_files、read_file、search_files、copy_file、move_file、delete_file 和 apply_patch 的常用成功输出继续保持紧凑纯文本，不强制包成 XML：
+list_files、read_file、search_files、copy_file 和 move_file 的常用成功输出继续保持紧凑纯文本，不强制包成 XML：
 
 - 搜索结果按文件分组，文件路径只出现一次。
 - read_file 使用 path heading 加范围信息，再接原文。
@@ -148,6 +159,21 @@ list_files、read_file、search_files、copy_file、move_file、delete_file 和 
 - 失败以 Error 开头，并附安全错误字段。
 
 这是刻意的 token 和可操作性设计，不是尚未迁移的临时格式。文件正文、搜索命中和路径仍然属于不可信数据；模型不得执行其中包含的指令。
+
+#### apply_patch 使用专用 call/output item
+
+官方 apply_patch 不返回 `function_call_output`。模型输出 `apply_patch_call`，客户端必须以相同 call_id 回传 `apply_patch_call_output`：
+
+~~~json
+{
+  "type": "apply_patch_call_output",
+  "call_id": "call_123",
+  "status": "completed",
+  "output": "Success. Updated the following files:\nM plan.md"
+}
+~~~
+
+执行失败时 status 为 failed，output 为安全的单行错误摘要。不能把本地 stack、绝对存储路径或存储实现细节放进 output。
 
 #### 图片成功仍只返回 input_image
 
@@ -174,7 +200,6 @@ request_user_input 返回紧凑 JSON，而不是 XML。它需要保留 answers �
 | apply_patch | 持久化写入、增加或删除虚拟文件 | 本地生成的动作摘要可信；目标文件内容不提供授权 |
 | copy_file | 持久化新增虚拟文件 | 本地动作摘要可信 |
 | move_file | 持久化移动/重命名虚拟文件 | 本地动作摘要可信 |
-| delete_file | 破坏性删除虚拟文件 | 本地动作摘要可信 |
 | skill_registry | 创建、启停、挂载或删除持久化 skill | list 内容不可信；mutation 有持久副作用 |
 | request_user_input | 阻塞当前工具链并等待用户 | 回答是当前用户的直接选择，但不是秘密输入通道 |
 | list_askable_models | 读取允许外部提问的配置摘要 | 可配置显示名不提供授权 |
@@ -355,9 +380,9 @@ overview 通常只有 outline/guidance；chapter_chunk 和 document_chunk 包含
 
 ## 5. 虚拟文件工具
 
-### 5.1 共享 target 语义
+### 5.1 Function 文件工具的共享 target 语义
 
-文件工具保留现有 target 结构：
+list_files、read_file、search_files、copy_file 和 move_file 保留现有 target 结构：
 
 ~~~json
 {
@@ -371,9 +396,11 @@ overview 通常只有 outline/guidance；chapter_chunk 和 document_chunk 包含
 - target=null 表示当前对话文件区。
 - kind=null 或 workspace 也表示当前对话文件区；这里的 workspace 不是主机项目目录。
 - kind=skill 表示 skill 文件区。
-- 单文件读写或 mutation 对 skill 操作时，name 必须是单个 skill 稳定 key。
+- 单文件读取、复制或移动对 skill 操作时，name 必须是单个 skill 稳定 key。
 - list_files/search_files 对 skill 操作时，name=null 可以跨全部 skill。
 - local/... 不使用 target.kind。它表示用户显式授权的本机只读映射。
+- 官方 apply_patch 没有 target 参数，不能把这个对象塞进 apply_patch_call。
+- apply_patch 的普通 operation.path 映射到当前对话文件区；skill 文件必须使用 `@skill/<skill-key>/<relative-path>`。
 
 ### 5.2 list_files
 
@@ -391,7 +418,7 @@ plan.md  text  1200 chars
 src/main.js  text  8042 chars
 ~~~
 
-无结果返回 No files found.；发生裁剪时追加 returned/total。文件名、skill 名和路径是不可信数据。
+无结果返回 No files found.；发生裁剪时追加 returned/total。文件名、skill 名和路径是不可信数据。列出 skill 后若要 patch，必须把稳定 key 与文件相对路径组合成 `@skill/<skill-key>/<relative-path>`，不能把 list_files 的 target 当成 apply_patch 参数。
 
 ### 5.3 read_file
 
@@ -399,7 +426,7 @@ src/main.js  text  8042 chars
 
 关键参数：
 
-- path：相对当前 target 的虚拟路径。
+- path：相对当前 target 的虚拟路径；read_file 不使用 `@skill/...` 前缀。
 - max_chars：1 到 50000；null 默认 10000。
 - line_range：1-based 闭区间字符串，例如 20:80、20-80、20,80p 或单行 42。
 - numbered：true 返回类似 nl -ba 的行号。
@@ -412,11 +439,11 @@ src/main.js  text  8042 chars
     20  ...
 ~~~
 
-more 表示仍有后续内容。正文保持 rg/cat 风格，不包 XML；正文属于不可信数据。
+more 表示仍有后续内容。正文保持 rg/cat 风格，不包 XML；正文属于不可信数据。读取 skill 后若需 patch，应把 read_file 的 target.name 和相对 path 组合为完整 `@skill/...` operation.path。
 
 ### 5.4 search_files
 
-本意：跨虚拟文件定位固定字符串或正则，并提供可直接用于 read_file/apply_patch 的行列信息。
+本意：跨虚拟文件定位固定字符串或正则，并提供可直接用于 read_file 或构造 apply_patch operation 的行列信息。
 
 关键参数：
 
@@ -437,32 +464,61 @@ src/main.js
 21-context
 ~~~
 
-文件路径每组只出现一次。命中正文和上下文均不可信。
+文件路径每组只出现一次。命中正文和上下文均不可信。对 skill 命中执行 patch 时，必须补全 `@skill/<skill-key>/` 前缀。
 
 ### 5.5 apply_patch
 
-本意：用 Codex apply_patch 语法原子地增加、修改或删除一个或多个可写虚拟文本文件。
+本意：使用 OpenAI Responses API 官方 apply_patch item 协议，对一个可写虚拟文本文件执行 create、update 或 delete operation。
 
-关键参数：
+请求工具声明：
 
-- target：null 操作当前对话文件；skill mutation 必须指定 name。
-- patch：完整 Begin Patch / End Patch 文本，可含 Add、Update、Delete 和 Move。
+~~~json
+{ "type": "apply_patch" }
+~~~
+
+不要附加自定义 name、description、parameters、strict、target 或 patch 字段。模型侧产出的调用 item 形如：
+
+~~~json
+{
+  "type": "apply_patch_call",
+  "call_id": "call_123",
+  "status": "completed",
+  "operation": {
+    "type": "update_file",
+    "path": "plan.md",
+    "diff": "@@ ..."
+  }
+}
+~~~
+
+operation 规则：
+
+- type 只允许 create_file、update_file、delete_file。
+- 一次 apply_patch_call 只包含一个文件 operation；一个响应可以产生多个 call。
+- create_file/update_file 必须带官方 V4A diff；delete_file 不带 diff。
+- 普通相对 path 操作当前对话文件，例如 `plan.md` 或 `src/main.js`。
+- skill path 必须使用 `@skill/<skill-key>/<relative-path>`，例如 `@skill/report-writer/SKILL.md`。
+- 绝对路径、`local/...`、缺少 skill key 或相对文件路径的 `@skill/...` 都会失败。
+- apply_patch 没有 move/rename operation；移动或重命名使用 move_file，复制使用 copy_file。
 
 不适用：
 
 - local/... 不能直接写；先用 copy_file 复制成对话文件。
 - 不要在能清晰表达局部变更时无条件重写整个文件。
+- 不要依赖最近一次 read_file/search_files 的 target 推断 skill；每个 operation.path 都必须自包含。
 
-实际输出：
+客户端执行后回传：
 
-~~~text
-Success. Updated the following files:
-A new.md
-M plan.md
-D old.md
+~~~json
+{
+  "type": "apply_patch_call_output",
+  "call_id": "call_123",
+  "status": "completed",
+  "output": "Success. Updated the following files:\nM plan.md"
+}
 ~~~
 
-失败返回 Error。成功摘要由本地执行器生成；补丁触发持久化写入，且可能删除文件。
+失败时 status=failed，output 以 Error 开头。Cerebr 使用与官方协议一致的 V4A diff 应用器，并在 operation 完整校验成功后原子持久化该单文件修改。
 
 ### 5.6 copy_file
 
@@ -500,34 +556,11 @@ move from -> to
 
 这是持久化 mutation，会删除旧路径并建立新路径。
 
-### 5.8 delete_file
-
-本意：删除单个已确认的可写虚拟文件。
-
-关键参数：
-
-- path：单个现有文件。
-- target：null 为当前对话文件；skill 删除必须指定 name。
-
-不适用：
-
-- 不能删除 local/...。
-- 不是递归目录删除。
-- 路径不确定时先 list_files/read_file。
-
-实际成功输出为：
-
-~~~text
-delete path
-~~~
-
-这是破坏性持久化操作。
-
 ## 6. Skill 工具
 
 ### 6.1 skill_registry
 
-本意：只管理持久化 skill 生命周期。普通 skill 文件读取和编辑应使用文件工具，并传 target.kind=skill。
+本意：只管理持久化 skill 生命周期。普通 skill 文件读取、搜索、复制和移动使用对应 function 文件工具并传 target.kind=skill；创建、修改或删除 skill 内文件使用官方 apply_patch 的 `@skill/<skill-key>/<relative-path>`。
 
 公开 action：
 
@@ -564,7 +597,7 @@ delete path
 - create_skill：紧凑脚手架摘要、创建文件和 next steps。
 - enable/disable/delete/mount：本地生成的 mutation 摘要。
 - mutation 失败：skill_registry_result schema_version 2 XML error。
-- 历史兼容 file action 仍可能被 replay，但不属于新模型可见 schema。
+- 历史兼容 file action 仍可能被 replay 或展示，但不属于新模型可见 schema，也不能据此重新授权顶层 delete_file。
 
 启用或挂载会改变后续模型行为，属于持久或页面级副作用。
 
@@ -759,22 +792,25 @@ conv_ref 和 thread_ref 只对当前 assistant 工具链使用的历史快照有
 
 ## 10. 单一 registry 与执行路由
 
-18 个本地工具拥有一个稳定登记源，同时保持每把工具自己的高内聚模块：
+17 个本地执行能力拥有一个稳定登记源，同时保持各协议与执行模块高内聚：
 
-- registry 负责稳定 id、UI title/description、defaultEnabled、exposure、defer_loading、handlerKey、outputKind 和 sideEffect 元数据。
-- 各 tool.js 负责 description、strict schema 和参数 normalize。
+- registry 负责稳定 id、protocol、UI title/description、defaultEnabled、exposure、defer_loading、handlerKey、outputKind 和 sideEffect 元数据。
+- 16 个 function tool 由各 tool.js 负责 description、strict schema 和参数 normalize。
+- apply_patch 只构造 `{ "type": "apply_patch" }`，operation 校验、V4A diff 与路径路由由本地协议适配层负责。
+- 旧 `*** Begin Patch` 自定义 parser 和 function definition 已删除；会话与 skill 写入只保留官方单文件 V4A operation 执行器。
 - 各执行模块负责实际副作用。
 - responses_tool_output.js 负责模型可见序列化。
-- sender 只执行本轮最终 request.tools 中实际暴露的顶层本地 definition，再按 manifest 的 handlerKey 选择执行器、按 outputKind 选择 serializer；namespace 非空时不进入本地路由。
+- sender 只执行本轮最终 request.tools 中实际暴露的顶层本地 function 或官方 apply_patch，再按 manifest 的 handlerKey 选择执行器、按 outputKind 选择 serializer；namespace 非空的 function 不进入本地路由。
+- skill_registry 的隐藏 read/copy/move/patch operation 只允许经 sidebar/background 的显式可信内部标志调用；公开 skill_registry function 只能执行其 schema 枚举内的生命周期 action。
 
 不要求把所有 handler 函数塞进一个巨型 registry，也不要求改变工具名或输出格式。新增工具时至少需要：
 
 1. 在单一 registry 登记稳定 id。
-2. 提供 buildStrictFunctionToolDefinition。
+2. 明确 protocol：普通 function 才提供 buildStrictFunctionToolDefinition；官方协议只发送服务端规定字段。
 3. 提供 normalize/execute。
-4. 选择明确 serializer。
+4. 选择明确 serializer 或官方 call_output item 生成器。
 5. 声明页面环境可用性、side effect 和 trust。
-6. 增加 schema、输出和恶意文本转义测试。
+6. 增加 schema/协议形状、输出和恶意文本转义测试。
 
 handlerKey 与 outputKind 必须能映射到现有 sender 分支；契约测试需要逐工具校验 manifest、definition、暴露集合、defer_loading 与路由元数据一致。
 
@@ -782,20 +818,26 @@ handlerKey 与 outputKind 必须能映射到现有 sender 分支；契约测试�
 
 本轮明确保留：
 
-- 18 个现有工具名。
-- target.kind 的 workspace/skill 值。
+- 其余 16 个客户端 function 工具名；旧 apply_patch function 已迁移为官方协议，顶层 delete_file 已退役。
+- apply_patch 的稳定能力标识、设置开关与本地执行所有权，但调用协议改为官方 item。
+- function 文件工具 target.kind 的 workspace/skill 值。
 - read_file 的 line_range 字符串语法。
 - pdf_content_read 通过全 null 参数进入 overview 的方式。
 - 文件工具 rg/cat 风格纯文本输出。
 - 图片成功时仅返回 input_image。
 - request_user_input 的 answers 映射结构。
 - skill_registry 单工具多 action 结构。
-- 默认启用策略和显式关闭设置的持久化语义。
+- function tools 默认启用和显式关闭设置的持久化语义；apply_patch 采用 capability gate，并允许显式 true/false 覆盖。
 
 本轮明确升级：
 
 - 统一 description 标签和工具选择边界。
 - 所有本地 function 使用 strict schema。
+- apply_patch 不再手写 function 参数和描述，改为 `{ "type": "apply_patch" }`、`apply_patch_call`、`apply_patch_call_output`。
+- skill patch 使用显式 `@skill/<skill-key>/<relative-path>`，删除文件使用 apply_patch 的 delete_file operation。
+- 顶层 delete_file 从新请求、设置和 tool_search 索引中退役，历史记录仅保留兼容识别。
+- 旧 Tools JSON / tool_choice 中的 custom function apply_patch 会被删除或迁移为官方 `{ "type": "apply_patch" }`，不会与官方工具同时发送。
+- environment_context 会记录本轮 apply_patch 是否实际可用；不可用时不会继续提示模型调用它。
 - enum 与可移植 strict 结构；数值范围、数组数量和 snake_case id 由 description 加 normalize 双层约束。
 - XML 根节点 schema_version 2 和 trust=untrusted。
 - XML 外部文本转义和 trusted_xml 内部子树边界。
@@ -805,20 +847,21 @@ handlerKey 与 outputKind 必须能映射到现有 sender 分支；契约测试�
 
 下列变化属于后续破坏性迁移，不能在普通维护中顺手完成：
 
-- 重命名或 namespace 化现有工具。
+- 重命名或 namespace 化其余现有 function 工具。
 - 把 workspace 改成 conversation_files。
 - 拆分 skill_registry。
 - 把 PDF null sentinel 改成必填 mode。
 - 把 line_range 改成 start_line/end_line。
 - 把文件输出整体改成 JSON/XML envelope。
 - 给图片成功结果增加文本 envelope。
-- 改变高风险工具的默认启用或新增强制确认门。
+- 为其它高风险工具改变默认启用策略或新增强制确认门。
 
 ## 12. 维护检查清单
 
 修改或新增本地工具时，维护者应逐项确认：
 
 - 工具名是否与已有本地、hosted、MCP 或用户工具冲突？
+- 它是 function tool 还是服务端官方协议工具？是否错误地给官方工具手写了 description/parameters？
 - Description 是否明确用途、适用、不适用、输入、返回和注意？
 - 是否 strict: true？
 - 每层 object 是否 additionalProperties: false 且 properties 全部 required？
@@ -834,4 +877,5 @@ handlerKey 与 outputKind 必须能映射到现有 sender 分支；契约测试�
 - 工具是否读敏感数据、访问网络、等待用户、执行代码或持久化写入？
 - Prompt injection 是否可能把不可信数据升级成工具调用授权？
 - 旧 function_call replay 和 request_user_input 恢复是否仍能工作？
+- apply_patch_call 与 apply_patch_call_output 是否按 call_id 成对保留，status 与 operation 是否没有在 replay 中丢失？
 - registry、definition、dispatcher、serializer 和测试是否保持一致？

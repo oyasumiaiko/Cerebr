@@ -2,10 +2,10 @@
  * Responses API 扩展提供工具注册表。
  *
  * 设计目标：
- * - 把 Cerebr 暴露给 Responses API 的“本地 function tools”统一登记到一个纯模块里；
+ * - 把 Cerebr 暴露给 Responses API 的“本地执行工具”统一登记到一个纯模块里；
  * - 让 API 设置 UI、请求构建和 sender 的自动注入逻辑共用同一份工具元数据，
  *   避免工具名、默认值、说明文案散落在多个文件后逐渐失配；
- * - 默认采用“全开 + 只持久化显式关闭项”的兼容策略，保证老配置升级后不会突然丢失工具。
+ * - function tools 默认全开并只持久化显式关闭项；官方 apply_patch 额外受模型与端点 capability 门控。
  */
 
 function normalizeString(value) {
@@ -28,9 +28,20 @@ function cloneJsonCompatible(value) {
 function createExtensionToolSpec(spec) {
   return Object.freeze({
     defaultEnabled: true,
+    protocol: 'function',
     ...spec
   });
 }
+
+/**
+ * 已从模型可见工具面退役、但旧配置和历史中仍可能出现的本地工具名。
+ * 这些名称必须继续被请求清理器识别，不能被误当成用户新定义的外部 function。
+ */
+export const RETIRED_RESPONSES_EXTENSION_TOOL_IDS = Object.freeze(['delete_file']);
+
+// OpenAI 官方文档当前明确列出的 apply_patch 支持代际。未知模型默认不注入，避免
+// Responses 兼容端点因不认识专用 tool type 而让整条请求 400；用户仍可显式开启。
+const RESPONSES_APPLY_PATCH_SUPPORTED_MODEL_PATTERN = /^gpt-5\.([1-9]\d*)(?:$|[-.])/i;
 
 export const RESPONSES_EXTENSION_TOOL_SPECS = Object.freeze([
   createExtensionToolSpec({
@@ -46,12 +57,13 @@ export const RESPONSES_EXTENSION_TOOL_SPECS = Object.freeze([
   createExtensionToolSpec({
     id: 'apply_patch',
     title: '虚拟文件 Apply Patch',
-    description: '允许模型对可写虚拟文件执行补丁式修改。',
+    description: '使用 Responses API 官方 apply_patch 协议修改可写虚拟文件；支持模型自动开启，其他兼容模型可显式强制开启，文件操作仍由 Cerebr 本地执行。',
+    protocol: 'apply_patch',
     exposure: 'always',
-    handlerKey: 'virtual_file',
-    outputKind: 'virtual_file',
+    handlerKey: 'apply_patch',
+    outputKind: 'apply_patch',
     sideEffect: 'write',
-    deferLoading: true
+    deferLoading: false
   }),
   createExtensionToolSpec({
     id: 'list_files',
@@ -97,16 +109,6 @@ export const RESPONSES_EXTENSION_TOOL_SPECS = Object.freeze([
     id: 'move_file',
     title: '虚拟文件移动',
     description: '允许模型移动或重命名可写虚拟文件。',
-    exposure: 'always',
-    handlerKey: 'virtual_file',
-    outputKind: 'virtual_file',
-    sideEffect: 'write',
-    deferLoading: true
-  }),
-  createExtensionToolSpec({
-    id: 'delete_file',
-    title: '虚拟文件删除',
-    description: '允许模型删除可写虚拟文件。',
     exposure: 'always',
     handlerKey: 'virtual_file',
     outputKind: 'virtual_file',
@@ -218,6 +220,7 @@ export const RESPONSES_EXTENSION_TOOL_SPECS = Object.freeze([
 const RESPONSES_EXTENSION_TOOL_SPEC_BY_ID = new Map(
   RESPONSES_EXTENSION_TOOL_SPECS.map(spec => [spec.id, spec])
 );
+const RETIRED_RESPONSES_EXTENSION_TOOL_ID_SET = new Set(RETIRED_RESPONSES_EXTENSION_TOOL_IDS);
 
 /**
  * 按稳定工具名读取 manifest 条目。调用方只读使用冻结对象，不得在执行链临时改写。
@@ -239,7 +242,8 @@ export function getResponsesExtensionToolSpec(toolId) {
  */
 export function resolveResponsesExtensionToolSpecForCall(toolName, namespace) {
   if (normalizeString(namespace)) return null;
-  return getResponsesExtensionToolSpec(toolName);
+  const spec = getResponsesExtensionToolSpec(toolName);
+  return spec?.protocol === 'function' ? spec : null;
 }
 
 /**
@@ -265,25 +269,44 @@ export function resolveAuthorizedResponsesExtensionToolSpec(toolName, namespace,
   return exposed ? spec : null;
 }
 
+/**
+ * 官方 apply_patch 仍由客户端执行，因此必须像 function tool 一样检查“本轮最终请求
+ * 是否真的暴露了它”。服务端若凭空返回写文件调用，不会因此获得本地副作用授权。
+ */
+export function isAuthorizedResponsesApplyPatchTool(requestTools) {
+  return (Array.isArray(requestTools) ? requestTools : []).some(tool => (
+    tool
+    && typeof tool === 'object'
+    && !Array.isArray(tool)
+    && normalizeString(tool.type).toLowerCase() === 'apply_patch'
+  ));
+}
+
 function readAllowedLocalExtensionToolId(entry) {
   if (typeof entry === 'string') {
     const name = normalizeString(entry);
-    return RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.has(name) ? name : '';
+    return (RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.has(name) || RETIRED_RESPONSES_EXTENSION_TOOL_ID_SET.has(name))
+      ? name
+      : '';
   }
   if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return '';
   const namespace = normalizeString(entry.namespace);
   if (namespace) return '';
   const type = normalizeString(entry.type).toLowerCase();
+  if (type === 'apply_patch') return 'apply_patch';
   const name = normalizeString(entry.name);
-  return type === 'function' && RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.has(name) ? name : '';
+  return type === 'function'
+    && (RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.has(name) || RETIRED_RESPONSES_EXTENSION_TOOL_ID_SET.has(name))
+    ? name
+    : '';
 }
 
 /**
- * 让 `tool_choice.type=allowed_tools` 与最终实际暴露的本地 function 列表保持一致。
+ * 让 `tool_choice.type=allowed_tools` 与最终实际暴露的本地工具列表保持一致。
  *
  * 页面环境与扩展开关会在请求最后阶段裁掉部分本地工具。如果 allowed_tools 仍引用
  * 这些工具，上游会收到“允许/要求一个未定义工具”的矛盾请求。这里仅处理 Cerebr
- * 自己登记的 18 个名称；hosted、MCP 与提供商私有条目保持原样。
+ * 自己登记的 17 个能力标识；hosted、MCP 与提供商私有条目保持原样。
  *
  * - 仍有可用条目：删除当前不可用的本地条目；
  * - auto 且只剩不可用本地条目：收敛为 `none`；
@@ -297,35 +320,79 @@ export function reconcileResponsesAllowedToolChoice(toolChoice, tools) {
   if (!toolChoice || typeof toolChoice !== 'object' || Array.isArray(toolChoice)) {
     return toolChoice;
   }
-  if (normalizeString(toolChoice.type).toLowerCase() !== 'allowed_tools' || !Array.isArray(toolChoice.tools)) {
+  const availableLocalToolIds = new Set(
+    (Array.isArray(tools) ? tools : [])
+      .map((tool) => {
+        if (!tool || typeof tool !== 'object' || Array.isArray(tool)) return '';
+        const type = normalizeString(tool.type).toLowerCase();
+        if (type === 'apply_patch') return 'apply_patch';
+        if (type !== 'function' || normalizeString(tool.namespace)) return '';
+        const name = normalizeString(tool.name);
+        const spec = RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.get(name);
+        return spec?.protocol === 'function' ? name : '';
+      })
+      .filter(Boolean)
+  );
+  const toolChoiceType = normalizeString(toolChoice.type).toLowerCase();
+  if (toolChoiceType === 'apply_patch') {
+    if (!availableLocalToolIds.has('apply_patch')) {
+      throw new Error('Responses tool_choice 强制 apply_patch，但本轮请求没有暴露官方 apply_patch 工具。');
+    }
+    return { type: 'apply_patch' };
+  }
+
+  if (toolChoiceType === 'function' && !normalizeString(toolChoice.namespace)) {
+    const functionName = normalizeString(toolChoice.name);
+    const localToolId = readAllowedLocalExtensionToolId(toolChoice);
+    if (localToolId === 'apply_patch') {
+      if (!availableLocalToolIds.has('apply_patch')) {
+        throw new Error('Responses tool_choice 仍引用旧 apply_patch function，但本轮没有暴露官方 apply_patch 工具。');
+      }
+      return { type: 'apply_patch' };
+    }
+    if (localToolId && !availableLocalToolIds.has(localToolId)) {
+      throw new Error(`Responses tool_choice 强制当前不可用的本地 function：${functionName || localToolId}`);
+    }
     return cloneJsonCompatible(toolChoice);
   }
 
-  const availableLocalFunctionNames = new Set(
-    (Array.isArray(tools) ? tools : [])
-      .filter(tool => (
-        tool
-        && typeof tool === 'object'
-        && !Array.isArray(tool)
-        && normalizeString(tool.type).toLowerCase() === 'function'
-        && !normalizeString(tool.namespace)
-      ))
-      .map(tool => normalizeString(tool.name))
-      .filter(name => RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.has(name))
-  );
+  if (toolChoiceType !== 'allowed_tools' || !Array.isArray(toolChoice.tools)) {
+    return cloneJsonCompatible(toolChoice);
+  }
+
   const unavailableLocalToolIds = [];
-  const reconciledTools = toolChoice.tools.filter((entry) => {
+  const reconciledTools = [];
+  let hasCanonicalApplyPatch = false;
+  toolChoice.tools.forEach((entry) => {
     const localToolId = readAllowedLocalExtensionToolId(entry);
-    if (!localToolId || availableLocalFunctionNames.has(localToolId)) return true;
-    unavailableLocalToolIds.push(localToolId);
-    return false;
+    if (!localToolId) {
+      reconciledTools.push(cloneJsonCompatible(entry));
+      return;
+    }
+    if (!availableLocalToolIds.has(localToolId)) {
+      unavailableLocalToolIds.push(localToolId);
+      return;
+    }
+    if (localToolId === 'apply_patch') {
+      if (!hasCanonicalApplyPatch) {
+        reconciledTools.push({ type: 'apply_patch' });
+        hasCanonicalApplyPatch = true;
+      }
+      return;
+    }
+    reconciledTools.push(cloneJsonCompatible(entry));
   });
 
-  if (unavailableLocalToolIds.length <= 0) return cloneJsonCompatible(toolChoice);
+  if (unavailableLocalToolIds.length <= 0) {
+    return {
+      ...cloneJsonCompatible(toolChoice),
+      tools: reconciledTools
+    };
+  }
   if (reconciledTools.length > 0) {
     return {
       ...cloneJsonCompatible(toolChoice),
-      tools: cloneJsonCompatible(reconciledTools)
+      tools: reconciledTools
     };
   }
 
@@ -355,8 +422,9 @@ function getToolSettingsById(settings, toolId) {
  * 判断某个扩展工具在当前配置下是否应视为启用。
  *
  * 规则：
- * - 未配置时按默认值处理，目前全部默认开启；
+ * - 未配置时按 manifest 默认值处理；function tools 当前默认开启；
  * - 仅当显式写入 `enabled: false` 时才视为关闭；
+ * - apply_patch 是否实际暴露还需经过 `isResponsesApplyPatchToolAvailable` 的 capability 判断；
  * - 未注册工具保持“放行”，避免意外裁掉用户未来新增但当前版本还未登记的工具。
  *
  * @param {Object|null|undefined} settings
@@ -366,6 +434,7 @@ function getToolSettingsById(settings, toolId) {
 export function isResponsesExtensionToolEnabled(settings, toolId) {
   const normalizedToolId = normalizeString(toolId);
   if (!normalizedToolId) return false;
+  if (RETIRED_RESPONSES_EXTENSION_TOOL_ID_SET.has(normalizedToolId)) return false;
   const spec = RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.get(normalizedToolId);
   if (!spec) return true;
   const toolSettings = getToolSettingsById(settings, normalizedToolId);
@@ -389,9 +458,41 @@ export function filterResponsesExtensionFunctionTools(tools, settings) {
       if (!tool || typeof tool !== 'object' || Array.isArray(tool)) return true;
       const toolType = normalizeString(tool.type).toLowerCase();
       if (toolType !== 'function') return true;
+      if (normalizeString(tool.namespace)) return true;
       return isResponsesExtensionToolEnabled(settings, normalizeString(tool.name));
     })
     .map(tool => cloneJsonCompatible(tool));
+}
+
+export function isResponsesApplyPatchModelSupported(modelName) {
+  return RESPONSES_APPLY_PATCH_SUPPORTED_MODEL_PATTERN.test(normalizeString(modelName));
+}
+
+export function isOfficialOpenAIResponsesEndpoint(baseUrl) {
+  const value = normalizeString(baseUrl);
+  if (!value) return false;
+  try {
+    return new URL(value).hostname.toLowerCase() === 'api.openai.com';
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * 判断当前 API 配置是否应暴露官方 apply_patch。
+ *
+ * - enabled=false：始终关闭；
+ * - enabled=true：允许用户为确认兼容的第三方模型显式开启；
+ * - 未配置：只对 OpenAI 文档明确支持的模型代际自动开启。
+ */
+export function isResponsesApplyPatchToolAvailable(config) {
+  const source = (config && typeof config === 'object' && !Array.isArray(config)) ? config : {};
+  const settings = source.responsesApiSettings || source.settings || {};
+  const toolSettings = getToolSettingsById(settings, 'apply_patch');
+  if (toolSettings?.enabled === false) return false;
+  if (toolSettings?.enabled === true) return true;
+  return isOfficialOpenAIResponsesEndpoint(source.baseUrl)
+    && isResponsesApplyPatchModelSupported(source.modelName);
 }
 
 /**
@@ -405,26 +506,54 @@ export function filterResponsesExtensionFunctionTools(tools, settings) {
  * @param {Array<any>|null|undefined} availableExtensionTools
  * @returns {Array<any>}
  */
-export function filterUnavailableResponsesExtensionFunctionTools(tools, availableExtensionTools) {
-  const availableNames = new Set(
+export function filterUnavailableResponsesExtensionTools(tools, availableExtensionTools) {
+  const availableToolIds = new Set(
     (Array.isArray(availableExtensionTools) ? availableExtensionTools : [])
-      .filter(tool => (
-        tool
-        && typeof tool === 'object'
-        && !Array.isArray(tool)
-        && normalizeString(tool.type).toLowerCase() === 'function'
-      ))
-      .map(tool => normalizeString(tool.name))
-      .filter(name => RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.has(name))
+      .map((tool) => {
+        if (!tool || typeof tool !== 'object' || Array.isArray(tool)) return '';
+        const type = normalizeString(tool.type).toLowerCase();
+        if (type === 'apply_patch') return 'apply_patch';
+        if (type !== 'function' || normalizeString(tool.namespace)) return '';
+        const name = normalizeString(tool.name);
+        const spec = RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.get(name);
+        return spec?.protocol === 'function' ? name : '';
+      })
+      .filter(Boolean)
   );
 
   return (Array.isArray(tools) ? tools : [])
     .filter((tool) => {
       if (!tool || typeof tool !== 'object' || Array.isArray(tool)) return true;
-      if (normalizeString(tool.type).toLowerCase() !== 'function') return true;
+      const type = normalizeString(tool.type).toLowerCase();
+      if (type === 'apply_patch') return availableToolIds.has('apply_patch');
+      if (type !== 'function') return true;
+      if (normalizeString(tool.namespace)) return true;
       const name = normalizeString(tool.name);
-      if (!RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.has(name)) return true;
-      return availableNames.has(name);
+      if (RETIRED_RESPONSES_EXTENSION_TOOL_ID_SET.has(name)) return false;
+      const spec = RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.get(name);
+      if (!spec) return true;
+      if (spec.protocol !== 'function') return false;
+      return availableToolIds.has(name);
     })
     .map(tool => cloneJsonCompatible(tool));
+}
+
+// 兼容旧导入名；实现已经可以同时过滤 function 与官方 apply_patch 工具。
+export const filterUnavailableResponsesExtensionFunctionTools = filterUnavailableResponsesExtensionTools;
+
+/**
+ * 清理同步设置里已经退役的 extension_tools 项，避免导入导出继续携带死配置。
+ */
+export function removeRetiredResponsesExtensionToolSettings(settings) {
+  const cloned = cloneJsonCompatible(settings);
+  if (!cloned || typeof cloned !== 'object' || Array.isArray(cloned)) return cloned;
+  const root = cloned.extension_tools;
+  if (!root || typeof root !== 'object' || Array.isArray(root)) return cloned;
+  RETIRED_RESPONSES_EXTENSION_TOOL_IDS.forEach((toolId) => {
+    delete root[toolId];
+  });
+  if (Object.keys(root).length <= 0) {
+    delete cloned.extension_tools;
+  }
+  return cloned;
 }

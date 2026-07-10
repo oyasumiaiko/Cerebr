@@ -23,12 +23,8 @@ function buildSkillInput(name = 'dom-probe') {
       default_prompt: 'Read the current page title and URL.'
     },
     match: ['https://*.example.com/*'],
-    instruction: {
-      path: 'SKILL.md'
-    },
-    runtime: {
-      entry_path: 'src/main.js'
-    },
+    instruction: { path: 'SKILL.md' },
+    runtime: { entry_path: 'src/main.js' },
     files: [
       {
         path: 'SKILL.md',
@@ -36,7 +32,7 @@ function buildSkillInput(name = 'dom-probe') {
       },
       {
         path: 'src/main.js',
-        content: 'const helpers = await require("./helpers/dom.js");\nreturn { read() { return { title: helpers.readTitle(), href: location.href }; } };\n'
+        content: 'return { read() { return document.title; } };\n'
       },
       {
         path: 'src/helpers/dom.js',
@@ -46,334 +42,118 @@ function buildSkillInput(name = 'dom-probe') {
   };
 }
 
-function wrapPatch(body) {
-  return `*** Begin Patch\n${body}\n*** End Patch`;
-}
-
-test('seekSequence 与 Codex 一样按 exact/rstrip/trim/宽松 Unicode 逐级匹配', async () => {
-  const { seekSequence } = await loadSkillApplyPatchModule();
-
-  assert.equal(seekSequence(['foo', 'bar', 'baz'], ['bar', 'baz'], 0, false), 1);
-  assert.equal(seekSequence(['foo   ', 'bar\t\t'], ['foo', 'bar'], 0, false), 0);
-  assert.equal(seekSequence(['   foo   ', '  bar\t'], ['foo', 'bar'], 0, false), 0);
-  assert.equal(seekSequence(['just one line'], ['too', 'many', 'lines'], 0, false), null);
-  assert.equal(
-    seekSequence(
-      ['import asyncio  # local import \u2013 avoids top\u2011level dep'],
-      ['import asyncio  # local import - avoids top-level dep'],
-      0,
-      false
-    ),
-    0
-  );
-});
-
-test('parseSkillApplyPatch 会解析标准 hunk 与 lenient heredoc', async () => {
-  const { parseSkillApplyPatch } = await loadSkillApplyPatchModule();
-
-  assert.throws(
-    () => parseSkillApplyPatch('bad'),
-    /The first line of the patch must be '\*\*\* Begin Patch'/
-  );
-  assert.throws(
-    () => parseSkillApplyPatch('*** Begin Patch\nbad'),
-    /The last line of the patch must be '\*\*\* End Patch'/
-  );
-
-  const parsed = parseSkillApplyPatch(wrapPatch(
-    [
-      '*** Add File: src/helpers/url.js',
-      '+module.exports = { readUrl() { return location.href; } };',
-      '*** Delete File: src/helpers/obsolete.js',
-      '*** Update File: src/main.js',
-      '*** Move to: src/runtime/main.js',
-      '@@',
-      '-return { read() { return { title: helpers.readTitle(), href: location.href }; } };',
-      '+return { read() { return { title: helpers.readTitle(), href: helpers.readUrl() }; } };'
-    ].join('\n')
-  ));
-
-  assert.equal(parsed.hunks.length, 3);
-  assert.deepEqual(parsed.hunks[0], {
-    type: 'add_file',
-    path: 'src/helpers/url.js',
-    contents: 'module.exports = { readUrl() { return location.href; } };\n'
-  });
-  assert.equal(parsed.hunks[2].move_path, 'src/runtime/main.js');
-
-  const lenient = parseSkillApplyPatch(`<<'EOF'\n${wrapPatch('*** Add File: foo.js\n+hi')}\nEOF\n`, {
-    mode: 'lenient'
-  });
-  assert.equal(lenient.hunks.length, 1);
-});
-
-test('applySkillPackagePatch 可以新增虚拟文件且用途由路径自动推断', async () => {
+test('官方 OpenAI apply_patch operation 对 skill 支持 create/update/delete，并拒绝同名 create', async () => {
   const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
-  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
+  const { applyOpenAIApplyPatchOperationToSkillPackage } = await loadSkillApplyPatchModule();
 
   const record = buildStoredSkillRecord(buildSkillInput());
-  const result = applySkillPackagePatch(record, wrapPatch(
-    [
-      '*** Add File: src/runtime/new-main.js',
-      '+module.exports = { read() { return location.href; } };'
-    ].join('\n')
-  ));
-
-  assert.deepEqual(result.affected_files, {
-    added: ['src/runtime/new-main.js'],
+  const created = applyOpenAIApplyPatchOperationToSkillPackage(record, {
+    type: 'create_file',
+    path: 'references/official.md',
+    diff: ['+# Official', '+alpha', '+'].join('\n')
+  });
+  assert.deepEqual(created.affected_files, {
+    added: ['references/official.md'],
     modified: [],
     deleted: []
   });
   assert.equal(
-    buildSkillFilePayload(result.record, 'src/runtime/new-main.js').file.kind,
-    'runtime_source'
+    buildSkillFilePayload(created.record, 'references/official.md').file.content,
+    '# Official\nalpha\n'
   );
-  assert.equal(result.record.runtime.entry_path, 'src/main.js');
-});
-
-test('applySkillPackagePatch 可以删除、修改、移动文件并保持指针自洽', async () => {
-  const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
-  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
-
-  const record = buildStoredSkillRecord(buildSkillInput());
-  const result = applySkillPackagePatch(record, wrapPatch(
-    [
-      '*** Update File: src/main.js',
-      '*** Move to: src/runtime/main.js',
-      '@@',
-      ' const helpers = await require("./helpers/dom.js");',
-      '-return { read() { return { title: helpers.readTitle(), href: location.href }; } };',
-      '+return { read() { return { title: helpers.readTitle(), href: helpers.readUrl() }; } };',
-      '*** Update File: src/helpers/dom.js',
-      '@@',
-      '-module.exports = { readTitle() { return document.title; } };',
-      '+module.exports = { readTitle() { return document.title.trim(); } };'
-    ].join('\n')
-  ));
-
-  assert.equal(result.record.runtime.entry_path, 'src/runtime/main.js');
   assert.equal(
-    buildSkillFilePayload(result.record, 'src/runtime/main.js').file.is_runtime_entry,
-    true
-  );
-  assert.match(
-    buildSkillFilePayload(result.record, 'src/helpers/dom.js').file.content,
-    /trim/
-  );
-  assert.deepEqual(result.affected_files, {
-    added: [],
-    modified: ['src/runtime/main.js', 'src/helpers/dom.js'],
-    deleted: []
-  });
-});
-
-test('applySkillPackagePatch 支持直接 patch manifest.json', async () => {
-  const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
-  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
-
-  const record = buildStoredSkillRecord(buildSkillInput());
-  const result = applySkillPackagePatch(record, wrapPatch(
-    [
-      '*** Update File: manifest.json',
-      '@@',
-      '-  "description": "读取页面标题和链接",',
-      '+  "description": "读取页面标题、链接与路径信息",',
-      '@@',
-      '-  "enabled": true,',
-      '+  "enabled": false,'
-    ].join('\n')
-  ));
-
-  assert.equal(result.record.enabled, false);
-  assert.equal(result.record.description, '读取页面标题、链接与路径信息');
-  assert.equal(
-    buildSkillFilePayload(result.record, 'manifest.json').file.is_manifest,
-    true
-  );
-  assert.deepEqual(result.affected_files, {
-    added: [],
-    modified: ['manifest.json'],
-    deleted: []
-  });
-});
-
-test('applySkillPackagePatch 会复现 Codex 的多 chunk、交错修改与 EOF 追加行为', async () => {
-  const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
-  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
-
-  const record = buildStoredSkillRecord({
-    ...buildSkillInput('multi-edit'),
-    runtime: { entry_path: 'src/runtime/demo.js' },
-    files: [
-      {
-        path: 'SKILL.md',
-        kind: 'instruction',
-        content: '# Multi Edit\n'
-      },
-      {
-        path: 'src/runtime/demo.js',
-        kind: 'runtime_source',
-        content: 'a\nb\nc\nd\ne\nf\n'
-      }
-    ]
-  });
-
-  const result = applySkillPackagePatch(record, wrapPatch(
-    [
-      '*** Update File: src/runtime/demo.js',
-      '@@',
-      ' a',
-      '-b',
-      '+B',
-      '@@',
-      ' c',
-      ' d',
-      '-e',
-      '+E',
-      '@@',
-      ' f',
-      '+g',
-      '*** End of File'
-    ].join('\n')
-  ));
-
-  assert.equal(
-    buildSkillFilePayload(result.record, 'src/runtime/demo.js').file.content,
-    'a\nB\nc\nd\nE\nf\ng\n'
-  );
-});
-
-test('applySkillPackagePatch 会保留 Codex 的纯追加 chunk 与 Unicode 宽松匹配', async () => {
-  const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
-  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
-
-  const additionRecord = buildStoredSkillRecord({
-    ...buildSkillInput('pure-add'),
-    files: [
-      {
-        path: 'SKILL.md',
-        kind: 'instruction',
-        content: '# Pure Add\n'
-      },
-      {
-        path: 'src/main.js',
-        kind: 'runtime_source',
-        content: 'line1\nline2\nline3\n'
-      }
-    ]
-  });
-  const additionResult = applySkillPackagePatch(additionRecord, wrapPatch(
-    [
-      '*** Update File: src/main.js',
-      '@@',
-      '+after-context',
-      '+second-line',
-      '@@',
-      ' line1',
-      '-line2',
-      '-line3',
-      '+line2-replacement'
-    ].join('\n')
-  ));
-  assert.equal(
-    buildSkillFilePayload(additionResult.record, 'src/main.js').file.content,
-    'line1\nline2-replacement\nafter-context\nsecond-line\n'
-  );
-
-  const unicodeRecord = buildStoredSkillRecord({
-    ...buildSkillInput('unicode-edit'),
-    files: [
-      {
-        path: 'SKILL.md',
-        kind: 'instruction',
-        content: '# Unicode\n'
-      },
-      {
-        path: 'src/main.js',
-        kind: 'runtime_source',
-        content: 'import asyncio  # local import \u2013 avoids top\u2011level dep\n'
-      }
-    ]
-  });
-  const unicodeResult = applySkillPackagePatch(unicodeRecord, wrapPatch(
-    [
-      '*** Update File: src/main.js',
-      '@@',
-      '-import asyncio  # local import - avoids top-level dep',
-      '+import asyncio  # HELLO'
-    ].join('\n')
-  ));
-  assert.equal(
-    buildSkillFilePayload(unicodeResult.record, 'src/main.js').file.content,
-    'import asyncio  # HELLO\n'
-  );
-});
-
-test('applySkillPackagePatch 会对虚拟文件特有的错误场景给出明确失败', async () => {
-  const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
-  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
-
-  const record = buildStoredSkillRecord(buildSkillInput());
-
-  const addedReference = applySkillPackagePatch(record, wrapPatch(
-    [
-      '*** Add File: references/notes.md',
-      '+# Notes'
-    ].join('\n')
-  ));
-  assert.equal(
-    buildSkillFilePayload(addedReference.record, 'references/notes.md').file.kind,
+    buildSkillFilePayload(created.record, 'references/official.md').file.kind,
     'reference'
   );
 
   assert.throws(
-    () => applySkillPackagePatch(record, wrapPatch(
-      [
-        '*** Add File: manifest.json',
-        '+{}'
-      ].join('\n')
-    )),
-    /manifest\.json 是保留虚拟文件，不支持 Add File/
+    () => applyOpenAIApplyPatchOperationToSkillPackage(created.record, {
+      type: 'create_file',
+      path: 'references/official.md',
+      diff: '+duplicate'
+    }),
+    /已存在文件 references\/official\.md，无法 create_file/
   );
 
-  assert.throws(
-    () => applySkillPackagePatch(record, wrapPatch(
-      [
-        '*** Delete File: manifest.json'
-      ].join('\n')
-    )),
-    /manifest\.json 是保留虚拟文件，不支持 Delete File/
+  const updated = applyOpenAIApplyPatchOperationToSkillPackage(created.record, {
+    type: 'update_file',
+    path: 'references/official.md',
+    diff: [' # Official', '-alpha', '+beta'].join('\n')
+  });
+  assert.equal(
+    buildSkillFilePayload(updated.record, 'references/official.md').file.content,
+    '# Official\nbeta\n'
   );
 
-  assert.throws(
-    () => applySkillPackagePatch(record, wrapPatch(
-      [
-        '*** Update File: manifest.json',
-        '*** Move to: other.json',
-        '@@',
-        '-  "enabled": true,',
-        '+  "enabled": false,'
-      ].join('\n')
-    )),
-    /manifest\.json 是保留虚拟文件，不支持 Move to/
-  );
+  const deleted = applyOpenAIApplyPatchOperationToSkillPackage(updated.record, {
+    type: 'delete_file',
+    path: 'references/official.md'
+  });
+  assert.deepEqual(deleted.affected_files.deleted, ['references/official.md']);
+  assert.equal(deleted.record.files.some((file) => file.path === 'references/official.md'), false);
+});
+
+test('官方 manifest operation 会保留显式 null，而不是回退到旧 interface/runtime 值', async () => {
+  const { buildStoredSkillRecord } = await loadSkillRegistryToolModule();
+  const { applyOpenAIApplyPatchOperationToSkillPackage } = await loadSkillApplyPatchModule();
+
+  const record = buildStoredSkillRecord(buildSkillInput());
+  const updated = applyOpenAIApplyPatchOperationToSkillPackage(record, {
+    type: 'update_file',
+    path: 'manifest.json',
+    diff: [
+      '-    "display_name": "DOM Probe",',
+      '-    "short_description": "读取当前页面标题和 URL",',
+      '-    "default_prompt": "Read the current page title and URL."',
+      '+    "display_name": null,',
+      '+    "short_description": null,',
+      '+    "default_prompt": null',
+      '@@',
+      '-    "entry_path": "src/main.js"',
+      '+    "entry_path": null'
+    ].join('\n')
+  });
+
+  assert.deepEqual(updated.record.interface, {
+    display_name: null,
+    short_description: null,
+    default_prompt: null
+  });
+  assert.equal(updated.record.runtime.entry_path, null);
+  assert.equal(updated.record.kind, 'guidance');
+});
+
+test('官方 skill operation 保护 manifest、缺失文件和最后一个文件', async () => {
+  const { buildStoredSkillRecord } = await loadSkillRegistryToolModule();
+  const { applyOpenAIApplyPatchOperationToSkillPackage } = await loadSkillApplyPatchModule();
+  const record = buildStoredSkillRecord(buildSkillInput());
 
   assert.throws(
-    () => applySkillPackagePatch(record, wrapPatch(
-      [
-        '*** Add File: ../escape.js',
-        '+oops'
-      ].join('\n')
-    )),
-    /不能包含空段、"\." 或 "\.\."/
+    () => applyOpenAIApplyPatchOperationToSkillPackage(record, {
+      type: 'delete_file',
+      path: 'manifest.json'
+    }),
+    /manifest\.json 是保留虚拟文件，只支持 update_file/
+  );
+  assert.throws(
+    () => applyOpenAIApplyPatchOperationToSkillPackage(record, {
+      type: 'update_file',
+      path: 'missing.js',
+      diff: '-old\n+new'
+    }),
+    /不存在文件 missing\.js/
   );
 
+  const singleFileRecord = buildStoredSkillRecord({
+    ...buildSkillInput('single-file'),
+    runtime: { entry_path: null },
+    files: [{ path: 'SKILL.md', content: '# Single\n' }]
+  });
   assert.throws(
-    () => applySkillPackagePatch(record, wrapPatch(
-      [
-        '*** Delete File: missing.js'
-      ].join('\n')
-    )),
-    /Failed to delete file missing\.js/
+    () => applyOpenAIApplyPatchOperationToSkillPackage(singleFileRecord, {
+      type: 'delete_file',
+      path: 'SKILL.md'
+    }),
+    /只剩最后一个文件/
   );
 });

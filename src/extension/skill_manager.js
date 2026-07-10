@@ -21,7 +21,9 @@ import {
   normalizeStoredSkillRecord,
   saveStoredSkillPackage
 } from '../agent_tools/skill/registry_tool.js';
-import { applySkillPackagePatch } from '../agent_tools/skill/skill_apply_patch.js';
+import {
+  applyOpenAIApplyPatchOperationToSkillPackage
+} from '../agent_tools/skill/skill_apply_patch.js';
 import {
   buildSkillDocumentRefreshSource,
   buildSkillMountOnCurrentPageSource,
@@ -585,6 +587,7 @@ export function createSkillManager(options = {}) {
         selected_resources: Array.isArray(skillInput?.resources) ? [...skillInput.resources] : [],
         examples_created: skillInput?.examples === true,
         next_steps: buildSkillScaffoldNextSteps({
+          skillName: nextRecord.name,
           enabled: nextRecord.enabled === true,
           resources: skillInput?.resources,
           examples: skillInput?.examples === true
@@ -768,77 +771,19 @@ export function createSkillManager(options = {}) {
     };
   }
 
-  async function deleteSkillFile(skillName, filePath, options = {}) {
-    const existing = await getMutableStoredSkillRecord(skillName, 'delete_file');
-    const normalizedExisting = normalizeStoredSkillRecord(existing);
-    if (!normalizedExisting) {
-      throw new Error(`技能 ${skillName} 不存在，无法删除文件。`);
-    }
-
-    const normalizedPath = normalizeSkillFilePath(filePath);
-    if (normalizedPath === SKILL_VIRTUAL_MANIFEST_PATH) {
-      throw new Error('manifest.json 是保留虚拟文件，不能删除。');
-    }
-    const existingFile = normalizedExisting.files.find((file) => file.path === normalizedPath) || null;
-    if (!existingFile) {
-      throw new Error(`技能 ${skillName} 中不存在文件 ${normalizedPath}。`);
-    }
-    if (normalizedExisting.files.length <= 1) {
-      throw new Error(`技能 ${skillName} 只剩最后一个文件，不能删除。`);
-    }
-
-    const nextFiles = normalizedExisting.files
-      .filter((file) => file.path !== normalizedPath)
-      .map((file) => ({ ...file }));
-    const deletingInstruction = normalizedExisting.instruction.path === normalizedPath;
-    const deletingRuntimeEntry = normalizedExisting.runtime.entry_path === normalizedPath;
-    const nextInstructionPath = deletingInstruction
-      ? (options?.nextInstructionPath || null)
-      : normalizedExisting.instruction.path;
-    const nextRuntimeEntryPath = deletingRuntimeEntry
-      ? (options?.nextRuntimeEntryPath || null)
-      : normalizedExisting.runtime.entry_path;
-
-    const nextRecord = buildStoredSkillRecord({
-      ...normalizedExisting,
-      instruction: {
-        path: nextInstructionPath
-      },
-      runtime: {
-        entry_path: nextRuntimeEntryPath
-      },
-      files: nextFiles
-    }, normalizedExisting);
-    const persistedRecord = await persistMutatedSkillRecord(normalizedExisting, nextRecord);
-
-    return {
-      ok: true,
-      action: 'delete_file',
-      deleted_file_path: normalizedPath,
-      skill: buildSkillSummary(persistedRecord),
-      files: buildSkillFileManifest(persistedRecord, { includeContent: false }),
-      affected_files: {
-        added: [],
-        modified: [],
-        deleted: [normalizedPath]
-      },
-      ...(await maybeRefreshCurrentDocument(options?.tabId))
-    };
-  }
-
-  async function applySkillPatch(skillName, patch, options = {}) {
+  async function applyOpenAIApplyPatchOperation(skillName, operation, options = {}) {
     const existing = await getMutableStoredSkillRecord(skillName, 'apply_patch');
     const normalizedExisting = normalizeStoredSkillRecord(existing);
     if (!normalizedExisting) {
       throw new Error(`技能 ${skillName} 不存在，无法应用补丁。`);
     }
 
-    const patched = applySkillPackagePatch(normalizedExisting, patch);
+    const patched = applyOpenAIApplyPatchOperationToSkillPackage(normalizedExisting, operation);
     const persistedRecord = await persistMutatedSkillRecord(normalizedExisting, patched.record);
-
     return {
       ok: true,
       action: 'apply_patch',
+      operation: patched.operation,
       skill: buildSkillSummary(persistedRecord),
       files: buildSkillFileManifest(persistedRecord, { includeContent: false }),
       affected_files: patched.affected_files,
@@ -867,7 +812,11 @@ export function createSkillManager(options = {}) {
   }
 
   async function executeRegistryAction(rawArgs, options = {}) {
-    const normalizedArgs = normalizeSkillRegistryToolArguments(rawArgs);
+    const normalizedArgs = normalizeSkillRegistryToolArguments(rawArgs, {
+      allowInternalPatchOperation: options?.allowInternalPatchOperation === true,
+      allowInternalFileActions: options?.allowInternalFileActions === true,
+      allowInternalCompatActions: options?.allowInternalCompatActions === true
+    });
     switch (normalizedArgs.action) {
       case 'list': {
         if (normalizedArgs.include_all_sites === true) {
@@ -996,10 +945,12 @@ export function createSkillManager(options = {}) {
         });
       case 'update':
         return await updateSkill(normalizedArgs.skill, { tabId: options?.tabId });
-      case 'apply_patch':
-        return await applySkillPatch(normalizedArgs.skill_name, normalizedArgs.patch, {
-          tabId: options?.tabId
-        });
+      case 'apply_patch_operation':
+        return await applyOpenAIApplyPatchOperation(
+          normalizedArgs.skill_name,
+          normalizedArgs.operation,
+          { tabId: options?.tabId }
+        );
       case 'copy_file':
         return await copySkillFile(
           normalizedArgs.skill_name,
@@ -1014,12 +965,6 @@ export function createSkillManager(options = {}) {
           normalizedArgs.destination_file_path,
           { tabId: options?.tabId }
         );
-      case 'delete_file':
-        return await deleteSkillFile(normalizedArgs.skill_name, normalizedArgs.file_path, {
-          tabId: options?.tabId,
-          nextInstructionPath: normalizedArgs.next_instruction_path,
-          nextRuntimeEntryPath: normalizedArgs.next_runtime_entry_path
-        });
       case 'delete_skill':
         return await deleteSkill(normalizedArgs.skill_name, { tabId: options?.tabId });
       case 'enable_skill':

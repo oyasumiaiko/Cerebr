@@ -52,16 +52,12 @@ import {
   buildSkillRegistryFunctionToolDefinition
 } from '../skill/registry_tool.js';
 import {
-  CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
   CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
-  CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
   CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
-  buildVirtualFileApplyPatchFunctionToolDefinition,
   buildVirtualFileCopyFileFunctionToolDefinition,
-  buildVirtualFileDeleteFileFunctionToolDefinition,
   buildVirtualFileListFilesFunctionToolDefinition,
   buildVirtualFileMoveFileFunctionToolDefinition,
   buildVirtualFileReadFileFunctionToolDefinition,
@@ -76,13 +72,11 @@ export const definitionBuildersById = Object.freeze({
   [JS_RUNTIME_EXECUTE_TOOL_NAME]: ({ pageToolEnvironment }) => (
     buildJsRuntimeExecuteFunctionToolDefinition(pageToolEnvironment)
   ),
-  [CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME]: () => buildVirtualFileApplyPatchFunctionToolDefinition(),
   [CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME]: () => buildVirtualFileListFilesFunctionToolDefinition(),
   [CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME]: () => buildVirtualFileReadFileFunctionToolDefinition(),
   [CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME]: () => buildVirtualFileSearchFilesFunctionToolDefinition(),
   [CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME]: () => buildVirtualFileCopyFileFunctionToolDefinition(),
   [CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME]: () => buildVirtualFileMoveFileFunctionToolDefinition(),
-  [CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME]: () => buildVirtualFileDeleteFileFunctionToolDefinition(),
   [SKILL_REGISTRY_TOOL_NAME]: ({ pageToolEnvironment }) => (
     buildSkillRegistryFunctionToolDefinition(pageToolEnvironment)
   ),
@@ -154,6 +148,7 @@ export function buildResponsesExtensionFunctionTools(options = {}) {
   const definitions = [];
 
   for (const spec of RESPONSES_EXTENSION_TOOL_SPECS) {
+    if (spec?.protocol !== 'function') continue;
     if (!isResponsesExtensionToolExposureAvailable(spec, options)) continue;
 
     const builder = definitionBuildersById[spec.id];
@@ -170,4 +165,19 @@ export function buildResponsesExtensionFunctionTools(options = {}) {
   }
 
   return definitions;
+}
+
+/**
+ * 构造不是 JSON function definition、但仍由 Cerebr 本地执行的官方协议工具。
+ * 当前只有 apply_patch；它不能 defer_loading，也不会携带客户端自定义 description
+ * 或 parameters。
+ */
+export function buildResponsesExtensionProtocolTools(options = {}) {
+  const tools = [];
+  for (const spec of RESPONSES_EXTENSION_TOOL_SPECS) {
+    if (spec?.protocol !== 'apply_patch') continue;
+    if (!isResponsesExtensionToolExposureAvailable(spec, options)) continue;
+    tools.push({ type: 'apply_patch' });
+  }
+  return tools;
 }

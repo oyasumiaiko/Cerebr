@@ -1387,7 +1387,7 @@ export function registerSidebarUtilities(appContext) {
    * - 所有真正会改 registry / 动态 userScripts 的动作都交给 background；
    * - sidebar 只负责把当前绑定 tabId 一并传过去，供 refresh 当前文档使用。
    */
-  appContext.utils.executeSkillRegistryAction = async (payload = {}) => {
+  appContext.utils.executeSkillRegistryAction = async (payload = {}, options = {}) => {
     if (!chrome?.runtime?.sendMessage) {
       return {
         success: false,
@@ -1405,6 +1405,9 @@ export function registerSidebarUtilities(appContext) {
           type: 'SKILL_REGISTRY_ACTION',
           tabId: Number.isFinite(targetTabId) ? targetTabId : null,
           isolateFromHostPage,
+          allowInternalPatchOperation: options?.allowInternalPatchOperation === true,
+          allowInternalFileActions: options?.allowInternalFileActions === true,
+          allowInternalCompatActions: options?.allowInternalCompatActions === true,
           payload: (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {}
         }),
         SKILL_REGISTRY_TIMEOUT_MS,
@@ -1444,7 +1447,8 @@ export function registerSidebarUtilities(appContext) {
       }
 
       const skillResult = await appContext.utils.executeSkillRegistryAction(
-        buildSkillRegistryFileActionPayloadFromVirtualFileAction(action, normalizedArgs)
+        buildSkillRegistryFileActionPayloadFromVirtualFileAction(action, normalizedArgs),
+        { allowInternalFileActions: true }
       );
       if (skillResult?.success === true) {
         const output = { ...skillResult };

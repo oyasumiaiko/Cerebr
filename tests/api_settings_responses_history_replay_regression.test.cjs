@@ -189,6 +189,107 @@ test('buildRequest 仍会保留已闭环的 function_call 与 function_call_outp
   );
 });
 
+test('buildRequest 不会重放中断后缺少 output 的 apply_patch_call', async (t) => {
+  const apiManager = await createApiManagerForTest(t);
+
+  const requestBody = await apiManager.buildRequest({
+    config: {
+      modelName: 'gpt-5.4',
+      baseUrl: 'https://api.openai.com/v1/responses',
+      connectionType: 'openai_responses',
+      useStreaming: false
+    },
+    messages: [
+      { role: 'user', content: 'first question' },
+      {
+        role: 'assistant',
+        content: 'partial patch',
+        response_input_items: [
+          {
+            type: 'message',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'partial patch' }]
+          },
+          {
+            type: 'apply_patch_call',
+            call_id: 'call_patch_dangling',
+            status: 'completed',
+            operation: {
+              type: 'update_file',
+              path: 'notes.md',
+              diff: '@@\n-old\n+new'
+            }
+          }
+        ]
+      },
+      { role: 'user', content: 'next question' }
+    ]
+  });
+
+  const responseInput = Array.isArray(requestBody?.input) ? requestBody.input : [];
+  assert.equal(
+    responseInput.some((item) => item?.type === 'apply_patch_call' && item?.call_id === 'call_patch_dangling'),
+    false
+  );
+  assert.equal(
+    responseInput.some((item) => item?.type === 'message' && item?.role === 'assistant'),
+    true
+  );
+});
+
+test('buildRequest 会保留已闭环 apply_patch call/output 及必需 status', async (t) => {
+  const apiManager = await createApiManagerForTest(t);
+
+  const requestBody = await apiManager.buildRequest({
+    config: {
+      modelName: 'gpt-5.4',
+      baseUrl: 'https://api.openai.com/v1/responses',
+      connectionType: 'openai_responses',
+      useStreaming: false
+    },
+    messages: [
+      { role: 'user', content: 'first question' },
+      {
+        role: 'assistant',
+        response_input_items: [
+          {
+            type: 'apply_patch_call',
+            call_id: 'call_patch_ok',
+            status: 'completed',
+            operation: {
+              type: 'delete_file',
+              path: 'obsolete.md'
+            }
+          },
+          {
+            type: 'apply_patch_call_output',
+            call_id: 'call_patch_ok',
+            status: 'completed',
+            output: 'Deleted obsolete.md.'
+          }
+        ]
+      },
+      { role: 'user', content: 'next question' }
+    ]
+  });
+
+  const responseInput = Array.isArray(requestBody?.input) ? requestBody.input : [];
+  const patchCall = responseInput.find((item) => (
+    item?.type === 'apply_patch_call' && item?.call_id === 'call_patch_ok'
+  ));
+  const patchOutput = responseInput.find((item) => (
+    item?.type === 'apply_patch_call_output' && item?.call_id === 'call_patch_ok'
+  ));
+
+  assert.equal(patchCall?.status, 'completed');
+  assert.deepEqual(patchCall?.operation, {
+    type: 'delete_file',
+    path: 'obsolete.md'
+  });
+  assert.equal(patchOutput?.status, 'completed');
+  assert.equal(patchOutput?.output, 'Deleted obsolete.md.');
+});
+
 test('buildRequest 会在原 image_generation_call item 上水合本地化生图结果', async (t) => {
   const apiManager = await createApiManagerForTest(t);
 

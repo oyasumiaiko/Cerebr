@@ -1,7 +1,6 @@
 import { normalizeSkillFilePath } from '../skill/registry_tool.js';
 import {
   VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
-  VIRTUAL_FILE_DELETE_FILE_TOOL_NAME,
   VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
   VIRTUAL_FILE_TARGET_KIND_SKILL,
   normalizeString
@@ -42,14 +41,6 @@ export function normalizeVirtualFileMoveFileArguments(args, target) {
     target,
     source_path: normalizeOperationPath(args.from, target, 'move_file.from'),
     destination_path: normalizeOperationPath(args.to, target, 'move_file.to')
-  };
-}
-
-export function normalizeVirtualFileDeleteFileArguments(args, target) {
-  return {
-    action: VIRTUAL_FILE_DELETE_FILE_TOOL_NAME,
-    target,
-    file_path: normalizeOperationPath(args.path, target, 'delete_file.path')
   };
 }
 
@@ -101,34 +92,10 @@ export function buildVirtualFileMoveFileFunctionToolDefinition() {
   });
 }
 
-export function buildVirtualFileDeleteFileFunctionToolDefinition() {
-  return buildStrictFunctionToolDefinition({
-    name: VIRTUAL_FILE_DELETE_FILE_TOOL_NAME,
-    description: buildModelToolDescription({
-      purpose: '删除一个可写虚拟文件，等价于单文件 `rm path`。',
-      useWhen: '用户目标明确要求移除当前对话文件或 skill 文件，且该路径已确认。',
-      avoidWhen: '不要删除 `local/...` 真实本机映射；路径不确定时先 list_files/read_file；这不是递归目录删除。',
-      input: 'target=null 操作当前对话文件区；删除 skill 文件时指定 target.name。path 必须是单个现有文件。',
-      output: '成功返回 `delete <path>`；失败只返回 Error。'
-    }),
-    properties: {
-      target: buildMutationTargetDescription(),
-      path: {
-        type: 'string',
-        description: '要删除的单个可写虚拟文件路径。不能是 `local/...`。'
-      }
-    }
-  });
-}
-
 export function buildConversationDocumentCopyFileFunctionToolDefinition() {
   return buildVirtualFileCopyFileFunctionToolDefinition();
 }
 
 export function buildConversationDocumentMoveFileFunctionToolDefinition() {
   return buildVirtualFileMoveFileFunctionToolDefinition();
-}
-
-export function buildConversationDocumentDeleteFileFunctionToolDefinition() {
-  return buildVirtualFileDeleteFileFunctionToolDefinition();
 }

@@ -290,10 +290,18 @@ test('normalizeSkillRegistryToolArguments 会收敛为新的 package/file action
   assert.equal(normalizedCompatCreate.skill.instruction.path, 'SKILL.md');
   assert.equal(normalizedCompatCreate.skill.files.length, 3);
 
+  assert.throws(
+    () => normalizeSkillRegistryToolArguments({
+      action: 'list_files',
+      skill_name: 'dom-probe'
+    }),
+    /不支持的 action `list_files`/
+  );
+
   const normalizedListFiles = normalizeSkillRegistryToolArguments({
     action: 'list_files',
     skill_name: 'dom-probe'
-  });
+  }, { allowInternalFileActions: true });
   assert.equal(normalizedListFiles.original_action, 'list_files');
   assert.equal(normalizedListFiles.action, 'list_files');
   assert.equal(normalizedListFiles.skill_name, 'dom-probe');
@@ -306,7 +314,7 @@ test('normalizeSkillRegistryToolArguments 会收敛为新的 package/file action
     context_after: 2,
     path_glob: 'src/**/*.js',
     max_results: 5
-  });
+  }, { allowInternalFileActions: true });
   assert.deepEqual(normalizedSearchFiles, {
     original_action: 'search_files',
     action: 'search_files',
@@ -334,7 +342,7 @@ test('normalizeSkillRegistryToolArguments 会收敛为新的 package/file action
     skill_name: 'dom-probe',
     file_path: './src/helpers/dom.js',
     include_line_numbers: true
-  });
+  }, { allowInternalFileActions: true });
   assert.deepEqual(normalizedReadFile, {
     original_action: 'read_file',
     action: 'read_file',
@@ -396,19 +404,37 @@ test('normalizeSkillRegistryToolArguments 会收敛为新的 package/file action
     /examples=true 时必须同时提供/
   );
 
-  const normalizedApplyPatch = normalizeSkillRegistryToolArguments({
-    action: 'apply_patch',
+  assert.throws(
+    () => normalizeSkillRegistryToolArguments({
+      action: 'apply_patch',
+      skill_name: 'dom-probe',
+      patch: '*** Begin Patch\n*** Update File: src/main.js\n@@\n-old\n+new\n*** End Patch'
+    }),
+    /不支持的 action `apply_patch`/
+  );
+  assert.throws(
+    () => normalizeSkillRegistryToolArguments({
+      action: 'apply_patch_operation',
+      skill_name: 'dom-probe',
+      operation: { type: 'delete_file', path: 'src/main.js' }
+    }),
+    /不支持的 action `apply_patch_operation`/
+  );
+
+  const normalizedApplyPatchOperation = normalizeSkillRegistryToolArguments({
+    action: 'apply_patch_operation',
     skill_name: 'dom-probe',
-    patch: '*** Begin Patch\n*** Update File: src/main.js\n@@\n-old\n+new\n*** End Patch'
-  });
-  assert.deepEqual(normalizedApplyPatch, {
-    original_action: 'apply_patch',
-    action: 'apply_patch',
+    operation: { type: 'update_file', path: 'src/main.js', diff: '-old\n+new' }
+  }, { allowInternalPatchOperation: true });
+  assert.deepEqual(normalizedApplyPatchOperation, {
+    original_action: 'apply_patch_operation',
+    action: 'apply_patch_operation',
     skill_name: 'dom-probe',
     skill: null,
     file_path: null,
     file: null,
-    patch: '*** Begin Patch\n*** Update File: src/main.js\n@@\n-old\n+new\n*** End Patch',
+    patch: null,
+    operation: { type: 'update_file', path: 'src/main.js', diff: '-old\n+new' },
     pattern: null,
     regex: false,
     case_mode: 'smart',
@@ -418,7 +444,7 @@ test('normalizeSkillRegistryToolArguments 会收敛为新的 package/file action
     max_results: 50,
     read_options: null,
     include_line_numbers: false,
-    deprecated_compat_action: true,
+    deprecated_compat_action: false,
     next_instruction_path: null,
     next_runtime_entry_path: null
   });
@@ -447,7 +473,7 @@ test('normalizeSkillRegistryToolArguments 会收敛为新的 package/file action
     deprecated_compat_action: false,
     next_instruction_path: null,
     next_runtime_entry_path: null
-  });
+  }, { allowInternalFileActions: true });
 });
 
 test('skill_registry 在纯对话模式下的工具说明不再默认指向当前页', async () => {
@@ -483,7 +509,7 @@ test('skill 读取参数支持字符偏移与按行续读', async () => {
     skill_name: 'long-dom-probe',
     start_line: 3,
     end_line: 5
-  });
+  }, { allowInternalFileActions: true });
   assert.deepEqual(normalizedReadDetail.read_options, {
     mode: 'line_range',
     skip_chars: null,
@@ -498,7 +524,7 @@ test('skill 读取参数支持字符偏移与按行续读', async () => {
     file_path: 'src/main.js',
     skip_chars: 120,
     max_chars: 200
-  });
+  }, { allowInternalFileActions: true });
   assert.deepEqual(normalizedReadFile.read_options, {
     mode: 'char_range',
     skip_chars: 120,
@@ -546,7 +572,7 @@ test('skill 读取参数支持字符偏移与按行续读', async () => {
       skip_chars: 10,
       start_line: 1,
       end_line: 2
-    }),
+    }, { allowInternalFileActions: true }),
     /不能同时使用字符区间和行区间/
   );
 

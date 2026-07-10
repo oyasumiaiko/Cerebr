@@ -186,6 +186,50 @@ async function reloadUnpackedExtension(context, {
   return await waitForExtensionWorker(context, { timeoutMs });
 }
 
+/**
+ * 确保固定 stable Chrome 测试 profile 已允许当前 unpacked 扩展运行 user scripts。
+ *
+ * Chrome 138+ 把 `chrome.userScripts` 放在扩展详情页的独立用户确认开关后面；即使
+ * manifest 已声明 userScripts 权限，未开启该开关时 service worker 里仍看不到 API。
+ * 这里仅操作仓库专用的固定测试 profile，不接触用户日常 Chrome profile。
+ *
+ * @param {import('playwright').BrowserContext} context
+ * @param {string} extensionId
+ * @param {{timeoutMs?:number}} [options]
+ * @returns {Promise<{allowed:boolean,changed:boolean}>}
+ */
+async function ensureExtensionUserScriptsAllowed(context, extensionId, { timeoutMs = 15_000 } = {}) {
+  const normalizedExtensionId = typeof extensionId === 'string' ? extensionId.trim() : '';
+  if (!normalizedExtensionId) {
+    throw new Error('Cannot enable user scripts without an extension id.');
+  }
+
+  const page = await context.newPage();
+  try {
+    await page.goto(`chrome://extensions/?id=${normalizedExtensionId}`, {
+      waitUntil: 'domcontentloaded'
+    });
+    const toggle = page.locator('extensions-toggle-row#allow-user-scripts');
+    await toggle.waitFor({ state: 'visible', timeout: timeoutMs });
+    const alreadyAllowed = await toggle.evaluate((element) => element.checked === true);
+    if (alreadyAllowed) {
+      return { allowed: true, changed: false };
+    }
+
+    await toggle.click();
+    await waitFor(async () => (
+      await toggle.evaluate((element) => element.checked === true).catch(() => false)
+    ), {
+      timeoutMs,
+      intervalMs: 200,
+      label: 'Allow User Scripts toggle'
+    });
+    return { allowed: true, changed: true };
+  } finally {
+    await page.close().catch(() => null);
+  }
+}
+
 async function waitForSidebarFrame(page, extensionId, { timeoutMs = 30_000 } = {}) {
   return await waitFor(async () => (
     page.frames().find((frame) => frame.url().startsWith(`chrome-extension://${extensionId}/src/ui/sidebar/sidebar.html`)) || null
@@ -196,6 +240,7 @@ module.exports = {
   DEFAULT_STABLE_CHROME_PATH,
   buildPersistentContextLaunchOptions,
   buildSendContentMessageExpression,
+  ensureExtensionUserScriptsAllowed,
   launchFixedSidebarContext,
   loadUnpackedExtensionIntoFixedProfile,
   loadPlaywright,
