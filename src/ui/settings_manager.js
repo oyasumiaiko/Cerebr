@@ -249,6 +249,8 @@ export function createSettingsManager(appContext) {
   let currentSettings = {...DEFAULT_SETTINGS};
   let backgroundImageLoadToken = 0;
   let backgroundImageQueueState = { signature: '', pool: [], index: 0 };
+  let currentBackgroundImageObjectUrl = '';
+  const BACKGROUND_IMAGE_CACHE_NAME = 'cerebr-background-images-v1';
 
   const getConversationTitleApiOptions = () => {
     const options = [{ label: '跟随当前 API', value: 'follow_current' }];
@@ -3128,7 +3130,8 @@ export function createSettingsManager(appContext) {
 
     if (/^\s*url\(/i.test(normalizedInput)) {
       const extracted = extractUrlFromCss(normalizedInput);
-      updateBackgroundImageCss(normalizedInput, true, token, extracted || undefined);
+      if (extracted) void loadBackgroundImageCandidate(extracted, token);
+      else updateBackgroundImageCss('none', false, token);
       return;
     }
 
@@ -3146,8 +3149,7 @@ export function createSettingsManager(appContext) {
 
     if (normalizedSource.kind === 'direct') {
       const targetUrl = maybeAppendCacheBuster(normalizedSource.url, cacheBustToken);
-      const cssValue = createCssUrlValue(targetUrl);
-      updateBackgroundImageCss(cssValue, true, token, targetUrl);
+      void loadBackgroundImageCandidate(targetUrl, token);
       return;
     }
 
@@ -3210,11 +3212,9 @@ export function createSettingsManager(appContext) {
 
   async function loadBackgroundImageFromList(listUrl, token, options = {}) {
     try {
-      const response = await fetch(listUrl);
-      if (!response.ok) {
-        throw new Error(`请求失败: ${response.status}`);
-      }
-      const text = await response.text();
+      const result = await chrome.runtime.sendMessage({ type: 'FETCH_BACKGROUND_TEXT', url: listUrl });
+      if (!result?.success) throw new Error(result?.error || 'background 读取列表失败');
+      const text = result.text || '';
       if (token !== backgroundImageLoadToken) return;
 
       const rawCandidates = parseBackgroundList(text);
@@ -3263,13 +3263,14 @@ export function createSettingsManager(appContext) {
       const candidate = getNextBackgroundCandidate(signature, candidates);
       attempts += 1;
       if (!candidate) continue;
+      let objectUrl = '';
       try {
-        await ensureImageLoad(candidate);
-        if (token !== backgroundImageLoadToken) return;
-        const cssValue = createCssUrlValue(candidate);
-        updateBackgroundImageCss(cssValue, true, token, candidate);
+        objectUrl = await fetchBackgroundImageObjectUrl(candidate);
+        await ensureImageLoad(objectUrl);
+        setBackgroundImageObjectUrl(objectUrl, token, candidate);
         return;
       } catch (error) {
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
         console.warn('背景图片加载失败，尝试下一张:', candidate, error);
       }
     }
@@ -3376,6 +3377,46 @@ export function createSettingsManager(appContext) {
     });
   }
 
+  async function fetchBackgroundImageObjectUrl(resourceUrl) {
+    const result = await chrome.runtime.sendMessage({ type: 'FETCH_BACKGROUND_IMAGE', url: resourceUrl });
+    if (!result?.success || !result.cacheKey) throw new Error(result?.error || 'background 读取图片失败');
+    const cache = await caches.open(BACKGROUND_IMAGE_CACHE_NAME);
+    try {
+      const response = await cache.match(result.cacheKey);
+      if (!response) throw new Error('background 图片缓存不存在');
+      const blob = await response.blob();
+      if (!blob.type.toLowerCase().startsWith('image/')) throw new Error(`background 缓存内容不是图片: ${blob.type || 'unknown'}`);
+      return URL.createObjectURL(blob);
+    } finally {
+      await cache.delete(result.cacheKey);
+    }
+  }
+
+  async function loadBackgroundImageCandidate(resourceUrl, token) {
+    let objectUrl = '';
+    try {
+      objectUrl = await fetchBackgroundImageObjectUrl(resourceUrl);
+      await ensureImageLoad(objectUrl);
+      setBackgroundImageObjectUrl(objectUrl, token, resourceUrl);
+    } catch (error) {
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      if (token !== backgroundImageLoadToken) return;
+      console.error('加载背景图片失败:', resourceUrl, error);
+      updateBackgroundImageCss('none', false, token);
+    }
+  }
+
+  function setBackgroundImageObjectUrl(objectUrl, token, debugUrl) {
+    if (token !== backgroundImageLoadToken) {
+      URL.revokeObjectURL(objectUrl);
+      return;
+    }
+    const previousObjectUrl = currentBackgroundImageObjectUrl;
+    currentBackgroundImageObjectUrl = objectUrl;
+    updateBackgroundImageCss(createCssUrlValue(objectUrl), true, token, debugUrl);
+    if (previousObjectUrl && previousObjectUrl !== objectUrl) URL.revokeObjectURL(previousObjectUrl);
+  }
+
   function createCssUrlValue(resourceUrl) {
     const escaped = String(resourceUrl).replace(/['"\\]/g, '\\$&');
     return `url("${escaped}")`;
@@ -3399,6 +3440,10 @@ export function createSettingsManager(appContext) {
 
   function updateBackgroundImageCss(cssValue, hasImage, token, debugUrl) {
     if (token !== backgroundImageLoadToken) return;
+    if (!hasImage && currentBackgroundImageObjectUrl) {
+      URL.revokeObjectURL(currentBackgroundImageObjectUrl);
+      currentBackgroundImageObjectUrl = '';
+    }
     document.documentElement.style.setProperty('--cerebr-background-image', cssValue || 'none');
 
     const syncBackgroundClass = () => {

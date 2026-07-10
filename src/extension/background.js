@@ -13,6 +13,60 @@ import { normalizeViewImageArguments } from '../agent_tools/view_image/tool.js';
 
 const CONTEXT_MENU_EXPLAIN_IMAGE_ID = 'explain-image';
 const CONTEXT_MENU_RELOAD_SIDEBAR_IFRAME_ID = 'reload-sidebar-iframe';
+const BACKGROUND_IMAGE_CACHE_NAME = 'cerebr-background-images-v1';
+const BACKGROUND_IMAGE_CACHE_PREFIX = 'https://cerebr-background-cache.invalid/';
+const BACKGROUND_TEXT_MAX_BYTES = 2 * 1024 * 1024;
+
+/**
+ * 只接受背景设置实际支持的资源协议，避免消息入口被扩展为任意协议读取器。
+ * http(s) 由 host_permissions 赋予跨域能力；file 仍受 Chrome 的“允许访问文件网址”开关约束。
+ */
+function normalizeBackgroundResourceUrl(input) {
+  const raw = typeof input === 'string' ? input.trim() : '';
+  if (!raw) throw new Error('背景资源地址为空');
+  const url = new URL(raw);
+  if (!['http:', 'https:', 'file:', 'data:'].includes(url.protocol)) {
+    throw new Error(`不支持的背景资源协议: ${url.protocol}`);
+  }
+  return url.href;
+}
+
+async function fetchBackgroundResource(url, accept) {
+  const normalizedUrl = normalizeBackgroundResourceUrl(url);
+  const response = await fetch(normalizedUrl, {
+    method: 'GET', credentials: 'omit', cache: 'no-store', redirect: 'follow',
+    headers: accept ? { Accept: accept } : undefined
+  });
+  if (!response.ok) {
+    throw new Error(`背景资源请求失败: HTTP ${response.status} ${response.statusText}`.trim());
+  }
+  return { response, normalizedUrl };
+}
+
+async function fetchBackgroundText(url) {
+  const { response, normalizedUrl } = await fetchBackgroundResource(url, 'text/plain,text/*;q=0.9,*/*;q=0.1');
+  const declaredLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(declaredLength) && declaredLength > BACKGROUND_TEXT_MAX_BYTES) {
+    throw new Error('背景图片列表超过 2 MiB 限制');
+  }
+  const buffer = await response.arrayBuffer();
+  if (buffer.byteLength > BACKGROUND_TEXT_MAX_BYTES) throw new Error('背景图片列表超过 2 MiB 限制');
+  return { url: normalizedUrl, text: new TextDecoder('utf-8').decode(buffer) };
+}
+
+async function fetchAndCacheBackgroundImage(url) {
+  const { response, normalizedUrl } = await fetchBackgroundResource(url, 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8');
+  const blob = await response.blob();
+  const contentType = (blob.type || response.headers.get('content-type') || '').toLowerCase();
+  if (!contentType.startsWith('image/')) throw new Error(`背景资源不是图片: ${contentType || 'unknown'}`);
+  if (blob.size === 0) throw new Error('背景图片内容为空');
+  const cacheKey = `${BACKGROUND_IMAGE_CACHE_PREFIX}${crypto.randomUUID()}`;
+  const cache = await caches.open(BACKGROUND_IMAGE_CACHE_NAME);
+  await cache.put(cacheKey, new Response(blob, {
+    headers: { 'Content-Type': contentType, 'Content-Length': String(blob.size), 'X-Cerebr-Original-Url': normalizedUrl }
+  }));
+  return { cacheKey, url: normalizedUrl, contentType, size: blob.size };
+}
 
 // 确保 Service Worker 立即激活
 self.addEventListener('install', (event) => {
@@ -371,6 +425,20 @@ chrome.runtime.onConnect.addListener((p) => {
 // 监听来自 content script 的消息
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // console.log('收到消息:', message, '来自:', sender.tab?.id);
+
+  if (message?.type === 'FETCH_BACKGROUND_TEXT') {
+    fetchBackgroundText(message?.url)
+      .then((result) => sendResponse({ success: true, ...result }))
+      .catch((error) => sendResponse({ success: false, error: error?.message || '读取背景图片列表失败' }));
+    return true;
+  }
+
+  if (message?.type === 'FETCH_BACKGROUND_IMAGE') {
+    fetchAndCacheBackgroundImage(message?.url)
+      .then((result) => sendResponse({ success: true, ...result }))
+      .catch((error) => sendResponse({ success: false, error: error?.message || '读取背景图片失败' }));
+    return true;
+  }
 
   if (message?.type === 'GET_JS_RUNTIME_STATUS') {
     (async () => {
