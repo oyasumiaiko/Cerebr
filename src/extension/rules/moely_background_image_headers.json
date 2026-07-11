@@ -1,0 +1,30 @@
+[
+  {
+    "id": 1,
+    "priority": 100,
+    "action": {
+      "type": "modifyHeaders",
+      "requestHeaders": [
+        {
+          "header": "Referer",
+          "operation": "set",
+          "value": "https://www.moely.link/"
+        },
+        {
+          "header": "Origin",
+          "operation": "set",
+          "value": "https://www.moely.link"
+        }
+      ]
+    },
+    "condition": {
+      "requestDomains": [
+        "i.moely.link",
+        "t.moely.link"
+      ],
+      "resourceTypes": [
+        "xmlhttprequest"
+      ]
+    }
+  }
+]
