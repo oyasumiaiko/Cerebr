@@ -10,12 +10,14 @@ import {
   normalizeWebpageScreenshotArguments
 } from '../agent_tools/webpage_screenshot/tool.js';
 import { normalizeViewImageArguments } from '../agent_tools/view_image/tool.js';
+import { putBackgroundImageBlob } from '../storage/background_image_blob_store.js';
 
 const CONTEXT_MENU_EXPLAIN_IMAGE_ID = 'explain-image';
 const CONTEXT_MENU_RELOAD_SIDEBAR_IFRAME_ID = 'reload-sidebar-iframe';
-const BACKGROUND_IMAGE_CACHE_NAME = 'cerebr-background-images-v1';
-const BACKGROUND_IMAGE_CACHE_PREFIX = 'https://cerebr-background-cache.invalid/';
 const BACKGROUND_TEXT_MAX_BYTES = 2 * 1024 * 1024;
+const BACKGROUND_REFERER_RULE_ID_START = 100000000;
+const BACKGROUND_REFERER_RULE_ID_END = 100100000;
+let nextBackgroundRefererRuleId = BACKGROUND_REFERER_RULE_ID_START;
 
 /**
  * 只接受背景设置实际支持的资源协议，避免消息入口被扩展为任意协议读取器。
@@ -28,19 +30,72 @@ function normalizeBackgroundResourceUrl(input) {
   if (!['http:', 'https:', 'file:', 'data:'].includes(url.protocol)) {
     throw new Error(`不支持的背景资源协议: ${url.protocol}`);
   }
+  // URL fragment 不会被网络请求发送；提前去掉它，确保 DNR 的精确匹配与实际请求一致。
+  url.hash = '';
   return url.href;
 }
 
 async function fetchBackgroundResource(url, accept) {
   const normalizedUrl = normalizeBackgroundResourceUrl(url);
-  const response = await fetch(normalizedUrl, {
+  const protocol = new URL(normalizedUrl).protocol;
+  const isRemoteHttpResource = protocol === 'http:' || protocol === 'https:';
+  const options = {
     method: 'GET', credentials: 'omit', cache: 'no-store', redirect: 'follow',
     headers: accept ? { Accept: accept } : undefined
-  });
+  };
+  const response = isRemoteHttpResource
+    ? await fetchBackgroundResourceWithSelfReferer(normalizedUrl, options)
+    : await fetch(normalizedUrl, options);
   if (!response.ok) {
     throw new Error(`背景资源请求失败: HTTP ${response.status} ${response.statusText}`.trim());
   }
   return { response, normalizedUrl };
+}
+
+/**
+ * DNR 的请求头值只能是常量，不能在静态规则中引用“当前请求 URL”。
+ * 因此每次远程资源请求临时登记一条精确 URL 规则，将 Referer 设为该资源自身，
+ * 请求结束后立即删除。会话规则只存在于当前浏览器会话，且不会污染其他站点请求。
+ */
+async function fetchBackgroundResourceWithSelfReferer(normalizedUrl, options) {
+  const ruleId = allocateBackgroundRefererRuleId();
+  const rule = createBackgroundSelfRefererRule(ruleId, normalizedUrl);
+  await chrome.declarativeNetRequest.updateSessionRules({ addRules: [rule] });
+  try {
+    return await fetch(normalizedUrl, options);
+  } finally {
+    await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [ruleId] });
+  }
+}
+
+function allocateBackgroundRefererRuleId() {
+  const ruleId = nextBackgroundRefererRuleId;
+  nextBackgroundRefererRuleId = (ruleId + 1 >= BACKGROUND_REFERER_RULE_ID_END)
+    ? BACKGROUND_REFERER_RULE_ID_START
+    : ruleId + 1;
+  return ruleId;
+}
+
+function createBackgroundSelfRefererRule(ruleId, normalizedUrl) {
+  const url = new URL(normalizedUrl);
+  return {
+    id: ruleId,
+    priority: 1000,
+    action: {
+      type: 'modifyHeaders',
+      requestHeaders: [{ header: 'Referer', operation: 'set', value: normalizedUrl }]
+    },
+    condition: {
+      // regexFilter 保证只有这一条 URL 命中，避免并发图片下载共用错误的 Referer。
+      regexFilter: `^${escapeDnrRegex(normalizedUrl)}$`,
+      requestDomains: [url.hostname],
+      resourceTypes: ['xmlhttprequest']
+    }
+  };
+}
+
+function escapeDnrRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 async function fetchBackgroundText(url) {
@@ -54,18 +109,20 @@ async function fetchBackgroundText(url) {
   return { url: normalizedUrl, text: new TextDecoder('utf-8').decode(buffer) };
 }
 
-async function fetchAndCacheBackgroundImage(url) {
+async function fetchAndStoreBackgroundImage(url) {
   const { response, normalizedUrl } = await fetchBackgroundResource(url, 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8');
   const blob = await response.blob();
   const contentType = (blob.type || response.headers.get('content-type') || '').toLowerCase();
   if (!contentType.startsWith('image/')) throw new Error(`背景资源不是图片: ${contentType || 'unknown'}`);
   if (blob.size === 0) throw new Error('背景图片内容为空');
-  const cacheKey = `${BACKGROUND_IMAGE_CACHE_PREFIX}${crypto.randomUUID()}`;
-  const cache = await caches.open(BACKGROUND_IMAGE_CACHE_NAME);
-  await cache.put(cacheKey, new Response(blob, {
-    headers: { 'Content-Type': contentType, 'Content-Length': String(blob.size), 'X-Cerebr-Original-Url': normalizedUrl }
-  }));
-  return { cacheKey, url: normalizedUrl, contentType, size: blob.size };
+  const blobKey = crypto.randomUUID();
+  await putBackgroundImageBlob({
+    key: blobKey,
+    blob,
+    sourceUrl: normalizedUrl,
+    contentType
+  });
+  return { blobKey, url: normalizedUrl, contentType, size: blob.size };
 }
 
 // 确保 Service Worker 立即激活
@@ -434,7 +491,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === 'FETCH_BACKGROUND_IMAGE') {
-    fetchAndCacheBackgroundImage(message?.url)
+    fetchAndStoreBackgroundImage(message?.url)
       .then((result) => sendResponse({ success: true, ...result }))
       .catch((error) => sendResponse({ success: false, error: error?.message || '读取背景图片失败' }));
     return true;

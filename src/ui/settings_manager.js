@@ -20,6 +20,7 @@ import {
   DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT,
   normalizeConversationDocumentViewModeOverridesSetting
 } from '../utils/conversation_document_viewer_state.js';
+import { takeBackgroundImageBlob } from '../storage/background_image_blob_store.js';
 
 const AI_FOOTER_SHARED_VARIABLE_PANEL_KEY = 'ai-footer-shared-variables';
 
@@ -250,7 +251,6 @@ export function createSettingsManager(appContext) {
   let backgroundImageLoadToken = 0;
   let backgroundImageQueueState = { signature: '', pool: [], index: 0 };
   let currentBackgroundImageObjectUrl = '';
-  const BACKGROUND_IMAGE_CACHE_NAME = 'cerebr-background-images-v1';
 
   const getConversationTitleApiOptions = () => {
     const options = [{ label: '跟随当前 API', value: 'follow_current' }];
@@ -3379,17 +3379,10 @@ export function createSettingsManager(appContext) {
 
   async function fetchBackgroundImageObjectUrl(resourceUrl) {
     const result = await chrome.runtime.sendMessage({ type: 'FETCH_BACKGROUND_IMAGE', url: resourceUrl });
-    if (!result?.success || !result.cacheKey) throw new Error(result?.error || 'background 读取图片失败');
-    const cache = await caches.open(BACKGROUND_IMAGE_CACHE_NAME);
-    try {
-      const response = await cache.match(result.cacheKey);
-      if (!response) throw new Error('background 图片缓存不存在');
-      const blob = await response.blob();
-      if (!blob.type.toLowerCase().startsWith('image/')) throw new Error(`background 缓存内容不是图片: ${blob.type || 'unknown'}`);
-      return URL.createObjectURL(blob);
-    } finally {
-      await cache.delete(result.cacheKey);
-    }
+    if (!result?.success || !result.blobKey) throw new Error(result?.error || 'background 读取图片失败');
+    const blob = await takeBackgroundImageBlob(result.blobKey);
+    if (!blob.type.toLowerCase().startsWith('image/')) throw new Error(`background 暂存内容不是图片: ${blob.type || 'unknown'}`);
+    return URL.createObjectURL(blob);
   }
 
   async function loadBackgroundImageCandidate(resourceUrl, token) {

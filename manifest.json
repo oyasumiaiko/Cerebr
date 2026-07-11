@@ -67,15 +67,6 @@
     "service_worker": "src/extension/background.js",
     "type": "module"
   },
-  "declarative_net_request": {
-    "rule_resources": [
-      {
-        "id": "moely_background_image_headers",
-        "enabled": true,
-        "path": "src/extension/rules/moely_background_image_headers.json"
-      }
-    ]
-  },
   "sandbox": {
     "pages": [
       "src/ui/html_preview_sandbox/html_preview_sandbox.html",
