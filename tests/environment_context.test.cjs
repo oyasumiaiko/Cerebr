@@ -24,15 +24,13 @@ test('buildEnvironmentContextPayload 会生成 current_date 与 timezone', async
 
   const payload = buildEnvironmentContextPayload({
     timezone: 'Asia/Shanghai',
-    applyPatchAvailable: true,
     now: Date.UTC(2026, 3, 7, 10, 30, 0)
   });
 
   assert.deepEqual(payload, {
     type: 'environment_context',
     current_date: '2026-04-07',
-    timezone: 'Asia/Shanghai',
-    apply_patch_available: true
+    timezone: 'Asia/Shanghai'
   });
 
   const items = buildEnvironmentContextInputItems(payload);
@@ -41,11 +39,8 @@ test('buildEnvironmentContextPayload 会生成 current_date 与 timezone', async
   assert.match(text, /<environment_context>/);
   assert.match(text, /<current_date>2026-04-07<\/current_date>/);
   assert.match(text, /<timezone>Asia\/Shanghai<\/timezone>/);
-  assert.match(text, /<apply_patch_available>true<\/apply_patch_available>/);
-  assert.match(text, /<virtual_file_tool_policy>/);
-  assert.match(text, /官方协议/);
-  assert.match(text, /@skill\/&lt;skill-key&gt;\/&lt;relative-path&gt;/);
-  assert.match(text, /没有单独的顶层 delete_file 工具/);
+  assert.doesNotMatch(text, /apply_patch|delete_file|copy_file|move_file/);
+  assert.doesNotMatch(text, /<virtual_file_tool_policy>|<user_uploaded_file_policy>|<local_file_mount_policy>/);
   assert.doesNotMatch(text, /<workspace_file_policy>/);
 });
 
@@ -87,7 +82,7 @@ test('resolveEnvironmentContextAttachment 在签名未变化时不重复追加',
     currentDate: '2026-04-07'
   });
   const signature = buildEnvironmentContextSignature(payload);
-  assert.match(signature, /official-apply-patch-v2/);
+  assert.match(signature, /facts-only-v3/);
 
   const unchanged = resolveEnvironmentContextAttachment({
     payload,
@@ -110,7 +105,7 @@ test('resolveEnvironmentContextAttachment 在签名未变化时不重复追加',
   assert.equal(changed.reason, 'initial');
 });
 
-test('buildEnvironmentContextInputItems 在本轮未暴露 apply_patch 时不会误导模型调用', async () => {
+test('buildEnvironmentContextInputItems 不接受或输出任何工具能力状态', async () => {
   const {
     buildEnvironmentContextPayload,
     buildEnvironmentContextInputItems
@@ -123,12 +118,11 @@ test('buildEnvironmentContextInputItems 在本轮未暴露 apply_patch 时不会
   });
   const text = buildEnvironmentContextInputItems(payload)[0].content[0].text;
 
-  assert.match(text, /<apply_patch_available>false<\/apply_patch_available>/);
-  assert.match(text, /当前请求没有暴露官方 apply_patch/);
-  assert.doesNotMatch(text, /apply_patch_call 的 operation\.path/);
+  assert.equal(Object.prototype.hasOwnProperty.call(payload, 'apply_patch_available'), false);
+  assert.doesNotMatch(text, /apply_patch|delete_file|可用文件能力|request\.tools/);
 });
 
-test('buildEnvironmentContextInputItems 会在用户上传文件时附带文件处理与命名规范', async () => {
+test('buildEnvironmentContextInputItems 只附带实际上传文件事实', async () => {
   const {
     buildEnvironmentContextPayload,
     buildEnvironmentContextInputItems
@@ -153,13 +147,11 @@ test('buildEnvironmentContextInputItems 会在用户上传文件时附带文件�
   assert.match(text, /<user_uploaded_files>/);
   assert.match(text, /<path>untitled<\/path>/);
   assert.match(text, /<file_name_was_missing>true<\/file_name_was_missing>/);
-  assert.match(text, /untitled/);
-  assert.match(text, /Markdown 相对路径链接/);
-  assert.match(text, /move_file 改名/);
+  assert.doesNotMatch(text, /<user_uploaded_file_policy>|move_file|copy_file|apply_patch/);
   assert.doesNotMatch(text, /\*\*\* Move to:/);
 });
 
-test('buildEnvironmentContextInputItems 会声明 local mount 是只读实时映射', async () => {
+test('buildEnvironmentContextInputItems 只附带实际 local mount 事实与只读标记', async () => {
   const {
     buildEnvironmentContextPayload,
     buildEnvironmentContextInputItems
@@ -185,7 +177,5 @@ test('buildEnvironmentContextInputItems 会声明 local mount 是只读实时映
   assert.match(text, /<path>local\/project<\/path>/);
   assert.match(text, /<kind>directory<\/kind>/);
   assert.match(text, /<read_only>true<\/read_only>/);
-  assert.match(text, /copy_file 把 local\/\.\.\. 复制成普通会话文件/);
-  assert.match(text, /list_files 或 search_files/);
-  assert.match(text, /不允许 apply_patch 或 move_file 直接修改/);
+  assert.doesNotMatch(text, /<local_file_mount_policy>|copy_file|move_file|apply_patch|list_files|search_files/);
 });

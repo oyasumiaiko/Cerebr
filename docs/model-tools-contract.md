@@ -93,7 +93,7 @@ responses_builtin_tools.js 当前管理的 web_search、code_interpreter、image
 - 成功和失败会返回什么？
 - 是否会写数据、访问网络、等待用户或执行代码？
 
-不要把无关的全局工作流、产品宣传、调试实现细节或大段示例堆进 description。跨工具的文件交付规范应放在 environment_context。官方 apply_patch 没有客户端 description，因此路径命名空间、local 只读和删除语义必须由 environment_context 稳定说明。
+不要把无关的全局工作流、产品宣传、调试实现细节或大段示例堆进 description。工具是否存在只由本轮最终 `request.tools` 决定；禁止通过 environment_context 额外解释某个工具存在或不存在。跨工具约束应优先由相关工具 description、实际参数结构和本地执行校验共同表达。
 
 ### 2.3 Strict Schema
 
@@ -837,7 +837,7 @@ handlerKey 与 outputKind 必须能映射到现有 sender 分支；契约测试�
 - skill patch 使用显式 `@skill/<skill-key>/<relative-path>`，删除文件使用 apply_patch 的 delete_file operation。
 - 顶层 delete_file 从新请求、设置和 tool_search 索引中退役，历史记录仅保留兼容识别。
 - 旧 Tools JSON / tool_choice 中的 custom function apply_patch 会被删除或迁移为官方 `{ "type": "apply_patch" }`，不会与官方工具同时发送。
-- environment_context 会记录本轮 apply_patch 是否实际可用；不可用时不会继续提示模型调用它。
+- environment_context 只记录日期、时区、实际上传文件和实际 local mount 等环境事实，不携带工具能力或操作策略。
 - enum 与可移植 strict 结构；数值范围、数组数量和 snake_case id 由 description 加 normalize 双层约束。
 - XML 根节点 schema_version 2 和 trust=untrusted。
 - XML 外部文本转义和 trusted_xml 内部子树边界。
