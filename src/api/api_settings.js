@@ -136,6 +136,17 @@ const RESPONSES_MAIN_FIELD_SPECS = Object.freeze([
     help: '限制本次 Responses API 的输出上限。'
   },
   {
+    path: ['top_p'],
+    key: 'top_p',
+    label: 'Top P',
+    kind: 'range',
+    defaultValue: 1,
+    min: 0,
+    max: 1,
+    step: 0.05,
+    help: '与 Temperature 二选一优先调一个；未启用时不发送 top_p。'
+  },
+  {
     path: ['truncation'],
     key: 'truncation',
     label: '截断策略',
@@ -361,6 +372,17 @@ const GEMINI_MEDIA_RESOLUTION_OPTIONS = Object.freeze([
   'MEDIA_RESOLUTION_HIGH'
 ]);
 const GEMINI_MAIN_FIELD_SPECS = Object.freeze([
+  {
+    path: ['generationConfig', 'topP'],
+    key: 'generationConfig.topP',
+    label: 'Top P',
+    kind: 'range',
+    defaultValue: 0.95,
+    min: 0,
+    max: 1,
+    step: 0.05,
+    help: 'Gemini 使用 nucleus sampling；仅启用后才附加 topP。'
+  },
   {
     path: ['generationConfig', 'topK'],
     key: 'generationConfig.topK',
@@ -5665,9 +5687,8 @@ export function createApiManager(appContext) {
         contents: contents,
         generationConfig: {
           responseMimeType: "text/plain",
-          ...(Number.isFinite(Number(config.temperature)) && Number(config.temperature) !== 1
-            ? { temperature: Number(config.temperature) }
-            : {}),
+          temperature: config.temperature ?? 1.0,
+          topP: 0.95, // Gemini 使用 topP 而不是 top_p
           ...geminiGenerationOverrides
         },
         ...geminiRootOverrides,
@@ -5850,12 +5871,11 @@ export function createApiManager(appContext) {
           requestBody.temperature = temperature;
         }
       } else {
-        const temperature = Number(config.temperature);
         requestBody = {
           model: config.modelName,
           messages: sanitizedMessages, // OpenAI API 仅接收标准字段，过滤内部扩展字段
           stream: (config.useStreaming !== false),
-          ...(Number.isFinite(temperature) && temperature !== 1 ? { temperature } : {}),
+          temperature: config.temperature ?? 1.0, // 确保有默认值
           ...overrides // 允许覆盖默认参数
         };
       }
