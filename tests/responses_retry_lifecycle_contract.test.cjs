@@ -67,32 +67,7 @@ test('Responses stream 未收到 completed 就关闭时按可见进度区分重�
   );
   assert.match(
     source,
-    /if \(lastHandleResult\?\.incomplete === true\) \{[\s\S]*?return lastHandleResult;[\s\S]*?\}[\s\S]*?if \(pendingClientToolCalls\.length <= 0\)/,
+    /if \(lastHandleResult\?\.incomplete === true\) \{[\s\S]*?return lastHandleResult;[\s\S]*?\}[\s\S]*?if \(pendingFunctionCalls\.length <= 0\)/,
     '部分回答保留后不能继续执行半截工具调用 follow-up'
-  );
-});
-
-test('多 client-tool call 会逐 call 持久化已完成 output，避免中止后副作用与历史漂移', async () => {
-  const source = await readWorkspaceFile('src/core/message_sender.js');
-
-  assert.match(
-    source,
-    /for \(const toolCall of pendingClientToolCalls\) \{[\s\S]*?clientToolOutputs\.push\(outputItem\);[\s\S]*?mergeResponsesClientToolOutputsIntoTimeline\([\s\S]*?persistAttemptConversationSnapshot\(attemptState, \{ force: true \}\);[\s\S]*?\}/,
-    '每个本地工具完成后都必须立刻合并 call/output 并持久化'
-  );
-});
-
-test('官方 apply_patch 只执行 completed call，非流式 incomplete 响应不会产生副作用', async () => {
-  const source = await readWorkspaceFile('src/core/message_sender.js');
-
-  assert.match(
-    source,
-    /type === OPENAI_APPLY_PATCH_CALL_TYPE[\s\S]*?record\?\.status[\s\S]*?=== 'completed'/,
-    'in_progress apply_patch_call 不能进入本地执行队列'
-  );
-  assert.match(
-    source,
-    /const responsesNonStreamIncomplete = isResponsesApi[\s\S]*?json\?\.incomplete_details[\s\S]*?incomplete: responsesNonStreamIncomplete/,
-    '非流式 Responses incomplete 状态必须传回 lifecycle 以阻止工具执行'
   );
 });

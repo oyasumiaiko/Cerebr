@@ -135,7 +135,9 @@ test('normalizeConversationDocumentPath 支持空格与 Unicode，并拒绝越�
 
 test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验并默认会话文件目标', async () => {
   const {
+    VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
     VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
+    VIRTUAL_FILE_DELETE_FILE_TOOL_NAME,
     VIRTUAL_FILE_LIST_FILES_TOOL_NAME,
     VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
     VIRTUAL_FILE_READ_FILE_TOOL_NAME,
@@ -153,22 +155,20 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
     path_glob: null
   });
 
-  const skillCopyTarget = normalizeVirtualFileToolArguments(VIRTUAL_FILE_COPY_FILE_TOOL_NAME, {
+  const skillPatchTarget = normalizeVirtualFileToolArguments(VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME, {
     target: {
       kind: 'skill',
       name: 'dom-probe'
     },
-    from: 'notes.md',
-    to: 'archive/notes.md'
+    patch: '*** Begin Patch\n*** Add File: notes.md\n+hello\n*** End Patch'
   });
-  assert.equal(skillCopyTarget.target.kind, 'skill');
-  assert.equal(skillCopyTarget.target.name, 'dom-probe');
+  assert.equal(skillPatchTarget.target.kind, 'skill');
+  assert.equal(skillPatchTarget.target.name, 'dom-probe');
 
   assert.throws(
-    () => normalizeVirtualFileToolArguments(VIRTUAL_FILE_COPY_FILE_TOOL_NAME, {
+    () => normalizeVirtualFileToolArguments(VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME, {
       target: { kind: 'skill' },
-      from: 'notes.md',
-      to: 'archive/notes.md'
+      patch: '*** Begin Patch\n*** Add File: notes.md\n+hello\n*** End Patch'
     }),
     /target.kind=skill 时 target.name 不能为空/
   );
@@ -242,6 +242,12 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
   assert.equal(moveSkillFile.source_path, 'references/old.md');
   assert.equal(moveSkillFile.destination_path, 'references/new.md');
 
+  const deleteFile = normalizeVirtualFileToolArguments(VIRTUAL_FILE_DELETE_FILE_TOOL_NAME, {
+    path: 'spec.md'
+  });
+  assert.equal(deleteFile.action, 'delete_file');
+  assert.equal(deleteFile.file_path, 'spec.md');
+
   const legacyWorkspacePrefixRead = normalizeVirtualFileToolArguments(VIRTUAL_FILE_READ_FILE_TOOL_NAME, {
     path: 'workspace/spec.md'
   });
@@ -254,22 +260,26 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
   assert.equal(legacyWorkspacePrefixSearch.path_glob, '**/*.md');
 });
 
-test('公开虚拟文件工具不再暴露独立 delete_file 定义或 action', async () => {
-  const tools = await loadConversationDocumentToolsModule();
+test('apply_patch 工具定义聚焦虚拟文件补丁契约，不重复最终交付策略', async () => {
+  const {
+    buildVirtualFileApplyPatchFunctionToolDefinition
+  } = await loadConversationDocumentToolsModule();
 
-  assert.equal(tools.VIRTUAL_FILE_DELETE_FILE_TOOL_NAME, undefined);
-  assert.equal(tools.CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME, undefined);
-  assert.equal(tools.buildVirtualFileDeleteFileFunctionToolDefinition, undefined);
-  assert.equal(tools.buildConversationDocumentDeleteFileFunctionToolDefinition, undefined);
-  assert.throws(
-    () => tools.normalizeVirtualFileToolArguments('delete_file', { path: 'obsolete.md' }),
-    /不支持的 action `delete_file`/
-  );
+  const applyPatchDefinition = buildVirtualFileApplyPatchFunctionToolDefinition();
+  assert.equal(applyPatchDefinition.strict, true);
+  assert.match(applyPatchDefinition.description, /虚拟文本文件/);
+  assert.match(applyPatchDefinition.description, /HTML/);
+  assert.match(applyPatchDefinition.description, /A\/M\/D/);
+  assert.doesNotMatch(applyPatchDefinition.description, /preview\.html/);
+  assert.doesNotMatch(applyPatchDefinition.description, /最终回复/);
+  assert.deepEqual(applyPatchDefinition.parameters.required, ['target', 'patch']);
+  assert.doesNotMatch(applyPatchDefinition.description, /workspace\//);
 });
 
 test('read_file/search_files 与文件操作工具定义暴露严格且低歧义的参数', async () => {
   const {
     buildVirtualFileCopyFileFunctionToolDefinition,
+    buildVirtualFileDeleteFileFunctionToolDefinition,
     buildVirtualFileMoveFileFunctionToolDefinition,
     buildVirtualFileReadFileFunctionToolDefinition,
     buildVirtualFileSearchFilesFunctionToolDefinition
@@ -309,82 +319,45 @@ test('read_file/search_files 与文件操作工具定义暴露严格且低歧义
   const moveDefinition = buildVirtualFileMoveFileFunctionToolDefinition();
   assert.match(moveDefinition.description, /mv from to/);
   assert.deepEqual(moveDefinition.parameters.required, ['target', 'from', 'to']);
+
+  const deleteDefinition = buildVirtualFileDeleteFileFunctionToolDefinition();
+  assert.match(deleteDefinition.description, /rm path/);
+  assert.deepEqual(deleteDefinition.parameters.required, ['target', 'path']);
 });
 
-test('官方 apply_patch operation 支持 create/update/delete，并拒绝同名 create', async () => {
+test('apply_patch 遇到同名 Add File 时会按 Windows 语义追加 (2)', async () => {
   const {
-    executeConversationDocumentOpenAIApplyPatchOperation
+    executeConversationDocumentAction,
+    CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME
   } = await loadConversationDocumentToolsModule();
 
-  const store = createInMemoryDocumentStore({});
-
-  const created = await executeConversationDocumentOpenAIApplyPatchOperation({
-    type: 'create_file',
-    path: '计划.md',
-    diff: [
-      '+# 计划',
-      '+第一版'
-    ].join('\n')
-  }, {
-    conversationId: 'conv-doc-official-patch',
-    store,
-    now: '2026-07-10T00:00:00.000Z'
+  const store = createInMemoryDocumentStore({
+    '计划.md': '# old\n'
   });
-  assert.equal(created.ok, true);
-  assert.deepEqual(created.affected_files, {
-    added: ['计划.md'],
-    modified: [],
-    deleted: []
-  });
-  assert.deepEqual(created.change_event.updated_paths, ['计划.md']);
-  assert.equal(
-    (await store.getDocument('conv-doc-official-patch', '计划.md')).content,
-    '# 计划\n第一版'
-  );
 
-  await assert.rejects(
-    () => executeConversationDocumentOpenAIApplyPatchOperation({
-      type: 'create_file',
-      path: '计划.md',
-      diff: '+不能覆盖'
+  const result = await executeConversationDocumentAction(
+    CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
+    {
+      patch: [
+        '*** Begin Patch',
+        '*** Add File: workspace/计划.md',
+        '+# new',
+        '*** End Patch'
+      ].join('\n')
     },
     {
-      conversationId: 'conv-doc-official-patch',
+      conversationId: 'conv-doc-1',
       store
-    }),
-    /已存在文件 计划\.md，无法 create_file/
+    }
   );
 
-  const updated = await executeConversationDocumentOpenAIApplyPatchOperation({
-    type: 'update_file',
-    path: '计划.md',
-    diff: [
-      ' # 计划',
-      '-第一版',
-      '+第二版'
-    ].join('\n')
-  }, {
-    conversationId: 'conv-doc-official-patch',
-    store,
-    now: '2026-07-10T00:00:01.000Z'
-  });
-  assert.deepEqual(updated.affected_files.modified, ['计划.md']);
-  assert.equal(
-    (await store.getDocument('conv-doc-official-patch', '计划.md')).content,
-    '# 计划\n第二版'
-  );
-
-  const deleted = await executeConversationDocumentOpenAIApplyPatchOperation({
-    type: 'delete_file',
-    path: '计划.md'
-  }, {
-    conversationId: 'conv-doc-official-patch',
-    store,
-    now: '2026-07-10T00:00:02.000Z'
-  });
-  assert.deepEqual(deleted.affected_files.deleted, ['计划.md']);
-  assert.deepEqual(deleted.change_event.deleted_paths, ['计划.md']);
-  assert.equal(await store.getDocument('conv-doc-official-patch', '计划.md'), null);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.affected_files.added, ['计划 (2).md']);
+  assert.deepEqual(result.renamed_targets, [{
+    requested_path: '计划.md',
+    final_path: '计划 (2).md',
+    reason: 'collision'
+  }]);
 });
 
 test('read_file 支持行范围与带行号输出', async () => {
@@ -473,12 +446,13 @@ test('write_file 内部 action 会写回内容并产出 change_event', async () 
   assert.deepEqual(result.change_event.updated_paths, ['new note.md']);
 });
 
-test('copy_file/move_file 会显式管理对话虚拟文件，删除统一走官方 apply_patch operation', async () => {
+test('copy_file/move_file/delete_file 会显式管理对话虚拟文件且不覆盖目标', async () => {
   const {
+    CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
     CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
+    CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME,
     CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME,
-    executeConversationDocumentAction,
-    executeConversationDocumentOpenAIApplyPatchOperation
+    executeConversationDocumentAction
   } = await loadConversationDocumentToolsModule();
 
   const store = createInMemoryDocumentStore({
@@ -500,6 +474,27 @@ test('copy_file/move_file 会显式管理对话虚拟文件，删除统一走官
   assert.equal(copied.ok, true);
   assert.equal(copied.file.path, 'source-copy.md');
   assert.deepEqual(copied.affected_files.added, ['source-copy.md']);
+
+  await assert.rejects(
+    () => executeConversationDocumentAction(
+      CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
+      {
+        patch: [
+          '*** Begin Patch',
+          '*** Update File: local/project/src/a.js',
+          '@@',
+          '-const token = 1;',
+          '+const token = 2;',
+          '*** End Patch'
+        ].join('\n')
+      },
+      {
+        conversationId: 'conv-doc-5',
+        store
+      }
+    ),
+    /不能直接修改 local 映射路径/
+  );
 
   await assert.rejects(
     () => executeConversationDocumentAction(
@@ -532,13 +527,16 @@ test('copy_file/move_file 会显式管理对话虚拟文件，删除统一走官
   assert.deepEqual(moved.affected_files.deleted, ['source.md']);
   assert.deepEqual(moved.change_event.deleted_paths, ['source.md']);
 
-  const deleted = await executeConversationDocumentOpenAIApplyPatchOperation({
-    type: 'delete_file',
-    path: 'renamed.md'
-  }, {
-    conversationId: 'conv-doc-5',
-    store
-  });
+  const deleted = await executeConversationDocumentAction(
+    CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME,
+    {
+      file_path: 'renamed.md'
+    },
+    {
+      conversationId: 'conv-doc-5',
+      store
+    }
+  );
   assert.equal(deleted.ok, true);
   assert.deepEqual(deleted.affected_files.deleted, ['renamed.md']);
 });

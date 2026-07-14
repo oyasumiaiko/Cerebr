@@ -626,10 +626,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               allowSenderTabFallback: false
             });
         const result = await skillManager.executeRegistryAction(message?.payload || {}, {
-          tabId: targetTabId,
-          allowInternalPatchOperation: message?.allowInternalPatchOperation === true,
-          allowInternalFileActions: message?.allowInternalFileActions === true,
-          allowInternalCompatActions: message?.allowInternalCompatActions === true
+          tabId: targetTabId
         });
         sendResponse({ success: true, ...result });
       } catch (error) {

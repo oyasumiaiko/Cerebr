@@ -84,20 +84,16 @@ import {
 } from '../agent_tools/shared/responses_custom_tool_search.js';
 import {
   RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES,
-  buildResponsesExtensionFunctionTools,
-  buildResponsesExtensionProtocolTools
+  buildResponsesExtensionFunctionTools
 } from '../agent_tools/shared/responses_extension_tool_registry.js';
 import {
   filterResponsesExtensionFunctionTools,
-  filterUnavailableResponsesExtensionTools,
-  isAuthorizedResponsesApplyPatchTool,
-  isResponsesApplyPatchToolAvailable,
-  isResponsesExtensionToolEnabled,
+  filterUnavailableResponsesExtensionFunctionTools,
   reconcileResponsesAllowedToolChoice,
   resolveAuthorizedResponsesExtensionToolSpec
 } from '../api/responses_extension_tools.js';
 import {
-  ensureResponsesReplayOutputItemsIncludeClientToolCalls
+  ensureResponsesReplayOutputItemsIncludeFunctionCalls
 } from '../utils/responses_follow_up.js';
 import {
   buildAssistantContentWithGeneratedImages,
@@ -131,16 +127,9 @@ import {
   buildConversationDocumentActionPayloadFromVirtualFileAction,
   buildSkillRegistryFileActionPayloadFromVirtualFileAction,
   executeConversationDocumentAction,
-  executeConversationDocumentOpenAIApplyPatchOperation,
   normalizeVirtualFileResultFromSkillRegistryAction,
   normalizeVirtualFileToolArguments
 } from '../agent_tools/virtual_file_io/index.js';
-import {
-  OPENAI_APPLY_PATCH_CALL_OUTPUT_TYPE,
-  OPENAI_APPLY_PATCH_CALL_TYPE,
-  buildOpenAIApplyPatchCallOutputText,
-  resolveOpenAIApplyPatchVirtualTarget
-} from '../agent_tools/virtual_file_io/openai_apply_patch.js';
 import {
   JS_RUNTIME_ENV_BOUND_HOST_PAGE,
   JS_RUNTIME_ENV_ISOLATED_SANDBOX,
@@ -1245,24 +1234,6 @@ export function createMessageSender(appContext) {
   }
 
   /**
-   * 克隆官方 apply_patch operation，同时逐字保留 V4A diff。
-   *
-   * 通用元数据压缩器会 trim 字符串；这对标题、状态等字段是合理的，但 diff 的首尾
-   * 空格、空行和 +/-/context 前缀属于协议正文，任何裁剪都可能让补丁误应用或失败。
-   */
-  function cloneResponsesApplyPatchOperation(operation) {
-    if (!operation || typeof operation !== 'object' || Array.isArray(operation)) return null;
-    const cloned = {
-      type: typeof operation.type === 'string' ? operation.type : '',
-      path: typeof operation.path === 'string' ? operation.path : ''
-    };
-    if (typeof operation.diff === 'string') {
-      cloned.diff = operation.diff;
-    }
-    return cloned;
-  }
-
-  /**
    * 规范化 Responses 工具返回里的 sources 条目，只保留 UI / 持久化真正会用到的轻量字段。
    * @param {any} source
    * @returns {Object|null}
@@ -1425,18 +1396,10 @@ export function createMessageSender(appContext) {
       return normalized;
     }
     if (kind === 'tool_call') {
-      const entryType = String(entry.type || '').trim().toLowerCase();
-      const applyPatchOperation = entryType === OPENAI_APPLY_PATCH_CALL_TYPE
-        ? cloneResponsesApplyPatchOperation(entry.operation)
-        : null;
       const normalized = compactResponsesMetaValue({
         ...entry,
-        operation: undefined,
         kind: 'tool_call'
       });
-      if (normalized && applyPatchOperation) {
-        normalized.operation = applyPatchOperation;
-      }
       return (normalized && typeof normalized === 'object' && !Array.isArray(normalized)) ? normalized : null;
     }
     return null;
@@ -1491,27 +1454,6 @@ export function createMessageSender(appContext) {
         name: item.name || '',
         arguments: item.arguments || ''
       });
-      return (normalized && typeof normalized === 'object' && !Array.isArray(normalized)) ? normalized : null;
-    }
-
-    if (type === OPENAI_APPLY_PATCH_CALL_TYPE) {
-      const operation = cloneResponsesApplyPatchOperation(item.operation);
-      const caller = Object.prototype.hasOwnProperty.call(item, 'caller')
-        ? cloneDataSafely(item.caller)
-        : null;
-      const normalized = compactResponsesMetaValue({
-        type,
-        id,
-        item_id: itemId || '',
-        call_id: callId || '',
-        status,
-        name: 'apply_patch',
-        caller,
-        created_by: item.created_by || ''
-      });
-      if (normalized && operation) {
-        normalized.operation = operation;
-      }
       return (normalized && typeof normalized === 'object' && !Array.isArray(normalized)) ? normalized : null;
     }
 
@@ -1574,18 +1516,11 @@ export function createMessageSender(appContext) {
 
   function createResponsesToolTimelineEntry(record, options = {}) {
     if (!record || typeof record !== 'object') return null;
-    const operation = String(record.type || '').trim().toLowerCase() === OPENAI_APPLY_PATCH_CALL_TYPE
-      ? cloneResponsesApplyPatchOperation(record.operation)
-      : null;
     const entry = compactResponsesMetaValue({
       kind: 'tool_call',
       ...record,
-      operation: undefined,
       status: options.status || record.status || ''
     });
-    if (entry && operation) {
-      entry.operation = operation;
-    }
     return (entry && typeof entry === 'object' && !Array.isArray(entry)) ? entry : null;
   }
 
@@ -1932,37 +1867,69 @@ export function createMessageSender(appContext) {
     if (!Array.isArray(timeline) || timeline.length === 0) return null;
     const toolCalls = timeline
       .filter(entry => entry?.kind === 'tool_call')
-      .map((entry) => {
-        const operation = String(entry?.type || '').trim().toLowerCase() === OPENAI_APPLY_PATCH_CALL_TYPE
-          ? cloneResponsesApplyPatchOperation(entry.operation)
-          : null;
-        const normalized = compactResponsesMetaValue({
-          type: entry.type,
-          id: entry.id,
-          item_id: entry.item_id,
-          call_id: entry.call_id,
-          status: entry.status,
-          action_type: entry.action_type,
-          query: entry.query,
-          queries: entry.queries,
-          url: entry.url,
-          title: entry.title,
-          pattern: entry.pattern,
-          name: entry.name,
-          arguments: entry.arguments,
-          caller: entry.caller,
-          created_by: entry.created_by,
-          revised_prompt: entry.revised_prompt,
-          result_image_url: entry.result_image_url,
-          sources: entry.sources
-        });
-        if (normalized && operation) {
-          normalized.operation = operation;
-        }
-        return normalized;
-      })
+      .map((entry) => compactResponsesMetaValue({
+        type: entry.type,
+        id: entry.id,
+        item_id: entry.item_id,
+        call_id: entry.call_id,
+        status: entry.status,
+        action_type: entry.action_type,
+        query: entry.query,
+        queries: entry.queries,
+        url: entry.url,
+        title: entry.title,
+        pattern: entry.pattern,
+        name: entry.name,
+        arguments: entry.arguments,
+        revised_prompt: entry.revised_prompt,
+        result_image_url: entry.result_image_url,
+        sources: entry.sources
+      }))
       .filter(entry => entry && typeof entry === 'object' && !Array.isArray(entry));
     return toolCalls.length > 0 ? toolCalls : null;
+  }
+
+  /**
+   * 合并多批 Responses 工具调用记录。
+   * 用途：
+   * - 流式场景下，`response.output_item.done` / `response.completed` 可能先后到来；
+   * - 这里按稳定 key 做覆盖式合并，避免出现重复条目。
+   * @param {any} existingRecords
+   * @param {any} incomingRecords
+   * @returns {Array<Object>}
+   */
+  function mergeResponsesToolCallRecordLists(existingRecords, incomingRecords) {
+    const merged = Array.isArray(existingRecords)
+      ? existingRecords
+        .map(record => compactResponsesMetaValue(record))
+        .filter(record => record && typeof record === 'object' && !Array.isArray(record))
+      : [];
+    const keyToIndex = new Map();
+    merged.forEach((record, index) => {
+      keyToIndex.set(getResponsesToolCallRecordKey(record, index), index);
+    });
+
+    (Array.isArray(incomingRecords) ? incomingRecords : []).forEach((record, index) => {
+      const normalized = compactResponsesMetaValue(record);
+      if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) return;
+      const key = getResponsesToolCallRecordKey(normalized, index);
+      if (keyToIndex.has(key)) {
+        const existingIndex = keyToIndex.get(key);
+        const previous = merged[existingIndex] || {};
+        merged[existingIndex] = compactResponsesMetaValue({
+          ...previous,
+          ...normalized,
+          sources: (Array.isArray(normalized.sources) && normalized.sources.length > 0)
+            ? normalized.sources
+            : previous.sources
+        });
+      } else {
+        keyToIndex.set(key, merged.length);
+        merged.push(normalized);
+      }
+    });
+
+    return merged;
   }
 
   function extractResponsesActivityTimelineFromOutput(payload) {
@@ -8432,27 +8399,6 @@ export function createMessageSender(appContext) {
   }
 
   /**
-   * 返回由 Cerebr 本地闭环、但使用 Responses 官方专用 item 协议的工具。
-   *
-   * apply_patch 与 function tool 的关键区别是：客户端只发送 `{ type: 'apply_patch' }`，
-   * 不得附带自定义 name、description 或 parameters。工具开关仍复用统一 manifest。
-   */
-  function getResponsesExtensionProtocolTools(
-    usedApiConfig,
-    pageToolEnvironment = resolveResponsesPageToolEnvironment()
-  ) {
-    if (!isOpenAIResponsesApiConfig(usedApiConfig)) return [];
-    if (!isResponsesApplyPatchToolAvailable(usedApiConfig)) return [];
-    return buildResponsesExtensionProtocolTools({
-      pageToolEnvironment,
-      hasJsRuntime: typeof utils?.executeJsRuntime === 'function'
-    }).filter(tool => isResponsesExtensionToolEnabled(
-      usedApiConfig?.responsesApiSettings,
-      tool?.type
-    ));
-  }
-
-  /**
    * 把自定义函数工具合并进 Responses API requestBody.tools。
    *
    * 合并规则：
@@ -8498,7 +8444,7 @@ export function createMessageSender(appContext) {
   }
 
   /**
-   * 在真正发请求前，把当前客户端支持的 function tools 与官方协议工具注入请求体。
+   * 在真正发请求前，把当前客户端支持的自定义 function tools 注入 Responses 请求体。
    *
    * @param {Object} requestBody
    * @param {Object|null|undefined} usedApiConfig
@@ -8523,11 +8469,9 @@ export function createMessageSender(appContext) {
         searchableToolNames: RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES
       }
     );
-    const protocolTools = getResponsesExtensionProtocolTools(usedApiConfig, pageToolEnvironment);
-    const availableExtensionTools = customTools.concat(protocolTools);
-    nextBody.tools = filterUnavailableResponsesExtensionTools(nextBody.tools, availableExtensionTools);
-    if (availableExtensionTools.length > 0) {
-      nextBody.tools = mergeResponsesRequestTools(nextBody.tools, availableExtensionTools);
+    nextBody.tools = filterUnavailableResponsesExtensionFunctionTools(nextBody.tools, customTools);
+    if (Array.isArray(customTools) && customTools.length > 0) {
+      nextBody.tools = mergeResponsesRequestTools(nextBody.tools, customTools);
     }
     if (Object.prototype.hasOwnProperty.call(nextBody, 'tool_choice')) {
       nextBody.tool_choice = reconcileResponsesAllowedToolChoice(nextBody.tool_choice, nextBody.tools);
@@ -9504,11 +9448,7 @@ export function createMessageSender(appContext) {
       if (typeof utils?.executeSkillRegistryAction !== 'function') {
         throw new Error('当前客户端没有可用的 skill_registry 执行入口。');
       }
-      const result = await utils.executeSkillRegistryAction(rawArgs, {
-        allowInternalPatchOperation: options?.allowInternalPatchOperation === true,
-        allowInternalFileActions: options?.allowInternalFileActions === true,
-        allowInternalCompatActions: options?.allowInternalCompatActions === true
-      });
+      const result = await utils.executeSkillRegistryAction(rawArgs);
       if (result?.success === true) {
         const payload = { ...result };
         delete payload.success;
@@ -9550,10 +9490,7 @@ export function createMessageSender(appContext) {
 
       const skillResult = await executeResponsesSkillRegistryInternalAction(
         buildSkillRegistryFileActionPayloadFromVirtualFileAction(toolName, normalizedArgs),
-        {
-          ...options,
-          allowInternalFileActions: true
-        }
+        options
       );
       return normalizeVirtualFileResultFromSkillRegistryAction(toolName, skillResult, normalizedArgs);
     } catch (error) {
@@ -9732,99 +9669,7 @@ export function createMessageSender(appContext) {
   }
 
   /**
-   * 执行 Responses API 官方 apply_patch_call。
-   *
-   * 官方协议本身不提供 Cerebr 的 target 参数，因此使用稳定的虚拟路径命名空间：
-   * - 普通相对路径写入当前会话文件；
-   * - `@skill/<skill-key>/<path>` 写入指定 skill；
-   * - `local/...` 始终只读，必须先通过 copy_file 复制到会话文件区。
-   *
-   * 每个 call 都独立执行并返回 completed/failed，避免一条失败 operation 污染后续
-   * follow-up 的协议闭环。
-   */
-  async function executeResponsesApplyPatchToolCall(toolCallRecord, options = {}) {
-    const callId = (typeof toolCallRecord?.call_id === 'string')
-      ? toolCallRecord.call_id.trim()
-      : '';
-    if (!callId) {
-      throw new Error('Responses apply_patch_call 缺少 call_id，无法回传工具结果。');
-    }
-
-    try {
-      if (!isAuthorizedResponsesApplyPatchTool(options?.requestBody?.tools)) {
-        throw new Error('本轮请求没有暴露官方 apply_patch 工具，已拒绝执行未授权的写文件调用。');
-      }
-      if (
-        toolCallRecord?.caller
-        && String(toolCallRecord.caller?.type || '').trim().toLowerCase() !== 'direct'
-      ) {
-        throw new Error('本轮 apply_patch 只授权 direct caller，已拒绝 programmatic 或未知 caller。');
-      }
-
-      const resolved = resolveOpenAIApplyPatchVirtualTarget(toolCallRecord?.operation);
-      if (resolved.target.kind === VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT) {
-        const conversationId = await resolveConversationIdForConversationDocumentTool(options);
-        const result = await executeConversationDocumentOpenAIApplyPatchOperation(
-          resolved.operation,
-          { conversationId }
-        );
-        if (result?.ok === true && result?.change_event) {
-          dispatchConversationDocumentChange(result.change_event);
-        }
-      } else if (resolved.target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL) {
-        const result = await executeResponsesSkillRegistryInternalAction({
-          action: 'apply_patch_operation',
-          skill_name: resolved.target.name,
-          operation: resolved.operation
-        }, {
-          ...options,
-          allowInternalPatchOperation: true
-        });
-        if (result?.ok !== true) {
-          throw new Error(
-            result?.error?.message
-            || result?.error
-            || `技能 ${resolved.target.name} 的 apply_patch 执行失败。`
-          );
-        }
-      } else {
-        throw new Error(`apply_patch 收到未知虚拟文件目标：${resolved.target.kind || '(empty)'}`);
-      }
-
-      return {
-        type: OPENAI_APPLY_PATCH_CALL_OUTPUT_TYPE,
-        call_id: callId,
-        status: 'completed',
-        output: buildOpenAIApplyPatchCallOutputText({
-          ok: true,
-          operation: resolved.operation,
-          displayPath: resolved.display_path
-        })
-      };
-    } catch (error) {
-      const normalizedError = normalizeResponsesCustomToolError(error);
-      return {
-        type: OPENAI_APPLY_PATCH_CALL_OUTPUT_TYPE,
-        call_id: callId,
-        status: 'failed',
-        output: `Error: ${normalizedError.message}`
-      };
-    }
-  }
-
-  async function executeResponsesClientToolCall(toolCallRecord, options = {}) {
-    const type = String(toolCallRecord?.type || '').trim().toLowerCase();
-    if (type === 'function_call') {
-      return await executeResponsesCustomFunctionToolCall(toolCallRecord, options);
-    }
-    if (type === OPENAI_APPLY_PATCH_CALL_TYPE) {
-      return await executeResponsesApplyPatchToolCall(toolCallRecord, options);
-    }
-    throw new Error(`当前客户端无法执行 Responses 工具调用类型 ${type || '(empty)'}。`);
-  }
-
-  /**
-   * 将本地 client tool output 合并回 response_activity_timeline。
+   * 将本地 function_call_output 合并回 response_activity_timeline。
    *
    * 目的：
    * - UI 上我们希望“工具调用条目”同时展示调用参数与执行结果；
@@ -9833,10 +9678,10 @@ export function createMessageSender(appContext) {
    *
    * @param {Array<Object>|null|undefined} timeline
    * @param {Array<Object>|null|undefined} toolCallRecords
-   * @param {Array<Object>|null|undefined} clientToolOutputs
+   * @param {Array<Object>|null|undefined} functionCallOutputs
    * @returns {Array<Object>}
    */
-  function mergeResponsesClientToolOutputsIntoTimeline(timeline, toolCallRecords, clientToolOutputs) {
+  function mergeResponsesFunctionOutputsIntoTimeline(timeline, toolCallRecords, functionCallOutputs) {
     let nextTimeline = cloneResponsesActivityTimeline(Array.isArray(timeline) ? timeline : []);
 
     (Array.isArray(toolCallRecords) ? toolCallRecords : []).forEach((record) => {
@@ -9849,13 +9694,8 @@ export function createMessageSender(appContext) {
       });
     });
 
-    (Array.isArray(clientToolOutputs) ? clientToolOutputs : []).forEach((outputItem) => {
+    (Array.isArray(functionCallOutputs) ? functionCallOutputs : []).forEach((outputItem) => {
       if (!outputItem || typeof outputItem !== 'object') return;
-      const outputType = String(outputItem.type || '').trim().toLowerCase();
-      const callType = outputType === OPENAI_APPLY_PATCH_CALL_OUTPUT_TYPE
-        ? OPENAI_APPLY_PATCH_CALL_TYPE
-        : (outputType === 'function_call_output' ? 'function_call' : '');
-      if (!callType) return;
       const callId = (typeof outputItem.call_id === 'string' && outputItem.call_id.trim())
         ? outputItem.call_id.trim()
         : '';
@@ -9864,12 +9704,12 @@ export function createMessageSender(appContext) {
       let merged = false;
       nextTimeline = nextTimeline.map((entry) => {
         if (!entry || entry.kind !== 'tool_call') return entry;
-        if (String(entry.type || '').trim().toLowerCase() !== callType) return entry;
+        if (String(entry.type || '').trim().toLowerCase() !== 'function_call') return entry;
         if (String(entry.call_id || '').trim() !== callId) return entry;
         merged = true;
         return normalizeResponsesActivityTimelineEntry({
           ...entry,
-          status: outputItem.status || 'completed',
+          status: 'completed',
           output: cloneDataSafely(outputItem.output)
         }) || entry;
       });
@@ -9877,13 +9717,12 @@ export function createMessageSender(appContext) {
       if (merged) return;
 
       nextTimeline = upsertResponsesToolTimeline(nextTimeline, {
-        type: callType,
+        type: 'function_call',
         call_id: callId,
-        name: callType === OPENAI_APPLY_PATCH_CALL_TYPE ? 'apply_patch' : '',
-        status: outputItem.status || 'completed',
+        status: 'completed',
         output: cloneDataSafely(outputItem.output)
       }, {
-        status: outputItem.status || 'completed'
+        status: 'completed'
       });
     });
 
@@ -10110,13 +9949,13 @@ export function createMessageSender(appContext) {
    *
    * @param {Object} previousRequestBody
    * @param {Array<Object>|null|undefined} responseOutputItems
-   * @param {Array<Object>} clientToolOutputs
+   * @param {Array<Object>} functionCallOutputs
    * @returns {Object}
    */
   function buildResponsesFunctionToolFollowUpRequest(
     previousRequestBody,
     responseOutputItems,
-    clientToolOutputs,
+    functionCallOutputs,
     pendingSteerInputItems = []
   ) {
     const nextBody = cloneDataSafely(previousRequestBody) || {};
@@ -10129,8 +9968,8 @@ export function createMessageSender(appContext) {
     nextBody.input = previousInput
       .concat(replayOutputItems.map(item => cloneDataSafely(item)))
       .concat(
-        Array.isArray(clientToolOutputs)
-          ? clientToolOutputs.map(item => cloneDataSafely(item))
+        Array.isArray(functionCallOutputs)
+          ? functionCallOutputs.map(item => cloneDataSafely(item))
           : []
       );
     if (Array.isArray(pendingSteerInputItems) && pendingSteerInputItems.length > 0) {
@@ -10346,21 +10185,16 @@ export function createMessageSender(appContext) {
         }
       }
 
-      const pendingClientToolCalls = Array.isArray(lastHandleResult?.responseToolCalls)
+      const pendingFunctionCalls = Array.isArray(lastHandleResult?.responseToolCalls)
         ? lastHandleResult.responseToolCalls
-          .filter((record) => {
-            const type = String(record?.type || '').trim().toLowerCase();
-            if (type === 'function_call') return true;
-            return type === OPENAI_APPLY_PATCH_CALL_TYPE
-              && String(record?.status || '').trim().toLowerCase() === 'completed';
-          })
+          .filter(record => String(record?.type || '').trim().toLowerCase() === 'function_call')
         : [];
 
       if (lastHandleResult?.incomplete === true) {
         return lastHandleResult;
       }
 
-      if (pendingClientToolCalls.length <= 0) {
+      if (pendingFunctionCalls.length <= 0) {
         return lastHandleResult;
       }
 
@@ -10369,42 +10203,21 @@ export function createMessageSender(appContext) {
       });
       await persistAttemptConversationSnapshot(attemptState, { force: true });
 
-      const replayOutputItemsForFollowUp = ensureResponsesReplayOutputItemsIncludeClientToolCalls(
-        lastHandleResult?.responseOutputItems,
-        pendingClientToolCalls
-      );
-      const clientToolOutputs = [];
-      for (const toolCall of pendingClientToolCalls) {
+      const functionCallOutputs = [];
+      for (const toolCall of pendingFunctionCalls) {
         if (signal?.aborted) {
           throw new DOMException('The operation was aborted.', 'AbortError');
         }
-        const outputItem = await executeResponsesClientToolCall(toolCall, {
+        functionCallOutputs.push(await executeResponsesCustomFunctionToolCall(toolCall, {
           attemptState,
           usedApiConfig,
           requestBody: currentRequestBody
-        });
-        clientToolOutputs.push(outputItem);
-
-        // 每个 call_id 完成后立即记录 call/output 对。多工具响应在后续调用前被中止时，
-        // 已经产生副作用的调用仍能留在历史；未完成的裸 call 会由跨 turn replay 过滤器丢弃。
-        if (attemptState) {
-          const progressTimeline = mergeResponsesClientToolOutputsIntoTimeline(
-            attemptState.responsesToolLoopAccumulatedTimeline || lastHandleResult?.responseActivityTimeline,
-            pendingClientToolCalls,
-            clientToolOutputs
-          );
-          const progressInputItems = mergeResponsesReplayOutputItems(
-            mergeResponsesReplayOutputItems(
-              attemptState.responsesToolLoopAccumulatedInputItems,
-              replayOutputItemsForFollowUp
-            ),
-            clientToolOutputs
-          );
-          applyResponsesActivityTimelineToAttempt(attemptState, progressTimeline);
-          applyResponsesInputItemsToAttempt(attemptState, progressInputItems);
-          await persistAttemptConversationSnapshot(attemptState, { force: true });
-        }
+        }));
       }
+      const replayOutputItemsForFollowUp = ensureResponsesReplayOutputItemsIncludeFunctionCalls(
+        lastHandleResult?.responseOutputItems,
+        pendingFunctionCalls
+      );
 
       /**
        * 关键语义：标准 steer 应该在“下一个安全边界”被吸收。
@@ -10433,10 +10246,10 @@ export function createMessageSender(appContext) {
         updateAttemptRuntimeState(attemptState, (draft) => {
           draft.activeTurn.status = 'applying_followup';
         });
-        const mergedTimeline = mergeResponsesClientToolOutputsIntoTimeline(
+        const mergedTimeline = mergeResponsesFunctionOutputsIntoTimeline(
           attemptState.responsesToolLoopAccumulatedTimeline || lastHandleResult?.responseActivityTimeline,
-          pendingClientToolCalls,
-          clientToolOutputs
+          pendingFunctionCalls,
+          functionCallOutputs
         );
         const mergedInputItems = mergeResponsesReplayOutputItems(
           attemptState.responsesToolLoopAccumulatedInputItems,
@@ -10444,7 +10257,7 @@ export function createMessageSender(appContext) {
         );
         const mergedInputItemsWithOutputs = mergeResponsesReplayOutputItems(
           mergedInputItems,
-          clientToolOutputs
+          functionCallOutputs
         );
         applyResponsesActivityTimelineToAttempt(attemptState, mergedTimeline);
         applyResponsesInputItemsToAttempt(attemptState, mergedInputItemsWithOutputs);
@@ -10454,7 +10267,7 @@ export function createMessageSender(appContext) {
       currentRequestBody = buildResponsesFunctionToolFollowUpRequest(
         currentRequestBody,
         replayOutputItemsForFollowUp,
-        clientToolOutputs,
+        functionCallOutputs,
         pendingSteerInputItemsForFollowUp
       );
       stagePendingSteersForFollowUp(
@@ -11264,8 +11077,6 @@ export function createMessageSender(appContext) {
       }
       const responsesPageToolEnvironment = resolveResponsesPageToolEnvironment(attempt);
       const shouldPrepareEnvironmentContext = isOpenAIResponsesApiConfig(effectiveApiConfig);
-      const responsesApplyPatchAvailable = shouldPrepareEnvironmentContext
-        && isResponsesApplyPatchToolAvailable(effectiveApiConfig);
       const shouldPreparePageRuntimeContext = (
         isOpenAIResponsesApiConfig(effectiveApiConfig)
         && typeof utils?.executeJsRuntime === 'function'
@@ -11331,8 +11142,7 @@ export function createMessageSender(appContext) {
             skillContextPayload,
             environmentContextPayload: buildEnvironmentContextPayload({
               uploadedFiles: uploadedFileEnvironmentEntries,
-              localMounts: localMountEnvironmentEntries,
-              applyPatchAvailable: responsesApplyPatchAvailable
+              localMounts: localMountEnvironmentEntries
             })
           });
           try {
@@ -12557,7 +12367,6 @@ export function createMessageSender(appContext) {
       let latestResponsesOutputItems = [];
       let latestResponsesAnswerImages = [];
       let hasOpenAIResponsesTerminalEvent = false;
-      let hasOpenAIResponsesIncompleteTerminalPayload = false;
       const latestResponsesOutputItemPhaseById = new Map();
       // Responses API：记录“正文可见文本”的分片状态，避免 delta/done/full item 多次到来时重复拼接。
       const latestResponsesOutputTextState = new Map();
@@ -13138,7 +12947,6 @@ export function createMessageSender(appContext) {
         assistantPhase: latestResponsesAssistantPhase || null,
         isResponsesApi: isOpenAIResponsesStream,
         incomplete: responsesStreamClosureAction === 'preserve_partial'
-          || hasOpenAIResponsesIncompleteTerminalPayload
       };
 
     async function processLine(line) {
@@ -13556,17 +13364,9 @@ export function createMessageSender(appContext) {
             { status: eventType === 'response.function_call_arguments.done' ? 'completed' : (data?.status || 'streaming') }
           );
           hasToolCallsDelta = true;
-        } else if (
-          eventType === 'response.completed'
-          || eventType === 'response.incomplete'
-          || eventType === 'response.failed'
-        ) {
+        } else if (eventType === 'response.completed') {
           hasOpenAIResponsesTerminalEvent = true;
           const completedPayload = (data?.response && typeof data.response === 'object') ? data.response : data;
-          const terminalStatus = String(completedPayload?.status || '').trim().toLowerCase();
-          hasOpenAIResponsesIncompleteTerminalPayload = eventType !== 'response.completed'
-            || !!completedPayload?.incomplete_details
-            || (!!terminalStatus && terminalStatus !== 'completed');
           shouldRebuildResponsesVisibleAnswer = upsertResponsesOutputTextPartsFromOutputPayload(
             latestResponsesOutputTextState,
             completedPayload,
@@ -13613,9 +13413,6 @@ export function createMessageSender(appContext) {
           }
         } else if (!eventType && isOpenAIResponsesPayload(data)) {
           hasOpenAIResponsesTerminalEvent = true;
-          const payloadStatus = String(data?.status || '').trim().toLowerCase();
-          hasOpenAIResponsesIncompleteTerminalPayload = !!data?.incomplete_details
-            || (!!payloadStatus && payloadStatus !== 'completed');
           shouldRebuildResponsesVisibleAnswer = upsertResponsesOutputTextPartsFromOutputPayload(
             latestResponsesOutputTextState,
             data,
@@ -13857,11 +13654,6 @@ export function createMessageSender(appContext) {
     const isGeminiApi = isGeminiApiResponse(response, usedApiConfig);
     const isResponsesApi = !isGeminiApi
       && (isOpenAIResponsesApiResponse(response, usedApiConfig) || isOpenAIResponsesPayload(json));
-    const responsesStatus = isResponsesApi ? String(json?.status || '').trim().toLowerCase() : '';
-    const responsesNonStreamIncomplete = isResponsesApi && (
-      (!!responsesStatus && responsesStatus !== 'completed')
-      || !!json?.incomplete_details
-    );
     const buildCurrentNonStreamAnswerContent = () => (
       isResponsesApi
         ? buildAssistantContentWithGeneratedImages(answer || '', responsesAnswerImages)
@@ -13913,8 +13705,7 @@ export function createMessageSender(appContext) {
           ? getNewResponsesToolCalls(previousResponsesActivityTimeline, responseActivityTimeline)
           : null,
         assistantPhase: responsesAssistantPhase || null,
-        isResponsesApi,
-        incomplete: responsesNonStreamIncomplete
+        isResponsesApi
       };
     };
     if (isGeminiApi) {

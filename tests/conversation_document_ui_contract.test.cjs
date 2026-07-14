@@ -8,48 +8,26 @@ async function readWorkspaceFile(relativePath) {
   return fs.readFile(filePath, 'utf8');
 }
 
-test('统一工具注册表使用官方 apply_patch 协议，并保留其余对话文档 function tools', async () => {
+test('统一工具注册表已注册对话文档工具，message_sender 保留专用执行分支', async () => {
   const source = await readWorkspaceFile('src/core/message_sender.js');
   const registrySource = await readWorkspaceFile('src/agent_tools/shared/responses_extension_tool_registry.js');
 
   assert.match(source, /buildResponsesExtensionFunctionTools/);
-  assert.match(source, /buildResponsesExtensionProtocolTools/);
-  assert.match(registrySource, /tools\.push\(\{ type: 'apply_patch' \}\)/);
   for (const builderName of [
+    'buildVirtualFileApplyPatchFunctionToolDefinition',
     'buildVirtualFileListFilesFunctionToolDefinition',
     'buildVirtualFileReadFileFunctionToolDefinition',
     'buildVirtualFileSearchFilesFunctionToolDefinition',
     'buildVirtualFileCopyFileFunctionToolDefinition',
-    'buildVirtualFileMoveFileFunctionToolDefinition'
+    'buildVirtualFileMoveFileFunctionToolDefinition',
+    'buildVirtualFileDeleteFileFunctionToolDefinition'
   ]) {
     assert.match(registrySource, new RegExp(`\\b${builderName}\\(`));
   }
-  assert.doesNotMatch(registrySource, /buildVirtualFileApplyPatchFunctionToolDefinition/);
-  assert.doesNotMatch(registrySource, /buildVirtualFileDeleteFileFunctionToolDefinition/);
   assert.match(source, /case 'virtual_file':\s*outputPayload = await executeResponsesVirtualFileFunction\(localFunctionName, parsedArgs, options\)/s);
   assert.match(source, /case 'virtual_file':\s*serializedOutput = serializeResponsesConversationDocumentFunctionToolOutput\(localFunctionName, outputPayload\)/s);
-  assert.match(source, /async function executeResponsesApplyPatchToolCall\(toolCallRecord, options = \{\}\)/);
-  assert.match(source, /resolveOpenAIApplyPatchVirtualTarget\(toolCallRecord\?\.operation\)/);
-  assert.match(source, /type: OPENAI_APPLY_PATCH_CALL_OUTPUT_TYPE/);
   assert.match(source, /consumePendingUploadedFileEnvironmentEntries/);
   assert.match(source, /uploadedFiles: uploadedFileEnvironmentEntries/);
-});
-
-test('message_processor 会从 apply_patch_call.operation 渲染预览并把 operation 纳入增量签名', async () => {
-  const processorSource = await readWorkspaceFile('src/core/message_processor.js');
-  const previewSource = await readWorkspaceFile('src/utils/skill_patch_preview.js');
-  const summarySource = await readWorkspaceFile('src/utils/conversation_document_tool_summary.js');
-  const statusSource = await readWorkspaceFile('src/utils/assistant_pre_response_status.js');
-
-  assert.match(previewSource, /export function buildOpenAIApplyPatchOperationPreview/);
-  assert.match(previewSource, /\['create_file', 'update_file', 'delete_file'\]/);
-  assert.match(previewSource, /OPENAI_APPLY_PATCH_SKILL_PATH_PREFIX = '@skill\/'/);
-  assert.match(summarySource, /OPENAI_APPLY_PATCH_CALL_TYPE = 'apply_patch_call'/);
-  assert.match(summarySource, /LEGACY_VIRTUAL_FILE_DELETE_TOOL_NAME = 'delete_file'/);
-  assert.doesNotMatch(summarySource, /VIRTUAL_FILE_DELETE_FILE_TOOL_NAME/);
-  assert.match(processorSource, /buildOpenAIApplyPatchOperationPreview\(entry\?\.operation\)/);
-  assert.match(processorSource, /operation: entry\?\.operation \|\| null/);
-  assert.match(statusSource, /itemType === 'apply_patch_call'/);
 });
 
 test('message_processor 已把裸相对路径链接替换为文档卡片，并监听文档变更事件', async () => {

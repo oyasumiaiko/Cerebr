@@ -165,7 +165,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   const created = await manager.executeRegistryAction({
     action: 'create_skill',
     skill: buildSkillInput()
-  }, { tabId: 11, allowInternalFileActions: true });
+  }, { tabId: 11 });
   assert.equal(created.ok, true);
   assert.equal(calls.register.length, 1);
   assert.equal(calls.execute.length, 1);
@@ -192,7 +192,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
         }
       ]
     }
-  }, { tabId: 11, allowInternalFileActions: true });
+  }, { tabId: 11 });
   assert.equal(updated.ok, true);
   assert.equal(calls.update.length, 1);
   assert.equal(calls.execute.length, 2);
@@ -201,7 +201,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     action: 'read_file',
     skill_name: 'dom-probe',
     file_path: 'src/helpers/dom.js'
-  }, { tabId: 11, allowInternalFileActions: true });
+  }, { tabId: 11 });
   assert.equal(readFile.ok, true);
   assert.equal(readFile.skill.file.path, 'src/helpers/dom.js');
   assert.match(readFile.skill.file.content, /document\.title/);
@@ -210,21 +210,22 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     action: 'read_file',
     skill_name: 'dom-probe',
     file_path: 'manifest.json'
-  }, { tabId: 11, allowInternalFileActions: true });
+  }, { tabId: 11 });
   assert.equal(readManifest.ok, true);
   assert.equal(readManifest.skill.file.is_manifest, true);
   assert.doesNotMatch(readManifest.skill.file.content, /"name":/);
   assert.doesNotMatch(readManifest.skill.file.content, /"kind":/);
 
   const addedFile = await manager.executeRegistryAction({
-    action: 'apply_patch_operation',
+    action: 'apply_patch',
     skill_name: 'dom-probe',
-    operation: {
-      type: 'create_file',
-      path: 'src/helpers/url.js',
-      diff: '+module.exports = { readUrl() { return location.href; } };'
-    }
-  }, { tabId: 11, allowInternalPatchOperation: true });
+    patch: [
+      '*** Begin Patch',
+      '*** Add File: src/helpers/url.js',
+      '+module.exports = { readUrl() { return location.href; } };',
+      '*** End Patch'
+    ].join('\n')
+  }, { tabId: 11 });
   assert.equal(addedFile.ok, true);
   assert.equal(addedFile.files.total_count, 5);
   assert.deepEqual(addedFile.affected_files, {
@@ -236,34 +237,34 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   assert.equal(calls.execute.length, 3);
 
   const patchedManifestDescription = await manager.executeRegistryAction({
-    action: 'apply_patch_operation',
+    action: 'apply_patch',
     skill_name: 'dom-probe',
-    operation: {
-      type: 'update_file',
-      path: 'manifest.json',
-      diff: [
-        '-  "description": "读取页面标题和链接",',
-        '+  "description": "读取页面标题、链接与路径信息",'
-      ].join('\n')
-    }
-  }, { tabId: 11, allowInternalPatchOperation: true });
+    patch: [
+      '*** Begin Patch',
+      '*** Update File: manifest.json',
+      '@@',
+      '-  "description": "读取页面标题和链接",',
+      '+  "description": "读取页面标题、链接与路径信息",',
+      '*** End Patch'
+    ].join('\n')
+  }, { tabId: 11 });
   assert.equal(patchedManifestDescription.ok, true);
   assert.equal(patchedManifestDescription.skill.description, '读取页面标题、链接与路径信息');
   assert.equal(calls.update.length, 3);
   assert.equal(calls.execute.length, 4);
 
   const patchedFile = await manager.executeRegistryAction({
-    action: 'apply_patch_operation',
+    action: 'apply_patch',
     skill_name: 'dom-probe',
-    operation: {
-      type: 'update_file',
-      path: 'src/helpers/url.js',
-      diff: [
-        '-module.exports = { readUrl() { return location.href; } };',
-        '+module.exports = { readUrl() { return location.pathname; } };'
-      ].join('\n')
-    }
-  }, { tabId: 11, allowInternalPatchOperation: true });
+    patch: [
+      '*** Begin Patch',
+      '*** Update File: src/helpers/url.js',
+      '@@',
+      '-module.exports = { readUrl() { return location.href; } };',
+      '+module.exports = { readUrl() { return location.pathname; } };',
+      '*** End Patch'
+    ].join('\n')
+  }, { tabId: 11 });
   assert.equal(patchedFile.ok, true);
   assert.deepEqual(patchedFile.affected_files, {
     added: [],
@@ -274,17 +275,17 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   assert.equal(calls.execute.length, 5);
 
   const patchedManifest = await manager.executeRegistryAction({
-    action: 'apply_patch_operation',
+    action: 'apply_patch',
     skill_name: 'dom-probe',
-    operation: {
-      type: 'update_file',
-      path: 'manifest.json',
-      diff: [
-        '-  "enabled": true,',
-        '+  "enabled": false,'
-      ].join('\n')
-    }
-  }, { tabId: 11, allowInternalPatchOperation: true });
+    patch: [
+      '*** Begin Patch',
+      '*** Update File: manifest.json',
+      '@@',
+      '-  "enabled": true,',
+      '+  "enabled": false,',
+      '*** End Patch'
+    ].join('\n')
+  }, { tabId: 11 });
   assert.equal(patchedManifest.ok, true);
   assert.deepEqual(patchedManifest.affected_files, {
     added: [],
@@ -296,31 +297,27 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   assert.equal(calls.execute.length, 6);
 
   const reenabledViaManifest = await manager.executeRegistryAction({
-    action: 'apply_patch_operation',
+    action: 'apply_patch',
     skill_name: 'dom-probe',
-    operation: {
-      type: 'update_file',
-      path: 'manifest.json',
-      diff: [
-        '-  "enabled": false,',
-        '+  "enabled": true,'
-      ].join('\n')
-    }
-  }, { tabId: 11, allowInternalPatchOperation: true });
+    patch: [
+      '*** Begin Patch',
+      '*** Update File: manifest.json',
+      '@@',
+      '-  "enabled": false,',
+      '+  "enabled": true,',
+      '*** End Patch'
+    ].join('\n')
+  }, { tabId: 11 });
   assert.equal(reenabledViaManifest.ok, true);
   assert.equal(calls.register.length, 2);
   assert.equal(calls.execute.length, 7);
 
   const deletedFile = await manager.executeRegistryAction({
-    action: 'apply_patch_operation',
+    action: 'delete_file',
     skill_name: 'dom-probe',
-    operation: {
-      type: 'delete_file',
-      path: 'src/helpers/url.js'
-    }
-  }, { tabId: 11, allowInternalPatchOperation: true });
+    file_path: 'src/helpers/url.js'
+  }, { tabId: 11 });
   assert.equal(deletedFile.ok, true);
-  assert.equal(deletedFile.operation.type, 'delete_file');
   assert.equal(deletedFile.files.total_count, 4);
   assert.equal(calls.update.length, 5);
   assert.equal(calls.execute.length, 8);
@@ -350,7 +347,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   assert.equal(calls.execute.length, 11);
 });
 
-test('copy_file/move_file 与官方 apply_patch delete operation 支持 skill 虚拟文件管理', async () => {
+test('copy_file/move_file/delete_file 支持 skill 虚拟文件管理', async () => {
   const { createSkillManager } = await loadSkillManagerModule();
   const calls = {
     update: []
@@ -370,7 +367,7 @@ test('copy_file/move_file 与官方 apply_patch delete operation 支持 skill �
     skill_name: 'dom-probe',
     source_file_path: 'src/helpers/dom.js',
     destination_file_path: 'src/helpers/dom-copy.js'
-  }, { allowInternalFileActions: true });
+  });
   assert.equal(copied.ok, true);
   assert.deepEqual(copied.affected_files.added, ['src/helpers/dom-copy.js']);
   assert.equal(copied.files.total_count, 5);
@@ -380,7 +377,7 @@ test('copy_file/move_file 与官方 apply_patch delete operation 支持 skill �
     skill_name: 'dom-probe',
     source_file_path: 'src/helpers/dom-copy.js',
     destination_file_path: 'src/helpers/dom-renamed.js'
-  }, { allowInternalFileActions: true });
+  });
   assert.equal(moved.ok, true);
   assert.deepEqual(moved.affected_files.modified, ['src/helpers/dom-renamed.js']);
   assert.deepEqual(moved.affected_files.deleted, ['src/helpers/dom-copy.js']);
@@ -391,20 +388,16 @@ test('copy_file/move_file 与官方 apply_patch delete operation 支持 skill �
       skill_name: 'dom-probe',
       source_file_path: 'src/helpers/dom.js',
       destination_file_path: 'src/main.js'
-    }, { allowInternalFileActions: true }),
+    }),
     /已存在文件 src\/main\.js/
   );
 
   const deleted = await manager.executeRegistryAction({
-    action: 'apply_patch_operation',
+    action: 'delete_file',
     skill_name: 'dom-probe',
-    operation: {
-      type: 'delete_file',
-      path: 'src/helpers/dom-renamed.js'
-    }
-  }, { allowInternalPatchOperation: true });
+    file_path: 'src/helpers/dom-renamed.js'
+  });
   assert.equal(deleted.ok, true);
-  assert.equal(deleted.operation.type, 'delete_file');
   assert.deepEqual(deleted.affected_files.deleted, ['src/helpers/dom-renamed.js']);
   assert.equal(deleted.files.total_count, 4);
   assert.ok(calls.update.length >= 3);
@@ -476,7 +469,7 @@ test('模板式 create_skill 默认禁用且不会自动 refresh 当前文档', 
     action: 'read_file',
     skill_name: 'dom-probe-template',
     file_path: 'SKILL.md'
-  }, { tabId: 11, allowInternalFileActions: true });
+  }, { tabId: 11 });
   assert.equal(instruction.ok, true);
   assert.match(instruction.skill.file.content, /## Overview/);
   assert.match(instruction.skill.file.content, /## Structuring This Skill/);
@@ -487,7 +480,7 @@ test('模板式 create_skill 默认禁用且不会自动 refresh 当前文档', 
     action: 'read_file',
     skill_name: 'dom-probe-template',
     file_path: 'manifest.json'
-  }, { tabId: 11, allowInternalFileActions: true });
+  }, { tabId: 11 });
   assert.equal(manifest.ok, true);
   assert.match(manifest.skill.file.content, /"enabled": false/);
   assert.match(manifest.skill.file.content, /"match": \[\]/);
@@ -619,49 +612,48 @@ test('skill 可以在后续 patch 后从 guidance 演进成 page runtime，再�
     action: 'read_file',
     skill_name: 'runtime-probe',
     file_path: 'SKILL.md'
-  }, { tabId: 11, allowInternalFileActions: true });
+  }, { tabId: 11 });
   assert.equal(Object.prototype.hasOwnProperty.call(genericInstruction.skill, 'has_runtime'), false);
 
   await manager.executeRegistryAction({
-    action: 'apply_patch_operation',
+    action: 'apply_patch',
     skill_name: 'runtime-probe',
-    operation: {
-      type: 'create_file',
-      path: 'src/main.js',
-      diff: [
-        '+return {',
-        '+  readSummary() {',
-        '+    return { title: document.title, href: location.href };',
-        '+  }',
-        '+};'
-      ].join('\n')
-    }
-  }, { tabId: 11, allowInternalPatchOperation: true });
+    patch: [
+      '*** Begin Patch',
+      '*** Add File: src/main.js',
+      '+return {',
+      '+  readSummary() {',
+      '+    return { title: document.title, href: location.href };',
+      '+  }',
+      '+};',
+      '*** End Patch'
+    ].join('\n')
+  }, { tabId: 11 });
 
   const runtimeManifest = await manager.executeRegistryAction({
-    action: 'apply_patch_operation',
+    action: 'apply_patch',
     skill_name: 'runtime-probe',
-    operation: {
-      type: 'update_file',
-      path: 'manifest.json',
-      diff: [
-        '-  "match": [],',
-        '+  "match": [',
-        '+    "https://app.example.com/*"',
-        '+  ],',
-        '@@',
-        '-    "entry_path": null',
-        '+    "entry_path": "src/main.js"'
-      ].join('\n')
-    }
-  }, { tabId: 11, allowInternalPatchOperation: true });
+    patch: [
+      '*** Begin Patch',
+      '*** Update File: manifest.json',
+      '@@',
+      '-  "match": [],',
+      '+  "match": [',
+      '+    "https://app.example.com/*"',
+      '+  ],',
+      '@@',
+      '-    "entry_path": null',
+      '+    "entry_path": "src/main.js"',
+      '*** End Patch'
+    ].join('\n')
+  }, { tabId: 11 });
   assert.equal(runtimeManifest.skill.kind, 'page_runtime');
 
   const runtimeInstruction = await manager.executeRegistryAction({
     action: 'read_file',
     skill_name: 'runtime-probe',
     file_path: 'SKILL.md'
-  }, { tabId: 11, allowInternalFileActions: true });
+  }, { tabId: 11 });
   assert.equal(runtimeInstruction.skill.has_runtime, true);
   assert.equal(runtimeInstruction.skill.runtime_entry_path, 'src/main.js');
 
@@ -680,22 +672,22 @@ test('skill 可以在后续 patch 后从 guidance 演进成 page runtime，再�
   assert.equal(mounted.requested_skill_status, 'mounted');
 
   const reverted = await manager.executeRegistryAction({
-    action: 'apply_patch_operation',
+    action: 'apply_patch',
     skill_name: 'runtime-probe',
-    operation: {
-      type: 'update_file',
-      path: 'manifest.json',
-      diff: [
-        '-  "match": [',
-        '-    "https://app.example.com/*"',
-        '-  ],',
-        '+  "match": [],',
-        '@@',
-        '-    "entry_path": "src/main.js"',
-        '+    "entry_path": null'
-      ].join('\n')
-    }
-  }, { tabId: 11, allowInternalPatchOperation: true });
+    patch: [
+      '*** Begin Patch',
+      '*** Update File: manifest.json',
+      '@@',
+      '-  "match": [',
+      '-    "https://app.example.com/*"',
+      '-  ],',
+      '+  "match": [],',
+      '@@',
+      '-    "entry_path": "src/main.js"',
+      '+    "entry_path": null',
+      '*** End Patch'
+    ].join('\n')
+  }, { tabId: 11 });
   assert.equal(reverted.skill.kind, 'guidance');
   assert.equal(calls.unregister.length, 1);
 
@@ -703,9 +695,9 @@ test('skill 可以在后续 patch 后从 guidance 演进成 page runtime，再�
     action: 'read_file',
     skill_name: 'runtime-probe',
     file_path: 'SKILL.md'
-  }, { tabId: 11, allowInternalFileActions: true });
+  }, { tabId: 11 });
   assert.equal(revertedInstruction.skill.has_runtime, true);
-  assert.match(revertedInstruction.skill.runtime_hint, /includes JS files/i);
+  assert.match(revertedInstruction.skill.runtime_hint, /JS runtime files/i);
 });
 
 test('mount_on_current_page 只挂载指定技能并返回当前页 active skills', async () => {
@@ -915,7 +907,7 @@ test('内置 skill-creator 会自动出现在列表中且保持只读', async ()
   const detail = await manager.executeRegistryAction({
     action: 'read_detail',
     skill_name: 'skill-creator'
-  }, { allowInternalFileActions: true });
+  });
   assert.equal(detail.ok, true);
   assert.equal(detail.skill.builtin, true);
   assert.match(detail.skill.instruction.content, /Skill Creator/);
@@ -932,7 +924,7 @@ test('内置 skill-creator 会自动出现在列表中且保持只读', async ()
     action: 'search_files',
     skill_name: 'skill-creator',
     pattern: 'search_files'
-  }, { allowInternalFileActions: true });
+  });
   assert.equal(builtinSearch.ok, true);
   assert.equal(builtinSearch.total_matches > 0, true);
   assert.equal(builtinSearch.matches[0].skill_name, 'skill-creator');
@@ -971,7 +963,7 @@ test('read_detail/read_file 支持截断预览、字符偏移与按行续读', a
   const detailPreview = await manager.executeRegistryAction({
     action: 'read_detail',
     skill_name: 'long-dom-probe'
-  }, { allowInternalFileActions: true });
+  });
   assert.equal(detailPreview.ok, true);
   assert.equal(detailPreview.skill.instruction.content_read.mode, 'preview');
   assert.equal(detailPreview.skill.instruction.content_read.max_chars, 10000);
@@ -984,7 +976,7 @@ test('read_detail/read_file 支持截断预览、字符偏移与按行续读', a
     start_line: 3,
     end_line: 4,
     include_line_numbers: true
-  }, { allowInternalFileActions: true });
+  });
   assert.equal(detailByLine.ok, true);
   assert.equal(detailByLine.skill.instruction.content_read.mode, 'line_range');
   assert.equal(detailByLine.skill.instruction.content_read.start_line, 3);
@@ -1000,7 +992,7 @@ test('read_detail/read_file 支持截断预览、字符偏移与按行续读', a
     skip_chars: 200,
     max_chars: 150,
     include_line_numbers: true
-  }, { allowInternalFileActions: true });
+  });
   assert.equal(fileByChars.ok, true);
   assert.equal(fileByChars.skill.file.content_read.mode, 'char_range');
   assert.equal(fileByChars.skill.file.content_read.skip_chars, 200);
@@ -1049,7 +1041,7 @@ test('list_files/search_files 支持单 skill 与全局搜索闭环', async () =
   const listFiles = await manager.executeRegistryAction({
     action: 'list_files',
     skill_name: 'dom-probe'
-  }, { allowInternalFileActions: true });
+  });
   assert.equal(listFiles.ok, true);
   assert.equal(listFiles.total_files, 4);
   assert.equal(listFiles.files[0].path, 'manifest.json');
@@ -1062,7 +1054,7 @@ test('list_files/search_files 支持单 skill 与全局搜索闭环', async () =
     context_before: 1,
     context_after: 1,
     max_results: 10
-  }, { allowInternalFileActions: true });
+  });
   assert.equal(globalSearch.ok, true);
   assert.equal(globalSearch.total_matches >= 4, true);
   assert.equal(globalSearch.matches.every((item) => item.file_path.startsWith('src/')), true);
@@ -1075,7 +1067,7 @@ test('list_files/search_files 支持单 skill 与全局搜索闭环', async () =
     start_line: globalSearch.matches[0].line_number,
     end_line: globalSearch.matches[0].line_number,
     include_line_numbers: true
-  }, { allowInternalFileActions: true });
+  });
   assert.equal(targetedRead.ok, true);
   assert.match(targetedRead.skill.file.numbered_content, new RegExp(`^${globalSearch.matches[0].line_number} \\| `, 'm'));
 });

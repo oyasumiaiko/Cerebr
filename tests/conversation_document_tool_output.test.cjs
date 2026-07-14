@@ -154,7 +154,7 @@ test('search_files 的对话文档工具输出会把命中上下文渲染成 rg 
   assert.doesNotMatch(text, /"before": \[/);
 });
 
-test('copy_file/move_file 的对话文档工具输出会压成单行操作摘要', async () => {
+test('copy_file/move_file/delete_file 的对话文档工具输出会压成单行操作摘要', async () => {
   const { buildResponsesConversationDocumentToolOutputContentItems } = await loadToolOutputModule();
 
   const copyItems = buildResponsesConversationDocumentToolOutputContentItems('copy_file', {
@@ -182,6 +182,15 @@ test('copy_file/move_file 的对话文档工具输出会压成单行操作摘要
   assert.doesNotMatch(moveText, /<move_file_result/);
   assert.match(moveText, /move references\/old\.md -> references\/new\.md/);
   assert.doesNotMatch(moveText, /Reminder:/);
+
+  const deleteItems = buildResponsesConversationDocumentToolOutputContentItems('delete_file', {
+    ok: true,
+    action: 'delete_file',
+    deleted_path: 'project/src/a.js'
+  });
+  const deleteText = deleteItems.map(item => item.text).join('\n');
+  assert.doesNotMatch(deleteText, /<delete_file_result/);
+  assert.match(deleteText, /delete project\/src\/a\.js/);
 });
 
 test('对话文档文件工具失败时也保持纯文本错误输出', async () => {

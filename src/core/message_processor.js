@@ -27,7 +27,6 @@ import { resolveResponseActivityPanelStatusState } from '../utils/response_activ
 import { resolveResponseActivityToolExpansionState } from '../utils/response_activity_tool_auto_collapse.js';
 import { normalizeAssistantPreResponseStatus } from '../utils/assistant_pre_response_status.js';
 import {
-  buildOpenAIApplyPatchOperationPreview,
   buildVirtualFileApplyPatchPreview,
   buildSkillApplyPatchPreview
 } from '../utils/skill_patch_preview.js';
@@ -2213,14 +2212,11 @@ export function createMessageProcessor(appContext) {
 
   function renderResponseActivitySkillApplyPatchPreview(toolBodyInner, entry) {
     if (!toolBodyInner) return false;
-    const entryType = String(entry?.type || '').trim().toLowerCase();
-    const preview = entryType === 'apply_patch_call'
-      ? buildOpenAIApplyPatchOperationPreview(entry?.operation)
-      : (isResponseActivitySkillRegistryEntry(entry)
-          ? buildSkillApplyPatchPreview(entry.arguments)
-          : (isResponseActivityConversationDocumentEntry(entry)
-              ? buildVirtualFileApplyPatchPreview(entry.arguments)
-              : null));
+    const preview = isResponseActivitySkillRegistryEntry(entry)
+      ? buildSkillApplyPatchPreview(entry.arguments)
+      : (isResponseActivityConversationDocumentEntry(entry)
+          ? buildVirtualFileApplyPatchPreview(entry.arguments)
+          : null);
     if (!preview || !Array.isArray(preview.files) || preview.files.length <= 0) return false;
 
     const summary = document.createElement('div');
@@ -2409,19 +2405,11 @@ export function createMessageProcessor(appContext) {
       toolBodyInner.appendChild(secondary);
     });
 
-    const structuredInputText = snapshot?.argumentsText
-      || ((typeof entry.arguments === 'string' && entry.arguments.trim())
-        ? formatResponseToolCallArguments(entry.arguments)
-        : (String(entry?.type || '').trim().toLowerCase() === 'apply_patch_call'
-            && entry?.operation
-            && typeof entry.operation === 'object'
-          ? JSON.stringify(entry.operation, null, 2)
-          : ''));
-    if (!renderedPatchPreview && structuredInputText) {
+    if (!renderedPatchPreview && typeof entry.arguments === 'string' && entry.arguments.trim()) {
       const pre = document.createElement('pre');
       pre.className = 'response-activity-tool-arguments';
       setupResponseActivityExpandableTextBlock(pre);
-      pre.textContent = structuredInputText;
+      pre.textContent = formatResponseToolCallArguments(entry.arguments);
       toolBodyInner.appendChild(pre);
     }
 
@@ -3289,12 +3277,6 @@ export function createMessageProcessor(appContext) {
     }
     if (getResponseActivityToolSecondaryLines(entry).length > 0) return true;
     if (typeof entry.arguments === 'string' && entry.arguments.trim()) return true;
-    if (
-      String(entry?.type || '').trim().toLowerCase() === 'apply_patch_call'
-      && entry?.operation
-      && typeof entry.operation === 'object'
-      && !Array.isArray(entry.operation)
-    ) return true;
     if (hasResponsesToolOutputBody(outputSource)) return true;
     if (Array.isArray(entry.sources) && entry.sources.length > 0) return true;
     return false;
@@ -3315,11 +3297,7 @@ export function createMessageProcessor(appContext) {
     const secondaryLines = getResponseActivityToolSecondaryLines(entry);
     const argumentsText = (typeof entry.arguments === 'string' && entry.arguments.trim())
       ? formatResponseToolCallArguments(entry.arguments)
-      : (String(entry?.type || '').trim().toLowerCase() === 'apply_patch_call'
-          && entry?.operation
-          && typeof entry.operation === 'object'
-        ? JSON.stringify(entry.operation, null, 2)
-        : '');
+      : '';
     const outputText = formatResponseToolCallOutput(outputSource) || '';
     const outputImages = extractResponseToolCallOutputImages(outputSource);
     const prefersInlineImagePreview = shouldPreferResponseActivityToolInlineImagePreview(entry, outputImages);
@@ -3359,8 +3337,7 @@ export function createMessageProcessor(appContext) {
         primaryParts,
         statusLabel,
         hasDetails,
-        prefersInlineImagePreview,
-        operation: entry?.operation || null
+        prefersInlineImagePreview
       }),
       bodySignature: JSON.stringify({
         prefersInlineImagePreview,
@@ -3369,8 +3346,7 @@ export function createMessageProcessor(appContext) {
         outputText,
         outputImageSignatures: outputImages.map((image) => image.signature),
         sources: normalizedSources,
-        jsMeta,
-        operation: entry?.operation || null
+        jsMeta
       }),
       inlinePreviewSignature: JSON.stringify({
         prefersInlineImagePreview,
@@ -4191,7 +4167,6 @@ export function createMessageProcessor(appContext) {
         primary: buildResponseToolCallPrimaryText(normalizedRecord),
         status: normalizedRecord.status || '',
         arguments: normalizedRecord.arguments || '',
-        operation: normalizedRecord.operation || null,
         url: normalizedRecord.url || '',
         queries: Array.isArray(normalizedRecord.queries) ? normalizedRecord.queries : [],
         sources: Array.isArray(normalizedRecord.sources) ? normalizedRecord.sources : []
@@ -4242,16 +4217,6 @@ export function createMessageProcessor(appContext) {
       const pre = document.createElement('pre');
       pre.className = 'response-tool-call-arguments';
       pre.textContent = formatResponseToolCallArguments(record.arguments);
-      item.appendChild(pre);
-    } else if (
-      String(record?.type || '').trim().toLowerCase() === 'apply_patch_call'
-      && record?.operation
-      && typeof record.operation === 'object'
-      && !Array.isArray(record.operation)
-    ) {
-      const pre = document.createElement('pre');
-      pre.className = 'response-tool-call-arguments';
-      pre.textContent = JSON.stringify(record.operation, null, 2);
       item.appendChild(pre);
     }
 

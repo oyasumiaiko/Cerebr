@@ -51,7 +51,7 @@ export function buildVirtualFileTargetSchemaDescription(options = {}) {
     kind: {
       type: ['string', 'null'],
       enum: [VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT, VIRTUAL_FILE_TARGET_KIND_SKILL, null],
-      description: '当前 function tool 的目标类型。传 null 或 `workspace` 表示当前对话文件区；传 `skill` 表示 skill 文件区。官方 apply_patch 不使用这个 target 参数。'
+      description: '目标类型。传 null 或 `workspace` 表示当前对话文件区；传 `skill` 表示 skill 文件区。'
     },
     name: {
       type: ['string', 'null'],
@@ -62,8 +62,8 @@ export function buildVirtualFileTargetSchemaDescription(options = {}) {
   }, {
     nullable: true,
     description: requireSkillName
-      ? '当前 function tool 的目标作用域。传 null 表示当前对话文件区；操作 skill 时传 {"kind":"skill","name":"<skill-key>"}。本地只读映射不用 target，而是直接使用 `local/...` 路径。官方 apply_patch 没有 target 参数；若随后修改 skill，operation.path 必须改写为 `@skill/<skill-key>/<relative-path>`。'
-      : '当前 function tool 的目标作用域。传 null 表示当前对话文件区；搜索/列出 skill 时传 kind=`skill`，name=null 可跨全部 skill。本地只读映射不用 target，而是直接使用 `local/...` 路径。官方 apply_patch 没有 target 参数，修改 skill 时使用 `@skill/<skill-key>/<relative-path>`。'
+      ? '目标作用域。传 null 表示当前对话文件区；操作 skill 时传 {"kind":"skill","name":"<skill-key>"}。本地只读映射不用 target，而是直接使用 `local/...` 路径。'
+      : '目标作用域。传 null 表示当前对话文件区；搜索/列出 skill 时传 kind=`skill`，name=null 可跨全部 skill。本地只读映射不用 target，而是直接使用 `local/...` 路径。'
   });
 }
 

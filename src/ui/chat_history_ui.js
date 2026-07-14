@@ -9400,7 +9400,7 @@ export function createChatHistoryUI(appContext) {
         for (const file of indexFiles) {
           const fileResult = await executeSkillViewerFileAction('read_file', {
             target: { kind: 'skill', name: skillName },
-            path: file.path
+            file_path: file.path
           });
           files.push({
             ...file,
@@ -9637,7 +9637,7 @@ export function createChatHistoryUI(appContext) {
         });
         const instructionFile = await executeSkillViewerFileAction('read_file', {
           target: { kind: 'skill', name: skillName },
-          path: summary?.instruction?.path || 'SKILL.md'
+          file_path: summary?.instruction?.path || 'SKILL.md'
         });
         detail = buildSkillDetailFromViewerParts(summary, instructionFile, fileIndex);
         if (detail) {

@@ -23,6 +23,18 @@ export function assertWritableWorkspacePath(path, action) {
   throw new Error(`${action || '文件操作'} 不能直接修改 local 映射路径 ${path}。本地映射是只读的；请先用 copy_file 从 local/... 复制成普通会话文件后再修改副本。`);
 }
 
+export function assertPatchDoesNotTouchLocalPaths(patchText) {
+  const lines = String(patchText || '').replace(/\r\n?/g, '\n').split('\n');
+  for (const line of lines) {
+    const match = line.match(/^\*\*\* (?:Add File|Update File|Delete File|Move to):\s+(.+?)\s*$/);
+    if (!match) continue;
+    const candidate = normalizeLocalMountString(match[1]);
+    if (isLocalVirtualPath(candidate)) {
+      throw new Error(`apply_patch 不能直接修改 local 映射路径 ${candidate}。本地映射是只读的；请先用 copy_file 复制成普通会话文件后再修改副本。`);
+    }
+  }
+}
+
 export function normalizeLocalMountPath(value) {
   const normalized = normalizeConversationDocumentPath(value);
   if (!isLocalVirtualPath(normalized) || normalized === LOCAL_MOUNT_ROOT) {

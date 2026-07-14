@@ -28,11 +28,7 @@ import {
 } from './responses_builtin_tools.js';
 import {
   RESPONSES_EXTENSION_TOOL_SPECS,
-  isOfficialOpenAIResponsesEndpoint,
-  isResponsesApplyPatchModelSupported,
-  isResponsesApplyPatchToolAvailable,
-  isResponsesExtensionToolEnabled,
-  removeRetiredResponsesExtensionToolSettings
+  isResponsesExtensionToolEnabled
 } from './responses_extension_tools.js';
 import {
   buildResponsesCompactRequestBody,
@@ -732,9 +728,7 @@ export function createApiManager(appContext) {
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
       return undefined;
     }
-    const compacted = compactResponsesApiSettingValue(
-      removeRetiredResponsesExtensionToolSettings(settings)
-    );
+    const compacted = compactResponsesApiSettingValue(settings);
     if (!compacted || typeof compacted !== 'object' || Array.isArray(compacted)) {
       return undefined;
     }
@@ -4249,7 +4243,7 @@ export function createApiManager(appContext) {
 
       const description = document.createElement('div');
       description.className = 'responses-settings-description';
-      description.textContent = '控制 Cerebr 暴露给 Responses API 并在本地执行的工具。这里同时包含 function tools 与官方 apply_patch 协议；关闭后该能力不会进入最终请求体。';
+      description.textContent = '控制 Cerebr 暴露给 Responses API 的本地 function tools。关闭后，该工具不会进入最终请求体，即使自动注入链路本来支持它。';
       body.appendChild(description);
 
       const grid = document.createElement('div');
@@ -4259,17 +4253,7 @@ export function createApiManager(appContext) {
       const setExtensionToolEnabled = (toolId, enabled) => {
         const draft = cloneJsonCompatible(getResponsesSettingsSnapshot()) || {};
         if (enabled) {
-          const connectionSource = getConnectionSourceById(apiConfigs[index]?.connectionSourceId);
-          const requiresExplicitCompatibilityOverride = toolId === 'apply_patch'
-            && (
-              !isResponsesApplyPatchModelSupported(apiConfigs[index]?.modelName)
-              || !isOfficialOpenAIResponsesEndpoint(connectionSource?.baseUrl || apiConfigs[index]?.baseUrl)
-            );
-          if (requiresExplicitCompatibilityOverride) {
-            setNestedValue(draft, ['extension_tools', toolId, 'enabled'], true);
-          } else {
-            deleteNestedValue(draft, ['extension_tools', toolId, 'enabled']);
-          }
+          deleteNestedValue(draft, ['extension_tools', toolId, 'enabled']);
           const toolState = getNestedValue(draft, ['extension_tools', toolId]);
           if (!toolState || typeof toolState !== 'object' || Array.isArray(toolState) || Object.keys(toolState).length <= 0) {
             deleteNestedValue(draft, ['extension_tools', toolId]);
@@ -4311,14 +4295,7 @@ export function createApiManager(appContext) {
         switchLabel.className = 'switch';
         const input = document.createElement('input');
         input.type = 'checkbox';
-        input.checked = toolSpec.protocol === 'apply_patch'
-          ? isResponsesApplyPatchToolAvailable({
-            modelName: apiConfigs[index]?.modelName,
-            baseUrl: getConnectionSourceById(apiConfigs[index]?.connectionSourceId)?.baseUrl
-              || apiConfigs[index]?.baseUrl,
-            responsesApiSettings: getResponsesSettingsSnapshot()
-          })
-          : isResponsesExtensionToolEnabled(getResponsesSettingsSnapshot(), toolSpec.id);
+        input.checked = isResponsesExtensionToolEnabled(getResponsesSettingsSnapshot(), toolSpec.id);
         input.title = input.checked ? '当前：已暴露给模型' : '当前：不暴露给模型';
         const slider = document.createElement('span');
         slider.className = 'slider';

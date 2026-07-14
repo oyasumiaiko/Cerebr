@@ -2,7 +2,6 @@ const fsp = require('fs/promises');
 const path = require('path');
 const {
   buildSendContentMessageExpression,
-  ensureExtensionUserScriptsAllowed,
   launchFixedSidebarContext,
   loadPlaywright,
   reloadUnpackedExtension,
@@ -178,23 +177,11 @@ async function main() {
         });
     result.steps.push('browser_ready');
 
-    let extensionWorker = launchMode === 'worktree_unpacked'
+    const extensionWorker = launchMode === 'worktree_unpacked'
       ? await waitForWorktreeExtensionWorker(context, { timeoutMs: 30_000 })
-      : await reloadUnpackedExtension(context, {
-          timeoutMs: 30_000,
-          unpackedPath: repoRoot
-        });
+      : await reloadUnpackedExtension(context, { timeoutMs: 30_000 });
     const extensionId = new URL(extensionWorker.url()).host;
     result.extensionId = extensionId;
-    if (launchMode === 'stable') {
-      result.userScriptsPermission = await ensureExtensionUserScriptsAllowed(context, extensionId);
-      if (result.userScriptsPermission.changed) {
-        extensionWorker = await reloadUnpackedExtension(context, {
-          timeoutMs: 30_000,
-          unpackedPath: repoRoot
-        });
-      }
-    }
     result.steps.push('extension_ready');
 
     await extensionWorker.evaluate(`(async () => {
@@ -316,21 +303,19 @@ async function main() {
       return await chrome.runtime.sendMessage({
         type: 'SKILL_REGISTRY_ACTION',
         tabId: typeof tab?.id === 'number' ? tab.id : null,
-        allowInternalPatchOperation: true,
         payload: {
-          action: 'apply_patch_operation',
+          action: 'apply_patch',
           skill_name: skillNameValue,
-          operation: {
-            type: 'create_file',
-            path: 'src/main.js',
-            diff: [
-              '+return {',
-              '+  readSummary() {',
-              '+    return { title: document.title, href: location.href };',
-              '+  }',
-              '+};'
-            ].join('\n')
-          }
+          patch: [
+            '*** Begin Patch',
+            '*** Add File: src/main.js',
+            '+return {',
+            '+  readSummary() {',
+            '+    return { title: document.title, href: location.href };',
+            '+  }',
+            '+};',
+            '*** End Patch'
+          ].join('\n')
         }
       });
     }, skillName);
@@ -345,23 +330,22 @@ async function main() {
       return await chrome.runtime.sendMessage({
         type: 'SKILL_REGISTRY_ACTION',
         tabId: typeof tab?.id === 'number' ? tab.id : null,
-        allowInternalPatchOperation: true,
         payload: {
-          action: 'apply_patch_operation',
+          action: 'apply_patch',
           skill_name: skillNameValue,
-          operation: {
-            type: 'update_file',
-            path: 'manifest.json',
-            diff: [
-              '-  "match": [],',
-              '+  "match": [',
-              `+    "${url.origin}/*"`,
-              '+  ],',
-              '@@',
-              '-    "entry_path": null',
-              '+    "entry_path": "src/main.js"'
-            ].join('\n')
-          }
+          patch: [
+            '*** Begin Patch',
+            '*** Update File: manifest.json',
+            '@@',
+            '-  "match": [],',
+            '+  "match": [',
+            `+    "${url.origin}/*"`,
+            '+  ],',
+            '@@',
+            '-    "entry_path": null',
+            '+    "entry_path": "src/main.js"',
+            '*** End Patch'
+          ].join('\n')
         }
       });
     }, { skillNameValue: skillName, urlString: targetUrl });

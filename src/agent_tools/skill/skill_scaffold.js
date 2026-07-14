@@ -311,19 +311,14 @@ export function buildSkillScaffoldNextSteps(options = {}) {
   const resources = Array.isArray(options.resources) ? options.resources : [];
   const enabled = options.enabled === true;
   const examples = options.examples === true;
-  const skillName = typeof options.skillName === 'string' && options.skillName.trim()
-    ? options.skillName.trim()
-    : '<skill-key>';
-  const skillRoot = `@skill/${skillName}`;
-  const resourceNames = resources.length > 0 ? resources : ['scripts', 'references', 'assets'];
-  const resourceText = resourceNames.map((value) => `${skillRoot}/${value}/`).join(', ');
+  const resourceText = resources.length > 0 ? resources.map((value) => `${value}/`).join(', ') : 'scripts/, references/, assets/';
 
   return [
-    `Edit ${skillRoot}/SKILL.md with official apply_patch and replace the placeholder sections with real trigger rules, workflow, and concrete examples.`,
+    'Edit SKILL.md and replace the placeholder sections with real trigger rules, workflow, and concrete examples.',
     examples
       ? `Replace or delete the placeholder files created under ${resourceText}.`
       : `Add concrete files under ${resourceText} only when the skill actually needs them.`,
-    `If this skill later needs browser runtime code, patch ${skillRoot}/manifest.json to add match and runtime.entry_path, then add the corresponding ${skillRoot}/src/... files with official apply_patch.`,
+    'If this skill later needs browser runtime code, patch manifest.json to add match and runtime.entry_path, then add the corresponding JS files with apply_patch.',
     'Keep references and scripts on-demand; do not turn the scaffold into a large package before the real workflow is clear.',
     enabled
       ? 'If you intentionally enabled the skill already, verify the summary and files first; only call mount_on_current_page after the skill truly becomes a page runtime skill.'

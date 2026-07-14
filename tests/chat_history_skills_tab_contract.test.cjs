@@ -47,17 +47,3 @@ test('Skill 查看器标题改为 Skill 管理', async () => {
   assert.match(source, /title\.textContent = 'Skill 管理';/);
   assert.match(source, /subtitle\.textContent = '查看当前扩展里已注册的浏览器 Skill，点列表查看详情；源码按需加载。';/);
 });
-
-test('Skill 查看器通过公开 read_file 参数名读取说明与源码文件', async () => {
-  const source = await readWorkspaceFile('src/ui/chat_history_ui.js');
-
-  assert.match(
-    source,
-    /executeSkillViewerFileAction\('read_file', \{\s*target: \{ kind: 'skill', name: skillName \},\s*path: file\.path\s*\}\)/s
-  );
-  assert.match(
-    source,
-    /executeSkillViewerFileAction\('read_file', \{\s*target: \{ kind: 'skill', name: skillName \},\s*path: summary\?\.instruction\?\.path \|\| 'SKILL\.md'\s*\}\)/s
-  );
-  assert.doesNotMatch(source, /executeSkillViewerFileAction\('read_file',[\s\S]{0,180}?file_path:/);
-});
