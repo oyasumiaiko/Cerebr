@@ -136,17 +136,6 @@ const RESPONSES_MAIN_FIELD_SPECS = Object.freeze([
     help: '限制本次 Responses API 的输出上限。'
   },
   {
-    path: ['top_p'],
-    key: 'top_p',
-    label: 'Top P',
-    kind: 'range',
-    defaultValue: 1,
-    min: 0,
-    max: 1,
-    step: 0.05,
-    help: '与 Temperature 二选一优先调一个；未启用时不发送 top_p。'
-  },
-  {
     path: ['truncation'],
     key: 'truncation',
     label: '截断策略',
@@ -372,17 +361,6 @@ const GEMINI_MEDIA_RESOLUTION_OPTIONS = Object.freeze([
   'MEDIA_RESOLUTION_HIGH'
 ]);
 const GEMINI_MAIN_FIELD_SPECS = Object.freeze([
-  {
-    path: ['generationConfig', 'topP'],
-    key: 'generationConfig.topP',
-    label: 'Top P',
-    kind: 'range',
-    defaultValue: 0.95,
-    min: 0,
-    max: 1,
-    step: 0.05,
-    help: 'Gemini 使用 nucleus sampling；仅启用后才附加 topP。'
-  },
   {
     path: ['generationConfig', 'topK'],
     key: 'generationConfig.topK',
