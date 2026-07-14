@@ -11264,6 +11264,8 @@ export function createMessageSender(appContext) {
       }
       const responsesPageToolEnvironment = resolveResponsesPageToolEnvironment(attempt);
       const shouldPrepareEnvironmentContext = isOpenAIResponsesApiConfig(effectiveApiConfig);
+      const responsesApplyPatchAvailable = shouldPrepareEnvironmentContext
+        && isResponsesApplyPatchToolAvailable(effectiveApiConfig);
       const shouldPreparePageRuntimeContext = (
         isOpenAIResponsesApiConfig(effectiveApiConfig)
         && typeof utils?.executeJsRuntime === 'function'
@@ -11329,7 +11331,8 @@ export function createMessageSender(appContext) {
             skillContextPayload,
             environmentContextPayload: buildEnvironmentContextPayload({
               uploadedFiles: uploadedFileEnvironmentEntries,
-              localMounts: localMountEnvironmentEntries
+              localMounts: localMountEnvironmentEntries,
+              applyPatchAvailable: responsesApplyPatchAvailable
             })
           });
           try {
