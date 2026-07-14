@@ -361,3 +361,64 @@ test('buildRequest 在 OpenAI Chat 与 Gemini 纯对话模式下也强制清除�
   assert.equal(Object.hasOwn(geminiBody, 'toolConfig'), false);
   assert.equal(Object.hasOwn(geminiBody, 'cachedContent'), false);
 });
+
+test('buildRequest 不再默认添加采样参数，但保留用户显式配置', async (t) => {
+  const apiManager = await createApiManagerForTest(t);
+  const messages = [{ role: 'user', content: '你好' }];
+
+  const defaultChatBody = await apiManager.buildRequest({
+    config: {
+      modelName: 'chat-model',
+      baseUrl: 'https://example.com/v1/chat/completions',
+      connectionType: 'openai',
+      temperature: 1,
+      useStreaming: false
+    },
+    messages
+  });
+  assert.equal(Object.hasOwn(defaultChatBody, 'temperature'), false);
+  assert.equal(Object.hasOwn(defaultChatBody, 'top_p'), false);
+
+  const explicitChatBody = await apiManager.buildRequest({
+    config: {
+      modelName: 'chat-model',
+      baseUrl: 'https://example.com/v1/chat/completions',
+      connectionType: 'openai',
+      temperature: 0.3,
+      customParams: JSON.stringify({ top_p: 0.8 }),
+      useStreaming: false
+    },
+    messages
+  });
+  assert.equal(explicitChatBody.temperature, 0.3);
+  assert.equal(explicitChatBody.top_p, 0.8);
+
+  const defaultGeminiBody = await apiManager.buildRequest({
+    config: {
+      modelName: 'gemini-model',
+      baseUrl: 'https://generativelanguage.googleapis.com',
+      connectionType: 'gemini',
+      temperature: 1,
+      useStreaming: false
+    },
+    messages
+  });
+  assert.equal(Object.hasOwn(defaultGeminiBody.generationConfig, 'temperature'), false);
+  assert.equal(Object.hasOwn(defaultGeminiBody.generationConfig, 'topP'), false);
+
+  const explicitGeminiBody = await apiManager.buildRequest({
+    config: {
+      modelName: 'gemini-model',
+      baseUrl: 'https://generativelanguage.googleapis.com',
+      connectionType: 'gemini',
+      temperature: 0.4,
+      geminiApiSettings: {
+        generationConfig: { topP: 0.7 }
+      },
+      useStreaming: false
+    },
+    messages
+  });
+  assert.equal(explicitGeminiBody.generationConfig.temperature, 0.4);
+  assert.equal(explicitGeminiBody.generationConfig.topP, 0.7);
+});

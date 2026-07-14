@@ -5687,8 +5687,9 @@ export function createApiManager(appContext) {
         contents: contents,
         generationConfig: {
           responseMimeType: "text/plain",
-          temperature: config.temperature ?? 1.0,
-          topP: 0.95, // Gemini 使用 topP 而不是 top_p
+          ...(Number.isFinite(Number(config.temperature)) && Number(config.temperature) !== 1
+            ? { temperature: Number(config.temperature) }
+            : {}),
           ...geminiGenerationOverrides
         },
         ...geminiRootOverrides,
@@ -5871,12 +5872,12 @@ export function createApiManager(appContext) {
           requestBody.temperature = temperature;
         }
       } else {
+        const temperature = Number(config.temperature);
         requestBody = {
           model: config.modelName,
           messages: sanitizedMessages, // OpenAI API 仅接收标准字段，过滤内部扩展字段
           stream: (config.useStreaming !== false),
-          temperature: config.temperature ?? 1.0, // 确保有默认值
-          top_p: 0.95,
+          ...(Number.isFinite(temperature) && temperature !== 1 ? { temperature } : {}),
           ...overrides // 允许覆盖默认参数
         };
       }
