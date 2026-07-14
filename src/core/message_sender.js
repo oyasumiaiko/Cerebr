@@ -93,6 +93,10 @@ import {
   resolveAuthorizedResponsesExtensionToolSpec
 } from '../api/responses_extension_tools.js';
 import {
+  isPureConversationApiConfig,
+  isUserMessageTemplateEnabled
+} from '../api/api_request_mode.js';
+import {
   ensureResponsesReplayOutputItemsIncludeFunctionCalls
 } from '../utils/responses_follow_up.js';
 import {
@@ -5882,6 +5886,9 @@ export function createMessageSender(appContext) {
     if (!isOpenAIResponsesApiConfig(usedApiConfig)) {
       throw new Error('当前配置不是 Responses API，无法执行本地 compact。');
     }
+    if (isPureConversationApiConfig(usedApiConfig)) {
+      throw new Error('当前 API 已启用纯对话模式，不能执行会生成额外上下文的 /compact。');
+    }
 
     const conversationChain = Array.isArray(normalizedPayload.conversationChain)
       ? normalizedPayload.conversationChain
@@ -5970,6 +5977,9 @@ export function createMessageSender(appContext) {
     }
     if (!isOpenAIResponsesApiConfig(usedApiConfig)) {
       throw new Error('当前配置不是 Responses API，无法执行 /compact。');
+    }
+    if (isPureConversationApiConfig(usedApiConfig)) {
+      throw new Error('当前 API 已启用纯对话模式，不能执行会生成额外上下文的 /compact。');
     }
 
     const activeThreadContext = prepareActiveThreadContextForAppend(resolveActiveThreadContext());
@@ -8388,6 +8398,7 @@ export function createMessageSender(appContext) {
    */
   function getResponsesCustomFunctionTools(usedApiConfig, pageToolEnvironment = resolveResponsesPageToolEnvironment()) {
     if (!isOpenAIResponsesApiConfig(usedApiConfig)) return [];
+    if (isPureConversationApiConfig(usedApiConfig)) return [];
     const tools = buildResponsesExtensionFunctionTools({
       pageToolEnvironment,
       hasJsRuntime: typeof utils?.executeJsRuntime === 'function'
@@ -8456,6 +8467,7 @@ export function createMessageSender(appContext) {
     pageToolEnvironment = resolveResponsesPageToolEnvironment()
   ) {
     if (!isOpenAIResponsesApiConfig(usedApiConfig)) return requestBody;
+    if (isPureConversationApiConfig(usedApiConfig)) return requestBody;
     const nextBody = cloneDataSafely(requestBody) || {};
     nextBody.tools = filterResponsesExtensionFunctionTools(
       nextBody.tools,
@@ -10190,6 +10202,12 @@ export function createMessageSender(appContext) {
           .filter(record => String(record?.type || '').trim().toLowerCase() === 'function_call')
         : [];
 
+      // 纯对话 API 即使遇到非预期的 provider tool_call，也只把它当作模型输出保存，
+      // 绝不在本地执行，更不会构造携带 tool output 的 follow-up 请求。
+      if (isPureConversationApiConfig(usedApiConfig)) {
+        return lastHandleResult;
+      }
+
       if (lastHandleResult?.incomplete === true) {
         return lastHandleResult;
       }
@@ -10360,6 +10378,7 @@ export function createMessageSender(appContext) {
 
     // 验证API配置（优先使用本次有效配置）
     if (!validateApiConfig(effectiveConfigCandidate)) return;
+    const pureConversationApiMode = isPureConversationApiConfig(effectiveConfigCandidate);
 
     // 若会话固定 API 已失效且未显式覆盖，提示一次并回退到当前选中配置
     if (hasConversationLock && !isConversationLockValid && !resolvedApiConfig && !preferredApiConfig) {
@@ -10430,7 +10449,8 @@ export function createMessageSender(appContext) {
       || preferredApiConfig
       || lockConfig
       || apiManager.getSelectedConfig();
-    const skipUserMessagePreprocess = options.__skipUserMessagePreprocess === true;
+    const skipUserMessagePreprocess = options.__skipUserMessagePreprocess === true
+      || !isUserMessageTemplateEnabled(preprocessorConfig);
     let messageTextForHistory = messageText;
     let preprocessedMessageText = null;
     let shouldApplyPreprocessor = false;
@@ -11072,17 +11092,21 @@ export function createMessageSender(appContext) {
       // 这样本轮请求就能直接使用独立 contextual item，而不是再通过 instructions 临时拼接。
       const config = effectiveApiConfig || apiManager.getSelectedConfig();
       effectiveApiConfig = config;
+      const isPureConversationRequest = pureConversationApiMode || isPureConversationApiConfig(config);
       if (attempt) {
         attempt.supportsStandardSteer = isOpenAIResponsesApiConfig(config);
       }
       const responsesPageToolEnvironment = resolveResponsesPageToolEnvironment(attempt);
-      const shouldPrepareEnvironmentContext = isOpenAIResponsesApiConfig(effectiveApiConfig);
+      const shouldPrepareEnvironmentContext = isOpenAIResponsesApiConfig(effectiveApiConfig)
+        && !isPureConversationRequest;
       const shouldPreparePageRuntimeContext = (
         isOpenAIResponsesApiConfig(effectiveApiConfig)
+        && !isPureConversationRequest
         && typeof utils?.executeJsRuntime === 'function'
       );
       const shouldPrepareSkillContext = (
         isOpenAIResponsesApiConfig(effectiveApiConfig)
+        && !isPureConversationRequest
         && typeof utils?.getMatchingSkillSummaries === 'function'
       );
       let pageRuntimeContextPayload = null;
@@ -11158,7 +11182,8 @@ export function createMessageSender(appContext) {
         prompts: promptsConfig,
         injectedSystemMessages,
         pageContent: null,
-        imageContainsScreenshot: !!imageContainsScreenshot,
+        // 图片本身仍作为显式 user content 发送；纯对话模式不额外追加自动截图说明。
+        imageContainsScreenshot: isPureConversationRequest ? false : !!imageContainsScreenshot,
         omitDefaultSystemPrompt,
         currentPromptType,
         regenerateMode,

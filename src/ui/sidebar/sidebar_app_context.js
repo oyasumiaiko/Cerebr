@@ -26,6 +26,7 @@ import {
   getDocumentZoomFactor,
   toLayoutPixels
 } from '../../utils/coordinate_space.js';
+import { isPureConversationApiConfig } from '../../api/api_request_mode.js';
 
 const JS_RUNTIME_STATUS_TIMEOUT_MS = 5000;
 const JS_RUNTIME_FRAME_SNAPSHOT_TIMEOUT_MS = 5000;
@@ -389,6 +390,9 @@ export function registerSidebarUtilities(appContext) {
     const baseText = (shouldShowName && apiName)
       ? `给 ${apiName} 发送消息...`
       : '输入消息...';
+    if (isPureConversationApiConfig(currentConfig)) {
+      return `纯对话 API，${baseText}`;
+    }
     if (options?.isTemporaryMode) {
       return `纯对话模式，${baseText}`;
     }

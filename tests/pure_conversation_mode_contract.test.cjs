@@ -7,7 +7,7 @@ async function readWorkspaceFile(relativePath) {
   return fs.readFile(path.resolve(__dirname, '..', relativePath), 'utf8');
 }
 
-test('纯对话模式只隔离新请求工具，不重写既有历史 contextual items', async () => {
+test('纯对话模式只隔离新请求工具和上下文，不重写既有历史 contextual items', async () => {
   const source = await readWorkspaceFile('src/core/message_sender.js');
 
   assert.match(source, /const canWriteContextToCurrentUserNode = !regenerateMode/);
@@ -19,7 +19,20 @@ test('纯对话模式只隔离新请求工具，不重写既有历史 contextual
     source,
     /if \(canWriteContextToCurrentUserNode\) \{\s*syncUserContextualInputsForConversationTurn/s
   );
-  assert.doesNotMatch(source, /sanitizeMessagesForPureConversation/);
+  assert.match(source, /const isPureConversationRequest = pureConversationApiMode \|\| isPureConversationApiConfig\(config\)/);
+  assert.match(source, /const shouldPrepareEnvironmentContext = isOpenAIResponsesApiConfig\(effectiveApiConfig\)\s*&& !isPureConversationRequest/);
+  assert.match(source, /当前 API 已启用纯对话模式，不能执行会生成额外上下文的 \/compact/);
+  assert.doesNotMatch(source, /delete targetUserNode\.contextual_input_items_before/);
+});
+
+test('API 纯对话模式有持久化选择器和独立消息模板开关', async () => {
+  const settingsSource = await readWorkspaceFile('src/api/api_settings.js');
+  const htmlSource = await readWorkspaceFile('src/ui/sidebar/sidebar.html');
+
+  assert.match(htmlSource, /class="api-request-mode"[\s\S]*value="enhanced"[\s\S]*value="pure_chat"/);
+  assert.match(htmlSource, /class="user-message-template-enabled"/);
+  assert.match(settingsSource, /requestMode: normalizeApiRequestMode\(c\.requestMode\)/);
+  assert.match(settingsSource, /userMessagePreprocessorEnabled: c\.userMessagePreprocessorEnabled !== false/);
 });
 
 test('纯对话模式仍允许保存宿主页 metadata 作为会话来源记录', async () => {

@@ -35,6 +35,14 @@ import {
   resolveResponsesCompactEndpointUrl,
   normalizeResponsesLocalCompactionSettings
 } from '../utils/responses_local_compaction.js';
+import {
+  API_REQUEST_MODE_ENHANCED,
+  API_REQUEST_MODE_PURE_CHAT,
+  buildPureConversationMessages,
+  enforcePureConversationRequestBody,
+  isPureConversationApiConfig,
+  normalizeApiRequestMode
+} from './api_request_mode.js';
 
 // 用户消息预处理模板的说明与示例，用于“？”提示与“复制角色块”按钮。
 const USER_MESSAGE_TEMPLATE_HELP_TEXT = [
@@ -1518,6 +1526,7 @@ export function createApiManager(appContext) {
         connectionSourceId: (typeof c.connectionSourceId === 'string') ? c.connectionSourceId.trim() : '',
         modelName: c.modelName,
         displayName: c.displayName,
+        requestMode: normalizeApiRequestMode(c.requestMode),
         temperature: c.temperature,
       useStreaming: (c.useStreaming !== false),
       isFavorite: !!c.isFavorite,
@@ -1528,6 +1537,7 @@ export function createApiManager(appContext) {
         maxChatHistoryAssistant: c.maxChatHistoryAssistant ?? null,
         customParams: minifyJsonIfPossible(c.customParams || ''),
         customSystemPrompt: (c.customSystemPrompt || '').trim(),
+        userMessagePreprocessorEnabled: c.userMessagePreprocessorEnabled !== false,
         userMessagePreprocessorTemplate: (typeof c.userMessagePreprocessorTemplate === 'string') ? c.userMessagePreprocessorTemplate : '',
         userMessagePreprocessorIncludeInHistory: !!c.userMessagePreprocessorIncludeInHistory
       };
@@ -2149,11 +2159,13 @@ export function createApiManager(appContext) {
       connectionSourceId,
       modelName: 'gpt-4o',
       displayName: '',
+      requestMode: API_REQUEST_MODE_ENHANCED,
       temperature: 1,
       useStreaming: true,
       isFavorite: false,
       customParams: '',
       customSystemPrompt: '',
+      userMessagePreprocessorEnabled: true,
       userMessagePreprocessorTemplate: '',
       userMessagePreprocessorIncludeInHistory: false,
       maxChatHistory: 500,
@@ -2251,11 +2263,13 @@ export function createApiManager(appContext) {
       } else {
         config.displayName = config.displayName.trim();
       }
+      config.requestMode = normalizeApiRequestMode(config.requestMode);
       config.temperature = Number.isFinite(Number(config.temperature)) ? Number(config.temperature) : 1;
       config.useStreaming = (config.useStreaming !== false);
       config.isFavorite = !!config.isFavorite;
       config.customParams = (typeof config.customParams === 'string') ? config.customParams : '';
       config.customSystemPrompt = (typeof config.customSystemPrompt === 'string') ? config.customSystemPrompt.trim() : '';
+      config.userMessagePreprocessorEnabled = config.userMessagePreprocessorEnabled !== false;
       config.userMessagePreprocessorTemplate = (typeof config.userMessagePreprocessorTemplate === 'string')
         ? config.userMessagePreprocessorTemplate
         : '';
@@ -3327,9 +3341,11 @@ export function createApiManager(appContext) {
    * @param {Object} config - API 配置对象
    * @param {string} [config.connectionSourceId] - 连接源 ID
    * @param {string} [config.modelName] - 模型名称
+   * @param {'enhanced'|'pure_chat'} [config.requestMode] - API 请求模式
    * @param {number} [config.temperature] - temperature 值（可为 0）
    * @param {boolean} [config.isFavorite] - 是否收藏
    * @param {string} [config.customParams] - 自定义参数
+   * @param {boolean} [config.userMessagePreprocessorEnabled] - 是否启用用户消息预处理模板
    * @param {string} [config.userMessagePreprocessorTemplate] - 用户消息预处理模板（支持 {{#system}}/{{#assistant}}/{{#user}} 角色块与 {{no_system_prompt}} 控制标记）
    * @param {boolean} [config.userMessagePreprocessorIncludeInHistory] - 预处理结果是否写入历史
    * @param {number} index - 该配置在 apiConfigs 数组中的索引
@@ -3363,6 +3379,8 @@ export function createApiManager(appContext) {
     const displayNameInput = template.querySelector('.display-name');
     const modelNameInput = template.querySelector('.model-name');
     const modelNameOptions = template.querySelector('.model-name-options');
+    const requestModeSelect = template.querySelector('.api-request-mode');
+    const requestModeHint = template.querySelector('.api-request-mode-hint');
     const temperatureInput = template.querySelector('.temperature');
     const temperatureValue = template.querySelector('.temperature-value');
     const apiForm = template.querySelector('.api-form');
@@ -3371,6 +3389,7 @@ export function createApiManager(appContext) {
     const customParamsInput = template.querySelector('.custom-params');
     const customSystemPromptInput = template.querySelector('.custom-system-prompt');
     const userMessageTemplateInput = template.querySelector('.user-message-template');
+    const userMessageTemplateEnabledToggle = template.querySelector('.user-message-template-enabled');
     const userMessageTemplateIncludeHistoryToggle = template.querySelector('.user-message-template-include-history');
     const userMessageTemplateHelpBtn = template.querySelector('.template-help-icon');
     const userMessageTemplateCopyBtn = template.querySelector('.template-inject-copy-btn');
@@ -3419,6 +3438,26 @@ export function createApiManager(appContext) {
     };
     const getSelectedSourceId = () =>
       getConnectionSourceById(connectionSourceSelect?.value)?.id || '';
+
+    const refreshRequestModeUi = () => {
+      const mode = normalizeApiRequestMode(requestModeSelect?.value || apiConfigs[index]?.requestMode);
+      if (requestModeSelect) requestModeSelect.value = mode;
+      if (requestModeHint) {
+        requestModeHint.textContent = mode === API_REQUEST_MODE_PURE_CHAT
+          ? '纯对话只发送用户、系统与 AI 消息；不注入隐藏上下文，不声明或执行任何工具。'
+          : '增强模式会按当前配置注入上下文并暴露工具。';
+      }
+      template.classList.toggle('pure-chat-api-mode', mode === API_REQUEST_MODE_PURE_CHAT);
+    };
+
+    const refreshUserMessageTemplateUi = () => {
+      const enabled = userMessageTemplateEnabledToggle?.checked !== false;
+      if (userMessageTemplateInput) userMessageTemplateInput.disabled = !enabled;
+      if (userMessageTemplateIncludeHistoryToggle) {
+        userMessageTemplateIncludeHistoryToggle.disabled = !enabled;
+      }
+      template.classList.toggle('user-message-template-disabled', !enabled);
+    };
 
     if (modelNameInput && modelNameOptions) {
       const dataListId = `api-model-options-${config.id || index}`;
@@ -4546,6 +4585,9 @@ export function createApiManager(appContext) {
 
     displayNameInput.value = config.displayName ?? '';
     modelNameInput.value = config.modelName ?? 'gpt-4o';
+    if (requestModeSelect) {
+      requestModeSelect.value = normalizeApiRequestMode(config.requestMode);
+    }
     temperatureInput.value = config.temperature ?? 1;
     temperatureValue.textContent = (config.temperature ?? 1).toFixed(1);
     customParamsInput.value = (typeof config.customParams === 'string') ? config.customParams : '';
@@ -4557,12 +4599,17 @@ export function createApiManager(appContext) {
     if (userMessageTemplateInput) {
       userMessageTemplateInput.value = config.userMessagePreprocessorTemplate || '';
     }
+    if (userMessageTemplateEnabledToggle) {
+      userMessageTemplateEnabledToggle.checked = config.userMessagePreprocessorEnabled !== false;
+    }
     if (userMessageTemplateIncludeHistoryToggle) {
       userMessageTemplateIncludeHistoryToggle.checked = !!config.userMessagePreprocessorIncludeInHistory;
     }
     if (userMessageTemplateHelpBtn) {
       userMessageTemplateHelpBtn.title = USER_MESSAGE_TEMPLATE_HELP_TEXT;
     }
+    refreshRequestModeUi();
+    refreshUserMessageTemplateUi();
     applyModelNameOptions();
 
     // 监听温度变化
@@ -4574,6 +4621,15 @@ export function createApiManager(appContext) {
     // 说明：input 事件触发频率很高，直接同步到 sync 容易撞到写入配额；
     // 因此改为 change 时再落盘（用户松手/确认时触发），既省配额也更稳定。
     temperatureInput.addEventListener('change', () => saveAPIConfigs());
+
+    if (requestModeSelect) {
+      requestModeSelect.addEventListener('change', () => {
+        apiConfigs[index].requestMode = normalizeApiRequestMode(requestModeSelect.value);
+        refreshRequestModeUi();
+        saveAPIConfigs();
+        utils?.updateMessageInputPlaceholder?.();
+      });
+    }
 
     // 检查是否已收藏
     if (config.isFavorite) {
@@ -4729,6 +4785,14 @@ export function createApiManager(appContext) {
       });
       userMessageTemplateInput.addEventListener('change', () => {
         apiConfigs[index].userMessagePreprocessorTemplate = userMessageTemplateInput.value || '';
+        saveAPIConfigs();
+      });
+    }
+
+    if (userMessageTemplateEnabledToggle) {
+      userMessageTemplateEnabledToggle.addEventListener('change', () => {
+        apiConfigs[index].userMessagePreprocessorEnabled = !!userMessageTemplateEnabledToggle.checked;
+        refreshUserMessageTemplateUi();
         saveAPIConfigs();
       });
     }
@@ -5497,6 +5561,8 @@ export function createApiManager(appContext) {
    */
   async function buildRequest({ messages, config, overrides = {} }) {
     config = resolveEffectiveConfig(config) || config;
+    const pureConversationMode = isPureConversationApiConfig(config);
+    const connectionType = getConfigConnectionType(config);
     // 构造请求基本结构
     let requestBody = {};
     // 全局开关：是否发送 signature（无论是否发送，接收端解析到 signature 仍会照常存入历史）
@@ -5509,7 +5575,9 @@ export function createApiManager(appContext) {
     // - Gemini：用于在 Part-level 回传 thought_signature；
     // - OpenAI 兼容：部分代理会要求在 message-level 回传 `thoughtSignature` + `reasoning_content`（以及 tool_calls[i].thoughtSignature），否则可能报 “signature required”；
     // - 因此这里先保留内部字段，后续按 API 类型有条件地注入/过滤。
-    let normalizedMessages = Array.isArray(messages) ? messages.map(m => ({ ...m })) : [];
+    let normalizedMessages = pureConversationMode
+      ? buildPureConversationMessages(messages)
+      : (Array.isArray(messages) ? messages.map(m => ({ ...m })) : []);
     const customSystemPrompt = (config.customSystemPrompt || '').trim();
     if (customSystemPrompt) {
       const systemIndex = normalizedMessages.findIndex(m => m && m.role === 'system');
@@ -5629,12 +5697,12 @@ export function createApiManager(appContext) {
 
       // 处理 system 消息：合并所有 system 内容到 systemInstruction（保序）。
       const systemInstructionParts = collectGeminiSystemInstructionParts(normalizedMessages);
+      const canonicalSystemInstruction = systemInstructionParts.length > 0
+        ? { parts: systemInstructionParts }
+        : null;
       if (systemInstructionParts.length > 0) {
-        requestBody.systemInstruction = {
-          // 根据Gemini API文档，systemInstruction是Content类型，其role是可选的 ('user'或'model')
-          // 对于系统指令，通常不指定role或留空
-          parts: systemInstructionParts
-        };
+        // Gemini 的 systemInstruction 是 Content 对象；这里仅使用用户可见 system 消息生成。
+        requestBody.systemInstruction = canonicalSystemInstruction;
       }
       // 如果存在自定义参数，解析并合并到 generationConfig
       if (config.customParams) {
@@ -5682,11 +5750,21 @@ export function createApiManager(appContext) {
         }
       }
 
+      if (pureConversationMode) {
+        requestBody = enforcePureConversationRequestBody(requestBody, {
+          connectionType,
+          contents,
+          systemInstruction: canonicalSystemInstruction
+        });
+      }
+
     } else {
       // OpenAI 兼容请求格式：
       // - /chat/completions 继续沿用原结构；
       // - /responses 自动切换为 Responses API 结构（支持 input_text/input_image）。
       const useResponsesApi = isOpenAIResponsesConnectionConfig(config);
+      let canonicalResponsesInput = null;
+      let canonicalResponsesInstructions = null;
       const sanitizedMessages = await Promise.all(normalizedMessages.map(async (msg) => {
         const base = { role: msg.role };
         if (msg.name) base.name = msg.name;
@@ -5770,6 +5848,7 @@ export function createApiManager(appContext) {
           instructions: responsesSystemInstructions
         } = extractResponsesSystemInstructions(normalizedMessages);
         const responsesInput = await convertOpenAIMessagesToResponsesInput(responsesMessages);
+        canonicalResponsesInput = responsesInput;
         if (responsesInput.length <= 0) {
           throw new Error('Responses 请求缺少非 system 上下文：当前发送内容在预处理与 system 指令抽离后为空。请检查“用户消息预处理模板”，确保最终至少保留一条 user 消息或正文文本。');
         }
@@ -5785,6 +5864,7 @@ export function createApiManager(appContext) {
           requestBody.instructions,
           responsesSystemInstructions
         );
+        canonicalResponsesInstructions = requestBody.instructions || null;
         // Responses API 对不同模型支持参数存在差异；默认仅在用户主动调节时带上 temperature，避免不兼容参数导致 400。
         const temperature = Number(config.temperature);
         if (Number.isFinite(temperature) && temperature !== 1) {
@@ -5809,6 +5889,19 @@ export function createApiManager(appContext) {
         } catch (e) {
           console.error("解析自定义参数 JSON 失败，请检查格式。", e);
         }
+      }
+
+      if (pureConversationMode) {
+        requestBody = enforcePureConversationRequestBody(requestBody, useResponsesApi
+          ? {
+            connectionType: CONNECTION_TYPE_OPENAI_RESPONSES,
+            input: canonicalResponsesInput,
+            instructions: canonicalResponsesInstructions
+          }
+          : {
+            connectionType: CONNECTION_TYPE_OPENAI,
+            messages: sanitizedMessages
+          });
       }
     }
     return requestBody;
@@ -6376,9 +6469,11 @@ export function createApiManager(appContext) {
    * @param {'openai'|'openai_responses'|'gemini'} [partialConfig.connectionType] - 连接方式（可选）
    * @param {string} partialConfig.baseUrl - API 基础 URL
    * @param {string} partialConfig.modelName - 模型名称
+   * @param {'enhanced'|'pure_chat'} [partialConfig.requestMode] - API 请求模式
    * @param {string} [partialConfig.apiKeyFilePath] - 本地 Key 文件路径（可选）
    * @param {number} [partialConfig.temperature] - 温度值
    * @param {string} [partialConfig.customParams] - 自定义参数字符串
+   * @param {boolean} [partialConfig.userMessagePreprocessorEnabled] - 是否启用用户消息预处理模板
    * @param {string} [partialConfig.userMessagePreprocessorTemplate] - 用户消息预处理模板（支持 {{#system}}/{{#assistant}}/{{#user}} 角色块与 {{no_system_prompt}} 控制标记）
    * @param {boolean} [partialConfig.userMessagePreprocessorIncludeInHistory] - 预处理结果是否写入历史
    * @returns {Object|null} 完整的 API 配置对象或 null
@@ -6449,11 +6544,13 @@ export function createApiManager(appContext) {
       connectionSourceId: selectedSourceId,
       modelName: normalizedModelName,
       displayName: partialConfig.displayName || '',
+      requestMode: normalizeApiRequestMode(partialConfig.requestMode),
       temperature: partialConfig.temperature ?? 1.0,
       useStreaming: partialConfig.useStreaming !== false,
       isFavorite: false,
       customParams: partialConfig.customParams || '',
       customSystemPrompt: partialConfig.customSystemPrompt || '',
+      userMessagePreprocessorEnabled: partialConfig.userMessagePreprocessorEnabled !== false,
       userMessagePreprocessorTemplate: (typeof partialConfig.userMessagePreprocessorTemplate === 'string')
         ? partialConfig.userMessagePreprocessorTemplate
         : '',
@@ -6597,11 +6694,13 @@ export function createApiManager(appContext) {
       id: config.id || generateUUID(),
       modelName: config.modelName || 'new-model',
       displayName: config.displayName || '新配置',
+      requestMode: normalizeApiRequestMode(config.requestMode),
       temperature: config.temperature ?? 1,
       useStreaming: config.useStreaming !== false,
       isFavorite: !!config.isFavorite,
       customParams: config.customParams || '',
       customSystemPrompt: config.customSystemPrompt || '',
+      userMessagePreprocessorEnabled: config.userMessagePreprocessorEnabled !== false,
       userMessagePreprocessorTemplate: (typeof config.userMessagePreprocessorTemplate === 'string')
         ? config.userMessagePreprocessorTemplate
         : '',

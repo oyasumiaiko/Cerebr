@@ -361,6 +361,14 @@
                                 <label>显示名称</label>
                                 <input type="text" class="display-name" placeholder="输入显示名称（可选）">
                             </div>
+                            <div class="form-group api-request-mode-group">
+                                <label>API 模式</label>
+                                <select class="api-request-mode">
+                                    <option value="enhanced">增强模式</option>
+                                    <option value="pure_chat">纯对话</option>
+                                </select>
+                                <div class="api-request-mode-hint">增强模式会按当前配置注入上下文并暴露工具。</div>
+                            </div>
                             <div class="form-group">
                                 <div class="form-group-header">
                                     <label>Temperature</label>
@@ -379,7 +387,16 @@
                                  <textarea class="custom-system-prompt" placeholder="为该 API 额外添加的系统提示词，发送时将置顶合并。"></textarea>
                              </div>
                              <div class="form-group user-message-template-group">
-                                 <label>用户消息预处理模板</label>
+                                 <div class="form-group-header user-message-template-header">
+                                     <label>用户消息预处理模板</label>
+                                     <div class="user-message-template-enable-control">
+                                         <span>启用</span>
+                                         <label class="switch">
+                                             <input type="checkbox" class="user-message-template-enabled" checked>
+                                             <span class="slider"></span>
+                                         </label>
+                                     </div>
+                                 </div>
                                  <textarea class="user-message-template" placeholder="使用 {{input}} 代表用户输入；支持 {{datetime}}/{{date}}/{{time}} 与 {{no_system_prompt}}；支持 {{#system}}/{{#assistant}}/{{#user}} 角色块按顺序发送"></textarea>
                                  <div class="switch-row user-message-template-options">
                                      <div class="switch-row-left">

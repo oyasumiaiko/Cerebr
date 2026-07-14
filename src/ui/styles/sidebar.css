@@ -4060,6 +4060,13 @@ input:checked + .slider::before {
     opacity: 0.68;
 }
 
+.api-request-mode-hint {
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.4;
+    opacity: 0.68;
+}
+
 .custom-params-group textarea.custom-params,
 .custom-system-prompt-group textarea.custom-system-prompt,
 .user-message-template-group textarea.user-message-template {
@@ -4073,6 +4080,18 @@ input:checked + .slider::before {
 
 .user-message-template-options {
     margin-top: 8px;
+}
+
+.user-message-template-header {
+    gap: 12px;
+}
+
+.user-message-template-enable-control {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    font-size: 12px;
 }
 
 .user-message-template-options .switch-row-left {
