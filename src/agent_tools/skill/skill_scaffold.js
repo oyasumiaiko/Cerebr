@@ -83,14 +83,11 @@ function buildSkillScaffoldInstructionContent(options = {}) {
   const skillTitle = normalizeSingleLineText(options.displayName) || titleCaseSkillName(skillName);
   const description = normalizeSingleLineText(options.description)
     || '[TODO: Complete and informative explanation of what the skill does and when to use it. Include WHEN to use this skill - specific scenarios, file types, or tasks that trigger it.]';
-  const shortDescription = normalizeSingleLineText(options.shortDescription) || description;
 
   return [
     '---',
     `name: ${toYamlQuotedString(skillName)}`,
     `description: ${toYamlQuotedString(description)}`,
-    'metadata:',
-    `  short-description: ${toYamlQuotedString(shortDescription)}`,
     '---',
     '',
     `# ${skillTitle}`,
@@ -105,27 +102,31 @@ function buildSkillScaffoldInstructionContent(options = {}) {
     '',
     '**1. Workflow-Based** (best for sequential processes)',
     '- Works well when there are clear step-by-step procedures.',
+    '- Example: a document skill with `Workflow Decision Tree` -> `Reading` -> `Creating` -> `Editing`.',
     '- Structure: `## Overview -> ## Workflow Decision Tree -> ## Step 1 -> ## Step 2...`',
     '',
     '**2. Task-Based** (best for tool collections)',
     '- Works well when the skill offers different operations or capabilities.',
+    '- Example: a PDF skill with `Quick Start` -> `Merge PDFs` -> `Split PDFs` -> `Extract Text`.',
     '- Structure: `## Overview -> ## Quick Start -> ## Task Category 1 -> ## Task Category 2...`',
     '',
     '**3. Reference / Guidelines** (best for standards or specifications)',
     '- Works well for policies, coding standards, or operating guidance.',
+    '- Example: brand rules with `Colors` -> `Typography` -> `Components`.',
     '- Structure: `## Overview -> ## Guidelines -> ## Specifications -> ## Usage...`',
     '',
     '**4. Capabilities-Based** (best for integrated systems)',
     '- Works well when the skill provides multiple interrelated features.',
+    '- Example: product management with a numbered list of connected capabilities.',
     '- Structure: `## Overview -> ## Core Capabilities -> ### 1. Feature -> ### 2. Feature...`',
     '',
-    'Patterns can be mixed and matched as needed.',
+    'Patterns can be mixed and matched as needed. Most skills combine a primary structure with smaller workflows for complex operations.',
     '',
     'Delete this entire "Structuring This Skill" section when done - it is only guidance.]',
     '',
     '## [TODO: Replace with the first main section based on chosen structure]',
     '',
-    '[TODO: Add the first real section here. Prefer concrete examples, decision points, or references to specific files over abstract design notes.]',
+    '[TODO: Add real content here: code samples for technical skills, decision trees for fragile workflows, realistic user requests, and direct links to scripts/templates/references as needed.]',
     '',
     '## Resources (optional)',
     '',
@@ -136,21 +137,21 @@ function buildSkillScaffoldInstructionContent(options = {}) {
     '',
     '**Appropriate for:** reusable JS snippets, selector probes, parser drafts, or logic you expect to paste into `js_runtime_execute.code` or later promote into `runtime.entry_path` / helper files.',
     '',
-    '**Important:** these files are not executed automatically by the extension. The current browser environment only runs code through `js_runtime_execute`, whose `code` field is executed as an async function body.',
+    '**Important:** these files are not executed automatically by the extension. Test representative JavaScript by reading it and running the adapted code through `js_runtime_execute`, whose `code` field is an async function body.',
     '',
     '### references/',
     'Documentation and reference material intended to be loaded into context to inform the model\'s process and decisions.',
     '',
-    '**Appropriate for:** API references, site structure notes, schemas, workflow guides, and detailed background that should not live in the main `SKILL.md`.',
+    '**Appropriate for:** API references, site structure notes, schemas, workflow guides, and detailed background that should not live in the main `SKILL.md`. Keep references one level below SKILL.md; add a table of contents to files longer than 100 lines.',
     '',
     '### assets/',
     'Files that are not intended to be loaded into context, but should instead be copied or reused in the final output.',
     '',
-    '**Appropriate for:** templates, boilerplate code, images, fonts, icons, starter directories, or other output artifacts.',
+    '**Appropriate for:** text templates, boilerplate code, starter files, or existing output artifacts. Do not use text patches to fabricate binary images, fonts, or archives.',
     '',
     '---',
     '',
-    '**Not every skill requires all three types of resources.**'
+    '**Not every skill requires all three types of resources. Keep SKILL.md under 500 lines, avoid duplicating reference content, and do not add README.md, QUICK_REFERENCE.md, or CHANGELOG.md.**'
   ].join('\n');
 }
 
@@ -208,17 +209,16 @@ function buildSkillScaffoldExampleAssetContent() {
   return [
     '# Example Asset File',
     '',
-    'This placeholder represents where asset files would be stored.',
-    'Replace it with actual asset files or delete it if not needed.',
+    'This placeholder represents text-based output material that should be copied or adapted, not loaded as instructions.',
+    'Replace it with a real text template or delete it if not needed.',
     '',
-    'Asset files are not intended to be loaded into context, but rather used within the final output.',
+    'Cerebr virtual skill files are edited as text. Do not use apply_patch to fabricate binary images, fonts, archives, or document files.',
     '',
     'Common examples:',
-    '- Templates',
-    '- Images',
-    '- Fonts',
-    '- Boilerplate code',
-    '- Icons'
+    '- Markdown or HTML templates',
+    '- CSS or JavaScript boilerplate',
+    '- JSON or YAML starter files',
+    '- Text snippets intended for final output'
   ].join('\n');
 }
 
@@ -228,7 +228,6 @@ export function buildSkillScaffoldFiles(options = {}) {
   const displayName = normalizeSingleLineText(options.displayName) || titleCaseSkillName(skillName);
   const description = normalizeSingleLineText(options.description)
     || '[TODO: Complete and informative explanation of what the skill does and when to use it. Include WHEN to use this skill - specific scenarios, file types, or tasks that trigger it.]';
-  const shortDescription = normalizeSingleLineText(options.shortDescription) || description;
   const resources = Array.isArray(options.resources) ? options.resources : [];
   const examples = options.examples === true;
   const withPrefix = (relativePath) => joinScaffoldPath(prefix, relativePath);
@@ -238,8 +237,7 @@ export function buildSkillScaffoldFiles(options = {}) {
     content: buildSkillScaffoldInstructionContent({
       skillName,
       displayName,
-      description,
-      shortDescription
+      description
     })
   }];
 
@@ -314,12 +312,14 @@ export function buildSkillScaffoldNextSteps(options = {}) {
   const resourceText = resources.length > 0 ? resources.map((value) => `${value}/`).join(', ') : 'scripts/, references/, assets/';
 
   return [
-    'Edit SKILL.md and replace the placeholder sections with real trigger rules, workflow, and concrete examples.',
+    'Edit SKILL.md: keep the stable name, put all trigger conditions in description, and replace every TODO with concise workflow or decision guidance.',
     examples
       ? `Replace or delete the placeholder files created under ${resourceText}.`
       : `Add concrete files under ${resourceText} only when the skill actually needs them.`,
+    'Keep SKILL.md frontmatter description aligned with manifest.json.description, and keep Cerebr UI metadata in manifest.json.interface.',
+    'Read the changed files back, remove unused placeholders and extra documentation, and verify every referenced path exists.',
+    'Forward-test complex skills with realistic requests and raw artifacts when an independent review surface is available; do not leak the expected answer.',
     'If this skill later needs browser runtime code, patch manifest.json to add match and runtime.entry_path, then add the corresponding JS files with apply_patch.',
-    'Keep references and scripts on-demand; do not turn the scaffold into a large package before the real workflow is clear.',
     enabled
       ? 'If you intentionally enabled the skill already, verify the summary and files first; only call mount_on_current_page after the skill truly becomes a page runtime skill.'
       : 'When the skill is ready, call enable_skill; only call mount_on_current_page after the skill truly becomes a page runtime skill.'
