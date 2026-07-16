@@ -2561,9 +2561,9 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
    - hover 时面板按当前 thumb 与鼠标位置对齐，首次按下即可直接拖动；
    - 几何全部使用 em，跟随界面字体放大，原生 range step=1 保证档位吸附。 */
 .reasoning-effort-control {
-    --reasoning-effort-track-width: 16em;
+    --reasoning-effort-track-width: 11.32em;
     --reasoning-effort-panel-padding: 1.8em;
-    --reasoning-effort-thumb-size: 1.15em;
+    --reasoning-effort-thumb-size: 0.72em;
     --reasoning-effort-current-offset: 50%;
     --reasoning-effort-open-offset: 50%;
     --reasoning-effort-pointer-anchor: 22px;
@@ -2597,13 +2597,14 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: calc(var(--cerebr-font-size, 14px) * 1.15);
+    /* 与右侧 Font Awesome 按钮保持同一默认字号，不随 slider 的 em 几何放大。 */
+    font-size: 1rem;
     transition: opacity 170ms ease, color 170ms ease, transform 170ms ease;
 }
 
 #reasoning-effort-button:hover {
     opacity: 1;
-    color: color-mix(in srgb, var(--cerebr-highlight) 72%, var(--cerebr-icon-color));
+    color: var(--cerebr-icon-color);
 }
 
 .reasoning-effort-control.is-open #reasoning-effort-button {
@@ -2626,7 +2627,7 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     top: 50%;
     left: calc(var(--reasoning-effort-pointer-anchor) - var(--reasoning-effort-panel-padding) - var(--reasoning-effort-open-offset));
     width: calc(var(--reasoning-effort-track-width) + var(--reasoning-effort-panel-padding) + var(--reasoning-effort-panel-padding));
-    height: 3.6em;
+    height: 2.6em;
     box-sizing: border-box;
     overflow: visible;
     opacity: 0;
@@ -2640,15 +2641,11 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
       calc(var(--reasoning-effort-panel-padding) + var(--reasoning-effort-open-offset))
       round 999px
     );
-    border: 1px solid transparent;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--cerebr-input-bg) 72%, var(--cerebr-bg-color));
-    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
-    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
-    -webkit-backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
+    border: none;
+    background: transparent;
     z-index: 3;
-    transition: clip-path 240ms cubic-bezier(0.22, 1, 0.36, 1), opacity 150ms ease,
-      border-color 170ms ease, visibility 0s linear 240ms;
+    transition: clip-path 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 140ms ease,
+      visibility 0s linear 220ms;
 }
 
 .reasoning-effort-control.is-open .reasoning-effort-slider-panel {
@@ -2656,7 +2653,6 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     visibility: visible;
     pointer-events: auto;
     clip-path: inset(0 round 999px);
-    border-color: color-mix(in srgb, var(--cerebr-control-border) 78%, transparent);
     transition-delay: 0s;
 }
 
@@ -2680,19 +2676,16 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 .reasoning-effort-value {
     position: absolute;
     left: calc(var(--reasoning-effort-panel-padding) + var(--reasoning-effort-current-offset));
-    bottom: calc(50% + 0.72em);
+    bottom: calc(50% + 0.45em);
     z-index: 5;
-    padding: 0.22em 0.48em;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--cerebr-input-bg) 72%, var(--cerebr-bg-color));
-    color: var(--cerebr-text-color);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
-    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-    font-weight: 650;
+    padding: 0;
+    color: color-mix(in srgb, var(--cerebr-text-color) 82%, transparent);
+    font-family: inherit;
+    font-weight: 500;
     line-height: 1;
     white-space: nowrap;
     pointer-events: none;
-    transform: translateX(-50%) scale(0.76);
+    transform: translateX(-50%) scale(0.72);
 }
 
 .reasoning-effort-range-wrap {
@@ -2700,10 +2693,20 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     left: var(--reasoning-effort-panel-padding);
     top: 50%;
     width: var(--reasoning-effort-track-width);
-    height: 1.45em;
+    height: 1.05em;
     display: flex;
     align-items: center;
     transform: translateY(-50%);
+}
+
+.reasoning-effort-range-wrap::before {
+    content: '';
+    position: absolute;
+    inset: -0.16em -0.5em;
+    border: 1px solid color-mix(in srgb, var(--cerebr-control-border) 42%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--cerebr-input-bg) 42%, transparent);
+    pointer-events: none;
 }
 
 .reasoning-effort-dots {
@@ -2723,10 +2726,10 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 }
 
 .reasoning-effort-dot {
-    width: 0.34em;
-    height: 0.34em;
+    width: 0.2em;
+    height: 0.2em;
     box-sizing: border-box;
-    border: 0.08em solid transparent;
+    border: 0.06em solid transparent;
     border-radius: 50%;
     background: color-mix(in srgb, var(--cerebr-slider-track-bg) 74%, var(--cerebr-text-color));
     transition: background-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
@@ -2738,24 +2741,24 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 }
 
 .reasoning-effort-dot.is-active {
-    background: color-mix(in srgb, var(--cerebr-highlight) 76%, var(--cerebr-slider-thumb-bg));
+    background: color-mix(in srgb, var(--cerebr-highlight) 52%, var(--cerebr-slider-thumb-bg));
 }
 
 .reasoning-effort-dot.is-default.is-active {
-    border-color: color-mix(in srgb, var(--cerebr-highlight) 80%, var(--cerebr-slider-thumb-bg));
+    border-color: color-mix(in srgb, var(--cerebr-highlight) 58%, var(--cerebr-slider-thumb-bg));
     background: transparent;
 }
 
 .reasoning-effort-dot.is-current {
-    transform: scale(1.35);
-    box-shadow: 0 0 0 0.16em color-mix(in srgb, var(--cerebr-highlight) 18%, transparent);
+    transform: none;
+    box-shadow: none;
 }
 
 #reasoning-effort-slider {
     position: relative;
     z-index: 1;
     width: 100%;
-    height: 1.45em;
+    height: 1.05em;
     margin: 0;
     padding: 0;
     border: none;
@@ -2767,14 +2770,14 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 }
 
 #reasoning-effort-slider::-webkit-slider-runnable-track {
-    height: 0.14em;
+    height: 0.08em;
     border-radius: 999px;
     background: linear-gradient(
       to right,
       transparent 0,
       transparent var(--reasoning-effort-official-start),
-      color-mix(in srgb, var(--cerebr-highlight) 68%, var(--cerebr-slider-thumb-bg)) var(--reasoning-effort-official-start),
-      color-mix(in srgb, var(--cerebr-highlight) 68%, var(--cerebr-slider-thumb-bg)) var(--reasoning-effort-progress),
+      color-mix(in srgb, var(--cerebr-highlight) 48%, var(--cerebr-slider-track-bg)) var(--reasoning-effort-official-start),
+      color-mix(in srgb, var(--cerebr-highlight) 48%, var(--cerebr-slider-track-bg)) var(--reasoning-effort-progress),
       var(--cerebr-slider-track-bg) var(--reasoning-effort-progress),
       var(--cerebr-slider-track-bg) 100%
     );
@@ -2785,11 +2788,11 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     z-index: 3;
     width: var(--reasoning-effort-thumb-size);
     height: var(--reasoning-effort-thumb-size);
-    margin-top: calc((0.14em - var(--reasoning-effort-thumb-size)) / 2);
-    border: 0.14em solid var(--cerebr-input-bg);
+    margin-top: calc((0.08em - var(--reasoning-effort-thumb-size)) / 2);
+    border: 0.08em solid var(--cerebr-input-bg);
     border-radius: 50%;
-    background: var(--cerebr-slider-thumb-bg);
-    box-shadow: 0 1px 5px rgba(0, 0, 0, 0.22);
+    background: color-mix(in srgb, var(--cerebr-icon-color) 82%, var(--cerebr-highlight) 18%);
+    box-shadow: none;
     -webkit-appearance: none;
     appearance: none;
     transition: transform 160ms ease, filter 160ms ease, box-shadow 160ms ease;
@@ -2797,20 +2800,20 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 
 #reasoning-effort-slider:hover::-webkit-slider-thumb,
 #reasoning-effort-slider:focus-visible::-webkit-slider-thumb {
-    transform: scale(1.12);
-    filter: brightness(1.1);
-    box-shadow: 0 0 0 0.2em color-mix(in srgb, var(--cerebr-highlight) 18%, transparent), 0 1px 5px rgba(0, 0, 0, 0.22);
+    transform: scale(1.05);
+    filter: none;
+    box-shadow: none;
 }
 
 #reasoning-effort-slider::-moz-range-track {
-    height: 0.14em;
+    height: 0.08em;
     border-radius: 999px;
     background: linear-gradient(
       to right,
       transparent 0,
       transparent var(--reasoning-effort-official-start),
-      color-mix(in srgb, var(--cerebr-highlight) 68%, var(--cerebr-slider-thumb-bg)) var(--reasoning-effort-official-start),
-      color-mix(in srgb, var(--cerebr-highlight) 68%, var(--cerebr-slider-thumb-bg)) var(--reasoning-effort-progress),
+      color-mix(in srgb, var(--cerebr-highlight) 48%, var(--cerebr-slider-track-bg)) var(--reasoning-effort-official-start),
+      color-mix(in srgb, var(--cerebr-highlight) 48%, var(--cerebr-slider-track-bg)) var(--reasoning-effort-progress),
       var(--cerebr-slider-track-bg) var(--reasoning-effort-progress),
       var(--cerebr-slider-track-bg) 100%
     );
@@ -2823,10 +2826,10 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 #reasoning-effort-slider::-moz-range-thumb {
     width: var(--reasoning-effort-thumb-size);
     height: var(--reasoning-effort-thumb-size);
-    border: 0.14em solid var(--cerebr-input-bg);
+    border: 0.08em solid var(--cerebr-input-bg);
     border-radius: 50%;
-    background: var(--cerebr-slider-thumb-bg);
-    box-shadow: 0 1px 5px rgba(0, 0, 0, 0.22);
+    background: color-mix(in srgb, var(--cerebr-icon-color) 82%, var(--cerebr-highlight) 18%);
+    box-shadow: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

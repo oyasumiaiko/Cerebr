@@ -16,8 +16,9 @@ test('Responses 推理强度选择器固定在输入框与文件按钮之间', a
   assert.ok(messageInputIndex >= 0);
   assert.ok(reasoningControlIndex > messageInputIndex);
   assert.ok(documentButtonIndex > reasoningControlIndex);
-  assert.match(sidebarHtml, /id="reasoning-effort-button"[\s\S]*fa-regular fa-microchip-ai/);
+  assert.match(sidebarHtml, /id="reasoning-effort-button"[\s\S]*far fa-gauge-simple/);
   assert.doesNotMatch(sidebarHtml, /fa-brain/);
+  assert.doesNotMatch(sidebarHtml, /fa-microchip-ai/);
   assert.match(
     sidebarHtml,
     /id="reasoning-effort-slider"[^>]*type="range"[^>]*min="0"[^>]*max="4"[^>]*step="1"[^>]*value="0"/
@@ -67,13 +68,16 @@ test('面板按当前档位在鼠标处展开，文字置于上方并在离开�
   const sidebarCss = await readWorkspaceFile('src/ui/styles/sidebar.css');
   const sidebarEventsSource = await readWorkspaceFile('src/ui/sidebar/sidebar_events.js');
 
-  assert.match(sidebarCss, /\.reasoning-effort-control\s*\{[\s\S]*--reasoning-effort-track-width:\s*16em[\s\S]*--reasoning-effort-panel-padding:\s*1\.8em[\s\S]*font-size:\s*var\(--cerebr-font-size/);
-  assert.match(sidebarCss, /#reasoning-effort-button[\s\S]*font-size:\s*calc\(var\(--cerebr-font-size, 14px\) \* 1\.15\)/);
+  assert.match(sidebarCss, /\.reasoning-effort-control\s*\{[\s\S]*--reasoning-effort-track-width:\s*11\.32em[\s\S]*--reasoning-effort-panel-padding:\s*1\.8em[\s\S]*font-size:\s*var\(--cerebr-font-size/);
+  assert.match(sidebarCss, /#reasoning-effort-button[\s\S]*font-size:\s*1rem/);
   assert.match(sidebarCss, /\.reasoning-effort-slider-panel\s*\{[\s\S]*left:\s*calc\(var\(--reasoning-effort-pointer-anchor\) - var\(--reasoning-effort-panel-padding\) - var\(--reasoning-effort-open-offset\)\)[\s\S]*clip-path:/);
   assert.match(sidebarCss, /\.reasoning-effort-control\.is-open \.reasoning-effort-slider-panel[\s\S]*clip-path:\s*inset\(0 round 999px\)/);
-  assert.match(sidebarCss, /\.reasoning-effort-value\s*\{[\s\S]*left:\s*calc\(var\(--reasoning-effort-panel-padding\) \+ var\(--reasoning-effort-current-offset\)\)[\s\S]*bottom:\s*calc\(50% \+ 0\.72em\)/);
+  assert.match(sidebarCss, /\.reasoning-effort-value\s*\{[\s\S]*left:\s*calc\(var\(--reasoning-effort-panel-padding\) \+ var\(--reasoning-effort-current-offset\)\)[\s\S]*bottom:\s*calc\(50% \+ 0\.45em\)/);
+  assert.match(sidebarCss, /\.reasoning-effort-value\s*\{[\s\S]*padding:\s*0;[\s\S]*font-family:\s*inherit/);
   assert.match(sidebarCss, /transparent var\(--reasoning-effort-official-start\)[\s\S]*var\(--reasoning-effort-progress\)/);
   assert.match(sidebarCss, /\.reasoning-effort-dot\.is-default\s*\{[\s\S]*background:\s*transparent/);
+  assert.match(sidebarCss, /\.reasoning-effort-dot\.is-current\s*\{[\s\S]*box-shadow:\s*none/);
+  assert.match(sidebarCss, /#reasoning-effort-slider:hover::\-webkit-slider-thumb,[\s\S]*box-shadow:\s*none/);
   assert.match(sidebarCss, /\.reasoning-effort-dots[\s\S]*justify-content:\s*space-between/);
   assert.match(sidebarCss, /#reasoning-effort-slider[\s\S]*-webkit-appearance:\s*none/);
   assert.match(sidebarEventsSource, /addEventListener\('pointerenter', openReasoningEffortControl\)/);

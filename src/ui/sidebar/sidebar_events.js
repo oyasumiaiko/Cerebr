@@ -150,8 +150,8 @@ function setupApiMenuWatcher(appContext) {
   const reasoningValue = appContext.dom?.reasoningEffortValue || null;
   const reasoningDots = appContext.dom?.reasoningEffortDots || null;
   const reasoningEffortSettingKey = 'responsesReasoningEffortSliderOptions';
-  const reasoningSliderThumbSizeEm = 1.15;
-  const reasoningSliderStepEm = 3.7;
+  const reasoningSliderThumbSizeEm = 0.72;
+  const reasoningSliderStepEm = 2.65;
   let reasoningEffortOptions = ['default'];
 
   const resolveConfigLabel = (config) => {

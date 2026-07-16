@@ -73,13 +73,16 @@ async function readReasoningUi(sidebarFrame) {
     const value = document.querySelector('#reasoning-effort-value');
     const input = document.querySelector('#message-input');
     const documentButton = document.querySelector('#document-button');
+    const documentIcon = document.querySelector('#document-button i');
     const currentApi = document.querySelector('.input-api-current-text');
     const dots = Array.from(document.querySelectorAll('.reasoning-effort-dot'));
-    const icon = document.querySelector('#reasoning-effort-button .fa-microchip-ai');
+    const icon = document.querySelector('#reasoning-effort-button .fa-gauge-simple');
     const brainIcon = document.querySelector('#reasoning-effort-button .fa-brain');
+    const chipIcon = document.querySelector('#reasoning-effort-button .fa-microchip-ai');
     const controlStyle = control ? getComputedStyle(control) : null;
     const buttonStyle = button ? getComputedStyle(button) : null;
     const iconStyle = icon ? getComputedStyle(icon) : null;
+    const documentIconStyle = documentIcon ? getComputedStyle(documentIcon) : null;
     const sliderStyle = slider ? getComputedStyle(slider) : null;
     const panelStyle = panel ? getComputedStyle(panel) : null;
     const siblings = Array.from(document.querySelector('#message-row')?.children || []);
@@ -137,8 +140,9 @@ async function readReasoningUi(sidebarFrame) {
         width: dot.getBoundingClientRect().width,
         centerX: dot.getBoundingClientRect().left + dot.getBoundingClientRect().width / 2
       })),
-      hasMicrochipAiIcon: !!icon,
+      hasGaugeIcon: !!icon,
       hasBrainIcon: !!brainIcon,
+      hasChipIcon: !!chipIcon,
       domOrder: {
         input: siblings.indexOf(input),
         control: siblings.indexOf(control),
@@ -158,7 +162,8 @@ async function readReasoningUi(sidebarFrame) {
       sizes: {
         controlFont: Number.parseFloat(controlStyle?.fontSize || '0'),
         buttonFont: Number.parseFloat(buttonStyle?.fontSize || '0'),
-        iconFont: Number.parseFloat(iconStyle?.fontSize || '0')
+        iconFont: Number.parseFloat(iconStyle?.fontSize || '0'),
+        documentIconFont: Number.parseFloat(documentIconStyle?.fontSize || '0')
       },
       panel: {
         width: Number.parseFloat(panelStyle?.width || '0'),
@@ -383,8 +388,14 @@ async function main() {
 
     result.initial = await readReasoningUi(sidebarFrame);
     assertState(!result.initial.hidden && result.initial.display !== 'none', 'Responses 配置下选择器未显示', result.initial);
-    assertState(result.initial.hasMicrochipAiIcon, '缺少 Font Awesome 空心 microchip-ai 图标', result.initial);
+    assertState(result.initial.hasGaugeIcon, '缺少 Font Awesome 空心 gauge-simple 图标', result.initial);
     assertState(!result.initial.hasBrainIcon, '仍残留大脑图标', result.initial);
+    assertState(!result.initial.hasChipIcon, '仍残留 AI 芯片图标', result.initial);
+    assertState(
+      Math.abs(result.initial.sizes.iconFont - result.initial.sizes.documentIconFont) <= 0.5,
+      '推理强度图标与右侧文件图标字号不一致',
+      result.initial.sizes
+    );
     assertState(
       result.initial.domOrder.input < result.initial.domOrder.control
       && result.initial.domOrder.control < result.initial.domOrder.documentButton,
@@ -411,10 +422,10 @@ async function main() {
     logProgress('验证 hover 锚定、上方浮签与 clip-path 展开动画');
     result.hover = await collectHoverMotion(sidebarFrame, page);
     const distinctClipPaths = new Set(result.hover.motion.clipPaths);
-    assertState(result.hover.collapsed.panel.width >= 220, '折叠时未保留最终 em 几何', result.hover.collapsed.panel);
+    assertState(result.hover.collapsed.panel.width >= 200, '折叠时未保留最终 em 几何', result.hover.collapsed.panel);
     assertState(result.hover.collapsed.panel.opacity <= 0.01, '折叠透明度不为 0', result.hover.collapsed.panel);
     assertState(result.hover.expanded.isOpen, 'hover 后控件未进入 is-open', result.hover.expanded);
-    assertState(result.hover.expanded.panel.width >= 220, 'hover 后面板未完整展开', result.hover.expanded.panel);
+    assertState(result.hover.expanded.panel.width >= 200, 'hover 后面板未完整展开', result.hover.expanded.panel);
     assertState(result.hover.expanded.panel.opacity >= 0.99, 'hover 后面板未显示', result.hover.expanded.panel);
     assertState(distinctClipPaths.size >= 3, 'hover 展开没有可观测的 clip-path 过渡', result.hover.motion);
     assertState(
@@ -431,7 +442,7 @@ async function main() {
     );
     result.steps.push('hover_animation_verified');
 
-    logProgress('验证 slider、吸附点和计算图标跟随界面字体缩放');
+    logProgress('验证 slider/吸附点跟随字体缩放，入口图标保持右侧默认字号');
     await page.mouse.move(12, 12);
     await setFontSizeFromSettings(sidebarFrame, 24);
     result.largeFont = await waitFor(async () => {
@@ -449,7 +460,12 @@ async function main() {
       '吸附点未按字体比例缩放',
       { initial: result.initial.dots[0], large: result.largeFont.dots[0] }
     );
-    assertState(result.largeFont.sizes.iconFont >= 27, '计算图标未跟随字体放大', result.largeFont.sizes);
+    assertState(
+      Math.abs(result.largeFont.sizes.iconFont - result.largeFont.sizes.documentIconFont) <= 0.5
+      && Math.abs(result.largeFont.sizes.iconFont - result.initial.sizes.iconFont) <= 0.5,
+      '推理强度图标未保持与右侧图标相同的默认字号',
+      { initial: result.initial.sizes, large: result.largeFont.sizes }
+    );
     await setFontSizeFromSettings(sidebarFrame, 14);
     await waitFor(async () => (await readReasoningUi(sidebarFrame)).sizes.controlFont <= 14.5, {
       timeoutMs: 10_000,
