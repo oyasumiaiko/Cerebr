@@ -165,7 +165,7 @@ export function createSettingsManager(appContext) {
     enableDollarMath: true,
     // 是否在输入框 placeholder 中显示当前模型名
     showModelNameInPlaceholder: true,
-    // Responses 输入区快捷滑块默认只展示最常用的四档；default 由滑块单独提供，
+    // Responses 输入区快捷菜单默认只展示最常用的四档；default 由菜单单独提供，
     // 不写入这份偏好，避免把“沿用模型默认值”误当成 OpenAI 的 effort 枚举值。
     responsesReasoningEffortSliderOptions: ['low', 'medium', 'high', 'xhigh'],
     // AI 消息末尾的 API 元数据模板（支持 {{var}} 占位）
@@ -311,9 +311,9 @@ export function createSettingsManager(appContext) {
   }
 
   /**
-   * 将 Responses 快捷滑块的可见档位限定在 API manager 暴露的官方顺序内。
+   * 将 Responses 快捷菜单的可见档位限定在 API manager 暴露的官方顺序内。
    * 设置面板可以任意勾选，但持久化时会过滤旧版残留值、default 与重复项，
-   * 让 slider 的左到右顺序始终与 Responses API 定义一致。
+   * 让菜单档位顺序始终与 Responses API 定义一致。
    */
   function normalizeResponsesReasoningEffortSliderOptions(value) {
     const selected = new Set(normalizeStringArraySetting(value));
@@ -1054,11 +1054,11 @@ export function createSettingsManager(appContext) {
       key: 'responsesReasoningEffortSliderOptions',
       type: 'multi_select_dropdown',
       id: 'responses-reasoning-effort-slider-options',
-      label: 'Responses 推理强度快捷档位',
+      label: 'Responses 推理强度快捷菜单',
       group: 'input',
       options: () => services.apiManager?.getResponsesReasoningEffortOptions?.() || [],
       defaultValue: DEFAULT_SETTINGS.responsesReasoningEffortSliderOptions,
-      placeholder: '选择 slider 显示的推理强度',
+      placeholder: '选择快捷菜单显示的推理强度',
       emptyText: '暂无可选推理强度',
       selectedCountNoun: '档',
       readFromUI: (el) => normalizeResponsesReasoningEffortSliderOptions(
@@ -1068,7 +1068,7 @@ export function createSettingsManager(appContext) {
       writeToUI: (el, value) => {
         writeMultiSelectDropdownControl(el, {
           options: () => services.apiManager?.getResponsesReasoningEffortOptions?.() || [],
-          placeholder: '选择 slider 显示的推理强度',
+          placeholder: '选择快捷菜单显示的推理强度',
           emptyText: '暂无可选推理强度',
           selectedCountNoun: '档'
         }, value);

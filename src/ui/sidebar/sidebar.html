@@ -174,18 +174,10 @@
         <div id="message-row">
             <div id="message-input" contenteditable="plaintext-only" placeholder="输入消息..." role="textbox"></div>
             <div id="reasoning-effort-control" class="reasoning-effort-control" hidden>
-                <div class="reasoning-effort-slider-panel">
-                    <div class="reasoning-effort-slider-content">
-                        <span id="reasoning-effort-value" class="reasoning-effort-value">default</span>
-                        <div class="reasoning-effort-range-wrap">
-                            <div id="reasoning-effort-dots" class="reasoning-effort-dots" aria-hidden="true"></div>
-                            <input id="reasoning-effort-slider" type="range" min="0" max="4" step="1" value="0" aria-label="推理强度">
-                        </div>
-                    </div>
-                </div>
-                <button id="reasoning-effort-button" type="button" aria-label="推理强度：default" aria-controls="reasoning-effort-slider" aria-expanded="false">
+                <button id="reasoning-effort-button" type="button" aria-label="推理强度：default" aria-haspopup="menu" aria-controls="reasoning-effort-menu" aria-expanded="false">
                     <i class="far fa-gauge-simple" aria-hidden="true"></i>
                 </button>
+                <div id="reasoning-effort-menu" class="reasoning-effort-menu" role="menu" aria-label="推理强度"></div>
             </div>
             <button id="document-button" title="新建文件">
                 <i class="far fa-file-circle-plus"></i>
