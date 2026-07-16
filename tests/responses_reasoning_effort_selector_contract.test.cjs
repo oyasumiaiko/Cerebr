@@ -72,8 +72,9 @@ test('面板按当前档位在鼠标处展开，文字置于上方并在离开�
   assert.match(sidebarCss, /#reasoning-effort-button[\s\S]*font-size:\s*1rem/);
   assert.match(sidebarCss, /\.reasoning-effort-slider-panel\s*\{[\s\S]*left:\s*calc\(var\(--reasoning-effort-pointer-anchor\) - var\(--reasoning-effort-panel-padding\) - var\(--reasoning-effort-open-offset\)\)[\s\S]*clip-path:/);
   assert.match(sidebarCss, /\.reasoning-effort-control\.is-open \.reasoning-effort-slider-panel[\s\S]*clip-path:\s*inset\(0 round 999px\)/);
-  assert.match(sidebarCss, /\.reasoning-effort-value\s*\{[\s\S]*left:\s*calc\(var\(--reasoning-effort-panel-padding\) \+ var\(--reasoning-effort-current-offset\)\)[\s\S]*bottom:\s*calc\(50% \+ 0\.45em\)/);
+  assert.match(sidebarCss, /\.reasoning-effort-value\s*\{[\s\S]*left:\s*calc\(var\(--reasoning-effort-panel-padding\) \+ var\(--reasoning-effort-current-offset\)\)[\s\S]*bottom:\s*calc\(50% \+ 0\.95em\)/);
   assert.match(sidebarCss, /\.reasoning-effort-value\s*\{[\s\S]*padding:\s*0;[\s\S]*font-family:\s*inherit/);
+  assert.match(sidebarCss, /\.reasoning-effort-range-wrap::before\s*\{[\s\S]*background:\s*var\(--cerebr-panel-inline-bg, var\(--cerebr-input-bg\)\)[\s\S]*backdrop-filter:\s*blur\(var\(--cerebr-main-ui-blur-radius, 0px\)\)[\s\S]*0 6px 14px rgba\(0, 0, 0, 0\.12\)/);
   assert.match(sidebarCss, /transparent var\(--reasoning-effort-official-start\)[\s\S]*var\(--reasoning-effort-progress\)/);
   assert.match(sidebarCss, /\.reasoning-effort-dot\.is-default\s*\{[\s\S]*background:\s*transparent/);
   assert.match(sidebarCss, /\.reasoning-effort-dot\.is-current\s*\{[\s\S]*box-shadow:\s*none/);

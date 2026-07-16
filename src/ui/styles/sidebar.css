@@ -2627,7 +2627,7 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     top: 50%;
     left: calc(var(--reasoning-effort-pointer-anchor) - var(--reasoning-effort-panel-padding) - var(--reasoning-effort-open-offset));
     width: calc(var(--reasoning-effort-track-width) + var(--reasoning-effort-panel-padding) + var(--reasoning-effort-panel-padding));
-    height: 2.6em;
+    height: 3.4em;
     box-sizing: border-box;
     overflow: visible;
     opacity: 0;
@@ -2676,7 +2676,7 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 .reasoning-effort-value {
     position: absolute;
     left: calc(var(--reasoning-effort-panel-padding) + var(--reasoning-effort-current-offset));
-    bottom: calc(50% + 0.45em);
+    bottom: calc(50% + 0.95em);
     z-index: 5;
     padding: 0;
     color: color-mix(in srgb, var(--cerebr-text-color) 82%, transparent);
@@ -2702,10 +2702,15 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 .reasoning-effort-range-wrap::before {
     content: '';
     position: absolute;
-    inset: -0.16em -0.5em;
-    border: 1px solid color-mix(in srgb, var(--cerebr-control-border) 42%, transparent);
+    inset: -0.42em -0.72em;
+    border: 1px solid color-mix(in srgb, var(--cerebr-border-color) 45%, transparent);
     border-radius: 999px;
-    background: color-mix(in srgb, var(--cerebr-input-bg) 42%, transparent);
+    background: var(--cerebr-panel-inline-bg, var(--cerebr-input-bg));
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
+    -webkit-backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
+    box-shadow:
+      0 6px 14px rgba(0, 0, 0, 0.12),
+      inset 0 0 0 1px color-mix(in srgb, #fff 18%, transparent);
     pointer-events: none;
 }
 
