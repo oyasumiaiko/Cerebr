@@ -32,6 +32,15 @@ export function normalizeAssistantPreResponseStatus(value) {
   });
 }
 
+export function buildResponsesRetryStatusText(retryAttempt, maxRetries) {
+  const normalizedAttempt = Number(retryAttempt);
+  const normalizedMaxRetries = Number(maxRetries);
+  const suffix = Number.isFinite(normalizedAttempt) && Number.isFinite(normalizedMaxRetries)
+    ? ` ${normalizedAttempt}/${normalizedMaxRetries}`
+    : '';
+  return `连接中断，正在重新连接...${suffix}`;
+}
+
 /**
  * 本地请求链路阶段。
  *
@@ -74,15 +83,13 @@ export function deriveAssistantPreResponseStatusFromLocalStage(stage, data = {})
   }
 
   if (normalizedStage === 'responses_retry_wait') {
-    const retryAttempt = Number(data?.retryAttempt);
-    const maxRetries = Number(data?.maxRetries);
-    const suffix = Number.isFinite(retryAttempt) && Number.isFinite(maxRetries)
-      ? `（${retryAttempt}/${maxRetries}）`
-      : '';
     return createAssistantPreResponseStatus(
-      `连接异常，正在重试${suffix}...`,
+      buildResponsesRetryStatusText(data?.retryAttempt, data?.maxRetries),
       normalizedStage,
-      { note: '当前 Responses 请求会按原请求体重新发送。' }
+      {
+        note: normalizeString(data?.retryDetail)
+          || '当前 Responses 请求会按完全相同的请求体重新发送。'
+      }
     );
   }
 

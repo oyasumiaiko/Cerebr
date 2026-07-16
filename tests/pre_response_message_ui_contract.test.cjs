@@ -29,6 +29,10 @@ test('预正文消息使用独立状态层渲染，并在删除时先中止对�
 
   assert.match(messageProcessorSource, /assistant-pre-response-status/);
   assert.match(messageProcessorSource, /response-activity-panel-status/);
+  assert.match(messageProcessorSource, /entryKind: 'stream_error'/);
+  assert.match(messageProcessorSource, /reconcileResponseActivityStreamErrorEntry/);
+  assert.match(messageProcessorSource, /response-activity-stream-error-details/);
+  assert.match(messageProcessorSource, /bindStableToggleDetails\(details, item\)/);
   assert.match(messageProcessorSource, /syncResponseActivityPanelStatus/);
   assert.match(messageProcessorSource, /resolveResponseActivityPanelStatusState/);
   assert.match(messageProcessorSource, /setResponseActivityPanelExpandedState/);
@@ -41,6 +45,8 @@ test('预正文消息使用独立状态层渲染，并在删除时先中止对�
   assert.match(uiManagerSource, /container\.addEventListener\('scroll', handleContainerScrollAutoFollowState, \{ passive: true \}\)/);
   assert.match(sidebarCssSource, /\.response-activity-panel-status\[data-stage=\"completed_duration\"\]/);
   assert.match(sidebarCssSource, /\.response-activity-panel-status\.is-collapsible:hover/);
+  assert.match(sidebarCssSource, /\.response-activity-entry--stream-error/);
+  assert.match(sidebarCssSource, /\.response-activity-stream-error\[open\] \.response-activity-stream-error-chevron/);
   assert.match(messageSenderSource, /function renderAttemptPreResponseStatus[\s\S]*?response_activity_timeline/);
   assert.equal(hasVisibleAssistantOutputBody.includes('responseActivityTimeline.length > 0'), false);
   assert.equal(hasVisibleAssistantOutputBody.includes('input?.thoughts'), false);

@@ -92,6 +92,22 @@ test('response_activity_timeline 中的 steer entry 会被原样保留', async (
   ]);
 });
 
+test('response_activity_timeline 中的 handled stream_error 会和 commentary 一起保留', async () => {
+  const { getAssistantActivityTimeline } = await loadModule();
+  const timeline = getAssistantActivityTimeline({
+    response_activity_timeline: [
+      { kind: 'commentary', id: 'commentary_1', status: 'completed', text: '正在分析' },
+      { kind: 'stream_error', id: 'retry_1', status: 'handled', text: '连接中断，正在重新连接... 1/10', additionalDetails: 'idle timeout waiting for SSE' },
+      { kind: 'reasoning_summary', id: 'reasoning_1', status: 'completed', text: 'summary text' }
+    ]
+  });
+
+  assert.deepEqual(timeline, [
+    { kind: 'commentary', id: 'commentary_1', status: 'completed', text: '正在分析' },
+    { kind: 'stream_error', id: 'retry_1', status: 'handled', text: '连接中断，正在重新连接... 1/10', additionalDetails: 'idle timeout waiting for SSE' }
+  ]);
+});
+
 test('纯 thoughtsRaw 会要求 UI 使用统一 response_activity 面板', async () => {
   const { shouldRenderAssistantActivityTimeline } = await loadModule();
 

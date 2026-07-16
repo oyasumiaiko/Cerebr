@@ -54,8 +54,10 @@ test('Responses retry wait 本地阶段会展示重试计数', async () => {
   const { deriveAssistantPreResponseStatusFromLocalStage } = await loadAssistantPreResponseStatusModule();
   const status = deriveAssistantPreResponseStatusFromLocalStage('responses_retry_wait', {
     retryAttempt: 2,
-    maxRetries: 5
+    maxRetries: 10,
+    retryDetail: 'Idle timeout waiting for SSE'
   });
-  assert.equal(status.text, '连接异常，正在重试（2/5）...');
+  assert.equal(status.text, '连接中断，正在重新连接... 2/10');
   assert.equal(status.stage, 'responses_retry_wait');
+  assert.equal(status.note, 'Idle timeout waiting for SSE');
 });

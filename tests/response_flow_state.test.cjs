@@ -169,7 +169,7 @@ test('planStreamingRenderTransition skips forced update once answer has appeared
   });
 });
 
-test('resolveResponsesStreamClosureAction retries only before visible progress', async () => {
+test('resolveResponsesStreamClosureAction retries through reasoning/tool progress but preserves partial final', async () => {
   const { resolveResponsesStreamClosureAction } = await loadResponseFlowStateModule();
 
   assert.equal(
@@ -188,6 +188,16 @@ test('resolveResponsesStreamClosureAction retries only before visible progress',
       hasStartedResponse: true,
       hasRenderedAssistantMessage: true,
       hasVisibleAnswerContent: false
+    }),
+    'retry'
+  );
+
+  assert.equal(
+    resolveResponsesStreamClosureAction({
+      hasTerminalEvent: false,
+      hasStartedResponse: true,
+      hasRenderedAssistantMessage: true,
+      hasVisibleAnswerContent: true
     }),
     'preserve_partial'
   );

@@ -55,6 +55,10 @@ export function getResponsesActivityTimelineEntryKey(entry, fallbackIndex = 0) {
     const id = (typeof entry.id === 'string' && entry.id) ? entry.id : `reasoning_${fallbackIndex}`;
     return `reasoning:${id}`;
   }
+  if (kind === 'stream_error') {
+    const id = (typeof entry.id === 'string' && entry.id) ? entry.id : `stream_error_${fallbackIndex}`;
+    return `stream_error:${id}`;
+  }
   if (kind === 'tool_call') {
     return `tool:${getResponsesToolCallRecordKey(entry, fallbackIndex)}`;
   }
