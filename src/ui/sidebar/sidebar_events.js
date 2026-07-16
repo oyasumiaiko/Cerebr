@@ -239,15 +239,12 @@ function setupApiMenuWatcher(appContext) {
     const officialOptions = apiManager.getResponsesReasoningEffortOptions?.() || [];
     const configuredOptions = settingsManager?.getSetting?.(reasoningEffortSettingKey);
     const configuredSet = new Set(Array.isArray(configuredOptions) ? configuredOptions : []);
-    // 若当前 API 已保存了一个后来被用户隐藏的档位，仍临时显示它，
-    // 保证菜单如实表达当前请求，而不是错误回落到 default。
-    const visibleOfficialOptions = officialOptions.filter((effort) => (
-      configuredSet.has(effort) || effort === currentEffort
-    ));
-    reasoningEffortOptions = ['default', ...visibleOfficialOptions];
+    // 菜单严格服从“显示档位”设置；当前值即使被隐藏，也继续由模型名后缀如实显示，
+    // 不在菜单中偷偷重新插回。
+    reasoningEffortOptions = ['default', ...officialOptions].filter((effort) => configuredSet.has(effort));
 
     if (!reasoningMenu) return;
-    const optionNodes = reasoningEffortOptions.flatMap((effort, index) => {
+    const optionNodes = reasoningEffortOptions.flatMap((effort) => {
       const option = document.createElement('button');
       option.type = 'button';
       option.className = 'reasoning-effort-option menu-item';
@@ -263,7 +260,7 @@ function setupApiMenuWatcher(appContext) {
       check.className = 'fa-solid fa-check reasoning-effort-option-check';
       check.setAttribute('aria-hidden', 'true');
       option.append(label, check);
-      if (index !== 0 || reasoningEffortOptions.length <= 1) return [option];
+      if (effort !== 'default' || reasoningEffortOptions.length <= 1) return [option];
 
       // default 表示“交还给模型决定”，语义上不同于明确指定的强度，
       // 用一条克制的菜单分隔线把它与显式档位分组。

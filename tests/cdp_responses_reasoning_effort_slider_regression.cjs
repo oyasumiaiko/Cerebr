@@ -17,10 +17,12 @@ const {
   waitForWorktreeExtensionWorker
 } = require('./lib/worktree_unpacked_extension_harness.cjs');
 
-const DEFAULT_VISIBLE_EFFORTS = ['default', 'low', 'medium', 'high', 'xhigh'];
+const DEFAULT_VISIBLE_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
+const VISIBLE_EFFORTS_WITH_DEFAULT = ['default', ...DEFAULT_VISIBLE_EFFORTS];
 const VISIBLE_EFFORTS_WITH_MAX = [...DEFAULT_VISIBLE_EFFORTS, 'max'];
-const CONFIGURED_EFFORTS = DEFAULT_VISIBLE_EFFORTS.slice(1);
-const CONFIGURED_EFFORTS_WITH_MAX = VISIBLE_EFFORTS_WITH_MAX.slice(1);
+const CONFIGURED_EFFORTS = [...DEFAULT_VISIBLE_EFFORTS];
+const CONFIGURED_EFFORTS_WITH_DEFAULT = [...VISIBLE_EFFORTS_WITH_DEFAULT];
+const CONFIGURED_EFFORTS_WITH_MAX = [...VISIBLE_EFFORTS_WITH_MAX];
 const RESPONSES_CONFIG_ID = 'responses_reasoning_effort_regression';
 const CHAT_CONFIG_ID = 'chat_reasoning_effort_regression';
 const [
@@ -85,7 +87,7 @@ async function readReasoningUi(sidebarFrame) {
     const menu = document.querySelector('#reasoning-effort-menu');
     const input = document.querySelector('#message-input');
     const documentButton = document.querySelector('#document-button');
-    const icon = button?.querySelector('.fa-gauge-simple') || null;
+    const icon = button?.querySelector('.fa-signal-bars') || null;
     const documentIcon = documentButton?.querySelector('i') || null;
     const settingsMenu = document.querySelector('#settings-menu');
     const settingsItem = document.querySelector('#preferences-settings-toggle');
@@ -182,8 +184,9 @@ async function readReasoningUi(sidebarFrame) {
         tabIndex: option.tabIndex,
         text: option.textContent?.trim() || ''
       })),
-      hasGaugeIcon: !!icon,
-      hasRegularGaugeIcon: !!button?.querySelector('.far.fa-gauge-simple'),
+      hasSignalBarsIcon: !!icon,
+      hasRegularSignalBarsIcon: !!button?.querySelector('.far.fa-signal-bars'),
+      hasGaugeIcon: !!button?.querySelector('.fa-gauge-simple'),
       hasBrainIcon: !!button?.querySelector('.fa-brain'),
       hasChipIcon: !!button?.querySelector('.fa-microchip-ai'),
       hasLegacySlider: !!document.querySelector('#reasoning-effort-slider'),
@@ -295,6 +298,7 @@ async function verifyKeyboardNavigation(sidebarFrame) {
     return !state.isOpen && state.focus.id === 'reasoning-effort-button' ? state : null;
   }, { timeoutMs: 5_000, intervalMs: 50, label: 'reasoning menu keyboard Escape close' });
 
+  await button.focus();
   await button.press('ArrowDown');
   const openedWithArrow = await waitFor(async () => {
     const state = await readReasoningUi(sidebarFrame);
@@ -340,7 +344,10 @@ async function setEffortOptionChecked(sidebarFrame, effort, checked) {
     menu.style.pointerEvents = 'none';
   });
   await settingControl.waitFor({ state: 'visible', timeout: 15_000 });
-  await settingControl.locator('.settings-multiselect-toggle').click();
+  const dropdownToggle = settingControl.locator('.settings-multiselect-toggle');
+  if (await dropdownToggle.getAttribute('aria-expanded') !== 'true') {
+    await dropdownToggle.click();
+  }
 
   const checkbox = settingControl.locator(`input[type="checkbox"][value="${effort}"]`);
   await checkbox.waitFor({ state: 'visible', timeout: 5_000 });
@@ -534,8 +541,16 @@ async function main() {
     result.initial = await readReasoningUi(sidebarFrame);
     assertState(!result.initial.hidden && result.initial.display !== 'none', 'Responses 配置下推理强度入口未显示', result.initial);
     assertState(result.initial.menu.exists && !result.initial.hasLegacySlider, '仍在使用旧 slider DOM', result.initial);
-    assertState(result.initial.hasGaugeIcon && result.initial.hasRegularGaugeIcon, '缺少 Font Awesome 空心 gauge-simple 图标', result.initial);
-    assertState(!result.initial.hasBrainIcon && !result.initial.hasChipIcon, '仍残留大脑或芯片图标', result.initial);
+    assertState(
+      result.initial.hasSignalBarsIcon && result.initial.hasRegularSignalBarsIcon,
+      '缺少 Font Awesome 空心 signal-bars 图标',
+      result.initial
+    );
+    assertState(
+      !result.initial.hasBrainIcon && !result.initial.hasChipIcon && !result.initial.hasGaugeIcon,
+      '仍残留大脑、芯片或 gauge 图标',
+      result.initial
+    );
     assertState(
       Math.abs(result.initial.sizes.iconFont - result.initial.sizes.documentIconFont) <= 0.5,
       '推理强度图标与旁边文件按钮图标字号不一致',
@@ -549,7 +564,7 @@ async function main() {
     );
     assertState(
       JSON.stringify(result.initial.options.map(option => option.effort)) === JSON.stringify(DEFAULT_VISIBLE_EFFORTS),
-      '默认菜单不是 default + low/medium/high/xhigh',
+      '默认菜单不是 low/medium/high/xhigh',
       result.initial.options
     );
     assertState(
@@ -639,6 +654,22 @@ async function main() {
     await cycleFavoriteApi(sidebarFrame, 'ArrowUp', 'gpt-5.6');
     result.steps.push('responses_only_visibility_verified');
 
+    logProgress('在偏好设置中真实勾选 default，并验证菜单即时显示');
+    await setEffortOptionChecked(sidebarFrame, 'default', true);
+    result.withDefaultOptions = await waitFor(async () => {
+      const state = await readReasoningUi(sidebarFrame);
+      return JSON.stringify(state.options.map(option => option.effort)) === JSON.stringify(VISIBLE_EFFORTS_WITH_DEFAULT)
+        ? state
+        : null;
+    }, { timeoutMs: 10_000, intervalMs: 100, label: 'default added to reasoning effort menu' });
+    result.withDefaultSettingPersistence = await waitFor(async () => {
+      const persisted = await readPersistedState(extensionWorker, RESPONSES_CONFIG_ID);
+      return JSON.stringify(persisted.visibleEfforts) === JSON.stringify(CONFIGURED_EFFORTS_WITH_DEFAULT)
+        ? persisted
+        : null;
+    }, { timeoutMs: 15_000, intervalMs: 250, label: 'default visible setting persisted' });
+    result.steps.push('default_visibility_setting_verified');
+
     logProgress('通过真实菜单点击 default 并验证清除显式 effort');
     await selectEffortFromMenu(sidebarFrame, 'default');
     result.defaultState = await waitFor(async () => {
@@ -655,6 +686,29 @@ async function main() {
       return persisted.localEffort === '' && persisted.syncEffort === '' ? persisted : null;
     }, { timeoutMs: 25_000, intervalMs: 350, label: 'default effort cleared from local and sync' });
     result.steps.push('default_cleared');
+
+    logProgress('取消显示当前 default，验证菜单严格隐藏但模型后缀保持 -default');
+    await setEffortOptionChecked(sidebarFrame, 'default', false);
+    result.hiddenDefaultPreserved = await waitFor(async () => {
+      const state = await readReasoningUi(sidebarFrame);
+      return state.effort === 'default'
+        && state.pill === 'gpt-5.6-default'
+        && state.placeholder.includes('gpt-5.6-default')
+        && !state.options.some(option => option.effort === 'default')
+        && !state.options.some(option => option.selected)
+        && JSON.stringify(state.options.map(option => option.effort)) === JSON.stringify(DEFAULT_VISIBLE_EFFORTS)
+        ? state
+        : null;
+    }, { timeoutMs: 10_000, intervalMs: 100, label: 'hidden current default removed from menu' });
+    result.hiddenDefaultSettingPersistence = await waitFor(async () => {
+      const persisted = await readPersistedState(extensionWorker, RESPONSES_CONFIG_ID);
+      return persisted.localEffort === ''
+        && persisted.syncEffort === ''
+        && JSON.stringify(persisted.visibleEfforts) === JSON.stringify(CONFIGURED_EFFORTS)
+        ? persisted
+        : null;
+    }, { timeoutMs: 15_000, intervalMs: 250, label: 'hidden default setting persisted without changing current effort' });
+    result.steps.push('hidden_current_default_preserved');
 
     logProgress('在偏好设置中真实勾选 max，并验证菜单即时显示');
     await setEffortOptionChecked(sidebarFrame, 'max', true);
@@ -689,18 +743,19 @@ async function main() {
     }, { timeoutMs: 25_000, intervalMs: 350, label: 'max effort persisted to local and sync' });
     result.steps.push('max_selected_and_persisted');
 
-    logProgress('取消显示当前 max，验证当前隐藏档位仍如实保留');
+    logProgress('取消显示当前 max，验证菜单严格隐藏但模型后缀保持 -max');
     await setEffortOptionChecked(sidebarFrame, 'max', false);
     result.hiddenCurrentPreserved = await waitFor(async () => {
       const state = await readReasoningUi(sidebarFrame);
-      const maxOption = state.options.find(option => option.effort === 'max');
       return state.effort === 'max'
         && state.pill === 'gpt-5.6-max'
-        && maxOption?.selected
-        && JSON.stringify(state.options.map(option => option.effort)) === JSON.stringify(VISIBLE_EFFORTS_WITH_MAX)
+        && state.placeholder.includes('gpt-5.6-max')
+        && !state.options.some(option => option.effort === 'max')
+        && !state.options.some(option => option.selected)
+        && JSON.stringify(state.options.map(option => option.effort)) === JSON.stringify(DEFAULT_VISIBLE_EFFORTS)
         ? state
         : null;
-    }, { timeoutMs: 10_000, intervalMs: 100, label: 'hidden current max preserved in menu' });
+    }, { timeoutMs: 10_000, intervalMs: 100, label: 'hidden current max removed from menu' });
     result.hiddenSettingPersistence = await waitFor(async () => {
       const persisted = await readPersistedState(extensionWorker, RESPONSES_CONFIG_ID);
       return persisted.localEffort === 'max'
@@ -721,12 +776,12 @@ async function main() {
     await sidebarFrame.locator('#message-input').waitFor({ state: 'visible', timeout: 30_000 });
     result.reloaded = await waitFor(async () => {
       const state = await readReasoningUi(sidebarFrame);
-      const maxOption = state.options.find(option => option.effort === 'max');
       return state.effort === 'max'
         && state.pill === 'gpt-5.6-max'
         && state.placeholder.includes('gpt-5.6-max')
-        && maxOption?.selected
-        && JSON.stringify(state.options.map(option => option.effort)) === JSON.stringify(VISIBLE_EFFORTS_WITH_MAX)
+        && !state.options.some(option => option.effort === 'max')
+        && !state.options.some(option => option.selected)
+        && JSON.stringify(state.options.map(option => option.effort)) === JSON.stringify(DEFAULT_VISIBLE_EFFORTS)
         ? state
         : null;
     }, { timeoutMs: 20_000, intervalMs: 250, label: 'reloaded hidden current max state' });

@@ -165,8 +165,8 @@ export function createSettingsManager(appContext) {
     enableDollarMath: true,
     // 是否在输入框 placeholder 中显示当前模型名
     showModelNameInPlaceholder: true,
-    // Responses 输入区快捷菜单默认只展示最常用的四档；default 由菜单单独提供，
-    // 不写入这份偏好，避免把“沿用模型默认值”误当成 OpenAI 的 effort 枚举值。
+    // Responses 输入区快捷菜单默认只展示最常用的四档；default 与其它档位一样
+    // 由这份偏好控制，默认不显示。
     responsesReasoningEffortSliderOptions: ['low', 'medium', 'high', 'xhigh'],
     // AI 消息末尾的 API 元数据模板（支持 {{var}} 占位）
     aiFooterTemplate: DEFAULT_AI_FOOTER_TEMPLATE,
@@ -310,15 +310,17 @@ export function createSettingsManager(appContext) {
     return next;
   }
 
+  function getResponsesReasoningEffortMenuOptions() {
+    return ['default', ...(services.apiManager?.getResponsesReasoningEffortOptions?.() || [])];
+  }
+
   /**
-   * 将 Responses 快捷菜单的可见档位限定在 API manager 暴露的官方顺序内。
-   * 设置面板可以任意勾选，但持久化时会过滤旧版残留值、default 与重复项，
-   * 让菜单档位顺序始终与 Responses API 定义一致。
+   * 将 Responses 快捷菜单的可见档位限定在菜单支持的固定顺序内。
+   * 设置面板可以任意勾选，但持久化时会过滤旧版残留值与重复项。
    */
   function normalizeResponsesReasoningEffortSliderOptions(value) {
     const selected = new Set(normalizeStringArraySetting(value));
-    const officialOptions = services.apiManager?.getResponsesReasoningEffortOptions?.() || [];
-    return officialOptions.filter((effort) => effort !== 'default' && selected.has(effort));
+    return getResponsesReasoningEffortMenuOptions().filter((effort) => selected.has(effort));
   }
 
   function getAskOtherAiApiOptions() {
@@ -1056,7 +1058,7 @@ export function createSettingsManager(appContext) {
       id: 'responses-reasoning-effort-slider-options',
       label: 'Responses 推理强度快捷菜单',
       group: 'input',
-      options: () => services.apiManager?.getResponsesReasoningEffortOptions?.() || [],
+      options: getResponsesReasoningEffortMenuOptions,
       defaultValue: DEFAULT_SETTINGS.responsesReasoningEffortSliderOptions,
       placeholder: '选择快捷菜单显示的推理强度',
       emptyText: '暂无可选推理强度',
@@ -1067,7 +1069,7 @@ export function createSettingsManager(appContext) {
       ),
       writeToUI: (el, value) => {
         writeMultiSelectDropdownControl(el, {
-          options: () => services.apiManager?.getResponsesReasoningEffortOptions?.() || [],
+          options: getResponsesReasoningEffortMenuOptions,
           placeholder: '选择快捷菜单显示的推理强度',
           emptyText: '暂无可选推理强度',
           selectedCountNoun: '档'
