@@ -165,6 +165,9 @@ export function createSettingsManager(appContext) {
     enableDollarMath: true,
     // 是否在输入框 placeholder 中显示当前模型名
     showModelNameInPlaceholder: true,
+    // Responses 输入区快捷滑块默认只展示最常用的四档；default 由滑块单独提供，
+    // 不写入这份偏好，避免把“沿用模型默认值”误当成 OpenAI 的 effort 枚举值。
+    responsesReasoningEffortSliderOptions: ['low', 'medium', 'high', 'xhigh'],
     // AI 消息末尾的 API 元数据模板（支持 {{var}} 占位）
     aiFooterTemplate: DEFAULT_AI_FOOTER_TEMPLATE,
     // AI 消息尾注：仅在同一行内用于拼接非空片段的分隔符。
@@ -307,6 +310,17 @@ export function createSettingsManager(appContext) {
     return next;
   }
 
+  /**
+   * 将 Responses 快捷滑块的可见档位限定在 API manager 暴露的官方顺序内。
+   * 设置面板可以任意勾选，但持久化时会过滤旧版残留值、default 与重复项，
+   * 让 slider 的左到右顺序始终与 Responses API 定义一致。
+   */
+  function normalizeResponsesReasoningEffortSliderOptions(value) {
+    const selected = new Set(normalizeStringArraySetting(value));
+    const officialOptions = services.apiManager?.getResponsesReasoningEffortOptions?.() || [];
+    return officialOptions.filter((effort) => effort !== 'default' && selected.has(effort));
+  }
+
   function getAskOtherAiApiOptions() {
     const apiConfigs = services.apiManager?.getAllConfigs?.() || [];
     return apiConfigs
@@ -336,7 +350,7 @@ export function createSettingsManager(appContext) {
       .filter(Boolean);
   }
 
-  function formatAskOtherAiApiSelectionSummary(selectedIds, options, placeholder) {
+  function formatMultiSelectSelectionSummary(selectedIds, options, placeholder, selectedCountNoun = '项') {
     const optionByValue = new Map(
       (Array.isArray(options) ? options : [])
         .map((item) => {
@@ -353,7 +367,7 @@ export function createSettingsManager(appContext) {
     if (labels.length <= 0) return placeholder || '选择 API';
     if (labels.length === 1) return labels[0];
     if (labels.length === 2) return labels.join('、');
-    return `已选 ${labels.length} 个 API`;
+    return `已选 ${labels.length} ${selectedCountNoun}`;
   }
 
   function writeMultiSelectDropdownControl(control, def, value) {
@@ -413,7 +427,12 @@ export function createSettingsManager(appContext) {
       optionsContainer.appendChild(empty);
     }
 
-    const summary = formatAskOtherAiApiSelectionSummary(selectedValues, options, def.placeholder);
+    const summary = formatMultiSelectSelectionSummary(
+      selectedValues,
+      options,
+      def.placeholder,
+      def.selectedCountNoun
+    );
     toggleButton.textContent = summary;
     toggleButton.title = summary;
   }
@@ -970,6 +989,7 @@ export function createSettingsManager(appContext) {
       defaultValue: DEFAULT_SETTINGS.askOtherAiEnabledApiIds,
       placeholder: '选择可用于 ask_other_ai 的 API',
       emptyText: '暂无可选 API',
+      selectedCountNoun: '个 API',
       readFromUI: (el) => normalizeStringArraySetting(
         Array.from(el?.querySelectorAll?.('.settings-multiselect-option input[type="checkbox"]:checked') || [])
           .map((input) => input.value)
@@ -978,7 +998,8 @@ export function createSettingsManager(appContext) {
         writeMultiSelectDropdownControl(el, {
           options: () => getAskOtherAiApiOptions(),
           placeholder: '选择可用于 ask_other_ai 的 API',
-          emptyText: '暂无可选 API'
+          emptyText: '暂无可选 API',
+          selectedCountNoun: '个 API'
         }, value);
       }
     },
@@ -1028,6 +1049,30 @@ export function createSettingsManager(appContext) {
       group: 'input',
       defaultValue: DEFAULT_SETTINGS.showModelNameInPlaceholder,
       apply: (v) => applyShowModelNameInPlaceholder(v)
+    },
+    {
+      key: 'responsesReasoningEffortSliderOptions',
+      type: 'multi_select_dropdown',
+      id: 'responses-reasoning-effort-slider-options',
+      label: 'Responses 推理强度快捷档位',
+      group: 'input',
+      options: () => services.apiManager?.getResponsesReasoningEffortOptions?.() || [],
+      defaultValue: DEFAULT_SETTINGS.responsesReasoningEffortSliderOptions,
+      placeholder: '选择 slider 显示的推理强度',
+      emptyText: '暂无可选推理强度',
+      selectedCountNoun: '档',
+      readFromUI: (el) => normalizeResponsesReasoningEffortSliderOptions(
+        Array.from(el?.querySelectorAll?.('.settings-multiselect-option input[type="checkbox"]:checked') || [])
+          .map((input) => input.value)
+      ),
+      writeToUI: (el, value) => {
+        writeMultiSelectDropdownControl(el, {
+          options: () => services.apiManager?.getResponsesReasoningEffortOptions?.() || [],
+          placeholder: '选择 slider 显示的推理强度',
+          emptyText: '暂无可选推理强度',
+          selectedCountNoun: '档'
+        }, value);
+      }
     },
     {
       key: 'aiFooterTemplate',
@@ -1518,6 +1563,9 @@ export function createSettingsManager(appContext) {
     }
     if (key === 'askOtherAiEnabledApiIds') {
       return normalizeStringArraySetting(value);
+    }
+    if (key === 'responsesReasoningEffortSliderOptions') {
+      return normalizeResponsesReasoningEffortSliderOptions(value);
     }
     return value;
   }

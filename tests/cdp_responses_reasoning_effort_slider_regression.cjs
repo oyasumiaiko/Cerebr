@@ -12,7 +12,8 @@ const {
   waitForSidebarFrame
 } = require('./lib/stable_chrome_sidebar_harness.cjs');
 
-const EFFORTS = ['default', 'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const DEFAULT_VISIBLE_EFFORTS = ['default', 'low', 'medium', 'high', 'xhigh'];
+const VISIBLE_EFFORTS_WITH_MAX = [...DEFAULT_VISIBLE_EFFORTS, 'max'];
 const RESPONSES_CONFIG_ID = 'responses_reasoning_effort_regression';
 const CHAT_CONFIG_ID = 'chat_reasoning_effort_regression';
 const [repoRootArg = '.', outputDirArg = 'output/playwright/responses-reasoning-effort-slider'] = process.argv.slice(2);
@@ -66,35 +67,78 @@ function buildStorageSeed() {
 async function readReasoningUi(sidebarFrame) {
   return sidebarFrame.evaluate(() => {
     const control = document.querySelector('#reasoning-effort-control');
+    const button = document.querySelector('#reasoning-effort-button');
     const slider = document.querySelector('#reasoning-effort-slider');
     const panel = document.querySelector('.reasoning-effort-slider-panel');
+    const value = document.querySelector('#reasoning-effort-value');
     const input = document.querySelector('#message-input');
     const documentButton = document.querySelector('#document-button');
     const currentApi = document.querySelector('.input-api-current-text');
     const dots = Array.from(document.querySelectorAll('.reasoning-effort-dot'));
-    const icon = document.querySelector('#reasoning-effort-button .fa-brain');
+    const icon = document.querySelector('#reasoning-effort-button .fa-microchip-ai');
+    const brainIcon = document.querySelector('#reasoning-effort-button .fa-brain');
     const controlStyle = control ? getComputedStyle(control) : null;
+    const buttonStyle = button ? getComputedStyle(button) : null;
+    const iconStyle = icon ? getComputedStyle(icon) : null;
+    const sliderStyle = slider ? getComputedStyle(slider) : null;
     const panelStyle = panel ? getComputedStyle(panel) : null;
     const siblings = Array.from(document.querySelector('#message-row')?.children || []);
+    const rect = (element) => {
+      if (!element) return null;
+      const bounds = element.getBoundingClientRect();
+      return {
+        x: bounds.x,
+        y: bounds.y,
+        left: bounds.left,
+        right: bounds.right,
+        top: bounds.top,
+        bottom: bounds.bottom,
+        width: bounds.width,
+        height: bounds.height,
+        centerX: bounds.left + bounds.width / 2,
+        centerY: bounds.top + bounds.height / 2
+      };
+    };
+    const sliderRect = rect(slider);
+    const sliderMin = Number(slider?.min || 0);
+    const sliderMax = Number(slider?.max || 0);
+    const sliderValue = Number(slider?.value || 0);
+    const sliderRatio = sliderMax > sliderMin
+      ? (sliderValue - sliderMin) / (sliderMax - sliderMin)
+      : 0;
+    const thumbSize = Number.parseFloat(controlStyle?.getPropertyValue('--reasoning-effort-thumb-size') || '0')
+      * Number.parseFloat(controlStyle?.fontSize || '0');
+    const thumbCenter = sliderRect ? {
+      x: sliderRect.left + thumbSize / 2 + sliderRatio * Math.max(0, sliderRect.width - thumbSize),
+      y: sliderRect.centerY
+    } : null;
 
     return {
       hidden: control?.hidden === true,
       display: controlStyle?.display || '',
+      isOpen: control?.classList.contains('is-open') === true,
       effort: control?.dataset?.effort || '',
-      valueText: document.querySelector('#reasoning-effort-value')?.textContent?.trim() || '',
+      valueText: value?.textContent?.trim() || '',
       slider: slider ? {
         min: slider.min,
         max: slider.max,
         step: slider.step,
         value: slider.value,
-        ariaValueText: slider.getAttribute('aria-valuetext') || ''
+        ariaValueText: slider.getAttribute('aria-valuetext') || '',
+        disabled: slider.disabled,
+        width: Number.parseFloat(sliderStyle?.width || '0'),
+        height: Number.parseFloat(sliderStyle?.height || '0')
       } : null,
       dots: dots.map(dot => ({
         effort: dot.dataset.effort || '',
         active: dot.classList.contains('is-active'),
-        current: dot.classList.contains('is-current')
+        current: dot.classList.contains('is-current'),
+        isDefault: dot.classList.contains('is-default'),
+        width: dot.getBoundingClientRect().width,
+        centerX: dot.getBoundingClientRect().left + dot.getBoundingClientRect().width / 2
       })),
-      hasBrainIcon: !!icon,
+      hasMicrochipAiIcon: !!icon,
+      hasBrainIcon: !!brainIcon,
       domOrder: {
         input: siblings.indexOf(input),
         control: siblings.indexOf(control),
@@ -102,11 +146,26 @@ async function readReasoningUi(sidebarFrame) {
       },
       pill: currentApi?.textContent?.trim() || '',
       placeholder: input?.getAttribute('placeholder') || '',
+      focusedElementId: document.activeElement?.id || '',
+      geometry: {
+        control: rect(control),
+        button: rect(button),
+        panel: rect(panel),
+        slider: sliderRect,
+        value: rect(value),
+        thumbCenter
+      },
+      sizes: {
+        controlFont: Number.parseFloat(controlStyle?.fontSize || '0'),
+        buttonFont: Number.parseFloat(buttonStyle?.fontSize || '0'),
+        iconFont: Number.parseFloat(iconStyle?.fontSize || '0')
+      },
       panel: {
         width: Number.parseFloat(panelStyle?.width || '0'),
         opacity: Number.parseFloat(panelStyle?.opacity || '0'),
         visibility: panelStyle?.visibility || '',
-        transitionDuration: panelStyle?.transitionDuration || ''
+        transitionDuration: panelStyle?.transitionDuration || '',
+        clipPath: panelStyle?.clipPath || ''
       }
     };
   });
@@ -144,16 +203,61 @@ async function collectHoverMotion(sidebarFrame, page) {
         playState: animation.playState || ''
       };
     });
-    const widths = [];
+    const clipPaths = [];
     for (let index = 0; index < 10; index += 1) {
-      widths.push(Number.parseFloat(getComputedStyle(panel).width || '0'));
+      clipPaths.push(getComputedStyle(panel).clipPath || '');
       await new Promise(resolve => setTimeout(resolve, 28));
     }
-    return { animations, widths };
+    return { animations, clipPaths };
   });
 
   const expanded = await readReasoningUi(sidebarFrame);
   return { collapsed, motion, expanded };
+}
+
+async function setFontSizeFromSettings(sidebarFrame, fontSize) {
+  await sidebarFrame.locator('#font-size').evaluate((input, nextFontSize) => {
+    input.value = String(nextFontSize);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  }, fontSize);
+}
+
+async function setEffortOptionChecked(sidebarFrame, effort, checked) {
+  const settingControl = sidebarFrame.locator('#responses-reasoning-effort-slider-options');
+  if (await settingControl.count() <= 0) {
+    // 偏好设置采用懒渲染：真实打开一次“偏好设置”标签，
+    // 再操作其多选控件，确保测到的是用户实际使用的设置链路。
+    await sidebarFrame.locator('#preferences-settings-toggle').evaluate((toggle) => toggle.click());
+    await settingControl.waitFor({ state: 'attached', timeout: 15_000 });
+  }
+  await settingControl.evaluate((control, payload) => {
+    const checkbox = Array.from(control.querySelectorAll('input[type="checkbox"]'))
+      .find(input => input.value === payload.effort);
+    if (!checkbox) throw new Error(`Missing reasoning effort option: ${payload.effort}`);
+    checkbox.checked = payload.checked;
+    checkbox.dispatchEvent(new Event('change', { bubbles: true }));
+  }, { effort, checked });
+  await sidebarFrame.locator('#preferences-settings-toggle').evaluate((toggle) => {
+    const panel = document.querySelector('#chat-history-panel');
+    if (panel && (panel.classList.contains('visible') || getComputedStyle(panel).display !== 'none')) {
+      toggle.click();
+    }
+  });
+}
+
+async function dragFromCurrentThumbToEnd(sidebarFrame, page) {
+  const controlBox = await sidebarFrame.locator('#reasoning-effort-control').boundingBox();
+  if (!controlBox) throw new Error('Reasoning effort control has no bounding box');
+  const startX = controlBox.x + controlBox.width / 2;
+  const startY = controlBox.y + controlBox.height / 2;
+  await page.mouse.move(startX, startY);
+  await page.waitForTimeout(320);
+  const sliderBox = await sidebarFrame.locator('#reasoning-effort-slider').boundingBox();
+  if (!sliderBox) throw new Error('Reasoning effort slider has no bounding box after hover');
+  await page.mouse.down();
+  await page.mouse.move(sliderBox.x + sliderBox.width - 2, sliderBox.y + sliderBox.height / 2, { steps: 12 });
+  await page.mouse.up();
 }
 
 async function setEffortIndex(sidebarFrame, index) {
@@ -204,7 +308,7 @@ async function main() {
     outputDir,
     chromePath,
     headless: runHeadless,
-    efforts: EFFORTS,
+    defaultVisibleEfforts: DEFAULT_VISIBLE_EFFORTS,
     steps: [],
     console: []
   };
@@ -279,7 +383,8 @@ async function main() {
 
     result.initial = await readReasoningUi(sidebarFrame);
     assertState(!result.initial.hidden && result.initial.display !== 'none', 'Responses 配置下选择器未显示', result.initial);
-    assertState(result.initial.hasBrainIcon, '缺少 Font Awesome 大脑图标', result.initial);
+    assertState(result.initial.hasMicrochipAiIcon, '缺少 Font Awesome 空心 microchip-ai 图标', result.initial);
+    assertState(!result.initial.hasBrainIcon, '仍残留大脑图标', result.initial);
     assertState(
       result.initial.domOrder.input < result.initial.domOrder.control
       && result.initial.domOrder.control < result.initial.domOrder.documentButton,
@@ -288,31 +393,70 @@ async function main() {
     );
     assertState(
       result.initial.slider?.min === '0'
-      && result.initial.slider?.max === '7'
+      && result.initial.slider?.max === '4'
       && result.initial.slider?.step === '1',
       '滑块离散范围不正确',
       result.initial.slider
     );
     assertState(
-      JSON.stringify(result.initial.dots.map(dot => dot.effort)) === JSON.stringify(EFFORTS),
-      '吸附点顺序不正确',
+      JSON.stringify(result.initial.dots.map(dot => dot.effort)) === JSON.stringify(DEFAULT_VISIBLE_EFFORTS),
+      '默认可见吸附点不是 default + low/medium/high/xhigh',
       result.initial.dots
     );
+    assertState(result.initial.dots[0]?.isDefault === true, 'default 吸附点未独立标记', result.initial.dots);
     assertState(result.initial.pill === 'gpt-5.6-medium', '初始模型标签缺少 -medium', result.initial);
     assertState(result.initial.placeholder.includes('gpt-5.6-medium'), 'placeholder 缺少 -medium', result.initial);
     await sidebarFrame.locator('#message-row').screenshot({ path: path.join(outputDir, 'collapsed.png') });
 
-    logProgress('验证 hover 展开动画');
+    logProgress('验证 hover 锚定、上方浮签与 clip-path 展开动画');
     result.hover = await collectHoverMotion(sidebarFrame, page);
-    const distinctWidths = new Set(result.hover.motion.widths.map(width => width.toFixed(1)));
-    // Chrome 在 width:0 与 1px 边框组合下可能保留约 1.33px 的亚像素计算值；
-    // opacity/visibility 才是交互层面的折叠边界，因此宽度允许 2px 渲染容差。
-    assertState(result.hover.collapsed.panel.width <= 2, '折叠宽度超出亚像素容差', result.hover.collapsed.panel);
+    const distinctClipPaths = new Set(result.hover.motion.clipPaths);
+    assertState(result.hover.collapsed.panel.width >= 220, '折叠时未保留最终 em 几何', result.hover.collapsed.panel);
     assertState(result.hover.collapsed.panel.opacity <= 0.01, '折叠透明度不为 0', result.hover.collapsed.panel);
-    assertState(result.hover.expanded.panel.width >= 170, 'hover 后面板未完整展开', result.hover.expanded.panel);
+    assertState(result.hover.expanded.isOpen, 'hover 后控件未进入 is-open', result.hover.expanded);
+    assertState(result.hover.expanded.panel.width >= 220, 'hover 后面板未完整展开', result.hover.expanded.panel);
     assertState(result.hover.expanded.panel.opacity >= 0.99, 'hover 后面板未显示', result.hover.expanded.panel);
-    assertState(distinctWidths.size >= 3, 'hover 展开没有可观测的连续宽度变化', result.hover.motion);
+    assertState(distinctClipPaths.size >= 3, 'hover 展开没有可观测的 clip-path 过渡', result.hover.motion);
+    assertState(
+      Math.abs(result.hover.expanded.geometry.thumbCenter.x - result.hover.expanded.geometry.button.centerX) <= 1.5
+      && Math.abs(result.hover.expanded.geometry.thumbCenter.y - result.hover.expanded.geometry.button.centerY) <= 1.5,
+      '展开后当前 thumb 没有准确落在鼠标/图标位置',
+      result.hover.expanded.geometry
+    );
+    assertState(
+      Math.abs(result.hover.expanded.geometry.value.centerX - result.hover.expanded.geometry.thumbCenter.x) <= 1.5
+      && result.hover.expanded.geometry.value.bottom < result.hover.expanded.geometry.thumbCenter.y,
+      '档位浮签未对齐 thumb 或未位于鼠标上方',
+      result.hover.expanded.geometry
+    );
     result.steps.push('hover_animation_verified');
+
+    logProgress('验证 slider、吸附点和计算图标跟随界面字体缩放');
+    await page.mouse.move(12, 12);
+    await setFontSizeFromSettings(sidebarFrame, 24);
+    result.largeFont = await waitFor(async () => {
+      const state = await readReasoningUi(sidebarFrame);
+      return state.sizes.controlFont >= 23.5 ? state : null;
+    }, { timeoutMs: 10_000, intervalMs: 100, label: 'reasoning slider font scaled to 24px' });
+    const expectedScale = 24 / 14;
+    assertState(
+      Math.abs((result.largeFont.slider.width / result.initial.slider.width) - expectedScale) <= 0.08,
+      'slider 宽度未按字体比例缩放',
+      { initial: result.initial.slider, large: result.largeFont.slider }
+    );
+    assertState(
+      Math.abs((result.largeFont.dots[0].width / result.initial.dots[0].width) - expectedScale) <= 0.12,
+      '吸附点未按字体比例缩放',
+      { initial: result.initial.dots[0], large: result.largeFont.dots[0] }
+    );
+    assertState(result.largeFont.sizes.iconFont >= 27, '计算图标未跟随字体放大', result.largeFont.sizes);
+    await setFontSizeFromSettings(sidebarFrame, 14);
+    await waitFor(async () => (await readReasoningUi(sidebarFrame)).sizes.controlFont <= 14.5, {
+      timeoutMs: 10_000,
+      intervalMs: 100,
+      label: 'reasoning slider font restored to 14px'
+    });
+    result.steps.push('font_scaling_verified');
 
     logProgress('验证非 Responses 配置自动隐藏');
     await cycleFavoriteApi(sidebarFrame, 'ArrowDown', 'chat-model');
@@ -337,9 +481,19 @@ async function main() {
     }, { timeoutMs: 25_000, intervalMs: 350, label: 'default effort cleared from local and sync' });
     result.steps.push('default_cleared');
 
-    logProgress('快速切换 xhigh → max 并验证 latest-wins 持久化');
-    await setEffortIndex(sidebarFrame, 6);
-    await setEffortIndex(sidebarFrame, 7);
+    logProgress('在设置中加入 max，验证可见档位无需重载即时更新');
+    await setEffortOptionChecked(sidebarFrame, 'max', true);
+    result.withMaxOptions = await waitFor(async () => {
+      const state = await readReasoningUi(sidebarFrame);
+      return JSON.stringify(state.dots.map(dot => dot.effort)) === JSON.stringify(VISIBLE_EFFORTS_WITH_MAX)
+        ? state
+        : null;
+    }, { timeoutMs: 10_000, intervalMs: 100, label: 'max added to visible reasoning efforts' });
+    assertState(result.withMaxOptions.slider?.max === '5', '加入 max 后 range 上限未更新', result.withMaxOptions.slider);
+    result.steps.push('visible_options_updated');
+
+    logProgress('从当前图标/thumb 位置直接按下拖到 max');
+    await dragFromCurrentThumbToEnd(sidebarFrame, page);
     result.maxState = await waitFor(async () => {
       const state = await readReasoningUi(sidebarFrame);
       return state.effort === 'max'
@@ -357,8 +511,25 @@ async function main() {
     }, { timeoutMs: 25_000, intervalMs: 350, label: 'max effort persisted to local and sync' });
     result.steps.push('max_persisted');
 
+    assertState(result.maxState.focusedElementId === 'reasoning-effort-slider', '真实拖动后 range 未保留焦点', result.maxState);
     await sidebarFrame.locator('#reasoning-effort-control').hover({ force: true });
     await sidebarFrame.locator('#message-row').screenshot({ path: path.join(outputDir, 'expanded-max.png') });
+    await sidebarFrame.locator('body').screenshot({ path: path.join(outputDir, 'expanded-max-body.png') });
+
+    logProgress('验证 range 仍有焦点时鼠标离开会立即关闭');
+    // 在 sidebar iframe 内移到输入框左侧，确保浏览器向控件派发真实 pointerleave；
+    // 直接跨出 iframe 的顶层坐标移动在 Chrome 中不保证传递子文档 pointerleave。
+    await sidebarFrame.locator('#message-input').hover({ position: { x: 18, y: 12 }, force: true });
+    result.closedAfterLeave = await waitFor(async () => {
+      const state = await readReasoningUi(sidebarFrame);
+      return !state.isOpen && state.panel.opacity <= 0.01 ? state : null;
+    }, { timeoutMs: 5_000, intervalMs: 50, label: 'reasoning slider closed on pointerleave' });
+    assertState(
+      result.closedAfterLeave.focusedElementId !== 'reasoning-effort-slider',
+      '离开后 range 焦点未释放',
+      result.closedAfterLeave
+    );
+    result.steps.push('pointerleave_close_verified');
 
     logProgress('重载 sidebar 验证持久化恢复');
     await sidebarFrame.evaluate(() => window.location.reload());
@@ -369,10 +540,43 @@ async function main() {
       return state.effort === 'max'
         && state.pill === 'gpt-5.6-max'
         && state.placeholder.includes('gpt-5.6-max')
+        && JSON.stringify(state.dots.map(dot => dot.effort)) === JSON.stringify(VISIBLE_EFFORTS_WITH_MAX)
         ? state
         : null;
     }, { timeoutMs: 20_000, intervalMs: 250, label: 'reloaded max effort state' });
     result.steps.push('reload_persistence_verified');
+
+    logProgress('当前 max 被从可见设置取消后仍临时保留，不误标 default');
+    await setEffortOptionChecked(sidebarFrame, 'max', false);
+    result.hiddenCurrentPreserved = await waitFor(async () => {
+      const state = await readReasoningUi(sidebarFrame);
+      return state.effort === 'max' && state.dots.at(-1)?.effort === 'max' ? state : null;
+    }, { timeoutMs: 10_000, intervalMs: 100, label: 'hidden current max preserved in slider' });
+    assertState(result.hiddenCurrentPreserved.pill === 'gpt-5.6-max', '隐藏当前档位后模型标签失真', result.hiddenCurrentPreserved);
+    result.steps.push('hidden_current_effort_preserved');
+
+    logProgress('从已隐藏的 max 拖走时保持轨道稳定，离开后再收拢可见档位');
+    await sidebarFrame.locator('#reasoning-effort-control').hover({ force: true });
+    const hiddenTrackWidth = (await readReasoningUi(sidebarFrame)).slider.width;
+    await setEffortIndex(sidebarFrame, 4);
+    result.hiddenTrackDuringChange = await waitFor(async () => {
+      const state = await readReasoningUi(sidebarFrame);
+      return state.effort === 'xhigh' && state.dots.at(-1)?.effort === 'max' ? state : null;
+    }, { timeoutMs: 10_000, intervalMs: 100, label: 'hidden max retained while slider open' });
+    assertState(
+      Math.abs(result.hiddenTrackDuringChange.slider.width - hiddenTrackWidth) <= 1,
+      '拖离已隐藏当前档时轨道长度发生跳变',
+      result.hiddenTrackDuringChange.slider
+    );
+    await sidebarFrame.locator('#message-input').hover({ position: { x: 18, y: 12 }, force: true });
+    result.hiddenTrackAfterLeave = await waitFor(async () => {
+      const state = await readReasoningUi(sidebarFrame);
+      return !state.isOpen
+        && JSON.stringify(state.dots.map(dot => dot.effort)) === JSON.stringify(DEFAULT_VISIBLE_EFFORTS)
+        ? state
+        : null;
+    }, { timeoutMs: 10_000, intervalMs: 100, label: 'hidden max removed after pointerleave' });
+    result.steps.push('hidden_effort_track_stability_verified');
 
     result.success = true;
     result.finishedAt = new Date().toISOString();

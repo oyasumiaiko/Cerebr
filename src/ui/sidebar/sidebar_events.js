@@ -140,6 +140,7 @@ function applyMessageInputPlaceholder(appContext, currentConfig) {
 
 function setupApiMenuWatcher(appContext) {
   const apiManager = appContext.services.apiManager;
+  const settingsManager = appContext.services.settingsManager;
   const chatHistoryUI = appContext.services.chatHistoryUI;
   const showNotification = appContext.utils?.showNotification;
   const messageInput = appContext.dom?.messageInput || null;
@@ -148,10 +149,10 @@ function setupApiMenuWatcher(appContext) {
   const reasoningSlider = appContext.dom?.reasoningEffortSlider || null;
   const reasoningValue = appContext.dom?.reasoningEffortValue || null;
   const reasoningDots = appContext.dom?.reasoningEffortDots || null;
-  const reasoningEffortOptions = [
-    'default',
-    ...(apiManager.getResponsesReasoningEffortOptions?.() || [])
-  ];
+  const reasoningEffortSettingKey = 'responsesReasoningEffortSliderOptions';
+  const reasoningSliderThumbSizeEm = 1.15;
+  const reasoningSliderStepEm = 3.7;
+  let reasoningEffortOptions = ['default'];
 
   const resolveConfigLabel = (config) => {
     if (!config) return 'API';
@@ -238,50 +239,95 @@ function setupApiMenuWatcher(appContext) {
     };
   };
 
-  if (reasoningSlider && reasoningEffortOptions.length > 0) {
-    reasoningSlider.min = '0';
-    reasoningSlider.max = String(reasoningEffortOptions.length - 1);
-    reasoningSlider.step = '1';
-  }
+  // 用明确的 em 档位坐标同步文字、断开点与进度。这里不使用百分比，
+  // 因为同一百分比在 panel.left 与 panel 内部会分别相对 44px 控件和轨道解析，无法稳定锚定鼠标。
+  const buildReasoningSliderOffset = (index, optionCount) => {
+    const safeIndex = Math.max(0, Math.min(Math.max(0, optionCount - 1), index));
+    const offsetEm = (reasoningSliderThumbSizeEm / 2) + (safeIndex * reasoningSliderStepEm);
+    return `${Number(offsetEm.toFixed(4))}em`;
+  };
 
-  if (reasoningDots && reasoningEffortOptions.length > 0) {
-    const dotNodes = reasoningEffortOptions.map((effort) => {
-      const dot = document.createElement('span');
-      dot.className = 'reasoning-effort-dot';
-      dot.dataset.effort = effort;
-      dot.title = effort === 'default' ? 'default（模型默认）' : effort;
-      return dot;
-    });
-    reasoningDots.replaceChildren(...dotNodes);
-  }
+  const syncReasoningEffortOptions = (currentEffort = 'default') => {
+    const officialOptions = apiManager.getResponsesReasoningEffortOptions?.() || [];
+    const configuredOptions = settingsManager?.getSetting?.(reasoningEffortSettingKey);
+    const configuredSet = new Set(Array.isArray(configuredOptions) ? configuredOptions : []);
+    const retainedWhileOpen = reasoningControl?.classList.contains('is-open')
+      ? new Set(reasoningEffortOptions.slice(1))
+      : new Set();
+    // 若当前 API 已保存了一个后来被用户隐藏的档位，仍临时显示它，
+    // 保证 slider 如实表达当前请求，而不是错误回落到 default。展开拖动期间还保留
+    // 当下整组档位，避免从“已隐藏的当前档”拖走时轨道突然缩短。
+    const visibleOfficialOptions = officialOptions.filter((effort) => (
+      configuredSet.has(effort) || effort === currentEffort || retainedWhileOpen.has(effort)
+    ));
+    const nextOptions = ['default', ...visibleOfficialOptions];
+    const optionsChanged = nextOptions.length !== reasoningEffortOptions.length
+      || nextOptions.some((effort, index) => effort !== reasoningEffortOptions[index]);
+    reasoningEffortOptions = nextOptions;
+    const panelWidthEm = reasoningSliderThumbSizeEm
+      + Math.max(0, reasoningEffortOptions.length - 1) * reasoningSliderStepEm;
+    reasoningControl?.style.setProperty('--reasoning-effort-track-width', `${Number(panelWidthEm.toFixed(4))}em`);
+
+    if (reasoningSlider) {
+      reasoningSlider.min = '0';
+      reasoningSlider.max = String(Math.max(0, reasoningEffortOptions.length - 1));
+      reasoningSlider.step = '1';
+      reasoningSlider.disabled = reasoningEffortOptions.length <= 1;
+    }
+
+    if (reasoningDots && optionsChanged) {
+      const dotNodes = reasoningEffortOptions.map((effort) => {
+        const dot = document.createElement('span');
+        dot.className = 'reasoning-effort-dot';
+        dot.classList.toggle('is-default', effort === 'default');
+        dot.dataset.effort = effort;
+        dot.title = effort === 'default' ? 'default（模型默认）' : effort;
+        return dot;
+      });
+      reasoningDots.replaceChildren(...dotNodes);
+      reasoningDots.classList.toggle('is-single', reasoningEffortOptions.length <= 1);
+    }
+
+    const officialStartOffset = buildReasoningSliderOffset(
+      reasoningEffortOptions.length > 1 ? 1 : 0,
+      reasoningEffortOptions.length
+    );
+    reasoningControl?.style.setProperty('--reasoning-effort-official-start', officialStartOffset);
+  };
 
   const updateReasoningEffortControl = (displayConfig) => {
     if (!reasoningControl) return;
-    const isResponsesConfig = reasoningEffortOptions.length > 0
-      && apiManager.isResponsesApiConfig?.(displayConfig) === true;
+    const isResponsesConfig = apiManager.isResponsesApiConfig?.(displayConfig) === true;
     reasoningControl.hidden = !isResponsesConfig;
-    if (!isResponsesConfig) return;
+    if (!isResponsesConfig) {
+      reasoningControl.classList.remove('is-open');
+      reasoningButton?.setAttribute('aria-expanded', 'false');
+      return;
+    }
 
-    const effort = apiManager.getResponsesReasoningEffort?.(displayConfig) || reasoningEffortOptions[0];
+    const effort = apiManager.getResponsesReasoningEffort?.(displayConfig) || 'default';
+    syncReasoningEffortOptions(effort);
     const optionIndex = Math.max(0, reasoningEffortOptions.indexOf(effort));
-    const progress = reasoningEffortOptions.length > 1
-      ? (optionIndex / (reasoningEffortOptions.length - 1)) * 100
-      : 0;
+    const currentOffset = buildReasoningSliderOffset(optionIndex, reasoningEffortOptions.length);
+    const progressOffset = optionIndex === 0
+      ? reasoningControl.style.getPropertyValue('--reasoning-effort-official-start')
+      : currentOffset;
 
     if (reasoningSlider) {
       reasoningSlider.value = String(optionIndex);
       reasoningSlider.setAttribute('aria-valuetext', effort);
-      reasoningSlider.style.setProperty('--reasoning-effort-progress', `${progress}%`);
     }
+    reasoningControl.style.setProperty('--reasoning-effort-current-offset', currentOffset);
+    reasoningControl.style.setProperty('--reasoning-effort-progress', progressOffset);
     if (reasoningValue) reasoningValue.textContent = effort;
     if (reasoningButton) {
       const title = `推理强度：${effort}`;
-      reasoningButton.title = title;
       reasoningButton.setAttribute('aria-label', title);
     }
     reasoningControl.dataset.effort = effort;
     Array.from(reasoningDots?.children || []).forEach((dot, index) => {
-      dot.classList.toggle('is-active', index <= optionIndex);
+      const isActive = optionIndex === 0 ? index === 0 : index > 0 && index <= optionIndex;
+      dot.classList.toggle('is-active', isActive);
       dot.classList.toggle('is-current', index === optionIndex);
     });
   };
@@ -426,14 +472,54 @@ function setupApiMenuWatcher(appContext) {
     if (updated) updateAll();
   };
 
+  const openReasoningEffortControl = (pointerEvent = null) => {
+    if (!reasoningControl || reasoningControl.hidden || !reasoningSlider) return;
+    const controlRect = reasoningControl.getBoundingClientRect();
+    const pointerX = Number(pointerEvent?.clientX);
+    const localPointerX = Number.isFinite(pointerX)
+      ? Math.max(0, Math.min(controlRect.width, pointerX - controlRect.left))
+      : controlRect.width / 2;
+    const currentOffset = reasoningControl.style.getPropertyValue('--reasoning-effort-current-offset') || '50%';
+    reasoningControl.style.setProperty('--reasoning-effort-pointer-anchor', `${localPointerX}px`);
+    reasoningControl.style.setProperty('--reasoning-effort-open-offset', currentOffset);
+    reasoningControl.classList.add('is-open');
+    reasoningButton?.setAttribute('aria-expanded', 'true');
+  };
+
+  const closeReasoningEffortControl = () => {
+    if (!reasoningControl) return;
+    const wasOpen = reasoningControl.classList.contains('is-open');
+    reasoningControl.classList.remove('is-open');
+    reasoningButton?.setAttribute('aria-expanded', 'false');
+    // range 在拖动后会保留 focus；离开整个控件时主动 blur，
+    // 保证鼠标离开就关闭，不被 focus-within 或键盘焦点粘住。
+    if (document.activeElement === reasoningSlider) reasoningSlider.blur();
+    if (wasOpen) updateAll();
+  };
+
   reasoningSlider?.addEventListener('input', () => updateReasoningEffortFromSlider(false));
   reasoningSlider?.addEventListener('change', () => updateReasoningEffortFromSlider(true));
-  reasoningButton?.addEventListener('click', () => reasoningSlider?.focus());
+  reasoningSlider?.addEventListener('focus', () => {
+    if (!reasoningControl?.classList.contains('is-open')) openReasoningEffortControl();
+  });
+  reasoningSlider?.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    closeReasoningEffortControl();
+    reasoningButton?.focus();
+  });
+  reasoningControl?.addEventListener('pointerenter', openReasoningEffortControl);
+  reasoningControl?.addEventListener('pointerleave', closeReasoningEffortControl);
+  reasoningButton?.addEventListener('click', () => {
+    openReasoningEffortControl();
+    reasoningSlider?.focus();
+  });
 
   updateAll();
   window.addEventListener('apiConfigsUpdated', updateAll);
   document.addEventListener('CONVERSATION_API_CONTEXT_CHANGED', updateAll);
   document.addEventListener('keydown', handleFavoriteApiCycleShortcut);
+  settingsManager?.subscribe?.(reasoningEffortSettingKey, updateAll);
 }
 
 /**
