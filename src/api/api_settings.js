@@ -76,7 +76,7 @@ const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1/chat/completions';
 const OPENAI_RESPONSES_DEFAULT_BASE_URL = 'https://api.openai.com/v1/responses';
 const GEMINI_DEFAULT_BASE_URL = 'https://generativelanguage.googleapis.com';
 const CONNECTION_SOURCE_DEFAULT_NAME_PREFIX = '连接源';
-const RESPONSES_REASONING_EFFORT_OPTIONS = Object.freeze(['none', 'minimal', 'low', 'medium', 'high', 'xhigh']);
+const RESPONSES_REASONING_EFFORT_OPTIONS = Object.freeze(['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
 const RESPONSES_REASONING_SUMMARY_OPTIONS = Object.freeze(['auto', 'concise', 'detailed']);
 const RESPONSES_PROMPT_CACHE_RETENTION_OPTIONS = Object.freeze(['in-memory', '24h']);
 const RESPONSES_SERVICE_TIER_OPTIONS = Object.freeze(['auto', 'default', 'flex', 'scale', 'priority']);
@@ -114,7 +114,7 @@ const RESPONSES_MAIN_FIELD_SPECS = Object.freeze([
     kind: 'select',
     defaultValue: 'medium',
     options: RESPONSES_REASONING_EFFORT_OPTIONS,
-    help: 'gpt-5 / o 系列模型可用；未启用时不附加 reasoning.effort。'
+    help: '侧栏快捷选择器与此字段共用同一配置；启用后附加 reasoning.effort，关闭则沿用模型默认值。'
   },
   {
     path: ['text', 'verbosity'],
@@ -653,6 +653,9 @@ export function createApiManager(appContext) {
   // 保存失败提示节流：避免拖动滑块等高频操作导致 toast 刷屏
   let lastSyncSaveWarningAt = 0;
   const SYNC_SAVE_WARNING_COOLDOWN_MS = 8000;
+  // composer 推理强度可能被用户快速连续切换；串行保存可保证最终档位最后落盘，
+  // 避免较早启动的异步 saveAPIConfigs 反而较晚完成并覆盖新值。
+  let reasoningEffortSaveQueue = Promise.resolve();
 
 
   function minifyJsonIfPossible(input) {
@@ -5219,6 +5222,123 @@ export function createApiManager(appContext) {
   }
 
   /**
+   * 把任意输入收敛为官网列出的 reasoning.effort 档位。
+   * 这里刻意不按模型过滤：模型不支持某档时，让上游返回明确错误，避免 UI 与真实请求悄悄分叉。
+   * @param {any} value
+   * @returns {string}
+   */
+  function normalizeResponsesReasoningEffort(value) {
+    const normalized = (typeof value === 'string') ? value.trim().toLowerCase() : '';
+    return RESPONSES_REASONING_EFFORT_OPTIONS.includes(normalized) ? normalized : '';
+  }
+
+  /**
+   * 解析当前配置显式设置的推理强度；空字符串表示不发送 effort、沿用模型默认值。
+   * customParams 在现有 buildRequest 链路中最后合并，因此显示状态也按同样优先级读取。
+   * @param {Object|null|undefined} config
+   * @returns {string}
+   */
+  function resolveResponsesReasoningEffort(config) {
+    if (typeof config?.customParams === 'string' && config.customParams.trim()) {
+      try {
+        const customParams = JSON.parse(config.customParams);
+        const customEffort = normalizeResponsesReasoningEffort(customParams?.reasoning?.effort);
+        if (customEffort) return customEffort;
+      } catch (_) {}
+    }
+
+    return normalizeResponsesReasoningEffort(config?.responsesApiSettings?.reasoning?.effort);
+  }
+
+  /**
+   * 找到可变的原始配置对象。输入区显示的配置可能来自会话锁定，也可能是 resolveEffectiveConfig 的副本，
+   * 因此必须优先按稳定 id 回到 apiConfigs，不能直接改传入对象。
+   * @param {Object|null|undefined} config
+   * @returns {Object|null}
+   */
+  function resolveMutableApiConfig(config) {
+    const reference = config || apiConfigs[selectedConfigIndex] || null;
+    if (!reference || typeof reference !== 'object') return null;
+
+    const id = (typeof reference.id === 'string') ? reference.id.trim() : '';
+    if (id) {
+      return apiConfigs.find(item => item?.id === id) || null;
+    }
+
+    const connectionSourceId = (typeof reference.connectionSourceId === 'string')
+      ? reference.connectionSourceId.trim()
+      : '';
+    const modelName = (typeof reference.modelName === 'string') ? reference.modelName.trim() : '';
+    return apiConfigs.find((item) => {
+      if (!item) return false;
+      if (connectionSourceId && item.connectionSourceId !== connectionSourceId) return false;
+      return modelName && (item.modelName || '').trim() === modelName;
+    }) || null;
+  }
+
+  /**
+   * 更新指定 Responses 配置的推理强度。
+   * 拖动阶段可传 persist:false 只更新内存，松开滑块后再持久化，避免连续写 chrome.storage.sync。
+   * @param {Object|null|undefined} config
+   * @param {string} effort
+   * @param {{persist?: boolean}} [options]
+   * @returns {boolean}
+   */
+  function setResponsesReasoningEffort(config, effort, options = {}) {
+    const rawEffort = (typeof effort === 'string') ? effort.trim().toLowerCase() : '';
+    const shouldClear = !rawEffort || rawEffort === 'default';
+    const normalizedEffort = shouldClear ? '' : normalizeResponsesReasoningEffort(rawEffort);
+    if (!shouldClear && !normalizedEffort) return false;
+
+    const mutableConfig = resolveMutableApiConfig(config);
+    if (!mutableConfig) return false;
+    const effectiveConfig = resolveEffectiveConfig(mutableConfig) || mutableConfig;
+    if (!isOpenAIResponsesConnectionConfig(effectiveConfig)) return false;
+
+    const nextSettings = cloneJsonCompatible(mutableConfig.responsesApiSettings || {}) || {};
+    if (shouldClear) {
+      deleteNestedValue(nextSettings, ['reasoning', 'effort']);
+    } else {
+      setNestedValue(nextSettings, ['reasoning', 'effort'], normalizedEffort);
+    }
+    const normalizedSettings = normalizeResponsesApiSettings(nextSettings);
+    if (normalizedSettings) {
+      mutableConfig.responsesApiSettings = normalizedSettings;
+    } else {
+      delete mutableConfig.responsesApiSettings;
+    }
+
+    // 若旧配置曾在 customParams 里直接写 effort，它拥有既有的最终覆盖优先级。
+    // 滑块同步更新/清除这一处，避免 UI 看似切档但实际请求仍被旧 JSON 覆盖。
+    if (typeof mutableConfig.customParams === 'string' && mutableConfig.customParams.trim()) {
+      try {
+        const customParams = JSON.parse(mutableConfig.customParams);
+        const hasCustomEffort = customParams
+          && typeof customParams === 'object'
+          && !Array.isArray(customParams)
+          && typeof getNestedValue(customParams, ['reasoning', 'effort']) !== 'undefined';
+        if (hasCustomEffort) {
+          if (shouldClear) {
+            deleteNestedValue(customParams, ['reasoning', 'effort']);
+          } else {
+            setNestedValue(customParams, ['reasoning', 'effort'], normalizedEffort);
+          }
+          mutableConfig.customParams = Object.keys(customParams).length > 0
+            ? JSON.stringify(customParams, null, 2)
+            : '';
+        }
+      } catch (_) {}
+    }
+
+    if (options.persist !== false) {
+      reasoningEffortSaveQueue = reasoningEffortSaveQueue
+        .catch(() => undefined)
+        .then(() => saveAPIConfigs());
+    }
+    return true;
+  }
+
+  /**
    * 读取当前配置上的 Responses API 额外参数，并做最终请求前校验。
    * 约束：
    * - 只保留启用的字段；
@@ -6755,6 +6875,10 @@ export function createApiManager(appContext) {
     getAllConnectionSources: () => connectionSources.map(source => ({ ...source })),
     getSelectedIndex: () => selectedConfigIndex,
     setSelectedIndex: (index) => setSelectedIndexInternal(index),
+    isResponsesApiConfig: (config) => isOpenAIResponsesConnectionConfig(config),
+    getResponsesReasoningEffortOptions: () => [...RESPONSES_REASONING_EFFORT_OPTIONS],
+    getResponsesReasoningEffort: (config) => resolveResponsesReasoningEffort(config),
+    setResponsesReasoningEffort,
 
     // 添加新配置
     addConfig

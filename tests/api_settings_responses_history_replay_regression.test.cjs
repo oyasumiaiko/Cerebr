@@ -391,3 +391,92 @@ test('buildRequest 不再为 Chat Completions 默认添加 top_p，但保留用�
   });
   assert.equal(explicitChatBody.top_p, 0.8);
 });
+
+test('Responses 推理强度覆盖官网完整档位且仅在显式选择后写入', async (t) => {
+  const apiManager = await createApiManagerForTest(t);
+  const messages = [{ role: 'user', content: '请分析这个问题' }];
+
+  assert.deepEqual(apiManager.getResponsesReasoningEffortOptions(), [
+    'none',
+    'minimal',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max'
+  ]);
+
+  const defaultResponsesBody = await apiManager.buildRequest({
+    config: {
+      modelName: 'gpt-5.6',
+      baseUrl: 'https://api.openai.com/v1/responses',
+      connectionType: 'openai_responses',
+      useStreaming: false
+    },
+    messages
+  });
+  assert.equal(Object.hasOwn(defaultResponsesBody, 'reasoning'), false);
+  assert.equal(apiManager.getResponsesReasoningEffort({}), '');
+
+  const maxResponsesBody = await apiManager.buildRequest({
+    config: {
+      modelName: 'gpt-5.6',
+      baseUrl: 'https://api.openai.com/v1/responses',
+      connectionType: 'openai_responses',
+      responsesApiSettings: {
+        reasoning: {
+          effort: 'max',
+          summary: 'detailed'
+        }
+      },
+      useStreaming: false
+    },
+    messages
+  });
+  assert.deepEqual(maxResponsesBody.reasoning, {
+    effort: 'max',
+    summary: 'detailed'
+  });
+
+  const overrideResponsesBody = await apiManager.buildRequest({
+    config: {
+      modelName: 'gpt-5.6',
+      baseUrl: 'https://api.openai.com/v1/responses',
+      connectionType: 'openai_responses',
+      responsesApiSettings: { reasoning: { effort: 'high' } },
+      useStreaming: false
+    },
+    overrides: { reasoning: { effort: 'low' } },
+    messages
+  });
+  assert.deepEqual(overrideResponsesBody.reasoning, { effort: 'low' });
+
+  const customParamsResponsesBody = await apiManager.buildRequest({
+    config: {
+      modelName: 'gpt-5.6',
+      baseUrl: 'https://api.openai.com/v1/responses',
+      connectionType: 'openai_responses',
+      responsesApiSettings: { reasoning: { effort: 'high' } },
+      customParams: JSON.stringify({ reasoning: { effort: 'xhigh' } }),
+      useStreaming: false
+    },
+    messages
+  });
+  assert.deepEqual(customParamsResponsesBody.reasoning, { effort: 'xhigh' });
+  assert.equal(apiManager.getResponsesReasoningEffort({
+    responsesApiSettings: { reasoning: { effort: 'high' } },
+    customParams: JSON.stringify({ reasoning: { effort: 'xhigh' } })
+  }), 'xhigh');
+
+  const chatBody = await apiManager.buildRequest({
+    config: {
+      modelName: 'chat-model',
+      baseUrl: 'https://example.com/v1/chat/completions',
+      connectionType: 'openai',
+      responsesApiSettings: { reasoning: { effort: 'max' } },
+      useStreaming: false
+    },
+    messages
+  });
+  assert.equal(Object.hasOwn(chatBody, 'reasoning'), false);
+});

@@ -2556,6 +2556,235 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     width: 100%;
 }
 
+/* Responses 推理强度快捷选择器：
+   - 大脑按钮固定占一个普通输入区图标位，不推动右侧文件/截屏/发送按钮；
+   - slider 面板从按钮左侧覆盖式展开，窄侧栏里也不会挤坏 composer；
+   - 原生 range 的 step=1 负责档位吸附，自绘圆点保证每个离散档位始终清晰可见。 */
+.reasoning-effort-control {
+    position: relative;
+    align-self: stretch;
+    flex: 0 0 44px;
+    width: 44px;
+    min-height: 44px;
+    z-index: 4;
+}
+
+.reasoning-effort-control[hidden] {
+    display: none;
+}
+
+#reasoning-effort-button {
+    position: relative;
+    z-index: 2;
+    width: 44px;
+    height: 100%;
+    min-height: 44px;
+    padding: 12px;
+    border: none;
+    background: none;
+    color: var(--cerebr-icon-color);
+    opacity: 0.6;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 180ms ease, color 180ms ease, transform 180ms ease;
+}
+
+#reasoning-effort-button:hover,
+.reasoning-effort-control:focus-within #reasoning-effort-button {
+    opacity: 1;
+    color: color-mix(in srgb, var(--cerebr-highlight) 72%, var(--cerebr-icon-color));
+}
+
+#reasoning-effort-button:active {
+    transform: scale(0.95);
+}
+
+#reasoning-effort-button:focus-visible {
+    outline: none;
+    border-radius: 999px;
+    box-shadow: var(--cerebr-control-focus-ring);
+}
+
+.reasoning-effort-slider-panel {
+    position: absolute;
+    top: 50%;
+    right: 34px;
+    width: 0;
+    height: 36px;
+    padding: 0;
+    box-sizing: border-box;
+    overflow: hidden;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: translate(8px, -50%);
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--cerebr-input-bg) 94%, transparent);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.16);
+    backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
+    -webkit-backdrop-filter: blur(var(--cerebr-main-ui-blur-radius, 0px));
+    transition:
+      width 230ms cubic-bezier(0.22, 1, 0.36, 1),
+      padding 230ms cubic-bezier(0.22, 1, 0.36, 1),
+      opacity 170ms ease,
+      transform 230ms cubic-bezier(0.22, 1, 0.36, 1),
+      border-color 170ms ease,
+      visibility 0s linear 230ms;
+}
+
+.reasoning-effort-control:hover .reasoning-effort-slider-panel,
+.reasoning-effort-control:focus-within .reasoning-effort-slider-panel {
+    width: 176px;
+    padding: 0 10px;
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: translate(0, -50%);
+    border-color: color-mix(in srgb, var(--cerebr-control-border) 78%, transparent);
+    transition-delay: 0s;
+}
+
+.reasoning-effort-slider-content {
+    width: 154px;
+    height: 100%;
+    display: grid;
+    grid-template-columns: 46px 100px;
+    align-items: center;
+    gap: 8px;
+}
+
+.reasoning-effort-value {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--cerebr-text-color);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+    text-align: right;
+}
+
+.reasoning-effort-range-wrap {
+    position: relative;
+    width: 100px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+}
+
+.reasoning-effort-dots {
+    position: absolute;
+    left: 7px;
+    right: 7px;
+    top: 50%;
+    display: flex;
+    justify-content: space-between;
+    transform: translateY(-50%);
+    pointer-events: none;
+    z-index: 2;
+}
+
+.reasoning-effort-dot {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: color-mix(in srgb, var(--cerebr-slider-track-bg) 74%, var(--cerebr-text-color));
+    transition: background-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+
+.reasoning-effort-dot.is-active {
+    background: color-mix(in srgb, var(--cerebr-highlight) 76%, var(--cerebr-slider-thumb-bg));
+}
+
+.reasoning-effort-dot.is-current {
+    transform: scale(1.35);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--cerebr-highlight) 18%, transparent);
+}
+
+#reasoning-effort-slider {
+    --reasoning-effort-progress: 0%;
+    position: relative;
+    z-index: 1;
+    width: 100px;
+    height: 20px;
+    margin: 0;
+    padding: 0;
+    border: none;
+    outline: none;
+    background: transparent;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+#reasoning-effort-slider::-webkit-slider-runnable-track {
+    height: 2px;
+    border-radius: 999px;
+    background: linear-gradient(
+      to right,
+      color-mix(in srgb, var(--cerebr-highlight) 68%, var(--cerebr-slider-thumb-bg)) 0,
+      color-mix(in srgb, var(--cerebr-highlight) 68%, var(--cerebr-slider-thumb-bg)) var(--reasoning-effort-progress),
+      var(--cerebr-slider-track-bg) var(--reasoning-effort-progress),
+      var(--cerebr-slider-track-bg) 100%
+    );
+}
+
+#reasoning-effort-slider::-webkit-slider-thumb {
+    position: relative;
+    z-index: 3;
+    width: 14px;
+    height: 14px;
+    margin-top: -6px;
+    border: 2px solid var(--cerebr-input-bg);
+    border-radius: 50%;
+    background: var(--cerebr-slider-thumb-bg);
+    box-shadow: 0 1px 5px rgba(0, 0, 0, 0.22);
+    -webkit-appearance: none;
+    appearance: none;
+    transition: transform 160ms ease, filter 160ms ease, box-shadow 160ms ease;
+}
+
+#reasoning-effort-slider:hover::-webkit-slider-thumb,
+#reasoning-effort-slider:focus-visible::-webkit-slider-thumb {
+    transform: scale(1.12);
+    filter: brightness(1.1);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--cerebr-highlight) 18%, transparent), 0 1px 5px rgba(0, 0, 0, 0.22);
+}
+
+#reasoning-effort-slider::-moz-range-track {
+    height: 2px;
+    border-radius: 999px;
+    background: var(--cerebr-slider-track-bg);
+}
+
+#reasoning-effort-slider::-moz-range-progress {
+    height: 2px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--cerebr-highlight) 68%, var(--cerebr-slider-thumb-bg));
+}
+
+#reasoning-effort-slider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--cerebr-input-bg);
+    border-radius: 50%;
+    background: var(--cerebr-slider-thumb-bg);
+    box-shadow: 0 1px 5px rgba(0, 0, 0, 0.22);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .reasoning-effort-slider-panel,
+    #reasoning-effort-button,
+    .reasoning-effort-dot,
+    #reasoning-effort-slider::-webkit-slider-thumb {
+        transition: none;
+    }
+}
+
 .slash-command-hints-header {
     font-size: calc(var(--cerebr-font-size, 14px) * 0.78);
     color: var(--cerebr-text-color);
@@ -2672,6 +2901,7 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
 
 #message-input {
     flex: 1;
+    min-width: 0;
     padding: 12px;
     border: none;
     background-color: transparent;

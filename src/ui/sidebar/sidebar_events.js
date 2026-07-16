@@ -143,6 +143,15 @@ function setupApiMenuWatcher(appContext) {
   const chatHistoryUI = appContext.services.chatHistoryUI;
   const showNotification = appContext.utils?.showNotification;
   const messageInput = appContext.dom?.messageInput || null;
+  const reasoningControl = appContext.dom?.reasoningEffortControl || null;
+  const reasoningButton = appContext.dom?.reasoningEffortButton || null;
+  const reasoningSlider = appContext.dom?.reasoningEffortSlider || null;
+  const reasoningValue = appContext.dom?.reasoningEffortValue || null;
+  const reasoningDots = appContext.dom?.reasoningEffortDots || null;
+  const reasoningEffortOptions = [
+    'default',
+    ...(apiManager.getResponsesReasoningEffortOptions?.() || [])
+  ];
 
   const resolveConfigLabel = (config) => {
     if (!config) return 'API';
@@ -229,6 +238,54 @@ function setupApiMenuWatcher(appContext) {
     };
   };
 
+  if (reasoningSlider && reasoningEffortOptions.length > 0) {
+    reasoningSlider.min = '0';
+    reasoningSlider.max = String(reasoningEffortOptions.length - 1);
+    reasoningSlider.step = '1';
+  }
+
+  if (reasoningDots && reasoningEffortOptions.length > 0) {
+    const dotNodes = reasoningEffortOptions.map((effort) => {
+      const dot = document.createElement('span');
+      dot.className = 'reasoning-effort-dot';
+      dot.dataset.effort = effort;
+      dot.title = effort === 'default' ? 'default（模型默认）' : effort;
+      return dot;
+    });
+    reasoningDots.replaceChildren(...dotNodes);
+  }
+
+  const updateReasoningEffortControl = (displayConfig) => {
+    if (!reasoningControl) return;
+    const isResponsesConfig = reasoningEffortOptions.length > 0
+      && apiManager.isResponsesApiConfig?.(displayConfig) === true;
+    reasoningControl.hidden = !isResponsesConfig;
+    if (!isResponsesConfig) return;
+
+    const effort = apiManager.getResponsesReasoningEffort?.(displayConfig) || reasoningEffortOptions[0];
+    const optionIndex = Math.max(0, reasoningEffortOptions.indexOf(effort));
+    const progress = reasoningEffortOptions.length > 1
+      ? (optionIndex / (reasoningEffortOptions.length - 1)) * 100
+      : 0;
+
+    if (reasoningSlider) {
+      reasoningSlider.value = String(optionIndex);
+      reasoningSlider.setAttribute('aria-valuetext', effort);
+      reasoningSlider.style.setProperty('--reasoning-effort-progress', `${progress}%`);
+    }
+    if (reasoningValue) reasoningValue.textContent = effort;
+    if (reasoningButton) {
+      const title = `推理强度：${effort}`;
+      reasoningButton.title = title;
+      reasoningButton.setAttribute('aria-label', title);
+    }
+    reasoningControl.dataset.effort = effort;
+    Array.from(reasoningDots?.children || []).forEach((dot, index) => {
+      dot.classList.toggle('is-active', index <= optionIndex);
+      dot.classList.toggle('is-current', index === optionIndex);
+    });
+  };
+
   const updateApiMenuText = (currentConfig, apiInfo = null) => {
     if (!currentConfig) return;
     const label = currentConfig.displayName || currentConfig.modelName || 'API 设置';
@@ -254,7 +311,8 @@ function setupApiMenuWatcher(appContext) {
 
     const favoriteConfigs = getFavoriteConfigItems();
 
-    const currentName = resolveConfigLabel(displayConfig);
+    const currentName = appContext.utils?.resolveComposerApiLabel?.(displayConfig)
+      || resolveConfigLabel(displayConfig);
     currentEl.textContent = '';
     const textSpan = document.createElement('span');
     textSpan.className = 'input-api-current-text';
@@ -351,9 +409,26 @@ function setupApiMenuWatcher(appContext) {
   const updateAll = () => {
     const { apiInfo, selectedConfig, displayConfig } = resolveConversationApiUiInfo();
     updateApiMenuText(displayConfig, apiInfo);
+    updateReasoningEffortControl(displayConfig);
     updateInputApiSwitcher({ apiInfo, selectedConfig, displayConfig });
     applyMessageInputPlaceholder(appContext, displayConfig);
   };
+
+  const updateReasoningEffortFromSlider = (persist) => {
+    if (!reasoningSlider || reasoningEffortOptions.length <= 0) return;
+    const optionIndex = Math.max(0, Math.min(
+      reasoningEffortOptions.length - 1,
+      Math.round(Number(reasoningSlider.value) || 0)
+    ));
+    const effort = reasoningEffortOptions[optionIndex];
+    const { displayConfig } = resolveConversationApiUiInfo();
+    const updated = apiManager.setResponsesReasoningEffort?.(displayConfig, effort, { persist });
+    if (updated) updateAll();
+  };
+
+  reasoningSlider?.addEventListener('input', () => updateReasoningEffortFromSlider(false));
+  reasoningSlider?.addEventListener('change', () => updateReasoningEffortFromSlider(true));
+  reasoningButton?.addEventListener('click', () => reasoningSlider?.focus());
 
   updateAll();
   window.addEventListener('apiConfigsUpdated', updateAll);

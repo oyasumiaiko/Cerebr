@@ -99,6 +99,11 @@ export function createSidebarAppContext(isStandalone) {
     threadResizeEdgeLeft: document.getElementById('thread-resize-edge-left'),
     threadResizeEdgeRight: document.getElementById('thread-resize-edge-right'),
     messageInput: document.getElementById('message-input'),
+    reasoningEffortControl: document.getElementById('reasoning-effort-control'),
+    reasoningEffortButton: document.getElementById('reasoning-effort-button'),
+    reasoningEffortSlider: document.getElementById('reasoning-effort-slider'),
+    reasoningEffortValue: document.getElementById('reasoning-effort-value'),
+    reasoningEffortDots: document.getElementById('reasoning-effort-dots'),
     documentButton: document.getElementById('document-button'),
     inputApiSwitcher,
     inputApiCurrent: inputApiSwitcher?.querySelector('.input-api-current') || null,
@@ -379,11 +384,24 @@ export function registerSidebarUtilities(appContext) {
     refreshComposerAccessoryLayout();
   };
 
-  // 统一生成输入框 placeholder 文案，避免各处硬编码导致切换覆盖不一致。
-  appContext.utils.buildMessageInputPlaceholder = (currentConfig, options = {}) => {
+  // 统一生成 composer 中展示的 API 名称。这里只改显示文本，不改真实 modelName，
+  // 避免 “-high / -max” 之类的强度后缀意外进入上游请求。
+  appContext.utils.resolveComposerApiLabel = (currentConfig) => {
     const rawName = currentConfig?.displayName || currentConfig?.modelName || currentConfig?.baseUrl || '';
     const fallbackName = (typeof rawName === 'string') ? rawName.trim() : '';
-    const apiName = fallbackName;
+    if (!fallbackName) return '';
+
+    const apiManager = appContext.services.apiManager;
+    if (apiManager?.isResponsesApiConfig?.(currentConfig)) {
+      const effort = apiManager.getResponsesReasoningEffort?.(currentConfig) || 'default';
+      return `${fallbackName}-${effort}`;
+    }
+    return fallbackName;
+  };
+
+  // 统一生成输入框 placeholder 文案，避免各处硬编码导致切换覆盖不一致。
+  appContext.utils.buildMessageInputPlaceholder = (currentConfig, options = {}) => {
+    const apiName = appContext.utils.resolveComposerApiLabel?.(currentConfig) || '';
     // 偏好设置开关：是否在 placeholder 中显示模型名（默认开启）。
     const showModelName = appContext.services.settingsManager?.getSetting?.('showModelNameInPlaceholder') !== false;
     const shouldShowName = showModelName;
