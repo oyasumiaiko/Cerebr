@@ -144,6 +144,38 @@ async function cleanupSmokeSkills(sidebarFrame, prefix) {
   }, prefix);
 }
 
+async function applySkillPatchThroughModelFacingRoute(sidebarFrame, skillNameValue, patchValue) {
+  return await sidebarFrame.evaluate(async ({ skillName, patch }) => {
+    const virtualFileTools = await import(
+      chrome.runtime.getURL('src/agent_tools/virtual_file_io/index.js')
+    );
+    const normalizedArgs = virtualFileTools.normalizeVirtualFileToolArguments('apply_patch', {
+      target: { kind: 'skill', name: skillName },
+      patch
+    });
+    const payload = virtualFileTools.buildSkillRegistryFileActionPayloadFromVirtualFileAction(
+      'apply_patch',
+      normalizedArgs
+    );
+    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    const rawResult = await chrome.runtime.sendMessage({
+      type: 'SKILL_REGISTRY_ACTION',
+      tabId: typeof tab?.id === 'number' ? tab.id : null,
+      payload
+    });
+    if (rawResult?.success !== true) return rawResult;
+    const { success: _success, ...skillResult } = rawResult;
+    return {
+      success: true,
+      ...virtualFileTools.normalizeVirtualFileResultFromSkillRegistryAction(
+        'apply_patch',
+        skillResult,
+        normalizedArgs
+      )
+    };
+  }, { skillName: skillNameValue, patch: patchValue });
+}
+
 async function main() {
   const result = {
     startedAt: new Date().toISOString(),
@@ -298,57 +330,42 @@ async function main() {
 
     await sidebarFrame.locator('body').screenshot({ path: path.join(outputDir, 'skill-viewer.png') });
 
-    const runtimeFilePatched = await sidebarFrame.evaluate(async (skillNameValue) => {
-      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-      return await chrome.runtime.sendMessage({
-        type: 'SKILL_REGISTRY_ACTION',
-        tabId: typeof tab?.id === 'number' ? tab.id : null,
-        payload: {
-          action: 'apply_patch',
-          skill_name: skillNameValue,
-          patch: [
-            '*** Begin Patch',
-            '*** Add File: src/main.js',
-            '+return {',
-            '+  readSummary() {',
-            '+    return { title: document.title, href: location.href };',
-            '+  }',
-            '+};',
-            '*** End Patch'
-          ].join('\n')
-        }
-      });
-    }, skillName);
+    const runtimeFilePatched = await applySkillPatchThroughModelFacingRoute(
+      sidebarFrame,
+      skillName,
+      [
+        '*** Begin Patch',
+        '*** Add File: src/main.js',
+        '+return {',
+        '+  readSummary() {',
+        '+    return { title: document.title, href: location.href };',
+        '+  }',
+        '+};',
+        '*** End Patch'
+      ].join('\n')
+    );
     if (!runtimeFilePatched?.success || runtimeFilePatched?.ok !== true) {
       throw new Error(`add runtime file failed: ${JSON.stringify(runtimeFilePatched)}`);
     }
     result.steps.push('runtime_file_added');
 
-    const runtimeManifestPatched = await sidebarFrame.evaluate(async ({ skillNameValue, urlString }) => {
-      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-      const url = new URL(urlString);
-      return await chrome.runtime.sendMessage({
-        type: 'SKILL_REGISTRY_ACTION',
-        tabId: typeof tab?.id === 'number' ? tab.id : null,
-        payload: {
-          action: 'apply_patch',
-          skill_name: skillNameValue,
-          patch: [
-            '*** Begin Patch',
-            '*** Update File: manifest.json',
-            '@@',
-            '-  "match": [],',
-            '+  "match": [',
-            `+    "${url.origin}/*"`,
-            '+  ],',
-            '@@',
-            '-    "entry_path": null',
-            '+    "entry_path": "src/main.js"',
-            '*** End Patch'
-          ].join('\n')
-        }
-      });
-    }, { skillNameValue: skillName, urlString: targetUrl });
+    const runtimeManifestPatched = await applySkillPatchThroughModelFacingRoute(
+      sidebarFrame,
+      skillName,
+      [
+        '*** Begin Patch',
+        '*** Update File: manifest.json',
+        '@@',
+        '-  "match": [],',
+        '+  "match": [',
+        `+    "${new URL(targetUrl).origin}/*"`,
+        '+  ],',
+        '@@',
+        '-    "entry_path": null',
+        '+    "entry_path": "src/main.js"',
+        '*** End Patch'
+      ].join('\n')
+    );
     if (!runtimeManifestPatched?.success || runtimeManifestPatched?.ok !== true || runtimeManifestPatched?.skill?.kind !== 'page_runtime') {
       throw new Error(`patch runtime manifest failed: ${JSON.stringify(runtimeManifestPatched)}`);
     }

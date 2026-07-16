@@ -8,6 +8,11 @@ async function loadSkillManagerModule() {
   return import(pathToFileURL(filePath).href);
 }
 
+async function loadVirtualFileToolsModule() {
+  const filePath = path.resolve(__dirname, '../src/agent_tools/virtual_file_io/index.js');
+  return import(`${pathToFileURL(filePath).href}?test=${Date.now()}`);
+}
+
 function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
@@ -124,6 +129,11 @@ function buildLongSkillInput(name = 'long-dom-probe') {
 
 test('create/update/delete/enable/disable 会驱动 register/update/unregister 与当前文档 refresh', async () => {
   const { createSkillManager } = await loadSkillManagerModule();
+  const {
+    buildSkillRegistryFileActionPayloadFromVirtualFileAction,
+    normalizeVirtualFileResultFromSkillRegistryAction,
+    normalizeVirtualFileToolArguments
+  } = await loadVirtualFileToolsModule();
 
   const calls = {
     register: [],
@@ -216,17 +226,26 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   assert.doesNotMatch(readManifest.skill.file.content, /"name":/);
   assert.doesNotMatch(readManifest.skill.file.content, /"kind":/);
 
-  const addedFile = await manager.executeRegistryAction({
-    action: 'apply_patch',
-    skill_name: 'dom-probe',
+  const modelPatchArgs = normalizeVirtualFileToolArguments('apply_patch', {
+    target: { kind: 'skill', name: 'dom-probe' },
     patch: [
       '*** Begin Patch',
       '*** Add File: src/helpers/url.js',
       '+module.exports = { readUrl() { return location.href; } };',
       '*** End Patch'
     ].join('\n')
-  }, { tabId: 11 });
+  });
+  const addedFileRaw = await manager.executeRegistryAction(
+    buildSkillRegistryFileActionPayloadFromVirtualFileAction('apply_patch', modelPatchArgs),
+    { tabId: 11 }
+  );
+  const addedFile = normalizeVirtualFileResultFromSkillRegistryAction(
+    'apply_patch',
+    addedFileRaw,
+    modelPatchArgs
+  );
   assert.equal(addedFile.ok, true);
+  assert.deepEqual(addedFile.target, { kind: 'skill', name: 'dom-probe' });
   assert.equal(addedFile.files.total_count, 5);
   assert.deepEqual(addedFile.affected_files, {
     added: ['src/helpers/url.js'],
