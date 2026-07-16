@@ -43,6 +43,18 @@ test('message_processor 已把裸相对路径链接替换为文档卡片，并�
   assert.match(viewerSource, /conversation-document-attachments/);
 });
 
+test('message_processor 会把成功 apply_patch 修改的会话文件自动挂成预览卡片', async () => {
+  const source = await readWorkspaceFile('src/core/message_processor.js');
+  const summarySource = await readWorkspaceFile('src/utils/conversation_document_tool_summary.js');
+
+  assert.match(source, /buildConversationDocumentApplyPatchPreviewDescriptors/);
+  assert.match(source, /syncAssistantApplyPatchDocumentCards/);
+  assert.match(source, /conversation-document-auto-apply-patch-cards/);
+  assert.match(source, /requireSuccessfulOutput:\s*true/);
+  assert.match(summarySource, /isSuccessfulConversationDocumentApplyPatchOutput/);
+  assert.match(summarySource, /operation.*=== 'delete'/);
+});
+
 test('conversation_document_viewer 使用无边框图标按钮承载基础文档操作', async () => {
   const source = await readWorkspaceFile('src/utils/conversation_document_viewer.js');
 

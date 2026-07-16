@@ -224,3 +224,110 @@ test('顶层 apply_patch 在 skill target 下会显示首个文件与 diff 汇�
   });
   assert.equal(buildVirtualFilePrimaryText(record), '修改 src/main.js dom-probe · +2 · -1 · 另 1 个文件');
 });
+
+test('会话文档 apply_patch 成功后可提取自动预览卡片描述', async () => {
+  const {
+    buildConversationDocumentApplyPatchPreviewDescriptors
+  } = await loadModule();
+
+  const record = {
+    type: 'function_call',
+    name: 'apply_patch',
+    output: [
+      {
+        type: 'input_text',
+        text: 'Success. Updated the following files:\nM workspace/src/a.md\nA src/b.md\nD src/old.md'
+      }
+    ],
+    arguments: JSON.stringify({
+      patch: [
+        '*** Begin Patch',
+        '*** Update File: workspace/src/a.md',
+        '@@',
+        ' old',
+        '-old',
+        '+new',
+        '*** Add File: src/b.md',
+        '+hello',
+        '*** Delete File: src/old.md',
+        '*** End Patch'
+      ].join('\n')
+    })
+  };
+
+  assert.deepEqual(
+    buildConversationDocumentApplyPatchPreviewDescriptors(record, { requireSuccessfulOutput: true }),
+    [
+      { path: 'src/a.md', title: 'src/a.md', operation: 'update' },
+      { path: 'src/b.md', title: 'src/b.md', operation: 'add' }
+    ]
+  );
+});
+
+test('会话文档 apply_patch 自动预览会跳过失败输出和 skill target', async () => {
+  const {
+    buildConversationDocumentApplyPatchPreviewDescriptors
+  } = await loadModule();
+
+  const patch = [
+    '*** Begin Patch',
+    '*** Update File: src/main.js',
+    '@@',
+    ' old',
+    '+new',
+    '*** End Patch'
+  ].join('\n');
+
+  assert.deepEqual(
+    buildConversationDocumentApplyPatchPreviewDescriptors({
+      type: 'function_call',
+      name: 'apply_patch',
+      output: [{ type: 'input_text', text: 'Error: patch failed' }],
+      arguments: JSON.stringify({ patch })
+    }, { requireSuccessfulOutput: true }),
+    []
+  );
+
+  assert.deepEqual(
+    buildConversationDocumentApplyPatchPreviewDescriptors({
+      type: 'function_call',
+      name: 'apply_patch',
+      output: [{ type: 'input_text', text: 'Success. Updated the following files:\nM src/main.js' }],
+      arguments: JSON.stringify({
+        target: { kind: 'skill', name: 'dom-probe' },
+        patch
+      })
+    }, { requireSuccessfulOutput: true }),
+    []
+  );
+});
+
+test('会话文档 apply_patch 自动预览对 Move 使用新路径', async () => {
+  const {
+    buildConversationDocumentApplyPatchPreviewDescriptors
+  } = await loadModule();
+
+  const record = {
+    type: 'function_call',
+    name: 'apply_patch',
+    output: [{ type: 'input_text', text: 'Success. Updated the following files:\nM dst/new.md' }],
+    arguments: JSON.stringify({
+      patch: [
+        '*** Begin Patch',
+        '*** Update File: src/old.md',
+        '*** Move to: dst/new.md',
+        '@@',
+        ' old',
+        '+new',
+        '*** End Patch'
+      ].join('\n')
+    })
+  };
+
+  assert.deepEqual(
+    buildConversationDocumentApplyPatchPreviewDescriptors(record, { requireSuccessfulOutput: true }),
+    [
+      { path: 'dst/new.md', title: 'dst/new.md', operation: 'move' }
+    ]
+  );
+});

@@ -42,6 +42,7 @@ import {
   isSkillRegistryToolCall
 } from '../utils/response_activity_tool_summary.js';
 import {
+  buildConversationDocumentApplyPatchPreviewDescriptors,
   buildVirtualFilePrimaryText,
   buildVirtualFileSummaryParts,
   getVirtualFileToolTypeLabel,
@@ -280,8 +281,121 @@ export function createMessageProcessor(appContext) {
     return conversationDocumentViewer.createConversationDocumentCardFromLink(link);
   }
 
+  function createConversationDocumentCardFromDescriptor(descriptor) {
+    const rawPath = (typeof descriptor?.path === 'string') ? descriptor.path.trim() : '';
+    const path = normalizeConversationDocumentHrefPath(rawPath);
+    const rawTitle = (typeof descriptor?.title === 'string') ? descriptor.title.trim() : '';
+    return conversationDocumentViewer.createConversationDocumentCard({
+      path,
+      title: rawTitle || path,
+      conversationId: resolveCurrentConversationDocumentId()
+    });
+  }
+
   function installConversationDocumentChangeListener() {
     conversationDocumentViewer.installConversationDocumentChangeListener();
+  }
+
+  function buildAssistantApplyPatchDocumentPreviewDescriptors(responseTimeline) {
+    const descriptors = [];
+    const seenPaths = new Set();
+    const timeline = Array.isArray(responseTimeline) ? responseTimeline : [];
+    timeline.forEach((entry) => {
+      if (!entry || typeof entry !== 'object') return;
+      if (String(entry.kind || '').trim().toLowerCase() !== 'tool_call') return;
+      buildConversationDocumentApplyPatchPreviewDescriptors(entry, {
+        requireSuccessfulOutput: true
+      }).forEach((descriptor) => {
+        const path = (typeof descriptor?.path === 'string') ? descriptor.path.trim() : '';
+        if (!path || seenPaths.has(path)) return;
+        seenPaths.add(path);
+        descriptors.push(descriptor);
+      });
+    });
+    return descriptors;
+  }
+
+  function collectNonAutoConversationDocumentCardPaths(messageElement, autoHost) {
+    const paths = new Set();
+    if (!(messageElement instanceof HTMLElement)) return paths;
+    messageElement.querySelectorAll('.conversation-document-card[data-document-path]').forEach((card) => {
+      if (!(card instanceof HTMLElement)) return;
+      if (autoHost instanceof HTMLElement && autoHost.contains(card)) return;
+      if (card.closest('.conversation-document-attachments__expanded')) return;
+      const path = (card.getAttribute('data-document-path') || '').trim();
+      if (path) paths.add(path);
+    });
+    return paths;
+  }
+
+  function syncAssistantApplyPatchDocumentCards(messageWrapperDiv, responseTimeline) {
+    if (!(messageWrapperDiv instanceof HTMLElement)) return false;
+
+    let host = messageWrapperDiv.querySelector(':scope > .conversation-document-auto-apply-patch-cards');
+    const manualPaths = collectNonAutoConversationDocumentCardPaths(messageWrapperDiv, host);
+    const descriptors = buildAssistantApplyPatchDocumentPreviewDescriptors(responseTimeline)
+      .filter((descriptor) => {
+        const path = (typeof descriptor?.path === 'string') ? descriptor.path.trim() : '';
+        return path && !manualPaths.has(path);
+      });
+
+    if (descriptors.length <= 0) {
+      const hadHost = !!host;
+      if (host) host.remove();
+      conversationDocumentViewer.syncConversationDocumentAttachmentStrip(messageWrapperDiv);
+      return hadHost;
+    }
+
+    if (!host) {
+      host = document.createElement('div');
+      host.className = 'conversation-document-auto-apply-patch-cards';
+    }
+
+    const existingCardsByPath = new Map(
+      Array.from(host.querySelectorAll(':scope > .conversation-document-card[data-document-path]'))
+        .map((card) => [(card.getAttribute('data-document-path') || '').trim(), card])
+        .filter(([path]) => !!path)
+    );
+    const fragment = document.createDocumentFragment();
+    descriptors.forEach((descriptor) => {
+      const path = (typeof descriptor?.path === 'string') ? descriptor.path.trim() : '';
+      if (!path) return;
+      let card = existingCardsByPath.get(path) || null;
+      if (!card) {
+        try {
+          card = createConversationDocumentCardFromDescriptor(descriptor);
+        } catch (_) {
+          card = null;
+        }
+      }
+      if (!(card instanceof HTMLElement)) return;
+      card.dataset.autoApplyPatchPreview = 'true';
+      fragment.appendChild(card);
+    });
+
+    host.replaceChildren(fragment);
+    if (host.childElementCount <= 0) {
+      const hadHost = !!host.parentElement;
+      host.remove();
+      conversationDocumentViewer.syncConversationDocumentAttachmentStrip(messageWrapperDiv);
+      return hadHost;
+    }
+
+    const footer = messageWrapperDiv.querySelector(':scope > .api-footer');
+    if (host.parentElement !== messageWrapperDiv) {
+      if (footer) {
+        messageWrapperDiv.insertBefore(host, footer);
+      } else {
+        messageWrapperDiv.appendChild(host);
+      }
+    } else if (footer && host.nextElementSibling !== footer) {
+      messageWrapperDiv.insertBefore(host, footer);
+    } else if (!footer && messageWrapperDiv.lastElementChild !== host) {
+      messageWrapperDiv.appendChild(host);
+    }
+
+    conversationDocumentViewer.syncConversationDocumentAttachmentStrip(messageWrapperDiv);
+    return true;
   }
 
   function shouldRenderUserMessagesAsMarkdown() {
@@ -4866,6 +4980,7 @@ export function createMessageProcessor(appContext) {
       setupThoughtsDisplay(messageWrapperDiv, null, processMathAndMarkdown);
       setupResponseToolCallsDisplay(messageWrapperDiv, null);
       syncResponsesLocalCompactionDisplay(messageWrapperDiv, null);
+      syncAssistantApplyPatchDocumentCards(messageWrapperDiv, []);
       messageVirtualizer.scheduleUpdate(resolveMessageListContainer(messageWrapperDiv));
       return true;
     }
@@ -4888,6 +5003,7 @@ export function createMessageProcessor(appContext) {
       });
       setupThoughtsDisplay(messageWrapperDiv, null, processMathAndMarkdown);
       setupResponseToolCallsDisplay(messageWrapperDiv, null);
+      syncAssistantApplyPatchDocumentCards(messageWrapperDiv, []);
       messageVirtualizer.scheduleUpdate(resolveMessageListContainer(messageWrapperDiv));
       return true;
     }
@@ -4911,6 +5027,7 @@ export function createMessageProcessor(appContext) {
       setupThoughtsDisplay(messageWrapperDiv, legacyThoughtsRaw, processMathAndMarkdown);
       setupResponseToolCallsDisplay(messageWrapperDiv, null);
     }
+    syncAssistantApplyPatchDocumentCards(messageWrapperDiv, responseTimeline);
     // metadata 同步阶段只允许刷新 assistant 自身附加展示，
     // 绝不能顺手改外层聊天容器的 scrollTop。
     // 否则 reasoning / tool timeline 的高度波动会把整个对话列表错误地滚动到旧消息。

@@ -29,6 +29,66 @@ function parseArgumentsObject(rawArguments) {
   }
 }
 
+function collectOutputTextParts(value, parts = []) {
+  if (value == null) return parts;
+  if (typeof value === 'string') {
+    const text = value.trim();
+    if (!text) return parts;
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed !== value) {
+        collectOutputTextParts(parsed, parts);
+        return parts;
+      }
+    } catch (_) {}
+    parts.push(text);
+    return parts;
+  }
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectOutputTextParts(item, parts));
+    return parts;
+  }
+  if (typeof value === 'object') {
+    if (typeof value.ok === 'boolean') {
+      parts.push(`ok: ${value.ok ? 'true' : 'false'}`);
+    }
+    for (const key of ['text', 'output_text', 'content', 'value', 'error']) {
+      if (typeof value[key] === 'string' && value[key].trim()) {
+        parts.push(value[key].trim());
+      }
+    }
+  }
+  return parts;
+}
+
+function collectOutputText(value) {
+  return collectOutputTextParts(value)
+    .map((part) => normalizeSummaryText(part))
+    .filter(Boolean)
+    .join('\n');
+}
+
+function isApplyPatchToolName(toolName) {
+  return normalizeSummaryText(toolName) === VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME;
+}
+
+function resolvePreviewDocumentPath(file, target) {
+  if (!file || typeof file !== 'object') return '';
+  if (String(file.operation || '').trim().toLowerCase() === 'delete') return '';
+  return normalizeSummaryPathForTarget(file.movePath || file.path, target);
+}
+
+export function isSuccessfulConversationDocumentApplyPatchOutput(rawOutput) {
+  const text = collectOutputText(rawOutput);
+  if (!text) return false;
+  if (/^\s*Error:/im.test(text)) return false;
+  if (/\bPatch failed\b/i.test(text)) return false;
+  if (/\b["']?ok["']?\s*[:=]\s*false\b/i.test(text)) return false;
+  return /^\s*Success\./im.test(text)
+    || /^\s*Patch applied successfully\./im.test(text)
+    || /\b["']?ok["']?\s*[:=]\s*true\b/i.test(text);
+}
+
 function joinSummaryMeta(parts) {
   return parts
     .map((part) => normalizeSummaryText(part))
@@ -232,6 +292,39 @@ export function buildVirtualFilePrimaryText(record, options = {}) {
     .map((part) => normalizeSummaryText(part))
     .filter(Boolean)
     .join(' ');
+}
+
+export function buildConversationDocumentApplyPatchPreviewDescriptors(record, options = {}) {
+  if (!isVirtualFileToolCall(record)) return [];
+  if (!isApplyPatchToolName(record?.name)) return [];
+  if (
+    options?.requireSuccessfulOutput === true
+    && !isSuccessfulConversationDocumentApplyPatchOutput(record?.output)
+  ) {
+    return [];
+  }
+
+  const args = parseArgumentsObject(record?.arguments);
+  const target = resolveVirtualFileTarget(args);
+  if (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL) return [];
+
+  const preview = buildVirtualFileApplyPatchPreview(args);
+  const files = Array.isArray(preview?.files) ? preview.files : [];
+  if (files.length <= 0) return [];
+
+  const descriptors = [];
+  const seenPaths = new Set();
+  files.forEach((file) => {
+    const path = resolvePreviewDocumentPath(file, target);
+    if (!path || seenPaths.has(path)) return;
+    seenPaths.add(path);
+    descriptors.push({
+      path,
+      title: path,
+      operation: file.operation || 'update'
+    });
+  });
+  return descriptors;
 }
 
 export function isConversationDocumentToolCall(record) {
