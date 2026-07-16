@@ -3962,8 +3962,11 @@ export function createMessageProcessor(appContext) {
       item.appendChild(details);
       bindStableToggleDetails(details, item);
       summary.addEventListener('click', (event) => {
-        if (details.dataset.hasDetails === 'true') return;
         event.preventDefault();
+        if (details.dataset.hasDetails !== 'true') return;
+        // stable Chrome 在嵌套活动面板中偶尔不会执行原生 <details> 的可信点击默认动作。
+        // 显式切换 open 可让真实鼠标、键盘合成 click 与浏览器回归保持同一确定行为。
+        details.open = !details.open;
       });
     }
 

@@ -391,15 +391,50 @@ async function readDomSnapshot(sidebarFrame) {
 }
 
 async function expandStreamErrorDetails(messageLocator, expectedText) {
+  await waitFor(async () => {
+    return await messageLocator.evaluate((element) => (
+      !element.classList.contains('updating')
+      && !element.classList.contains('regenerating')
+      && !element.classList.contains('loading-message')
+    )) ? true : null;
+  }, { timeoutMs: 5_000, intervalMs: 50, label: `assistant message settled: ${expectedText}` });
+  await sleep(180);
   const timeline = messageLocator.locator('.response-activity-timeline');
   if (await timeline.count()) {
     const expanded = await timeline.evaluate((element) => element.classList.contains('is-expanded'));
     if (!expanded) {
       await timeline.locator(':scope > .response-activity-panel-toggle').click();
+      await waitFor(async () => {
+        return await timeline.evaluate((element) => element.classList.contains('is-expanded')) ? true : null;
+      }, { timeoutMs: 5_000, intervalMs: 50, label: 'response activity panel expanded' });
     }
   }
   const entry = messageLocator.locator('.response-activity-entry--stream-error').filter({ hasText: expectedText }).last();
-  await entry.locator('.response-activity-stream-error-summary').click();
+  await entry.waitFor({ state: 'visible', timeout: 5_000 });
+  await entry.scrollIntoViewIfNeeded();
+  await sleep(120);
+  const details = entry.locator('.response-activity-stream-error');
+  const isOpen = await details.evaluate((element) => element.open === true);
+  if (!isOpen) {
+    await entry.locator('.response-activity-stream-error-summary').click();
+    try {
+      await waitFor(async () => {
+        return await details.evaluate((element) => element.open === true) ? true : null;
+      }, { timeoutMs: 5_000, intervalMs: 50, label: `stream error details open: ${expectedText}` });
+    } catch (error) {
+      const diagnostic = await entry.evaluate((element) => {
+        const detailsElement = element.querySelector(':scope > .response-activity-stream-error');
+        return {
+          entryKey: element.dataset.responseActivityEntryKey || '',
+          open: detailsElement?.open === true,
+          hasDetails: detailsElement?.dataset?.hasDetails || '',
+          summaryText: element.querySelector('.response-activity-stream-error-text')?.textContent || '',
+          detailsText: element.querySelector('.response-activity-stream-error-details-text')?.textContent || ''
+        };
+      }).catch(() => null);
+      throw new Error(`${error.message}; diagnostic=${JSON.stringify(diagnostic)}`);
+    }
+  }
   return await entry.locator('.response-activity-stream-error-details-text').innerText();
 }
 

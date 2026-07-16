@@ -33,6 +33,7 @@ test('预正文消息使用独立状态层渲染，并在删除时先中止对�
   assert.match(messageProcessorSource, /reconcileResponseActivityStreamErrorEntry/);
   assert.match(messageProcessorSource, /response-activity-stream-error-details/);
   assert.match(messageProcessorSource, /bindStableToggleDetails\(details, item\)/);
+  assert.match(messageProcessorSource, /event\.preventDefault\(\);[\s\S]*?details\.open = !details\.open/);
   assert.match(messageProcessorSource, /syncResponseActivityPanelStatus/);
   assert.match(messageProcessorSource, /resolveResponseActivityPanelStatusState/);
   assert.match(messageProcessorSource, /setResponseActivityPanelExpandedState/);
