@@ -92,6 +92,24 @@ test('deriveAssistantPreResponseStatusFromResponsesSse 会把 SSE 事件收敛�
   );
 });
 
+test('Responses retry 状态使用 Codex 风格重连标题并保留具体原因', async () => {
+  const { deriveAssistantPreResponseStatusFromLocalStage } = await loadAssistantPreResponseStatusModule();
+
+  assert.deepEqual(
+    deriveAssistantPreResponseStatusFromLocalStage('responses_retry_wait', {
+      retryAttempt: 2,
+      maxRetries: 10,
+      retryDetail: 'stream closed before response.completed'
+    }),
+    {
+      text: '连接中断，正在重新连接... 2/10',
+      stage: 'responses_retry_wait',
+      note: 'stream closed before response.completed',
+      showSpinner: true
+    }
+  );
+});
+
 test('normalizeAssistantPreResponseStatus 会过滤空文案并规范化字段', async () => {
   const { normalizeAssistantPreResponseStatus } = await loadAssistantPreResponseStatusModule();
 

@@ -140,6 +140,7 @@ import {
   resolvePageToolEnvironment
 } from '../agent_tools/shared/page_tool_environment.js';
 import {
+  buildResponsesRetryStatusText,
   createAssistantPreResponseStatus,
   deriveAssistantPreResponseStatusFromLocalStage,
   deriveAssistantPreResponseStatusFromRequestEvent,
@@ -1117,6 +1118,9 @@ export function createMessageSender(appContext) {
     error.name = 'ResponsesApiRecoverableError';
     error.isResponsesApiRecoverable = true;
     error.responsesRetryReason = options?.reason || 'recoverable';
+    if (Number.isFinite(Number(options?.retryAfterMs))) {
+      error.responsesRetryAfterMs = Math.max(0, Math.round(Number(options.retryAfterMs)));
+    }
     if (options?.cause) {
       try { error.cause = options.cause; } catch (_) {}
     }
@@ -1139,7 +1143,8 @@ export function createMessageSender(appContext) {
     const classification = classifyResponsesApiErrorPayload(payload, options);
     if (classification.retryable) {
       return createResponsesRecoverableError(message, {
-        reason: classification.reason
+        reason: classification.reason,
+        retryAfterMs: classification.retryAfterMs
       });
     }
     if (classification.fatal) {
@@ -1174,11 +1179,40 @@ export function createMessageSender(appContext) {
 
   function restoreResponsesRetryBaseline(attemptState, baseline) {
     if (!attemptState || !baseline) return;
+    const timeline = Array.isArray(baseline.timeline) ? baseline.timeline : [];
+    const inputItems = Array.isArray(baseline.inputItems) ? baseline.inputItems : [];
     syncAttemptResponsesRuntimeState(attemptState, {
-      timeline: Array.isArray(baseline.timeline) ? baseline.timeline : [],
-      inputItems: Array.isArray(baseline.inputItems) ? baseline.inputItems : [],
+      timeline,
+      inputItems,
       assistantPhase: baseline.assistantPhase || null,
       responseId: baseline.responseId || null
+    });
+    const appliedToAssistantNode = applyResponsesActivityTimelineToAttempt(attemptState, timeline);
+    if (!appliedToAssistantNode) {
+      previewResponsesActivityTimelineOnLoadingMessage(attemptState, timeline);
+    }
+    applyResponsesInputItemsToAttempt(attemptState, inputItems);
+  }
+
+  function createResponsesStreamErrorEntryForAttempt(attemptState, error, options = {}) {
+    const nextSerial = Number.isFinite(Number(attemptState?.responsesStreamErrorSerial))
+      ? Math.max(0, Math.floor(Number(attemptState.responsesStreamErrorSerial))) + 1
+      : 1;
+    if (attemptState) {
+      attemptState.responsesStreamErrorSerial = nextSerial;
+    }
+    const retryAttempt = Number(options?.retryAttempt);
+    const maxRetries = Number(options?.maxRetries);
+    const retryDelayMs = Number(options?.retryDelayMs);
+    const statusText = options?.text || buildResponsesRetryStatusText(retryAttempt, maxRetries);
+    const details = toDisplayableErrorText(error?.message || error, 1200)
+      || 'Responses stream disconnected';
+    return createResponsesStreamErrorTimelineEntry(statusText, details, {
+      id: `responses_stream_error:${attemptState?.id || 'attempt'}:${nextSerial}`,
+      status: options?.status || 'handled',
+      retryAttempt,
+      maxRetries,
+      retryDelayMs
     });
   }
 
@@ -1340,6 +1374,21 @@ export function createMessageSender(appContext) {
     });
   }
 
+  function createResponsesStreamErrorTimelineEntry(text, additionalDetails, options = {}) {
+    const content = normalizeResponsesCommentaryText(text);
+    if (!content) return null;
+    return normalizeResponsesActivityTimelineEntry({
+      kind: 'stream_error',
+      id: options.id || 'stream_error',
+      status: options.status || 'handled',
+      text: content,
+      additionalDetails: normalizeResponsesCommentaryText(additionalDetails),
+      retryAttempt: options.retryAttempt,
+      maxRetries: options.maxRetries,
+      retryDelayMs: options.retryDelayMs
+    });
+  }
+
   function preferResponsesCommentaryTimeline(timeline) {
     const normalizedList = Array.isArray(timeline) ? timeline : [];
     const hasCommentary = normalizedList.some(entry => entry?.kind === 'commentary');
@@ -1398,6 +1447,27 @@ export function createMessageSender(appContext) {
       if (id) normalized.id = id;
       if (status) normalized.status = status;
       return normalized;
+    }
+    if (kind === 'stream_error') {
+      const text = normalizeResponsesCommentaryText((typeof entry.text === 'string') ? entry.text : '');
+      if (!text) return null;
+      const normalized = compactResponsesMetaValue({
+        kind: 'stream_error',
+        id: (typeof entry.id === 'string' && entry.id.trim()) ? entry.id.trim() : '',
+        status: (typeof entry.status === 'string' && entry.status.trim()) ? entry.status.trim() : 'handled',
+        text,
+        additionalDetails: normalizeResponsesCommentaryText(entry.additionalDetails),
+        retryAttempt: Number.isFinite(Number(entry.retryAttempt))
+          ? Math.max(0, Math.floor(Number(entry.retryAttempt)))
+          : undefined,
+        maxRetries: Number.isFinite(Number(entry.maxRetries))
+          ? Math.max(0, Math.floor(Number(entry.maxRetries)))
+          : undefined,
+        retryDelayMs: Number.isFinite(Number(entry.retryDelayMs))
+          ? Math.max(0, Math.round(Number(entry.retryDelayMs)))
+          : undefined
+      });
+      return (normalized && typeof normalized === 'object' && !Array.isArray(normalized)) ? normalized : null;
     }
     if (kind === 'tool_call') {
       const normalized = compactResponsesMetaValue({
@@ -10066,12 +10136,14 @@ export function createMessageSender(appContext) {
           payload = JSON.parse(error);
         } catch (_) {}
         const classification = classifyResponsesApiErrorPayload(payload, {
-          httpStatus: response.status
+          httpStatus: response.status,
+          retryAfterHeader: response.headers?.get?.('retry-after') || ''
         });
         const message = `API错误 (${response.status}): ${error}`;
         if (classification.retryable) {
           throw createResponsesRecoverableError(message, {
-            reason: classification.reason
+            reason: classification.reason,
+            retryAfterMs: classification.retryAfterMs
           });
         }
         if (classification.fatal) {
@@ -10125,16 +10197,20 @@ export function createMessageSender(appContext) {
     let lastHandleResult = null;
 
     while (true) {
-      const responsesRetryBaseline = captureResponsesRetryBaseline(attemptState);
+      // 每个 sampling request 都冻结一份请求体；同一 hop 的所有恢复性重试只克隆并重发这份快照。
+      // 这样既不会把失败流中的半截 output 混进下一次请求，也避免发送层未来出现原地修改时造成漂移。
+      const requestBodySnapshot = cloneDataSafely(currentRequestBody) || currentRequestBody;
+      let responsesRetryBaseline = captureResponsesRetryBaseline(attemptState);
       const responsesMaxRetries = isOpenAIResponsesApiConfig(usedApiConfig)
         ? DEFAULT_RESPONSES_API_MAX_RETRIES
         : 0;
       let responsesRetryCount = 0;
+      const handledStreamErrors = [];
 
       while (true) {
         try {
           const response = await sendApiRequestForAttempt({
-            requestBody: currentRequestBody,
+            requestBody: cloneDataSafely(requestBodySnapshot) || requestBodySnapshot,
             usedApiConfig,
             signal,
             loadingMessage,
@@ -10143,6 +10219,10 @@ export function createMessageSender(appContext) {
 
           if (Array.isArray(attemptState?.pendingSteersStagedForFollowUp) && attemptState.pendingSteersStagedForFollowUp.length > 0) {
             await commitStagedPendingSteersForFollowUp(attemptState);
+            // response headers 到达后，staged steer 已被正式提交到本轮历史。若随后正文流中断，
+            // retry baseline 必须从“提交后”重新捕获；否则回滚会删掉 steer input，而 staged
+            // 队列已经清空，成功重试后也没有机会再次补回。
+            responsesRetryBaseline = captureResponsesRetryBaseline(attemptState);
           }
 
           const requestedResponseHandlingMode = resolveResponseHandlingMode({
@@ -10163,32 +10243,55 @@ export function createMessageSender(appContext) {
             : await handleNonStreamResponse(response, loadingMessage, usedApiConfig, attemptState);
           break;
         } catch (error) {
-          if (!shouldRetryResponsesLifecycleError(error, usedApiConfig) || responsesRetryCount >= responsesMaxRetries) {
+          const canRetryResponsesError = shouldRetryResponsesLifecycleError(error, usedApiConfig);
+          if (!canRetryResponsesError) {
+            throw error;
+          }
+          if (responsesRetryCount >= responsesMaxRetries) {
+            error.responsesRetriesExhausted = true;
+            error.responsesRetryCount = responsesRetryCount;
+            error.responsesMaxRetries = responsesMaxRetries;
+            error.skipConversationAutoRetry = true;
             throw error;
           }
 
           responsesRetryCount += 1;
-          restoreResponsesRetryBaseline(attemptState, responsesRetryBaseline);
-          const retryDelayMs = buildResponsesRetryDelayMs(responsesRetryCount);
+          const retryDelayMs = buildResponsesRetryDelayMs(responsesRetryCount, {
+            retryAfterMs: error?.responsesRetryAfterMs
+          });
+          const handledStreamError = createResponsesStreamErrorEntryForAttempt(attemptState, error, {
+            retryAttempt: responsesRetryCount,
+            maxRetries: responsesMaxRetries,
+            retryDelayMs
+          });
+          if (handledStreamError) {
+            handledStreamErrors.push(handledStreamError);
+          }
+          restoreResponsesRetryBaseline(attemptState, {
+            ...(responsesRetryBaseline || {}),
+            timeline: mergeResponsesActivityTimeline(
+              responsesRetryBaseline?.timeline || [],
+              handledStreamErrors
+            )
+          });
           console.warn(
             `Responses API 流程错误，准备重试 ${responsesRetryCount}/${responsesMaxRetries}，等待 ${retryDelayMs}ms：`,
             error
           );
           const retryStatusTarget = resolveLiveLoadingStatusElement(loadingMessage, attemptState) || loadingMessage || null;
-          if (normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) == null) {
-            syncAttemptPreResponseStatusFromLocalStage(
-              retryStatusTarget,
-              attemptState,
-              'responses_retry_wait',
-              {
-                retryAttempt: responsesRetryCount,
-                maxRetries: responsesMaxRetries,
-                retryDelayMs,
-                apiBase: usedApiConfig?.baseUrl || '',
-                modelName: usedApiConfig?.modelName || ''
-              }
-            );
-          }
+          syncAttemptPreResponseStatusFromLocalStage(
+            retryStatusTarget,
+            attemptState,
+            'responses_retry_wait',
+            {
+              retryAttempt: responsesRetryCount,
+              maxRetries: responsesMaxRetries,
+              retryDelayMs,
+              retryDetail: handledStreamError?.additionalDetails || error?.message || '',
+              apiBase: usedApiConfig?.baseUrl || '',
+              modelName: usedApiConfig?.modelName || ''
+            }
+          );
           updateAttemptRuntimeState(attemptState, (draft) => {
             draft.activeTurn.status = 'retrying';
           });
@@ -10283,7 +10386,7 @@ export function createMessageSender(appContext) {
       }
 
       currentRequestBody = buildResponsesFunctionToolFollowUpRequest(
-        currentRequestBody,
+        requestBodySnapshot,
         replayOutputItemsForFollowUp,
         functionCallOutputs,
         pendingSteerInputItemsForFollowUp
@@ -11483,6 +11586,7 @@ export function createMessageSender(appContext) {
 
       const canAutoRetry = (
         autoRetryEnabled
+        && error?.skipConversationAutoRetry !== true
         && normalizedConversationJobKind === 'append_user_message'
         && normalizedConversationRetryPolicy.enabled
         && autoRetryAttempt < (normalizedConversationRetryPolicy.maxAttempts - 1)
@@ -11529,11 +11633,24 @@ export function createMessageSender(appContext) {
       const detail = (typeof error?.message === 'string' && error.message.trim().length > 0)
         ? error.message.trim()
         : '发生未知错误';
-      const prefix = autoRetryEnabled
-        ? `自动重试失败 (${MAX_AUTO_RETRY_ATTEMPTS} 次): `
-        : isAbortError
-          ? '请求中断: '
-          : '发送失败: ';
+      const responsesRetriesExhausted = error?.responsesRetriesExhausted === true;
+      const responsesRetryCount = Number.isFinite(Number(error?.responsesRetryCount))
+        ? Math.max(0, Math.floor(Number(error.responsesRetryCount)))
+        : DEFAULT_RESPONSES_API_MAX_RETRIES;
+      const conversationAutoRetryExhausted = (
+        autoRetryEnabled
+        && error?.skipConversationAutoRetry !== true
+        && normalizedConversationJobKind === 'append_user_message'
+        && normalizedConversationRetryPolicy.enabled
+        && autoRetryAttempt >= (normalizedConversationRetryPolicy.maxAttempts - 1)
+      );
+      const prefix = responsesRetriesExhausted
+        ? `Responses 连接重试失败 (${responsesRetryCount} 次): `
+        : conversationAutoRetryExhausted
+          ? `自动重试失败 (${normalizedConversationRetryPolicy.maxAttempts} 次): `
+          : isAbortError
+            ? '请求中断: '
+            : '发送失败: ';
       const errorMessageText = `${prefix}${detail}`;
 
       let messageElement = null;
@@ -11606,8 +11723,13 @@ export function createMessageSender(appContext) {
         }
       }
 
-      if (autoRetryEnabled && typeof showNotification === 'function') {
-        // 错误：重试达到上限
+      if (responsesRetriesExhausted && typeof showNotification === 'function') {
+        showNotification({
+          message: `Responses 连接重试失败，已达到最大重试次数 (${responsesRetryCount})`,
+          type: 'error'
+        });
+      } else if (conversationAutoRetryExhausted && typeof showNotification === 'function') {
+        // 错误：消息级自动重试达到上限
         showNotification({
           message: `自动重试失败，已达到最大尝试次数 (${normalizedConversationRetryPolicy.maxAttempts})`,
           type: 'error'
@@ -12305,7 +12427,11 @@ export function createMessageSender(appContext) {
   async function handleStreamResponse(response, loadingMessage, usedApiConfig, attemptState) {
     captureAttemptConversationContext(attemptState);
     const resolveLoadingStatusTarget = () => resolveLiveLoadingStatusElement(loadingMessage, attemptState);
-    const canStillUpdateLoadingStatus = () => normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) == null;
+    const canStillUpdateLoadingStatus = () => {
+      if (normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) == null) return true;
+      if (!isOpenAIResponsesApiConfig(usedApiConfig)) return false;
+      return getAttemptRuntimeSnapshot(attemptState)?.activeTurn?.hasVisibleAnswerStarted !== true;
+    };
     // 流式场景：此时已拿到响应头，但正文 token 尚未到达。
     // 在首个 token 到达前维持占位消息，并展示“等待首 token”的细粒度状态。
     {
@@ -12788,34 +12914,71 @@ export function createMessageSender(appContext) {
       }
     };
 
-	    while (true) {
-	      const { done, value } = await reader.read();
-	      if (done) {
-        // 处理缓冲区中最后一行未以换行结尾的数据
-        if (incomingDataBuffer.length > 0) {
-          await processLine(incomingDataBuffer);
-          incomingDataBuffer = '';
+	    let responsesStreamFailure = null;
+      const cancelPendingStreamRender = () => {
+        // 本 hop 向外抛错并准备回滚时，必须先取消仍在排队的 DOM/元数据更新。
+        // 否则旧流的节流 timer 可能在 baseline 恢复后再次落地，把失败 hop 的半截状态
+        // 写回消息节点与 runtime，污染下一次“同请求”重试。
+        try { uiUpdateThrottler.cancel(); } catch (_) {}
+        if (attemptState?.uiUpdateThrottler === uiUpdateThrottler) {
+          attemptState.uiUpdateThrottler = null;
         }
-        // 如果还有未处理完的事件行，作为最后一个事件再处理一次
-        if (currentEventDataLines.length > 0) {
-          await processEvent();
+      };
+      try {
+	      while (true) {
+	        const { done, value } = await reader.read();
+	        if (done) {
+          // 处理缓冲区中最后一行未以换行结尾的数据
+          if (incomingDataBuffer.length > 0) {
+            await processLine(incomingDataBuffer);
+            incomingDataBuffer = '';
+          }
+          // 如果还有未处理完的事件行，作为最后一个事件再处理一次
+          if (currentEventDataLines.length > 0) {
+            await processEvent();
+          }
+	          break;
+	        }
+
+        incomingDataBuffer += decoder.decode(value, { stream: true });
+
+        let lineEndIndex;
+        while ((lineEndIndex = incomingDataBuffer.indexOf('\n')) >= 0) {
+          const line = incomingDataBuffer.substring(0, lineEndIndex);
+          incomingDataBuffer = incomingDataBuffer.substring(lineEndIndex + 1);
+	          await processLine(line);
+	        }
+	      }
+      } catch (error) {
+        if (error?.name === 'AbortError' || !isOpenAIResponsesStream) {
+          cancelPendingStreamRender();
+          throw error;
         }
-	        break;
-	      }
-
-      incomingDataBuffer += decoder.decode(value, { stream: true });
-
-      let lineEndIndex;
-      while ((lineEndIndex = incomingDataBuffer.indexOf('\n')) >= 0) {
-        const line = incomingDataBuffer.substring(0, lineEndIndex);
-        incomingDataBuffer = incomingDataBuffer.substring(lineEndIndex + 1);
-	        await processLine(line);
-	      }
-	    }
+        if (hasOpenAIResponsesTerminalEvent) {
+          console.warn('Responses stream failed after response.completed; ignoring trailing transport error.', error);
+        } else {
+          const failureAction = resolveResponsesStreamClosureAction({
+            hasTerminalEvent: false,
+            hasStartedResponse: streamRenderState.hasStartedResponse,
+            hasRenderedAssistantMessage: !!currentAiMessageId,
+            hasVisibleAnswerContent: streamRenderState.hasEverShownAnswerContent
+              || ((typeof aiResponse === 'string') && aiResponse.trim() !== '')
+              || latestResponsesAnswerImages.length > 0
+          });
+          // final 一旦已经对用户可见，任何非主动取消的流中断都必须保留当前回答并停止。
+          // 这里不能再依赖“错误是否可重试”的分类：浏览器底层网络错误、解码异常或供应商
+          // 返回的陌生错误文本都可能不命中分类器，但仍不应把已经展示的 final 清空。
+          if (failureAction !== 'preserve_partial') {
+            cancelPendingStreamRender();
+            throw error;
+          }
+          responsesStreamFailure = error;
+        }
+      }
 
       const responsesStreamClosureAction = isOpenAIResponsesStream
         ? resolveResponsesStreamClosureAction({
-            hasTerminalEvent: hasOpenAIResponsesTerminalEvent,
+            hasTerminalEvent: hasOpenAIResponsesTerminalEvent && !responsesStreamFailure,
             hasStartedResponse: streamRenderState.hasStartedResponse,
             hasRenderedAssistantMessage: !!currentAiMessageId,
             hasVisibleAnswerContent: streamRenderState.hasEverShownAnswerContent
@@ -12825,13 +12988,26 @@ export function createMessageSender(appContext) {
         : 'complete';
 
       if (responsesStreamClosureAction === 'retry') {
+        cancelPendingStreamRender();
         throw createResponsesRecoverableError(
           'Responses stream closed before response.completed',
           { reason: 'stream_closed_before_completed' }
         );
       }
       if (responsesStreamClosureAction === 'preserve_partial') {
-        console.warn('Responses stream closed before response.completed after visible output; preserving partial assistant response.');
+        const interruptionError = responsesStreamFailure
+          || new Error('Responses stream closed before response.completed');
+        const interruptionEntry = createResponsesStreamErrorEntryForAttempt(attemptState, interruptionError, {
+          text: '连接中断，已保留当前回答',
+          status: 'stopped'
+        });
+        if (interruptionEntry) {
+          latestResponsesActivityTimeline = mergeResponsesActivityTimeline(
+            latestResponsesActivityTimeline,
+            [interruptionEntry]
+          );
+        }
+        console.warn('Responses stream interrupted after final output started; preserving partial assistant response.', interruptionError);
         showNotification?.({
           message: '连接在回答结束前中断，已保留当前已收到的部分回答',
           type: 'warning',
@@ -13014,6 +13190,12 @@ export function createMessageSender(appContext) {
         const readableError = eventPreview
           ? `流式事件解析失败：${parseErrorText}；事件数据片段：${eventPreview}`
           : `流式事件解析失败：${parseErrorText}`;
+        if (isOpenAIResponsesStream) {
+          throw createResponsesRecoverableError(readableError, {
+            reason: 'stream_parse',
+            cause: e
+          });
+        }
         throw new Error(readableError);
       }
 
@@ -13661,24 +13843,55 @@ export function createMessageSender(appContext) {
     let responsesInputItems = cloneResponsesReplayOutputItems(previousResponsesInputItems);
     let responsesOutputItems = null;
     let responsesAnswerImages = [];
+    const isGeminiApi = isGeminiApiResponse(response, usedApiConfig);
+    const isConfiguredResponsesApi = !isGeminiApi
+      && isOpenAIResponsesApiResponse(response, usedApiConfig);
+    let responseText = '';
     let json = null;
     try {
-      json = await response.json();
+      responseText = await response.text();
+      json = JSON.parse(responseText);
     } catch (e) {
-      const text = await response.text().catch(() => '');
-      throw new Error(text || '解析响应失败');
+      if (isConfiguredResponsesApi) {
+        const detail = toDisplayableErrorText(e?.message || e, 300) || '未知 JSON 解析错误';
+        throw createResponsesRecoverableError(
+          responseText
+            ? `Responses API 响应解析失败：${detail}；响应片段：${toDisplayableErrorText(responseText, 500)}`
+            : `Responses API 响应解析失败：${detail}`,
+          { reason: 'response_json_parse', cause: e }
+        );
+      }
+      throw new Error(responseText || '解析响应失败');
     }
     const responseUsageMeta = normalizeApiUsageMeta(json?.usage || json?.response?.usage);
 
-    // 错误处理（通用）
-    if (json && json.error) {
+    const isResponsesApi = !isGeminiApi
+      && (isConfiguredResponsesApi || isOpenAIResponsesPayload(json));
+    if (isResponsesApi) {
+      const responseStatus = String(json?.status || json?.response?.status || '').trim().toLowerCase();
+      const isFailedResponse = responseStatus === 'failed';
+      const isIncompleteResponse = responseStatus === 'incomplete';
+      if (json?.error || json?.response?.error || isFailedResponse || isIncompleteResponse) {
+        const payloadError = json?.error
+          || json?.response?.error
+          || json?.incomplete_details
+          || json?.response?.incomplete_details
+          || json;
+        throw buildResponsesStreamErrorFromPayload(
+          payloadError,
+          isIncompleteResponse
+            ? 'OpenAI Responses returned an incomplete response'
+            : 'OpenAI Responses returned a failed response',
+          {
+            eventType: isIncompleteResponse ? 'response.incomplete' : 'response.failed'
+          }
+        );
+      }
+    } else if (json && json.error) {
+      // 错误处理（Gemini / Chat Completions 兼容）
       const msg = json.error.message || 'API 返回错误';
       throw new Error(msg);
     }
-
-    const isGeminiApi = isGeminiApiResponse(response, usedApiConfig);
-    const isResponsesApi = !isGeminiApi
-      && (isOpenAIResponsesApiResponse(response, usedApiConfig) || isOpenAIResponsesPayload(json));
     const buildCurrentNonStreamAnswerContent = () => (
       isResponsesApi
         ? buildAssistantContentWithGeneratedImages(answer || '', responsesAnswerImages)

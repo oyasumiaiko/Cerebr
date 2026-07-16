@@ -3357,6 +3357,20 @@ export function createMessageProcessor(appContext) {
 
   function buildResponseActivityEntrySnapshot(entry, index, processMathAndMarkdownFn, isThinkingRuntimeActive) {
     const key = getResponseActivityEntrySnapshotKey(entry, index);
+    if (entry.kind === 'stream_error') {
+      const text = (typeof entry.text === 'string') ? entry.text.trim() : '';
+      const additionalDetails = (typeof entry.additionalDetails === 'string')
+        ? entry.additionalDetails.trim()
+        : '';
+      return {
+        key,
+        entryKind: 'stream_error',
+        text,
+        additionalDetails,
+        hasDetails: !!additionalDetails,
+        signature: JSON.stringify({ text, additionalDetails })
+      };
+    }
     if (entry.kind === 'reasoning_summary' || entry.kind === 'commentary' || entry.kind === 'steer') {
       const rawText = (typeof entry.text === 'string') ? entry.text : '';
       const normalizedText = entry.kind === 'reasoning_summary'
@@ -3915,6 +3929,56 @@ export function createMessageProcessor(appContext) {
     );
   }
 
+  function reconcileResponseActivityStreamErrorEntry(item, snapshot) {
+    item.className = 'response-activity-entry response-activity-entry--stream-error';
+    let details = item.querySelector(':scope > .response-activity-stream-error');
+    if (!details) {
+      details = document.createElement('details');
+      details.className = 'response-activity-stream-error';
+
+      const summary = document.createElement('summary');
+      summary.className = 'response-activity-stream-error-summary';
+
+      const text = document.createElement('span');
+      text.className = 'response-activity-stream-error-text';
+      summary.appendChild(text);
+
+      const chevron = document.createElement('i');
+      chevron.className = 'fa-solid fa-chevron-down response-activity-stream-error-chevron';
+      chevron.setAttribute('aria-hidden', 'true');
+      summary.appendChild(chevron);
+
+      const body = document.createElement('div');
+      body.className = 'response-activity-stream-error-details';
+      const prefix = document.createElement('span');
+      prefix.className = 'response-activity-stream-error-details-prefix';
+      prefix.textContent = '└';
+      body.appendChild(prefix);
+      const detailsText = document.createElement('span');
+      detailsText.className = 'response-activity-stream-error-details-text';
+      body.appendChild(detailsText);
+
+      details.append(summary, body);
+      item.appendChild(details);
+      bindStableToggleDetails(details, item);
+      summary.addEventListener('click', (event) => {
+        if (details.dataset.hasDetails === 'true') return;
+        event.preventDefault();
+      });
+    }
+
+    details.dataset.hasDetails = snapshot.hasDetails ? 'true' : 'false';
+    if (!snapshot.hasDetails) {
+      details.open = false;
+    }
+    const text = details.querySelector(':scope > summary > .response-activity-stream-error-text');
+    if (text) text.textContent = snapshot.text;
+    const detailsText = details.querySelector(':scope > .response-activity-stream-error-details > .response-activity-stream-error-details-text');
+    if (detailsText) detailsText.textContent = snapshot.additionalDetails;
+    const chevron = details.querySelector(':scope > summary > .response-activity-stream-error-chevron');
+    if (chevron) chevron.hidden = !snapshot.hasDetails;
+  }
+
   function reconcileResponseActivityToolEntry(item, snapshot, previousSnapshot, timelineRoot, preservedToolState) {
     item.className = 'response-activity-entry response-activity-entry--tool';
     item.dataset.responseActivityToolKey = snapshot.key;
@@ -4097,6 +4161,8 @@ export function createMessageProcessor(appContext) {
       const previousEntrySnapshot = previousByKey[entrySnapshot.key] || null;
       if (entrySnapshot.entryKind === 'narrative') {
         reconcileResponseActivityNarrativeEntry(item, entrySnapshot, previousEntrySnapshot);
+      } else if (entrySnapshot.entryKind === 'stream_error') {
+        reconcileResponseActivityStreamErrorEntry(item, entrySnapshot);
       } else {
         reconcileResponseActivityToolEntry(
           item,

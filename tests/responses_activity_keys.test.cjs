@@ -28,3 +28,16 @@ test('getResponsesToolCallRecordKey 会把 function_call namespace 纳入稳定 
   assert.equal(keyA, 'function_call:browser:search:0');
   assert.equal(keyB, 'function_call:history:search:0');
 });
+
+test('getResponsesActivityTimelineEntryKey 会用 stream_error id 构造稳定 key', async () => {
+  const { getResponsesActivityTimelineEntryKey } = await loadResponsesActivityKeysModule();
+
+  assert.equal(
+    getResponsesActivityTimelineEntryKey({ kind: 'stream_error', id: 'retry_2' }, 9),
+    'stream_error:retry_2'
+  );
+  assert.notEqual(
+    getResponsesActivityTimelineEntryKey({ kind: 'stream_error', id: 'retry_2' }, 9),
+    getResponsesActivityTimelineEntryKey({ kind: 'stream_error', id: 'retry_3' }, 9)
+  );
+});

@@ -175,9 +175,8 @@ export function planStreamingRenderTransition(input = {}) {
  * Responses SSE 提前关闭时的收尾策略。
  *
  * 关键边界：
- * - 如果还没有任何可见进度，连接异常可以交给上层恢复性重试；
- * - 如果已经把 assistant 消息或正文展示给用户，再自动重试会复用同一个消息节点，
- *   新流的首段内容会覆盖旧流已收到的部分回答，因此必须保留当前部分结果。
+ * - reasoning、commentary、工具调用都属于可恢复的中间阶段，断线后可以回滚到本次请求基线并重试；
+ * - 只有 final 正文或最终图片已经对用户可见时才停止重试，保留当前部分结果。
  *
  * @param {{
  *   hasTerminalEvent?: boolean,
@@ -192,11 +191,9 @@ export function resolveResponsesStreamClosureAction(input = {}) {
     return 'complete';
   }
 
-  const hasStartedResponse = input?.hasStartedResponse === true;
-  const hasRenderedAssistantMessage = input?.hasRenderedAssistantMessage === true;
   const hasVisibleAnswerContent = input?.hasVisibleAnswerContent === true;
 
-  if (hasVisibleAnswerContent || (hasStartedResponse && hasRenderedAssistantMessage)) {
+  if (hasVisibleAnswerContent) {
     return 'preserve_partial';
   }
 

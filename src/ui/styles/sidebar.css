@@ -10537,6 +10537,76 @@ body.chat-empty .empty-state-content {
     padding-top: 0;
 }
 
+.message .response-activity-entry--stream-error {
+    padding: 2px 0;
+    color: color-mix(in srgb, var(--cerebr-text-color) 66%, transparent);
+}
+
+.message .response-activity-stream-error {
+    min-width: 0;
+}
+
+.message .response-activity-stream-error > summary {
+    list-style: none;
+}
+
+.message .response-activity-stream-error > summary::-webkit-details-marker {
+    display: none;
+}
+
+.message .response-activity-stream-error-summary {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    min-width: 0;
+    cursor: pointer;
+    user-select: none;
+}
+
+.message .response-activity-stream-error[data-has-details="false"] .response-activity-stream-error-summary {
+    cursor: default;
+}
+
+.message .response-activity-stream-error-text {
+    min-width: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.message .response-activity-stream-error-chevron {
+    flex: 0 0 auto;
+    margin-top: 0.2em;
+    font-size: 0.9em;
+    opacity: 0;
+    color: color-mix(in srgb, var(--cerebr-text-color) 46%, transparent);
+    transform: rotate(0deg);
+    transition: transform 180ms ease, opacity 180ms ease;
+}
+
+.message .response-activity-stream-error-summary:hover .response-activity-stream-error-chevron,
+.message .response-activity-stream-error[open] .response-activity-stream-error-chevron {
+    opacity: 1;
+}
+
+.message .response-activity-stream-error[open] .response-activity-stream-error-chevron {
+    transform: rotate(180deg);
+}
+
+.message .response-activity-stream-error-details {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    margin-top: 4px;
+    color: color-mix(in srgb, var(--cerebr-text-color) 66%, transparent);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.message .response-activity-stream-error-details-prefix {
+    flex: 0 0 auto;
+    color: color-mix(in srgb, var(--cerebr-text-color) 42%, transparent);
+}
+
 .message .response-activity-entry-summary {
     display: flex;
     align-items: center;
