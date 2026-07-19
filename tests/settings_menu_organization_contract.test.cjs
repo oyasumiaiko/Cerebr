@@ -59,6 +59,10 @@ test('右下角菜单只迁移点名设置，并保留位置按钮、新对话�
   );
   assert.match(sidebarHtml, /id="sidebar-position-switch"[\s\S]*?type="radio" name="sidebar-position" value="left"[\s\S]*?type="radio" name="sidebar-position" value="right"/);
   assert.match(sidebarCss, /\.sidebar-position-buttons input:checked \+ span/);
+  assert.match(sidebarCss, /--cerebr-switch-active-bg:\s*var\(--cerebr-highlight\)/);
+  assert.match(sidebarCss, /:root\.dark-theme[\s\S]*?--cerebr-switch-active-bg:\s*var\(--cerebr-icon-color\)/);
+  assert.match(sidebarCss, /\.sidebar-position-buttons input:checked \+ span \{[\s\S]*?background:\s*var\(--cerebr-switch-active-bg\)/);
+  assert.match(sidebarCss, /input:checked \+ \.slider \{[\s\S]*?background-color:\s*var\(--cerebr-switch-active-bg\)/);
   assert.doesNotMatch(settingsSource, /type:\s*'button_group'/);
   assert.doesNotMatch(settingsSource, /label:\s*'侧栏在右侧显示'/);
 
