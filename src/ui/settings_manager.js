@@ -3792,6 +3792,14 @@ export function createSettingsManager(appContext) {
   
   // 设置UI元素事件处理
   function setupEventListeners() {
+    if (sidebarPositionSwitch) {
+      sidebarPositionSwitch.addEventListener('click', (event) => {
+        event.preventDefault();
+        const nextPosition = currentSettings.sidebarPosition === 'left' ? 'right' : 'left';
+        setSidebarPosition(nextPosition);
+      });
+    }
+
     // 主题切换监听
     if (themeSwitch) {
       themeSwitch.addEventListener('change', function() {

@@ -57,6 +57,10 @@ test('右下角菜单只迁移点名设置，并保留位置按钮、新对话�
     readSettingDefinition(settingsSource, 'sidebarPosition'),
     /type:\s*'toggle'[\s\S]*?label:\s*'侧栏显示位置'[\s\S]*?querySelector\('input\[name="sidebar-position"\]:checked'\)/
   );
+  assert.match(
+    settingsSource,
+    /sidebarPositionSwitch\.addEventListener\('click',[\s\S]*?event\.preventDefault\(\);[\s\S]*?currentSettings\.sidebarPosition === 'left' \? 'right' : 'left'[\s\S]*?setSidebarPosition\(nextPosition\)/
+  );
   assert.match(sidebarHtml, /id="sidebar-position-switch"[\s\S]*?type="radio" name="sidebar-position" value="left"[\s\S]*?type="radio" name="sidebar-position" value="right"/);
   assert.match(sidebarCss, /\.sidebar-position-buttons input:checked \+ span/);
   assert.match(sidebarCss, /--cerebr-switch-active-bg:\s*var\(--cerebr-highlight\)/);
