@@ -18,13 +18,14 @@ function readSettingDefinition(source, key) {
   return source.slice(start, end);
 }
 
-test('右下角菜单只迁移点名设置，并保留新对话、停靠开关与底部收藏 API', async () => {
-  const [settingsSource, sidebarHtml, sidebarAppContextSource, sidebarEventsSource, contentSource] = await Promise.all([
+test('右下角菜单只迁移点名设置，并保留位置按钮、新对话、停靠开关与底部收藏 API', async () => {
+  const [settingsSource, sidebarHtml, sidebarAppContextSource, sidebarEventsSource, contentSource, sidebarCss] = await Promise.all([
     readWorkspaceFile('src/ui/settings_manager.js'),
     readWorkspaceFile('src/ui/sidebar/sidebar.html'),
     readWorkspaceFile('src/ui/sidebar/sidebar_app_context.js'),
     readWorkspaceFile('src/ui/sidebar/sidebar_events.js'),
-    readWorkspaceFile('src/extension/content.js')
+    readWorkspaceFile('src/extension/content.js'),
+    readWorkspaceFile('src/ui/styles/sidebar.css')
   ]);
 
   assert.match(readSettingDefinition(settingsSource, 'sidebarWidth'), /uiHidden:\s*true/);
@@ -52,6 +53,14 @@ test('右下角菜单只迁移点名设置，并保留新对话、停靠开关�
   }
   assert.match(settingsSource, /label:\s*'启用滚动迷你图'/);
   assert.doesNotMatch(settingsSource, /label:\s*'缩略图(?:宽度|透明度|自动隐藏|消息模式|滚轮)/);
+  assert.match(
+    readSettingDefinition(settingsSource, 'sidebarPosition'),
+    /type:\s*'toggle'[\s\S]*?label:\s*'侧栏显示位置'[\s\S]*?querySelector\('input\[name="sidebar-position"\]:checked'\)/
+  );
+  assert.match(sidebarHtml, /id="sidebar-position-switch"[\s\S]*?type="radio" name="sidebar-position" value="left"[\s\S]*?type="radio" name="sidebar-position" value="right"/);
+  assert.match(sidebarCss, /\.sidebar-position-buttons input:checked \+ span/);
+  assert.doesNotMatch(settingsSource, /type:\s*'button_group'/);
+  assert.doesNotMatch(settingsSource, /label:\s*'侧栏在右侧显示'/);
 
   const historyIndex = sidebarHtml.indexOf('id="chat-history-menu"');
   const favoritesIndex = sidebarHtml.indexOf('id="favorite-apis"');

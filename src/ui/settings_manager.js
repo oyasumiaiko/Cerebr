@@ -34,7 +34,7 @@ const AI_FOOTER_SHARED_VARIABLE_PANEL_KEY = 'ai-footer-shared-variables';
  * @param {HTMLElement} appContext.dom.scaleFactorSlider - 缩放比例滑块元素
  * @param {HTMLElement} appContext.dom.scaleValueDisplay - 缩放比例显示值元素
  * @param {HTMLElement} appContext.dom.autoScrollSwitch - 自动滚动开关元素
- * @param {HTMLElement} appContext.dom.sidebarPositionSwitch - 侧边栏位置开关元素
+ * @param {HTMLElement} appContext.dom.sidebarPositionSwitch - 侧边栏位置按钮组
  * @param {HTMLElement} appContext.dom.stopAtTopSwitch - 滚动到顶部时停止开关元素
  * @param {HTMLElement} appContext.dom.showThoughtProcessSwitch - 显示思考过程开关元素
  * @param {HTMLElement} appContext.dom.resetSettingsButton - 重置设置按钮元素
@@ -1218,17 +1218,21 @@ export function createSettingsManager(appContext) {
       label: '使用 $ / $$ 作为公式分隔符',
       defaultValue: DEFAULT_SETTINGS.enableDollarMath
     },
-    // 侧边栏位置（使用切换表示右侧）
+    // 侧边栏位置
     {
       key: 'sidebarPosition',
       type: 'toggle',
       menu: 'quick',
       group: 'layout',
       id: 'sidebar-position-switch',
-      label: '侧栏在右侧显示',
+      label: '侧栏显示位置',
       defaultValue: DEFAULT_SETTINGS.sidebarPosition,
-      readFromUI: (el) => el?.checked ? 'right' : 'left',
-      writeToUI: (el, v) => { if (el) el.checked = (v === 'right'); },
+      readFromUI: (el) => el?.querySelector('input[name="sidebar-position"]:checked')?.value || 'right',
+      writeToUI: (el, value) => {
+        el?.querySelectorAll('input[name="sidebar-position"]').forEach((input) => {
+          input.checked = input.value === value;
+        });
+      },
       apply: (v) => applySidebarPosition(v),
       standaloneHidden: true
     },
@@ -3736,11 +3740,9 @@ export function createSettingsManager(appContext) {
   
   // 应用侧边栏位置设置
   function applySidebarPosition(position) {
-    // 更新UI元素
-    if (sidebarPositionSwitch) {
-      sidebarPositionSwitch.checked = position === 'right';
-    }
-    
+    sidebarPositionSwitch?.querySelectorAll('input[name="sidebar-position"]').forEach((input) => {
+      input.checked = input.value === position;
+    });
     const collapseButton = document.getElementById('collapse-button');
     if (collapseButton) {
       if (position === 'left') {

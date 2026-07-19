@@ -2910,6 +2910,41 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     background-color: var(--cerebr-ui-hover-bg);
 }
 
+.sidebar-position-buttons {
+    display: inline-flex;
+    flex-shrink: 0;
+    padding: 2px;
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--cerebr-text-color) 8%, transparent);
+}
+
+.sidebar-position-buttons input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.sidebar-position-buttons label {
+    display: inline-flex;
+}
+
+.sidebar-position-buttons label > span {
+    min-width: 34px;
+    padding: 4px 10px;
+    border-radius: 5px;
+    text-align: center;
+    cursor: pointer;
+}
+
+.sidebar-position-buttons input:checked + span {
+    background: var(--cerebr-highlight);
+    color: #fff;
+}
+
+.sidebar-position-buttons input:focus-visible + span {
+    box-shadow: var(--cerebr-control-focus-ring);
+}
+
 .menu-item--stack {
     flex-direction: column;
     align-items: stretch;
