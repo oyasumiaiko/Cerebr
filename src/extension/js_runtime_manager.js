@@ -8,7 +8,10 @@
  * 4. 遇到 Chrome 版本 / 用户侧开关不满足时，返回明确错误，而不是偷偷 fallback。
  */
 
-import { CEREBR_SKILL_WORLD_ID } from './skill_runtime.js';
+import {
+  CEREBR_SKILL_WORLD_ID,
+  buildRuntimeBootstrapSource
+} from './skill_runtime.js';
 
 /**
  * 将错误对象压缩成适合 UI 展示的轻量结构。
@@ -163,6 +166,7 @@ function buildUserScriptSource(userCode, timeoutMs = 0, executionId = '') {
     : '';
   return `
   (async () => {
+    ${buildRuntimeBootstrapSource()}
     const __cerebrMaxLogs = 50;
     const __cerebrMaxLogChars = 4000;
     const __cerebrTimeoutMs = ${normalizedTimeoutMs};
@@ -364,6 +368,30 @@ function buildAbortUserScriptSource(executionId) {
  * @returns {Object}
  */
 export function createJsRuntimeManager() {
+  let skillWorldMessagingPromise = null;
+
+  /**
+   * 只为 Cerebr 的固定 USER_SCRIPT world 开启消息能力。
+   *
+   * 该 world 中的非可信页面代码只能进入 background 的 onUserScriptMessage 专用入口，
+   * background 仍会对消息类型、skill 名称、tab 与 frame 做窄校验，不会复用普通扩展消息面。
+   */
+  async function ensureSkillWorldMessaging() {
+    if (typeof chrome?.userScripts?.configureWorld !== 'function') {
+      throw new Error('当前 Chrome 版本不支持 USER_SCRIPT world 消息能力，无法自动挂载 skill。');
+    }
+    if (!skillWorldMessagingPromise) {
+      skillWorldMessagingPromise = chrome.userScripts.configureWorld({
+        worldId: CEREBR_SKILL_WORLD_ID,
+        messaging: true
+      }).catch((error) => {
+        skillWorldMessagingPromise = null;
+        throw error;
+      });
+    }
+    await skillWorldMessagingPromise;
+  }
+
   /**
    * 探测当前环境是否真的可执行 userScripts。
    * 这里既检查 API 是否存在，也检查 execute / getScripts 是否可用。
@@ -416,6 +444,7 @@ export function createJsRuntimeManager() {
    * @param {Object} request
    * @param {number} request.tabId
    * @param {string} request.code
+   * @param {string[]|null} [request.documentIds]
    * @param {number[]|null} [request.frameIds]
    * @param {boolean} [request.allFrames]
    * @param {boolean} [request.injectImmediately]
@@ -442,10 +471,15 @@ export function createJsRuntimeManager() {
     if (!availability.available) {
       throw new Error(availability.reason || 'JS Runtime 当前不可用');
     }
+    await ensureSkillWorldMessaging();
 
     /** @type {chrome.userScripts.UserScriptInjectionTarget} */
     const target = { tabId };
-    if (Array.isArray(request?.frameIds) && request.frameIds.length > 0) {
+    if (Array.isArray(request?.documentIds) && request.documentIds.length > 0) {
+      target.documentIds = request.documentIds
+        .map(value => String(value || '').trim())
+        .filter(Boolean);
+    } else if (Array.isArray(request?.frameIds) && request.frameIds.length > 0) {
       target.frameIds = request.frameIds
         .map(value => Number(value))
         .filter(value => Number.isFinite(value));
@@ -597,6 +631,7 @@ export function createJsRuntimeManager() {
   }
 
   return {
+    ensureSkillWorldMessaging,
     getAvailability,
     listFrames,
     execute,

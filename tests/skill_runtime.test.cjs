@@ -128,3 +128,89 @@ test('runtime bootstrap 会暴露 $skill/$invoke/$methods facade 且与内部注
     else globalThis.$methods = previousMethods;
   }
 });
+
+test('$invoke 会按名称自动挂载缺失 skill、合并并发请求且不重跑业务异常', async () => {
+  const {
+    CEREBR_SKILL_AUTO_MOUNT_MESSAGE_TYPE,
+    buildSkillMountOnCurrentPageSource,
+    buildSkillUnmountFromCurrentPageSource
+  } = await loadSkillRuntimeModule();
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const previousRuntime = globalThis.__cerebrSkills;
+  const previousSkill = globalThis.$skill;
+  const previousInvoke = globalThis.$invoke;
+  const previousMethods = globalThis.$methods;
+  const previousChrome = globalThis.chrome;
+
+  try {
+    delete globalThis.__cerebrSkills;
+    delete globalThis.$skill;
+    delete globalThis.$invoke;
+    delete globalThis.$methods;
+
+    const skill = buildSkill('auto-probe');
+    await new AsyncFunction(buildSkillMountOnCurrentPageSource(skill))();
+    await new AsyncFunction(buildSkillUnmountFromCurrentPageSource(skill.name))();
+
+    let autoMountCalls = 0;
+    globalThis.chrome = {
+      runtime: {
+        async sendMessage(message) {
+          autoMountCalls += 1;
+          assert.deepEqual(message, {
+            type: CEREBR_SKILL_AUTO_MOUNT_MESSAGE_TYPE,
+            skillName: 'auto-probe'
+          });
+          await new Promise((resolve) => setImmediate(resolve));
+          await new AsyncFunction(buildSkillMountOnCurrentPageSource(skill))();
+          return { ok: true };
+        }
+      }
+    };
+
+    const values = await Promise.all([
+      globalThis.$invoke('auto-probe', 'ping'),
+      globalThis.$invoke('auto-probe', 'ping')
+    ]);
+    assert.deepEqual(values, ['auto-probe', 'auto-probe']);
+    assert.equal(autoMountCalls, 1);
+
+    await assert.rejects(
+      () => globalThis.$invoke('auto-probe', 'missingMethod'),
+      /Mounted skill method not found: auto-probe\.missingMethod/
+    );
+    assert.equal(autoMountCalls, 1);
+
+    await new AsyncFunction(buildSkillUnmountFromCurrentPageSource(skill.name))();
+    globalThis.chrome.runtime.sendMessage = async () => {
+      autoMountCalls += 1;
+      return { ok: false, error: 'URL 不匹配' };
+    };
+    await assert.rejects(
+      () => globalThis.$invoke('auto-probe', 'ping'),
+      (error) => error?.name === 'SkillAutoMountError' && /URL 不匹配/.test(error.message)
+    );
+    assert.equal(autoMountCalls, 2);
+
+    globalThis.chrome.runtime.sendMessage = async () => {
+      autoMountCalls += 1;
+      throw new Error('message channel closed');
+    };
+    await assert.rejects(
+      () => globalThis.$invoke('auto-probe', 'ping'),
+      (error) => error?.name === 'SkillAutoMountError' && /message channel closed/.test(error.message)
+    );
+    assert.equal(autoMountCalls, 3);
+  } finally {
+    if (previousRuntime === undefined) delete globalThis.__cerebrSkills;
+    else globalThis.__cerebrSkills = previousRuntime;
+    if (previousSkill === undefined) delete globalThis.$skill;
+    else globalThis.$skill = previousSkill;
+    if (previousInvoke === undefined) delete globalThis.$invoke;
+    else globalThis.$invoke = previousInvoke;
+    if (previousMethods === undefined) delete globalThis.$methods;
+    else globalThis.$methods = previousMethods;
+    if (previousChrome === undefined) delete globalThis.chrome;
+    else globalThis.chrome = previousChrome;
+  }
+});

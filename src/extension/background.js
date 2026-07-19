@@ -1,5 +1,6 @@
 import { createJsRuntimeManager } from './js_runtime_manager.js';
 import { createSkillManager } from './skill_manager.js';
+import { CEREBR_SKILL_AUTO_MOUNT_MESSAGE_TYPE } from './skill_runtime.js';
 import {
   buildPromptImageResultFromImageBlob,
   buildPromptImageResultFromScreenshotDataUrl
@@ -1170,6 +1171,51 @@ function ensureSkillManagerReady(options = {}) {
       });
   }
   return skillManagerReadyPromise;
+}
+
+if (chrome?.runtime?.onUserScriptMessage?.addListener) {
+  chrome.runtime.onUserScriptMessage.addListener((message, sender, sendResponse) => {
+    if (message?.type !== CEREBR_SKILL_AUTO_MOUNT_MESSAGE_TYPE) return false;
+
+    (async () => {
+      try {
+        const skillName = typeof message?.skillName === 'string' ? message.skillName.trim() : '';
+        const tabId = Number(sender?.tab?.id);
+        const frameId = Number(sender?.frameId);
+        const documentId = typeof sender?.documentId === 'string' ? sender.documentId.trim() : '';
+        if (!skillName || skillName.length > 256) {
+          throw new Error('自动挂载 skill 失败：skillName 无效。');
+        }
+        if (!Number.isFinite(tabId)) {
+          throw new Error('自动挂载 skill 失败：消息没有有效的宿主 tab。');
+        }
+
+        await ensureSkillManagerReady();
+        const mountResult = await skillManager.mountSkillOnCurrentPage(skillName, {
+          tabId,
+          explicitUrl: typeof sender?.url === 'string' ? sender.url : null,
+          documentIds: documentId ? [documentId] : null,
+          frameIds: !documentId && Number.isFinite(frameId) && frameId >= 0 ? [frameId] : null
+        });
+        if (mountResult?.ok !== true || mountResult?.mounted_on_current_page !== true) {
+          const messageText = typeof mountResult?.error?.message === 'string'
+            ? mountResult.error.message
+            : `skill ${skillName} 未能挂载到当前 frame。`;
+          sendResponse({ ok: false, error: messageText });
+          return;
+        }
+        sendResponse({ ok: true });
+      } catch (error) {
+        sendResponse({
+          ok: false,
+          error: (typeof error?.message === 'string' && error.message.trim())
+            ? error.message.trim()
+            : '自动挂载 skill 失败。'
+        });
+      }
+    })();
+    return true;
+  });
 }
 
 if (chrome?.runtime?.onStartup?.addListener) {

@@ -37,7 +37,9 @@ test('host-page JS runtime requests are routed through a disposable hidden runne
   assert.match(runnerSource, /event\.source !== window\.parent/);
   assert.match(runnerSource, /const port = event\.ports\?\.\[0\]/);
   assert.match(runnerSource, /hostPort\.onmessage/);
-  assert.match(runnerSource, /await chrome\.runtime\.sendMessage\(runtimeMessage\)/);
+  assert.match(runnerSource, /createJsRuntimeManager/);
+  assert.match(runnerSource, /await executeRuntimeMessage\(runtimeMessage\)/);
+  assert.doesNotMatch(runnerSource, /await chrome\.runtime\.sendMessage\(runtimeMessage\)/);
   assert.match(runnerSource, /'EXECUTE_JS_RUNTIME'/);
   assert.match(runnerSource, /'ABORT_JS_RUNTIME'/);
 });

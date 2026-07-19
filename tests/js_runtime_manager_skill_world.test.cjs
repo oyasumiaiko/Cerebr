@@ -18,9 +18,11 @@ test('createJsRuntimeManager.execute 会在共享 skill worldId 下运行 userSc
   const { CEREBR_SKILL_WORLD_ID } = await loadSkillRuntimeModule();
 
   let capturedExecuteOptions = null;
+  const configuredWorlds = [];
   global.chrome = {
     userScripts: {
       async getScripts() { return []; },
+      async configureWorld(options) { configuredWorlds.push(options); },
       async execute(options) {
         capturedExecuteOptions = options;
         return [{
@@ -52,16 +54,75 @@ test('createJsRuntimeManager.execute 会在共享 skill worldId 下运行 userSc
     tabId: 9,
     code: 'return "ok";',
     timeoutMs: 45000,
+    documentIds: ['doc-target'],
+    frameIds: [3],
     injectImmediately: true
   });
 
   assert.equal(result.ok, true);
+  assert.deepEqual(configuredWorlds, [{ worldId: CEREBR_SKILL_WORLD_ID, messaging: true }]);
   assert.equal(capturedExecuteOptions.world, 'USER_SCRIPT');
   assert.equal(capturedExecuteOptions.worldId, CEREBR_SKILL_WORLD_ID);
   assert.equal(capturedExecuteOptions.target.tabId, 9);
+  assert.deepEqual(capturedExecuteOptions.target.documentIds, ['doc-target']);
+  assert.equal(capturedExecuteOptions.target.frameIds, undefined);
   assert.match(capturedExecuteOptions.js[0].code, /const __cerebrTimeoutMs = 45000;/);
+  assert.match(capturedExecuteOptions.js[0].code, /const __cerebrEnsureSkillRuntime/);
 
   delete global.chrome;
+});
+
+test('createJsRuntimeManager.execute 会在用户代码前升级已打开页面中的旧 skill runtime', async () => {
+  const { createJsRuntimeManager } = await loadJsRuntimeManagerModule();
+  let capturedSource = '';
+  const previousChrome = global.chrome;
+  const previousRuntime = globalThis.__cerebrSkills;
+  const previousInvoke = globalThis.$invoke;
+  const previousSkill = globalThis.$skill;
+  const previousMethods = globalThis.$methods;
+
+  try {
+    global.chrome = {
+      userScripts: {
+        async getScripts() { return []; },
+        async configureWorld() {},
+        async execute(options) {
+          capturedSource = options.js[0].code;
+          return [];
+        }
+      }
+    };
+    const legacyInvoke = async () => 'legacy';
+    globalThis.__cerebrSkills = {
+      __cerebrRuntime: true,
+      skills: Object.create(null),
+      skillMeta: Object.create(null)
+    };
+    globalThis.$invoke = legacyInvoke;
+
+    const manager = createJsRuntimeManager();
+    await manager.execute({
+      tabId: 9,
+      code: 'return typeof globalThis.__cerebrSkills.ensureMounted;',
+      timeoutMs: 10
+    });
+    const envelope = await eval(capturedSource);
+
+    assert.equal(envelope.value, 'function');
+    assert.equal(typeof globalThis.__cerebrSkills.ensureMounted, 'function');
+    assert.notEqual(globalThis.$invoke, legacyInvoke);
+  } finally {
+    if (previousChrome === undefined) delete global.chrome;
+    else global.chrome = previousChrome;
+    if (previousRuntime === undefined) delete globalThis.__cerebrSkills;
+    else globalThis.__cerebrSkills = previousRuntime;
+    if (previousInvoke === undefined) delete globalThis.$invoke;
+    else globalThis.$invoke = previousInvoke;
+    if (previousSkill === undefined) delete globalThis.$skill;
+    else globalThis.$skill = previousSkill;
+    if (previousMethods === undefined) delete globalThis.$methods;
+    else globalThis.$methods = previousMethods;
+  }
 });
 
 test('createJsRuntimeManager.abort 会在同一 worldId 下发送 executionId 中止脚本', async () => {
@@ -72,6 +133,7 @@ test('createJsRuntimeManager.abort 会在同一 worldId 下发送 executionId �
   global.chrome = {
     userScripts: {
       async getScripts() { return []; },
+      async configureWorld() {},
       async execute(options) {
         capturedAbortOptions = options;
         return [];

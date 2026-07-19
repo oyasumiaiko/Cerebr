@@ -6,6 +6,7 @@ import {
 
 export const CEREBR_SKILL_WORLD_ID = 'cerebr-skills';
 export const CEREBR_SKILL_SCRIPT_ID_PREFIX = 'cerebr-skill--';
+export const CEREBR_SKILL_AUTO_MOUNT_MESSAGE_TYPE = 'CEREBR_SKILL_AUTO_MOUNT';
 
 function encodeInlineJson(value) {
   return JSON.stringify(value)
@@ -26,18 +27,24 @@ export function buildRegisteredSkillScriptId(skillName) {
   return `${CEREBR_SKILL_SCRIPT_ID_PREFIX}${encodeURIComponent(String(skillName || ''))}`;
 }
 
-function buildRuntimeBootstrapSource() {
+export function buildRuntimeBootstrapSource() {
   return `
 const __cerebrEnsureSkillRuntime = () => {
   const existing = globalThis.__cerebrSkills;
-  if (existing && typeof existing === 'object' && existing.__cerebrRuntime === true) {
-    return existing;
-  }
+  const runtime = existing && typeof existing === 'object' && existing.__cerebrRuntime === true
+    ? existing
+    : {
+        __cerebrRuntime: true,
+        skills: Object.create(null),
+        skillMeta: Object.create(null),
+        autoMountPromises: Object.create(null)
+      };
 
-  const runtime = {
-    __cerebrRuntime: true,
-    skills: Object.create(null),
-    skillMeta: Object.create(null),
+  // 已打开页面可能仍保留旧版 runtime。每次 bootstrap 都升级方法，但保留已挂载 skill 状态。
+  if (!runtime.autoMountPromises || typeof runtime.autoMountPromises !== 'object') {
+    runtime.autoMountPromises = Object.create(null);
+  }
+  Object.assign(runtime, {
     list() {
       return Object.keys(this.skills).sort();
     },
@@ -74,6 +81,65 @@ const __cerebrEnsureSkillRuntime = () => {
       this.skillMeta[key] = meta && typeof meta === 'object' ? meta : {};
       return this.skills[key];
     },
+    async ensureMounted(name) {
+      const normalizedSkillName = String(name || '').trim();
+      if (!normalizedSkillName) {
+        throw new Error('Skill auto-mount requires a non-empty skill name.');
+      }
+      if (this.has(normalizedSkillName)) {
+        return this.get(normalizedSkillName);
+      }
+
+      const pendingMount = this.autoMountPromises[normalizedSkillName];
+      if (pendingMount) {
+        return await pendingMount;
+      }
+
+      const mountPromise = (async () => {
+        const runtimeApi = globalThis.chrome?.runtime;
+        if (!runtimeApi || typeof runtimeApi.sendMessage !== 'function') {
+          const error = new Error(\`Skill not mounted and auto-mount bridge is unavailable: \${normalizedSkillName}\`);
+          error.name = 'SkillNotMountedError';
+          throw error;
+        }
+
+        let response;
+        try {
+          response = await runtimeApi.sendMessage({
+            type: ${JSON.stringify(CEREBR_SKILL_AUTO_MOUNT_MESSAGE_TYPE)},
+            skillName: normalizedSkillName
+          });
+        } catch (cause) {
+          const detail = typeof cause?.message === 'string' && cause.message.trim()
+            ? cause.message.trim()
+            : String(cause || '消息通道不可用');
+          const error = new Error(\`Skill auto-mount request failed: \${normalizedSkillName}: \${detail}\`);
+          error.name = 'SkillAutoMountError';
+          throw error;
+        }
+        if (response?.ok !== true) {
+          const detail = typeof response?.error === 'string' && response.error.trim()
+            ? response.error.trim()
+            : '扩展未能挂载该 skill。';
+          const error = new Error(\`Skill auto-mount failed: \${normalizedSkillName}: \${detail}\`);
+          error.name = 'SkillAutoMountError';
+          throw error;
+        }
+        if (!this.has(normalizedSkillName)) {
+          const error = new Error(\`Skill auto-mount completed but runtime is still missing: \${normalizedSkillName}\`);
+          error.name = 'SkillAutoMountError';
+          throw error;
+        }
+        return this.get(normalizedSkillName);
+      })();
+
+      this.autoMountPromises[normalizedSkillName] = mountPromise;
+      try {
+        return await mountPromise;
+      } finally {
+        delete this.autoMountPromises[normalizedSkillName];
+      }
+    },
     resolveInvocation(skillName, methodName, rawPath = '') {
       const normalizedSkillName = String(skillName || '').trim();
       const normalizedMethodName = String(methodName || '').trim();
@@ -91,7 +157,9 @@ const __cerebrEnsureSkillRuntime = () => {
       }
       const skill = this.skills[normalizedSkillName];
       if (!skill) {
-        throw new Error(\`Skill not mounted: \${normalizedSkillName}\`);
+        const error = new Error(\`Skill not mounted: \${normalizedSkillName}\`);
+        error.name = 'SkillNotMountedError';
+        throw error;
       }
       const method = skill[normalizedMethodName];
       if (typeof method !== 'function') {
@@ -105,6 +173,10 @@ const __cerebrEnsureSkillRuntime = () => {
       };
     },
     async invokeMethod(skillName, methodName, ...args) {
+      const normalizedSkillName = String(skillName || '').trim();
+      if (!this.has(normalizedSkillName)) {
+        await this.ensureMounted(normalizedSkillName);
+      }
       const resolved = this.resolveInvocation(skillName, methodName);
       return await resolved.method(...args);
     },
@@ -118,7 +190,7 @@ const __cerebrEnsureSkillRuntime = () => {
       const methodName = rawPath.slice(firstDot + 1);
       return await this.invokeMethod(skillName, methodName, ...args);
     }
-  };
+  });
 
   globalThis.__cerebrSkills = runtime;
   globalThis.$skill = (name) => __cerebrEnsureSkillRuntime().get(name);

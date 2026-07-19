@@ -1,3 +1,5 @@
+import { createJsRuntimeManager } from '../../extension/js_runtime_manager.js';
+
 const MESSAGE_FLAG = '__cerebrJsRuntimeRunner';
 const ALLOWED_MESSAGE_TYPES = new Set([
   'GET_JS_RUNTIME_STATUS',
@@ -20,7 +22,52 @@ function resolveRunnerIdentity() {
 }
 
 const identity = resolveRunnerIdentity();
+const jsRuntimeManager = createJsRuntimeManager();
 let hostPort = null;
+
+async function executeRuntimeMessage(runtimeMessage) {
+  const tabId = Number(runtimeMessage?.tabId);
+  switch (runtimeMessage?.type) {
+    case 'GET_JS_RUNTIME_STATUS':
+      return {
+        success: true,
+        status: await jsRuntimeManager.getAvailability()
+      };
+    case 'GET_JS_RUNTIME_FRAMES':
+      return {
+        success: true,
+        tabId,
+        ...(await jsRuntimeManager.listFrames({ tabId }))
+      };
+    case 'EXECUTE_JS_RUNTIME':
+      return {
+        success: true,
+        tabId,
+        ...(await jsRuntimeManager.execute({
+          tabId,
+          code: runtimeMessage?.code || '',
+          executionId: runtimeMessage?.executionId || '',
+          timeoutMs: runtimeMessage?.timeoutMs,
+          frameIds: Array.isArray(runtimeMessage?.frameIds) ? runtimeMessage.frameIds : null,
+          allFrames: runtimeMessage?.allFrames === true,
+          injectImmediately: runtimeMessage?.injectImmediately === true
+        }))
+      };
+    case 'ABORT_JS_RUNTIME':
+      return {
+        success: true,
+        tabId,
+        ...(await jsRuntimeManager.abort({
+          tabId,
+          executionId: runtimeMessage?.executionId || '',
+          frameIds: Array.isArray(runtimeMessage?.frameIds) ? runtimeMessage.frameIds : null,
+          allFrames: runtimeMessage?.allFrames === true
+        }))
+      };
+    default:
+      throw new Error(`隐藏 JS Runtime runner 不支持消息类型：${runtimeMessage?.type || 'unknown'}`);
+  }
+}
 
 function postToHost(type, payload = {}) {
   hostPort?.postMessage({
@@ -41,7 +88,9 @@ async function handleRuntimeRequest(data = {}) {
   if (!requestId || !ALLOWED_MESSAGE_TYPES.has(runtimeMessageType)) return;
 
   try {
-    const response = await chrome.runtime.sendMessage(runtimeMessage);
+    // 长任务直接由持久的 runner iframe 等待 userScripts.execute，避免把一次
+    // runtime.sendMessage 事件悬挂数分钟后被 MV3 service worker 生命周期切断。
+    const response = await executeRuntimeMessage(runtimeMessage);
     postToHost('response', { requestId, response });
   } catch (error) {
     postToHost('response', {

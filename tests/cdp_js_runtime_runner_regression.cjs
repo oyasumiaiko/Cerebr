@@ -87,9 +87,22 @@ async function main() {
     ), { timeoutMs: 10_000, intervalMs: 100, label: 'initial JS runtime runner frame' });
     result.runnerUrlBefore = runnerFrameBefore.url();
 
-    logProgress('人为挂起 runner 消息请求，等待宿主页控制器自动重建');
+    logProgress('验证长任务执行不再依赖 background 消息通道');
     await runnerFrameBefore.evaluate(() => {
-      chrome.runtime.sendMessage = () => new Promise(() => {});
+      chrome.runtime.sendMessage = () => Promise.reject(new Error('background channel intentionally disabled'));
+    });
+    const directRunnerResult = await sidebarFrame.evaluate(async () => window.cerebr.debug.executeJsRuntime(
+      'await new Promise((resolve) => setTimeout(resolve, 250)); return document.title;',
+      { runtimeEnvironment: 'bound_host_page', timeoutMs: 5000 }
+    ));
+    if (directRunnerResult?.success !== true || directRunnerResult?.value !== 'Example Domain') {
+      throw new Error(`runner 仍错误依赖 background 消息通道：${JSON.stringify(directRunnerResult)}`);
+    }
+    result.directRunnerResult = directRunnerResult;
+
+    logProgress('人为挂起 runner 的 userScripts.execute，等待宿主页控制器自动重建');
+    await runnerFrameBefore.evaluate(() => {
+      chrome.userScripts.execute = () => new Promise(() => {});
     });
     const timedOutResult = await sidebarFrame.evaluate(async () => window.cerebr.debug.executeJsRuntime(
       'return document.title;',

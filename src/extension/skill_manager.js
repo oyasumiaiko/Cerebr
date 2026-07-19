@@ -447,7 +447,7 @@ export function createSkillManager(options = {}) {
     };
   }
 
-  async function mountSkillOnCurrentPage(skillName, options = {}) {
+  async function performSkillMountOnCurrentPage(skillName, options = {}) {
     if (!jsRuntimeManager || typeof jsRuntimeManager.execute !== 'function') {
       throw new Error('当前扩展没有可用的 JS Runtime 执行入口，无法将技能挂载到当前页。');
     }
@@ -482,6 +482,8 @@ export function createSkillManager(options = {}) {
     const rawResult = await jsRuntimeManager.execute({
       tabId: tab_id,
       code,
+      documentIds: Array.isArray(options?.documentIds) ? options.documentIds : null,
+      frameIds: Array.isArray(options?.frameIds) ? options.frameIds : null,
       injectImmediately: true
     });
 
@@ -489,6 +491,31 @@ export function createSkillManager(options = {}) {
       requestedSkillStatus,
       requestedSkillName: normalizedRecord?.name || skillName,
       currentPageUrl: url
+    });
+  }
+
+  async function mountSkillOnCurrentPage(skillName, options = {}) {
+    const normalizedSkillName = String(skillName || '').trim();
+    const normalizedTabId = normalizeTabId(options?.tabId);
+    const normalizedDocumentIds = Array.isArray(options?.documentIds)
+      ? Array.from(new Set(options.documentIds
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)))
+        .sort()
+      : [];
+    const normalizedFrameIds = Array.isArray(options?.frameIds)
+      ? Array.from(new Set(options.frameIds
+        .map((value) => normalizeTabId(value))
+        .filter((value) => value !== null && value >= 0)))
+        .sort((left, right) => left - right)
+      : [];
+    return await performSkillMountOnCurrentPage(normalizedSkillName, {
+      ...options,
+      tabId: normalizedTabId,
+      documentIds: normalizedDocumentIds.length > 0 ? normalizedDocumentIds : null,
+      frameIds: normalizedDocumentIds.length > 0
+        ? null
+        : (normalizedFrameIds.length > 0 ? normalizedFrameIds : null)
     });
   }
 
@@ -1061,6 +1088,7 @@ export function createSkillManager(options = {}) {
     initialize: reconcileRegisteredSkills,
     listMatchingSkillSummariesForTab,
     listSkillRecords,
+    mountSkillOnCurrentPage,
     reconcileRegisteredSkills,
     setSkillEnabled,
     syncCurrentDocumentSkills,

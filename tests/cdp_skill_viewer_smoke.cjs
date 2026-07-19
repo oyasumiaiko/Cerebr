@@ -387,28 +387,22 @@ async function main() {
     }
     result.steps.push('skill_enabled');
 
-    const refreshState = await sidebarFrame.evaluate(async (skillName) => {
-      const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
-      return await chrome.runtime.sendMessage({
-        type: 'SKILL_REGISTRY_ACTION',
-        tabId: typeof tab?.id === 'number' ? tab.id : null,
-        payload: {
-          action: 'mount_on_current_page',
-          skill_name: skillName
-        }
-      });
-    }, skillName);
-    if (!refreshState?.success || refreshState?.ok !== true || refreshState?.mounted_on_current_page !== true) {
-      throw new Error(`mount_on_current_page failed after UI click: ${JSON.stringify(refreshState)}`);
+    const autoInvokeState = await sidebarFrame.evaluate(async (skillNameValue) => (
+      await window.cerebr.debug.executeJsRuntime(
+        `await globalThis.__cerebrSkills?.unmount(${JSON.stringify(skillNameValue)});\n`
+          + `return await $invoke(${JSON.stringify(skillNameValue)}, 'readSummary');`,
+        { runtimeEnvironment: 'bound_host_page', timeoutMs: 15_000 }
+      )
+    ), skillName);
+    if (
+      autoInvokeState?.success !== true
+      || autoInvokeState?.value?.title !== 'Example Domain'
+      || autoInvokeState?.value?.href !== targetUrl
+    ) {
+      throw new Error(`$invoke auto-mount failed: ${JSON.stringify(autoInvokeState)}`);
     }
-    const activeSkills = Array.isArray(refreshState?.active_skills)
-      ? refreshState.active_skills
-      : [];
-    if (!activeSkills.includes(skillName)) {
-      throw new Error(`${skillName} not mounted after refresh: ${JSON.stringify(refreshState)}`);
-    }
-    result.activeSkills = activeSkills;
-    result.steps.push('runtime_mount_verified');
+    result.autoInvokeState = autoInvokeState;
+    result.steps.push('runtime_auto_mount_verified');
 
     result.postRunDeletedSkills = await cleanupSmokeSkills(sidebarFrame, skillName);
     result.steps.push('postclean_completed');

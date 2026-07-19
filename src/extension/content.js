@@ -48,8 +48,8 @@ function buildJsRuntimeRunnerFrameUrl(generation, channelId) {
 /**
  * 在宿主页中维护一个可牺牲的隐藏 JS Runtime runner iframe。
  *
- * runner 只接管扩展侧消息等待与结果接收，真正的用户代码仍由 background 通过
- * chrome.userScripts.execute() 注入宿主页，因此现有 DOM 能力与 frame_ids 语义不变。
+ * runner 直接通过 chrome.userScripts.execute() 把用户代码注入宿主页，避免长任务把
+ * MV3 service worker 的单次消息事件悬挂数分钟；现有 DOM 能力与 frame_ids 语义不变。
  * runner 失联时直接替换该 iframe，侧栏对话与 UI 状态不会被销毁。
  */
 class CerebrJsRuntimeRunner {

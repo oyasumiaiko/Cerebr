@@ -779,8 +779,59 @@ test('mount_on_current_page 只挂载指定技能并返回当前页 active skill
   assert.equal(result.skill.name, 'worldquant-brain-sim-state');
   assert.deepEqual(result.active_skills, ['worldquant-brain-sim-state']);
   assert.equal(executeCalls.length, 1);
+  assert.deepEqual(executeCalls[0].frameIds, null);
   assert.match(executeCalls[0].code, /worldquant-brain-sim-state/);
   assert.doesNotMatch(executeCalls[0].code, /worldquant-brain-knowledge-cache/);
+});
+
+test('mountSkillOnCurrentPage 会优先锁定发起请求的 document', async () => {
+  const { createSkillManager } = await loadSkillManagerModule();
+  const executeCalls = [];
+
+  const manager = createSkillManager({
+    store: createMockStore([{
+      ...buildSkillInput('worldquant-brain-sim-state'),
+      match: ['https://platform.worldquantbrain.com/*'],
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-03T00:00:00.000Z',
+      revision: 2
+    }]),
+    userScriptsApi: {
+      async getScripts() { return []; },
+      async register() {},
+      async update() {},
+      async unregister() {}
+    },
+    tabsApi: {
+      async get() {
+        return { id: 11, url: 'https://platform.worldquantbrain.com/research', title: 'BRAIN' };
+      }
+    },
+    jsRuntimeManager: {
+      async execute(request) {
+        executeCalls.push(clone(request));
+        return {
+          ok: true,
+          tabId: 11,
+          value: { active_skills: ['worldquant-brain-sim-state'] },
+          logs: [],
+          items: []
+        };
+      }
+    }
+  });
+
+  const result = await manager.mountSkillOnCurrentPage('worldquant-brain-sim-state', {
+    tabId: 11,
+    explicitUrl: 'https://platform.worldquantbrain.com/research',
+    documentIds: ['document-7'],
+    frameIds: [7]
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(executeCalls.length, 1);
+  assert.deepEqual(executeCalls[0].documentIds, ['document-7']);
+  assert.equal(executeCalls[0].frameIds, null);
 });
 
 test('mount_on_current_page 失败时返回 ok=false 并透传首个 frame 错误', async () => {
