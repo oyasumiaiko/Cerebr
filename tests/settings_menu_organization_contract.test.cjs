@@ -52,6 +52,7 @@ test('右下角菜单只迁移点名设置，并保留位置按钮、新对话�
     assert.match(readSettingDefinition(settingsSource, key), /group:\s*'layout'/);
   }
   assert.match(settingsSource, /label:\s*'启用滚动迷你图'/);
+  assert.match(settingsSource, /label:\s*'\$ \/ \$\$ 数学公式'/);
   assert.doesNotMatch(settingsSource, /label:\s*'缩略图(?:宽度|透明度|自动隐藏|消息模式|滚轮)/);
   assert.match(
     readSettingDefinition(settingsSource, 'sidebarPosition'),
