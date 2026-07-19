@@ -672,21 +672,17 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
         );
         if (frameErrorText) innerBlocks.push(buildXmlTextBlock('error', frameErrorText));
       } else {
-        const itemResultSerialized = stringifyResponsesToolOutputValue(item.result);
-        const topValueSerialized = stringifyResponsesToolOutputValue(normalized.value);
-        if (itemResultSerialized && topValueSerialized && itemResultSerialized === topValueSerialized && items.length === 1) {
-          innerBlocks.push(buildXmlTextBlock('result_ref', 'return_value'));
-        } else {
-          const frameReturnValueText = truncateResponsesToolOutputText(
-            trimTrailingWhitespace(formatResponsesJsRuntimeValueText(item.result)),
-            {
-              maxChars: 2_200,
-              mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
-            }
-          );
-          if (frameReturnValueText && frameReturnValueText !== 'null') {
-            innerBlocks.push(buildXmlTextBlock('return_value', frameReturnValueText));
+        // 单帧成功时 shouldRenderFrameResults 为 false，因此旧的 items.length === 1 比较分支不可达，
+        // 却会在多帧结果中额外完整序列化 item.result 与 normalized.value。直接格式化当前帧即可保持输出不变。
+        const frameReturnValueText = truncateResponsesToolOutputText(
+          trimTrailingWhitespace(formatResponsesJsRuntimeValueText(item.result)),
+          {
+            maxChars: 2_200,
+            mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
           }
+        );
+        if (frameReturnValueText && frameReturnValueText !== 'null') {
+          innerBlocks.push(buildXmlTextBlock('return_value', frameReturnValueText));
         }
       }
 

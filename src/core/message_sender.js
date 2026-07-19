@@ -8791,20 +8791,23 @@ export function createMessageSender(appContext) {
   }
 
   function compactResponsesJsRuntimeResult(rawResult) {
+    // 结果进入 sidebar 前已经经过 MessagePort 的结构化克隆；这里只收敛字段形状，不能再做防御性深拷贝。
+    // JS Runtime 允许返回大数组/对象，重复 clone 整体再 clone value/items 会在同一调用栈制造多份峰值内存，
+    // 即使最终工具文本会被截断，也可能在截断前先把 sidebar renderer 顶到 OOM。
     const normalized = (rawResult && typeof rawResult === 'object' && !Array.isArray(rawResult))
-      ? cloneDataSafely(rawResult)
+      ? rawResult
       : { ok: false, value: null, logs: [], items: [], error: null };
     return {
       ok: normalized?.ok === true,
       tabId: Number.isFinite(Number(normalized?.tabId)) ? Number(normalized.tabId) : null,
-      value: cloneDataSafely(normalized?.value ?? null),
+      value: normalized?.value ?? null,
       logs: Array.isArray(normalized?.logs)
-        ? cloneDataSafely(normalized.logs)
+        ? normalized.logs
         : [],
       items: Array.isArray(normalized?.items)
-        ? cloneDataSafely(normalized.items)
+        ? normalized.items
         : [],
-      error: normalized?.error ? cloneDataSafely(normalized.error) : null
+      error: normalized?.error || null
     };
   }
 
@@ -8847,8 +8850,8 @@ export function createMessageSender(appContext) {
           ok: false,
           tabId: Number.isFinite(Number(result?.tabId)) ? Number(result.tabId) : null,
           value: null,
-          logs: Array.isArray(result?.logs) ? cloneDataSafely(result.logs) : [],
-          items: Array.isArray(result?.items) ? cloneDataSafely(result.items) : [],
+          logs: Array.isArray(result?.logs) ? result.logs : [],
+          items: Array.isArray(result?.items) ? result.items : [],
           error: {
             message: (typeof result?.error === 'string' && result.error.trim())
               ? result.error.trim()
@@ -8862,8 +8865,8 @@ export function createMessageSender(appContext) {
         ok: result.ok === true,
         tabId: Number.isFinite(Number(result?.tabId)) ? Number(result.tabId) : null,
         value: result?.value ?? null,
-        logs: Array.isArray(result?.logs) ? cloneDataSafely(result.logs) : [],
-        items: Array.isArray(result?.items) ? cloneDataSafely(result.items) : [],
+        logs: Array.isArray(result?.logs) ? result.logs : [],
+        items: Array.isArray(result?.items) ? result.items : [],
         error: null
       });
     } catch (error) {
