@@ -60,3 +60,16 @@ test('Skill 查看器按公开 virtual_file 契约读取 skill 文件', async ()
     /executeSkillViewerFileAction\('read_file', \{\s*target: \{ kind: 'skill', name: skillName \},\s*path: summary\?\.instruction\?\.path \|\| 'SKILL\.md'\s*\}\)/s
   );
 });
+
+test('Skill 管理 UI 复用 registry 启停动作并用完整文件包生成 ZIP', async () => {
+  const source = await readWorkspaceFile('src/ui/chat_history_ui.js');
+  const sidebarHtml = await readWorkspaceFile('src/ui/sidebar/sidebar.html');
+
+  assert.match(sidebarHtml, /<script src="\/lib\/fflate\.min\.js"><\/script>/);
+  assert.match(source, /action: nextEnabled \? 'enable_skill' : 'disable_skill'/);
+  assert.match(source, /await refreshSkillViewerPanel\(null, \{ forceReloadDetail: true \}\)/);
+  assert.match(source, /`\$\{skillName\}\/\$\{file\.path\}`/);
+  assert.match(source, /window\.fflate\.zipSync\(archiveFiles, \{ level: 6 \}\)/);
+  assert.match(source, /triggerBlobDownload\(new Blob\(\[zipBytes\], \{ type: 'application\/zip' \}\), `\$\{skillName\}\.zip`\)/);
+  assert.match(source, /Promise\.all\(indexFiles\.map\(async \(file\) => \{/);
+});

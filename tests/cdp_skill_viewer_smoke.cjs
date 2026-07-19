@@ -1,5 +1,6 @@
 const fsp = require('fs/promises');
 const path = require('path');
+const { strFromU8, unzipSync } = require('../lib/fflate.min.js');
 const {
   buildSendContentMessageExpression,
   launchFixedSidebarContext,
@@ -40,6 +41,11 @@ if (!repoRoot || !outputDir) {
 const runHeadless = shouldRunHeadless();
 const { chromium } = loadPlaywright(repoRoot);
 const skillName = `example-dom-skill-${Date.now()}`;
+const startedAt = Date.now();
+
+function logProgress(message) {
+  console.log(`[skill-viewer-smoke +${((Date.now() - startedAt) / 1000).toFixed(1)}s] ${message}`);
+}
 
 function buildStorageSeed() {
   const sourceId = 'src_skill_viewer_smoke';
@@ -122,7 +128,8 @@ async function cleanupSmokeSkills(sidebarFrame, prefix) {
       type: 'SKILL_REGISTRY_ACTION',
       tabId,
       payload: {
-        action: 'list'
+        action: 'list',
+        include_all_sites: true
       }
     });
     const deleted = [];
@@ -194,6 +201,7 @@ async function main() {
 
   let context = null;
   try {
+    logProgress('启动浏览器');
     context = launchMode === 'worktree_unpacked'
       ? await launchWorktreeUnpackedChromiumContext({
           chromium,
@@ -257,6 +265,7 @@ async function main() {
       { timeoutMs: 20_000, intervalMs: 250, label: 'sidebar api configs ready' }
     );
     result.steps.push('sidebar_ready');
+    logProgress('侧栏已就绪，创建测试 skill');
 
     result.precleanDeletedSkills = await cleanupSmokeSkills(sidebarFrame, 'example-dom-skill');
     result.steps.push('preclean_completed');
@@ -327,6 +336,41 @@ async function main() {
     await sidebarFrame.getByRole('button', { name: '加载文件包' }).click();
     await sidebarFrame.locator('.skill-source-file').first().waitFor({ state: 'visible', timeout: 30_000 });
     result.steps.push('skill_source_loaded');
+
+    const downloadPromise = page.waitForEvent('download', { timeout: 30_000 });
+    await sidebarFrame.getByRole('button', { name: '下载 ZIP', exact: true }).click();
+    const download = await downloadPromise;
+    const downloadPath = await download.path();
+    const archive = unzipSync(new Uint8Array(await fsp.readFile(downloadPath)));
+    const archivePaths = Object.keys(archive).sort();
+    const manifestPath = `${skillName}/manifest.json`;
+    const instructionPath = `${skillName}/SKILL.md`;
+    if (!archivePaths.includes(manifestPath) || !archivePaths.includes(instructionPath)) {
+      throw new Error(`downloaded ZIP is missing core skill files: ${JSON.stringify(archivePaths)}`);
+    }
+    if (!strFromU8(archive[instructionPath]).includes(`name: "${skillName}"`)) {
+      throw new Error('downloaded ZIP SKILL.md does not belong to the selected skill');
+    }
+    result.downloadedZip = {
+      suggestedFilename: download.suggestedFilename(),
+      files: archivePaths
+    };
+    result.steps.push('skill_zip_downloaded');
+
+    await sidebarFrame.getByRole('button', { name: '启用', exact: true }).click();
+    await sidebarFrame.getByRole('button', { name: '禁用', exact: true }).waitFor({ state: 'visible', timeout: 30_000 });
+    const enabledPill = await skillListItem.locator('.skill-status-pill').textContent();
+    if (String(enabledPill || '').trim() !== '启用') {
+      throw new Error(`skill UI did not switch to enabled: ${JSON.stringify(enabledPill)}`);
+    }
+    await sidebarFrame.getByRole('button', { name: '禁用', exact: true }).click();
+    await sidebarFrame.getByRole('button', { name: '启用', exact: true }).waitFor({ state: 'visible', timeout: 30_000 });
+    const disabledPill = await skillListItem.locator('.skill-status-pill').textContent();
+    if (String(disabledPill || '').trim() !== '停用') {
+      throw new Error(`skill UI did not switch to disabled: ${JSON.stringify(disabledPill)}`);
+    }
+    result.steps.push('skill_toggle_verified');
+    logProgress('ZIP 下载与启停 UI 已验证，继续 runtime 回归');
 
     await sidebarFrame.locator('body').screenshot({ path: path.join(outputDir, 'skill-viewer.png') });
 
@@ -418,6 +462,7 @@ async function main() {
     result.steps.push('postclean_completed');
 
     result.ok = true;
+    logProgress('回归完成');
   } catch (error) {
     result.ok = false;
     result.error = String(error?.stack || error?.message || error);

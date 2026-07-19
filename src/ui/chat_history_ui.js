@@ -9386,37 +9386,52 @@ export function createChatHistoryUI(appContext) {
     return section;
   }
 
+  async function loadSkillSourcePackage(skillName) {
+    let sourcePayload = skillViewerState.sourceByName.get(skillName) || null;
+    if (sourcePayload) return sourcePayload;
+
+    const fileIndex = await executeSkillViewerFileAction('list_files', {
+      target: { kind: 'skill', name: skillName }
+    });
+    const indexFiles = Array.isArray(fileIndex?.files) ? fileIndex.files : [];
+    const files = await Promise.all(indexFiles.map(async (file) => {
+      const fileResult = await executeSkillViewerFileAction('read_file', {
+        target: { kind: 'skill', name: skillName },
+        path: file.path
+      });
+      return {
+        ...file,
+        ...(fileResult?.file || {})
+      };
+    }));
+    sourcePayload = {
+      target: { kind: 'skill', name: skillName },
+      total_files: fileIndex?.total_files || files.length,
+      returned_file_count: fileIndex?.returned_file_count || files.length,
+      files
+    };
+    skillViewerState.sourceByName.set(skillName, sourcePayload);
+    return sourcePayload;
+  }
+
+  async function downloadSkillPackage(skillName) {
+    if (typeof window.fflate?.zipSync !== 'function' || typeof window.fflate?.strToU8 !== 'function') {
+      throw new Error('ZIP 压缩组件未加载。');
+    }
+    const sourcePayload = await loadSkillSourcePackage(skillName);
+    const archiveFiles = Object.fromEntries((sourcePayload.files || []).map((file) => [
+      `${skillName}/${file.path}`,
+      window.fflate.strToU8(file.content || '')
+    ]));
+    const zipBytes = window.fflate.zipSync(archiveFiles, { level: 6 });
+    await triggerBlobDownload(new Blob([zipBytes], { type: 'application/zip' }), `${skillName}.zip`);
+  }
+
   async function loadSkillSourceIntoViewer(skillName) {
     const { detailContainer } = getSkillViewerRefs();
     if (!detailContainer) return;
     try {
-      let sourcePayload = skillViewerState.sourceByName.get(skillName) || null;
-      if (!sourcePayload) {
-        const fileIndex = await executeSkillViewerFileAction('list_files', {
-          target: { kind: 'skill', name: skillName }
-        });
-        const indexFiles = Array.isArray(fileIndex?.files) ? fileIndex.files : [];
-        const files = [];
-        for (const file of indexFiles) {
-          const fileResult = await executeSkillViewerFileAction('read_file', {
-            target: { kind: 'skill', name: skillName },
-            path: file.path
-          });
-          files.push({
-            ...file,
-            ...(fileResult?.file || {})
-          });
-        }
-        sourcePayload = {
-          target: { kind: 'skill', name: skillName },
-          total_files: fileIndex?.total_files || files.length,
-          returned_file_count: fileIndex?.returned_file_count || files.length,
-          files
-        };
-        if (sourcePayload) {
-          skillViewerState.sourceByName.set(skillName, sourcePayload);
-        }
-      }
+      const sourcePayload = await loadSkillSourcePackage(skillName);
 
       const existing = detailContainer.querySelector('.skill-source-section');
       if (existing) {
@@ -9530,6 +9545,76 @@ export function createChatHistoryUI(appContext) {
 
     const heroActions = document.createElement('div');
     heroActions.className = 'skill-detail-actions';
+
+    if (skillDetail.builtin !== true) {
+      const toggleBtn = document.createElement('button');
+      toggleBtn.type = 'button';
+      toggleBtn.className = 'skill-action-button';
+      toggleBtn.textContent = skillDetail.enabled === true ? '禁用' : '启用';
+      toggleBtn.title = skillDetail.enabled === true
+        ? '停用这个 skill，并从匹配页面移除它的 runtime。'
+        : '启用这个 skill，使它可以在匹配页面使用。';
+      toggleBtn.addEventListener('click', async () => {
+        const nextEnabled = skillDetail.enabled !== true;
+        try {
+          toggleBtn.disabled = true;
+          toggleBtn.textContent = nextEnabled ? '启用中...' : '禁用中...';
+          await executeSkillViewerAction({
+            action: nextEnabled ? 'enable_skill' : 'disable_skill',
+            skill_name: skillDetail.name
+          });
+          await refreshSkillViewerPanel(null, { forceReloadDetail: true });
+          showNotification?.({
+            message: `Skill 已${nextEnabled ? '启用' : '禁用'}`,
+            description: skillDetail.interface?.display_name || skillDetail.name,
+            type: 'success',
+            duration: 2200
+          });
+        } catch (error) {
+          console.error('切换 skill 启用状态失败:', error);
+          toggleBtn.disabled = false;
+          toggleBtn.textContent = skillDetail.enabled === true ? '禁用' : '启用';
+          showNotification?.({
+            message: '切换 Skill 状态失败',
+            description: String(error?.message || error),
+            type: 'error',
+            duration: 3200
+          });
+        }
+      });
+      heroActions.appendChild(toggleBtn);
+    }
+
+    const downloadBtn = document.createElement('button');
+    downloadBtn.type = 'button';
+    downloadBtn.className = 'skill-action-button';
+    downloadBtn.textContent = '下载 ZIP';
+    downloadBtn.title = '下载包含 manifest.json、SKILL.md 和全部资源文件的 skill 压缩包。';
+    downloadBtn.addEventListener('click', async () => {
+      try {
+        downloadBtn.disabled = true;
+        downloadBtn.textContent = '打包中...';
+        await downloadSkillPackage(skillDetail.name);
+        showNotification?.({
+          message: 'Skill ZIP 已下载',
+          description: `${skillDetail.name}.zip`,
+          type: 'success',
+          duration: 2200
+        });
+      } catch (error) {
+        console.error('下载 skill ZIP 失败:', error);
+        showNotification?.({
+          message: '下载 Skill ZIP 失败',
+          description: String(error?.message || error),
+          type: 'error',
+          duration: 3200
+        });
+      } finally {
+        downloadBtn.disabled = false;
+        downloadBtn.textContent = '下载 ZIP';
+      }
+    });
+    heroActions.appendChild(downloadBtn);
 
     const sourceBtn = document.createElement('button');
     sourceBtn.type = 'button';
