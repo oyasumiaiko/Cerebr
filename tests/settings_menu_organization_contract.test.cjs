@@ -18,11 +18,13 @@ function readSettingDefinition(source, key) {
   return source.slice(start, end);
 }
 
-test('右下角菜单只迁移点名设置，并保留新对话与底部收藏 API', async () => {
-  const [settingsSource, sidebarHtml, sidebarEventsSource] = await Promise.all([
+test('右下角菜单只迁移点名设置，并保留新对话、停靠开关与底部收藏 API', async () => {
+  const [settingsSource, sidebarHtml, sidebarAppContextSource, sidebarEventsSource, contentSource] = await Promise.all([
     readWorkspaceFile('src/ui/settings_manager.js'),
     readWorkspaceFile('src/ui/sidebar/sidebar.html'),
-    readWorkspaceFile('src/ui/sidebar/sidebar_events.js')
+    readWorkspaceFile('src/ui/sidebar/sidebar_app_context.js'),
+    readWorkspaceFile('src/ui/sidebar/sidebar_events.js'),
+    readWorkspaceFile('src/extension/content.js')
   ]);
 
   assert.match(readSettingDefinition(settingsSource, 'sidebarWidth'), /uiHidden:\s*true/);
@@ -33,6 +35,7 @@ test('右下角菜单只迁移点名设置，并保留新对话与底部收藏 A
     'scrollMinimapOpacity',
     'scrollMinimapAutoHide',
     'scrollMinimapMessageMode',
+    'hideNativeScrollbarInFullscreen',
     'DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD'
   ]) {
     assert.doesNotMatch(readSettingDefinition(settingsSource, key), /menu:\s*'quick'/);
@@ -42,6 +45,11 @@ test('右下角菜单只迁移点名设置，并保留新对话与底部收藏 A
   const favoritesIndex = sidebarHtml.indexOf('id="favorite-apis"');
   assert.ok(historyIndex >= 0 && favoritesIndex > historyIndex);
   assert.match(sidebarHtml, /id="clear-chat"(?![^>]*display:\s*none)[^>]*>[\s\S]*?新对话/);
+  assert.match(sidebarHtml, /class="menu-item menu-item--toggle" id="dock-mode-toggle"[\s\S]*?fa-sidebar[\s\S]*?id="dock-mode-switch"/);
+  assert.match(sidebarAppContextSource, /dockModeSwitch:\s*document\.getElementById\('dock-mode-switch'\)/);
   assert.match(sidebarEventsSource, /case 'CLEAR_CHAT_COMMAND':[\s\S]*?appContext\.dom\.clearChat\?\.click\(\)/);
   assert.match(sidebarEventsSource, /appContext\.dom\.clearChat\.addEventListener\('click',[\s\S]*?clearChatHistory\(\)/);
+  assert.match(sidebarEventsSource, /case 'DOCK_MODE_STATE_SYNC':[\s\S]*?applyDockModeState\(appContext, data\.isDocked\)/);
+  assert.match(contentSource, /setDockMode\(isDocked\)[\s\S]*?this\.notifyIframeDockModeState\(\)/);
+  assert.match(contentSource, /type:\s*'DOCK_MODE_STATE_SYNC'[\s\S]*?isDocked:\s*!!this\.isDocked/);
 });

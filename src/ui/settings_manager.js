@@ -1324,7 +1324,6 @@ export function createSettingsManager(appContext) {
     {
       key: 'hideNativeScrollbarInFullscreen',
       type: 'toggle',
-      menu: 'quick',
       group: 'layout',
       label: '全屏隐藏原生滚动条',
       defaultValue: DEFAULT_SETTINGS.hideNativeScrollbarInFullscreen,

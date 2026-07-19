@@ -1192,6 +1192,13 @@ function requestToggleDockMode(appContext) {
   appContext.utils.postHostMessage({ type: 'TOGGLE_DOCK_MODE_FROM_IFRAME' });
 }
 
+function applyDockModeState(appContext, isDocked) {
+  appContext.state.isDocked = !!isDocked;
+  if (appContext.dom.dockModeSwitch) {
+    appContext.dom.dockModeSwitch.checked = appContext.state.isDocked;
+  }
+}
+
 function setupFullscreenToggle(appContext) {
   // 初始化时仅用 DOM class 兜底，真实状态由父页面同步，避免 F5 刷新误继承旧状态。
   if (!appContext.state.isStandalone) {
@@ -1246,7 +1253,11 @@ function setupFullscreenToggle(appContext) {
 
 function setupDockModeToggle(appContext) {
   if (!appContext.dom.dockModeToggle) return;
-  appContext.dom.dockModeToggle.addEventListener('click', () => requestToggleDockMode(appContext));
+  appContext.dom.dockModeToggle.addEventListener('click', (event) => {
+    event.preventDefault();
+    requestToggleDockMode(appContext);
+  });
+  applyDockModeState(appContext, false);
 }
 
 function setupScreenshotButton(appContext) {
@@ -1409,6 +1420,12 @@ function setupHostBridgeMessageHandlers(appContext) {
           break;
         }
         applyFullscreenMode(appContext, data.isFullscreen);
+        break;
+      case 'DOCK_MODE_STATE_SYNC':
+        if (appContext.state.isStandalone) {
+          break;
+        }
+        applyDockModeState(appContext, data.isDocked);
         break;
       case 'TEMP_MODE_STATE_SYNC':
         if (appContext.state.isStandalone) {

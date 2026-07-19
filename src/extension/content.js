@@ -868,6 +868,7 @@ class CerebrSidebar {
     const next = !!isDocked;
     if (this.isDocked === next) {
       this.updateDockLayout();
+      this.notifyIframeDockModeState();
       return;
     }
     this.isDocked = next;
@@ -879,11 +880,12 @@ class CerebrSidebar {
     } else {
       this.clearDockLayout();
     }
-      if (!this.isFullscreen) {
-        this.updatePosition(this.sidebarPosition);
-      }
-      this.manager?.layoutSidebars?.();
+    if (!this.isFullscreen) {
+      this.updatePosition(this.sidebarPosition);
     }
+    this.manager?.layoutSidebars?.();
+    this.notifyIframeDockModeState();
+  }
 
   async initializeSidebar() {
     try {
@@ -1155,6 +1157,11 @@ class CerebrSidebar {
           this.notifyIframeFullscreenState(this.isFullscreen);
         } catch (e) {
           console.warn('同步 iframe 全屏状态失败（忽略）:', e);
+        }
+        try {
+          this.notifyIframeDockModeState();
+        } catch (e) {
+          console.warn('同步 iframe 停靠状态失败（忽略）:', e);
         }
         try {
           this.notifyIframeTempModeState(this.isTemporaryMode);
@@ -1502,6 +1509,17 @@ class CerebrSidebar {
       });
     } catch (error) {
       console.log('通知iframe全屏状态失败:', error);
+    }
+  }
+
+  notifyIframeDockModeState() {
+    try {
+      this.postToIframe({
+        type: 'DOCK_MODE_STATE_SYNC',
+        isDocked: !!this.isDocked
+      });
+    } catch (error) {
+      console.log('通知 iframe 停靠状态失败:', error);
     }
   }
 
