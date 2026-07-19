@@ -2,20 +2,6 @@
 (() => {
   let clearChatButtonRef = null;
 
-  function handleWindowMessage(event) {
-    const message = event?.data;
-    if (!message || typeof message.type !== 'string') return;
-
-    if (message.type === 'CLEAR_CHAT_COMMAND') {
-      if (!clearChatButtonRef) {
-        clearChatButtonRef = document.getElementById('clear-chat');
-      }
-      clearChatButtonRef?.click();
-    }
-  }
-
-  window.addEventListener('message', handleWindowMessage);
-
   function init() {
     const chatLayout = document.getElementById('chat-layout');
     const chatContainer = document.getElementById('chat-container');
@@ -1921,7 +1907,6 @@
         resetMinimapWheelAccumulator(state);
       });
       window.removeEventListener('resize', handleWindowResize);
-      window.removeEventListener('message', handleWindowMessage);
     });
   }
 

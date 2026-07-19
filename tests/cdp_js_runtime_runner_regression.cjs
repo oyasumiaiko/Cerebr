@@ -58,6 +58,21 @@ async function main() {
     result.extensionId = extensionId;
     const page = context.pages()[0] || await context.newPage();
     await page.goto(targetUrl, { waitUntil: 'domcontentloaded' });
+    const hostileRunnerUrl = `chrome-extension://${extensionId}/src/ui/js_runtime_runner/js_runtime_runner.html?generation=1&channelId=hostile_probe`;
+    await page.evaluate(async (url) => {
+      const frame = document.createElement('iframe');
+      frame.dataset.hostileRunnerProbe = 'true';
+      frame.src = url;
+      document.documentElement.appendChild(frame);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }, hostileRunnerUrl);
+    const hostileRunnerFrame = page.frames().find((frame) => frame.url().includes('channelId=hostile_probe')) || null;
+    if (hostileRunnerFrame) {
+      throw new Error(`宿主页仍可通过固定扩展 ID 加载 runner：${hostileRunnerFrame.url()}`);
+    }
+    result.steps.push('hostile_runner_static_url_blocked');
+    logProgress('固定扩展 ID 的宿主页 runner 加载已被动态 WAR 阻止');
+    await page.evaluate(() => document.querySelector('iframe[data-hostile-runner-probe]')?.remove());
     await extensionWorker.evaluate(
       buildSendContentMessageExpression(JSON.stringify({ type: 'OPEN_SIDEBAR' }))
     );
@@ -152,7 +167,7 @@ async function main() {
       throw new Error(`读取 JS Runtime frame 快照失败：${JSON.stringify(runtimeFrameSnapshot)}`);
     }
     const exposedExtensionFrame = (runtimeFrameSnapshot.frames || []).find((frame) => (
-      typeof frame?.url === 'string' && frame.url.startsWith(`chrome-extension://${extensionId}/`)
+      typeof frame?.url === 'string' && frame.url.startsWith('chrome-extension://')
     ));
     if (exposedExtensionFrame) {
       throw new Error(`扩展内部 iframe 被错误注入 frame 上下文：${JSON.stringify(exposedExtensionFrame)}`);

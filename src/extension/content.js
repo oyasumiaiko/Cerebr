@@ -165,7 +165,7 @@ class CerebrJsRuntimeRunner {
     postResponseToSidebar(sidebarInstanceId, requestId, response) {
         const sidebar = this.resolveSidebarById(sidebarInstanceId);
         if (!sidebar) return;
-        sidebar.postToJsRuntimeBridge({
+        sidebar.postToIframe({
             [JS_RUNTIME_RUNNER_MESSAGE_FLAG]: true,
             type: 'response',
             requestId,
@@ -547,7 +547,8 @@ class CerebrSidebar {
     this.isFullscreen = false;
     this.isDisposed = false;
     this.container = null;
-    this.jsRuntimeBridgePort = null;
+    this.sidebarBridgePort = null;
+    this.pendingBridgeMessages = [];
     this.restoreObserver = null;
     this.restoreTimeoutId = null;
     // 临时模式状态由父页面内存维护，用于 iframe 右键重载恢复，F5 刷新时自动重置。
@@ -569,39 +570,33 @@ class CerebrSidebar {
     return this.sidebar?.querySelector('.cerebr-sidebar__iframe') || null;
   }
 
-  ownsWindow(sourceWindow) {
-    const iframe = this.getIframe();
-    return !!(iframe && iframe.contentWindow && iframe.contentWindow === sourceWindow);
-  }
-
   postToIframe(message) {
-    const iframe = this.getIframe();
-    if (!iframe || !iframe.contentWindow) return false;
-    iframe.contentWindow.postMessage(message, '*');
+    if (!this.sidebarBridgePort) {
+      this.pendingBridgeMessages.push(message);
+      return true;
+    }
+    this.sidebarBridgePort.postMessage(message);
     return true;
   }
 
-  connectJsRuntimeBridge() {
+  connectSidebarBridge() {
     const iframe = this.getIframe();
     if (!iframe?.contentWindow) return false;
-    try { this.jsRuntimeBridgePort?.close?.(); } catch (_) {}
+    try { this.sidebarBridgePort?.close?.(); } catch (_) {}
     const channel = new MessageChannel();
-    this.jsRuntimeBridgePort = channel.port1;
-    this.jsRuntimeBridgePort.onmessage = (event) => {
-      this.manager?.handleJsRuntimeBridgeMessage?.(this, event?.data);
+    this.sidebarBridgePort = channel.port1;
+    this.sidebarBridgePort.onmessage = (event) => {
+      this.manager?.handleSidebarBridgeMessage?.(this, event?.data);
     };
-    this.jsRuntimeBridgePort.start?.();
+    this.sidebarBridgePort.start?.();
     iframe.contentWindow.postMessage({
       [JS_RUNTIME_RUNNER_MESSAGE_FLAG]: true,
       type: 'connect_sidebar',
       bridgeChannelId: this.bridgeChannelId
     }, '*', [channel.port2]);
-    return true;
-  }
-
-  postToJsRuntimeBridge(message) {
-    if (!this.jsRuntimeBridgePort) return false;
-    this.jsRuntimeBridgePort.postMessage(message);
+    this.pendingBridgeMessages.splice(0).forEach((message) => {
+      this.sidebarBridgePort.postMessage(message);
+    });
     return true;
   }
 
@@ -1152,7 +1147,7 @@ class CerebrSidebar {
       // 以便右键重载时保留状态，同时在 F5 刷新页面时由父页面自动回到默认值。
       iframe.addEventListener('load', () => {
         try {
-          this.connectJsRuntimeBridge();
+          this.connectSidebarBridge();
         } catch (e) {
           console.warn('连接隐藏 JS Runtime runner 通道失败（忽略）:', e);
         }
@@ -1255,7 +1250,7 @@ class CerebrSidebar {
 
       // 延迟发送 URL_CHANGED 消息，等待 iframe 加载完毕
       iframe.addEventListener('load', () => {
-         iframe.contentWindow.postMessage({
+        this.postToIframe({
            type: 'URL_CHANGED',
            url: window.location.href,
            title: document.title,
@@ -1263,7 +1258,7 @@ class CerebrSidebar {
            lastModified: document.lastModified,
            lang: document.documentElement.lang,
            charset: document.characterSet
-         }, '*');
+        });
       });
     } catch (error) {
       console.error('初始化侧边栏失败:', error);
@@ -1567,8 +1562,9 @@ class CerebrSidebar {
       this.postToIframe({ type: 'BLUR_INPUT' });
     } catch (_) {}
 
-    try { this.jsRuntimeBridgePort?.close?.(); } catch (_) {}
-    this.jsRuntimeBridgePort = null;
+    try { this.sidebarBridgePort?.close?.(); } catch (_) {}
+    this.sidebarBridgePort = null;
+    this.pendingBridgeMessages.length = 0;
 
     try {
       if (this.container?.parentNode) {
@@ -1677,14 +1673,93 @@ class CerebrSidebarManager {
     return this.sidebarById.get(instanceId.trim()) || null;
   }
 
-  getSidebarByWindow(sourceWindow) {
-    return this.sidebars.find((item) => item.ownsWindow(sourceWindow)) || null;
-  }
-
   handleJsRuntimeBridgeMessage(sidebar, data = {}) {
     if (!sidebar || data?.[JS_RUNTIME_RUNNER_MESSAGE_FLAG] !== true) return;
     if (data.type !== 'request') return;
     this.jsRuntimeRunner?.forwardRequest?.(sidebar, data);
+  }
+
+  handleSidebarBridgeMessage(sourceSidebar, data = {}) {
+    if (!sourceSidebar || !data || typeof data !== 'object') return;
+    if (data?.[JS_RUNTIME_RUNNER_MESSAGE_FLAG] === true) {
+      this.handleJsRuntimeBridgeMessage(sourceSidebar, data);
+      return;
+    }
+    if (!data.type) return;
+    this.setActiveSidebar(sourceSidebar);
+
+    switch (data.type) {
+      case 'SIDEBAR_WIDTH_CHANGE':
+        this.applyWidthToAll(data.width);
+        break;
+      case 'SCALE_FACTOR_CHANGE':
+        this.applyScaleToAll(data.value);
+        break;
+      case 'SIDEBAR_POSITION_CHANGE':
+        this.applyPositionToAll(data.position);
+        break;
+      case 'SIDEBAR_EDGE_CONTROL_POINTER_DOWN':
+        this.startSidebarEdgeControlInteraction(sourceSidebar, data);
+        break;
+      case 'TOGGLE_DOCK_MODE_FROM_IFRAME':
+        {
+          const nextDocked = !sourceSidebar.isDocked;
+          if (nextDocked) {
+            this.sidebars.forEach((item) => {
+              if (item !== sourceSidebar) item.setDockMode(false);
+            });
+          }
+          sourceSidebar.setDockMode(nextDocked);
+        }
+        this.layoutSidebars();
+        break;
+      case 'CLOSE_SIDEBAR':
+        if (sourceSidebar.isPrimary) {
+          sourceSidebar.toggle(false);
+          this.layoutSidebars();
+        } else {
+          this.destroySidebar(sourceSidebar);
+        }
+        break;
+      case 'TOGGLE_FULLSCREEN_FROM_IFRAME':
+        console.log('处理全屏切换消息:', data.isFullscreen);
+        this.toggleFullscreenForSidebar(sourceSidebar);
+        break;
+      case 'CREATE_ADDITIONAL_SIDEBAR':
+        this.createSidebar({ show: true });
+        break;
+      case 'CAPTURE_SCREENSHOT':
+        captureAndDropScreenshot(sourceSidebar);
+        break;
+      case 'OPEN_MARKDOWN_LINK':
+        openMarkdownLinkInPage(data.url);
+        break;
+      case 'REQUEST_PAGE_INFO':
+        this.sendPageInfoToSidebar(sourceSidebar);
+        break;
+      case 'REQUEST_FULLSCREEN_STATE':
+        sourceSidebar.notifyIframeFullscreenState(sourceSidebar.isFullscreen);
+        break;
+      case 'REQUEST_TEMP_MODE_STATE':
+        sourceSidebar.notifyIframeTempModeState(sourceSidebar.isTemporaryMode);
+        break;
+      case 'REQUEST_ALT_KEY_STATE':
+        sourceSidebar.notifyIframeAltKeyState(this.isAltKeyPressed);
+        break;
+      case 'REQUEST_HOST_EMBED_SCALE':
+        sourceSidebar.notifyIframeEmbedScale();
+        break;
+      case 'TEMP_MODE_STATE_CHANGED':
+        sourceSidebar.isTemporaryMode = !!data?.isOn;
+        break;
+      case 'SIDEBAR_SELECTION_CHANGED':
+        if (!data.source || data.source === 'cerebr-sidebar') {
+          currentSelection = (data.text || '').toString().trim();
+        }
+        break;
+      default:
+        break;
+    }
   }
 
   destroySidebar(sidebarInstance) {
@@ -2348,7 +2423,6 @@ class CerebrSidebarManager {
       }
     });
 
-    window.addEventListener('message', (event) => this.handleFrameMessage(event));
   }
 
   setupDragAndDrop() {
@@ -2436,86 +2510,6 @@ class CerebrSidebarManager {
     return null;
   }
 
-  handleFrameMessage(event) {
-    const data = event?.data || {};
-    if (!data?.type) return;
-    const sourceSidebar = this.getSidebarByWindow(event.source);
-    if (!sourceSidebar) return;
-    this.setActiveSidebar(sourceSidebar);
-
-    switch (data.type) {
-      case 'SIDEBAR_WIDTH_CHANGE':
-        this.applyWidthToAll(data.width);
-        break;
-      case 'SCALE_FACTOR_CHANGE':
-        this.applyScaleToAll(data.value);
-        break;
-      case 'SIDEBAR_POSITION_CHANGE':
-        this.applyPositionToAll(data.position);
-        break;
-      case 'SIDEBAR_EDGE_CONTROL_POINTER_DOWN':
-        this.startSidebarEdgeControlInteraction(sourceSidebar, data);
-        break;
-      case 'TOGGLE_DOCK_MODE_FROM_IFRAME':
-        {
-          const nextDocked = !sourceSidebar.isDocked;
-          if (nextDocked) {
-            this.sidebars.forEach((item) => {
-              if (item !== sourceSidebar) item.setDockMode(false);
-            });
-          }
-          sourceSidebar.setDockMode(nextDocked);
-        }
-        this.layoutSidebars();
-        break;
-      case 'CLOSE_SIDEBAR':
-        if (sourceSidebar.isPrimary) {
-          sourceSidebar.toggle(false);
-          this.layoutSidebars();
-        } else {
-          this.destroySidebar(sourceSidebar);
-        }
-        break;
-      case 'TOGGLE_FULLSCREEN_FROM_IFRAME':
-        console.log('处理全屏切换消息:', data.isFullscreen);
-        this.toggleFullscreenForSidebar(sourceSidebar);
-        break;
-      case 'CREATE_ADDITIONAL_SIDEBAR':
-        this.createSidebar({ show: true });
-        break;
-      case 'CAPTURE_SCREENSHOT':
-        captureAndDropScreenshot(sourceSidebar);
-        break;
-      case 'OPEN_MARKDOWN_LINK':
-        openMarkdownLinkInPage(data.url);
-        break;
-      case 'REQUEST_PAGE_INFO':
-        this.sendPageInfoToSidebar(sourceSidebar);
-        break;
-      case 'REQUEST_FULLSCREEN_STATE':
-        sourceSidebar.notifyIframeFullscreenState(sourceSidebar.isFullscreen);
-        break;
-      case 'REQUEST_TEMP_MODE_STATE':
-        sourceSidebar.notifyIframeTempModeState(sourceSidebar.isTemporaryMode);
-        break;
-      case 'REQUEST_ALT_KEY_STATE':
-        sourceSidebar.notifyIframeAltKeyState(this.isAltKeyPressed);
-        break;
-      case 'REQUEST_HOST_EMBED_SCALE':
-        sourceSidebar.notifyIframeEmbedScale();
-        break;
-      case 'TEMP_MODE_STATE_CHANGED':
-        sourceSidebar.isTemporaryMode = !!data?.isOn;
-        break;
-      case 'SIDEBAR_SELECTION_CHANGED':
-        if (!data.source || data.source === 'cerebr-sidebar') {
-          currentSelection = (data.text || '').toString().trim();
-        }
-        break;
-      default:
-        break;
-    }
-  }
 }
 
 let sidebarManager;

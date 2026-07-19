@@ -18,6 +18,7 @@ test('host-page JS runtime requests are routed through a disposable hidden runne
 
   assert.match(manifestSource, /src\/ui\/js_runtime_runner\/js_runtime_runner\.html/);
   assert.match(manifestSource, /src\/ui\/js_runtime_runner\/js_runtime_runner\.js/);
+  assert.match(manifestSource, /"use_dynamic_url"\s*:\s*true/);
   assert.match(runnerHtml, /<script type="module" src="\.\/js_runtime_runner\.js"><\/script>/);
 
   assert.match(contentSource, /class CerebrJsRuntimeRunner/);
@@ -29,7 +30,7 @@ test('host-page JS runtime requests are routed through a disposable hidden runne
 
   assert.match(sidebarSource, /function requestJsRuntimeRunner\(runtimeMessage, timeoutMs, timeoutMessage\)/);
   assert.match(sidebarSource, /const port = event\.ports\?\.\[0\]/);
-  assert.match(sidebarSource, /jsRuntimeRunnerPort\.postMessage\(\{/);
+  assert.match(sidebarSource, /hostBridgePort\.postMessage\(\{/);
   assert.match(sidebarSource, /\{ type: 'GET_JS_RUNTIME_STATUS' \}/);
   assert.match(sidebarSource, /\{ type: 'GET_JS_RUNTIME_FRAMES', tabId: targetTabId \}/);
   assert.match(sidebarSource, /const executePromise = requestJsRuntimeRunner\(/);

@@ -245,8 +245,28 @@ export function registerSidebarUtilities(appContext) {
     ownerDocument: document
   });
   let jsRuntimeRunnerRequestSeq = 0;
-  let jsRuntimeRunnerPort = null;
+  let hostBridgePort = null;
+  const pendingHostMessages = [];
+  const pendingHostBridgeMessages = [];
+  let hostMessageHandler = null;
   const jsRuntimeRunnerPendingRequests = new Map();
+
+  function postHostMessage(message) {
+    if (appContext.state.isStandalone || window.parent === window) return false;
+    if (!hostBridgePort) {
+      pendingHostMessages.push(message);
+      return true;
+    }
+    hostBridgePort.postMessage(message);
+    return true;
+  }
+
+  appContext.utils.postHostMessage = postHostMessage;
+  appContext.utils.setHostMessageHandler = (handler) => {
+    hostMessageHandler = typeof handler === 'function' ? handler : null;
+    if (!hostMessageHandler) return;
+    pendingHostBridgeMessages.splice(0).forEach((message) => hostMessageHandler(message));
+  };
 
   window.addEventListener('message', (event) => {
     if (event.source !== window.parent) return;
@@ -255,24 +275,32 @@ export function registerSidebarUtilities(appContext) {
     if (data.bridgeChannelId !== appContext.state.bridgeChannelId) return;
     const port = event.ports?.[0];
     if (!port) return;
-    try { jsRuntimeRunnerPort?.close?.(); } catch (_) {}
-    jsRuntimeRunnerPort = port;
-    jsRuntimeRunnerPort.onmessage = (portEvent) => {
+    try { hostBridgePort?.close?.(); } catch (_) {}
+    hostBridgePort = port;
+    hostBridgePort.onmessage = (portEvent) => {
       const responseData = portEvent?.data || {};
-      if (responseData?.[JS_RUNTIME_RUNNER_MESSAGE_FLAG] !== true || responseData.type !== 'response') return;
-      const requestId = typeof responseData.requestId === 'string' ? responseData.requestId : '';
-      const pending = jsRuntimeRunnerPendingRequests.get(requestId);
-      if (!pending) return;
-      jsRuntimeRunnerPendingRequests.delete(requestId);
-      if (pending.timeoutId) window.clearTimeout(pending.timeoutId);
-      pending.resolve(responseData.response);
+      if (responseData?.[JS_RUNTIME_RUNNER_MESSAGE_FLAG] === true && responseData.type === 'response') {
+        const requestId = typeof responseData.requestId === 'string' ? responseData.requestId : '';
+        const pending = jsRuntimeRunnerPendingRequests.get(requestId);
+        if (!pending) return;
+        jsRuntimeRunnerPendingRequests.delete(requestId);
+        if (pending.timeoutId) window.clearTimeout(pending.timeoutId);
+        pending.resolve(responseData.response);
+        return;
+      }
+      if (hostMessageHandler) {
+        hostMessageHandler(responseData);
+      } else {
+        pendingHostBridgeMessages.push(responseData);
+      }
     };
-    jsRuntimeRunnerPort.start?.();
+    hostBridgePort.start?.();
+    pendingHostMessages.splice(0).forEach((message) => hostBridgePort.postMessage(message));
   });
 
   function requestJsRuntimeRunner(runtimeMessage, timeoutMs, timeoutMessage) {
     const bridgeChannelId = appContext.state.bridgeChannelId;
-    if (!bridgeChannelId || !jsRuntimeRunnerPort || window.parent === window) {
+    if (!bridgeChannelId || !hostBridgePort || window.parent === window) {
       return Promise.reject(new Error('当前侧栏没有可用的宿主页 JS Runtime runner。'));
     }
     jsRuntimeRunnerRequestSeq += 1;
@@ -288,7 +316,7 @@ export function registerSidebarUtilities(appContext) {
         reject(new Error(timeoutMessage || 'JS Runtime runner 请求超时'));
       }, normalizedTimeoutMs);
       jsRuntimeRunnerPendingRequests.set(requestId, { resolve, reject, timeoutId });
-      jsRuntimeRunnerPort.postMessage({
+      hostBridgePort.postMessage({
         [JS_RUNTIME_RUNNER_MESSAGE_FLAG]: true,
         type: 'request',
         bridgeChannelId,
@@ -1350,7 +1378,7 @@ export function registerSidebarUtilities(appContext) {
       appContext.utils.showNotification({ message: '独立聊天页面不支持网页截图', type: 'warning' });
       return;
     }
-    window.parent.postMessage({ type: 'CAPTURE_SCREENSHOT' }, '*');
+    postHostMessage({ type: 'CAPTURE_SCREENSHOT' });
   };
 
   /**

@@ -57,7 +57,7 @@ test('宿主页 Alt 状态会桥接到 iframe 侧栏滚动管理器', async () =
   );
   assert.match(
     sidebarEventsSource,
-    /window\.parent\.postMessage\(\{ type: 'REQUEST_ALT_KEY_STATE' \}, '\*'\);/
+    /appContext\.utils\.postHostMessage\(\{ type: 'REQUEST_ALT_KEY_STATE' \}\);/
   );
 
   assert.match(

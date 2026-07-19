@@ -1608,17 +1608,6 @@ export function createThemeManager() {
   }
 
   /**
-   * 通知父窗口主题变化
-   * @param {string} themeId - 主题ID
-   */
-  function notifyThemeChange(themeId) {
-    window.parent.postMessage({
-      type: 'THEME_CHANGE',
-      themeId: themeId
-    }, '*');
-  }
-
-  /**
    * 设置监听系统主题变化事件
    */
   function setupSystemThemeListener() {
@@ -1863,7 +1852,6 @@ export function createThemeManager() {
     getAvailableThemes,
     getThemeById,
     applyTheme,
-    notifyThemeChange,
     renderThemePreview,
     init
   };

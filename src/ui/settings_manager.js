@@ -2963,9 +2963,6 @@ export function createSettingsManager(appContext) {
     // 若启用了“自定义配色覆盖主题”，需要在主题切换后再次覆盖关键变量。
     applyCustomThemeColorOverrides();
     
-    // 通知主题管理器主题变更
-    themeManager.notifyThemeChange(themeValue);
-    
     // 更新主题预览卡片活动状态（不会重新渲染导致菜单关闭）
     updateThemePreviewActiveState(themeValue);
   }
@@ -3790,27 +3787,27 @@ export function createSettingsManager(appContext) {
   
   // 通知侧边栏宽度变化
   function notifySidebarWidthChange(width) {
-    window.parent.postMessage({
+    appContext.utils.postHostMessage({
       type: 'SIDEBAR_WIDTH_CHANGE',
       width: parseInt(width)
-    }, '*');
+    });
   }
   
   // 通知缩放比例变化
   function notifyScaleFactorChange(value) {
-    window.parent.postMessage({
+    appContext.utils.postHostMessage({
       type: 'SCALE_FACTOR_CHANGE',
       value: value
-    }, '*');
+    });
   }
   
   // 通知侧边栏位置变化
   function notifySidebarPositionChange(position) {
     console.log(`发送侧边栏位置变化通知: ${position}`);
-    window.parent.postMessage({
+    appContext.utils.postHostMessage({
       type: 'SIDEBAR_POSITION_CHANGE',
       position: position
-    }, '*');
+    });
   }
   
   // 监听系统主题变化

@@ -558,11 +558,11 @@ export function createMessageProcessor(appContext) {
 
       const url = link.dataset.cerebrResolvedUrl || link.getAttribute('href') || '';
       if (!url) return;
-      if (!window.parent || window.parent === window) return;
+      if (appContext.state.isStandalone) return;
 
       event.preventDefault();
       event.stopPropagation();
-      window.parent.postMessage({ type: 'OPEN_MARKDOWN_LINK', url }, '*');
+      appContext.utils.postHostMessage({ type: 'OPEN_MARKDOWN_LINK', url });
     };
 
     if (chatContainer) {

@@ -24,7 +24,8 @@ const { chromium } = loadPlaywright(repoRoot);
 
 function getSidebarFrames(page, extensionId) {
   return page.frames().filter((frame) => (
-    frame.url().startsWith(`chrome-extension://${extensionId}/src/ui/sidebar/sidebar.html`)
+    frame.url().startsWith('chrome-extension://')
+    && frame.url().includes('/src/ui/sidebar/sidebar.html')
   ));
 }
 

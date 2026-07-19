@@ -188,7 +188,10 @@ async function reloadUnpackedExtension(context, {
 
 async function waitForSidebarFrame(page, extensionId, { timeoutMs = 30_000 } = {}) {
   return await waitFor(async () => (
-    page.frames().find((frame) => frame.url().startsWith(`chrome-extension://${extensionId}/src/ui/sidebar/sidebar.html`)) || null
+    page.frames().find((frame) => (
+      frame.url().startsWith('chrome-extension://')
+      && frame.url().includes('/src/ui/sidebar/sidebar.html')
+    )) || null
   ), { timeoutMs, label: 'sidebar frame' });
 }
 

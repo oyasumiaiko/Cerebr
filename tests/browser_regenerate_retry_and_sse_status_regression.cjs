@@ -372,7 +372,10 @@ async function main() {
     result.steps.push('sidebar_open_requested');
 
     const sidebarFrame = await waitFor(async () => (
-      hostPage.frames().find((frame) => frame.url().startsWith(`chrome-extension://${extensionId}/src/ui/sidebar/sidebar.html`)) || null
+      hostPage.frames().find((frame) => (
+        frame.url().startsWith('chrome-extension://')
+        && frame.url().includes('/src/ui/sidebar/sidebar.html')
+      )) || null
     ), { timeoutMs: 30000, intervalMs: 200, label: 'embedded sidebar frame' });
     await sidebarFrame.locator('#message-input').waitFor({ state: 'visible', timeout: 30000 });
     await waitFor(async () => {

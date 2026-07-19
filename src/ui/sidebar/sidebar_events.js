@@ -28,7 +28,7 @@ export function registerSidebarEventHandlers(appContext) {
   setupDockModeToggle(appContext);
   setupScreenshotButton(appContext);
   setupAddSidebarButton(appContext);
-  setupWindowMessageHandlers(appContext);
+  setupHostBridgeMessageHandlers(appContext);
   setupTempModeIndicator(appContext);
   setupMessageInputHandlers(appContext);
   setupSlashCommandHints(appContext);
@@ -113,13 +113,7 @@ function setupStatusDot(appContext) {
   });
 
   refresh();
-  window.addEventListener('message', (event) => {
-    if (event?.data?.type === 'TOGGLE_TEMP_MODE_FROM_EXTENSION') {
-      setTimeout(refresh, 0);
-    } else if (event?.data?.type === 'URL_CHANGED') {
-      setTimeout(refresh, 0);
-    }
-  });
+  appContext.utils.refreshStatusDot = refresh;
   document.addEventListener('TEMP_MODE_CHANGED', () => setTimeout(refresh, 0));
   if (appContext.dom.emptyStateTempMode && !appContext.state.isStandalone) {
     appContext.dom.emptyStateTempMode.addEventListener('click', () => setTimeout(refresh, 0));
@@ -1172,7 +1166,7 @@ function requestToggleFullscreen(appContext) {
 
   // 先在 iframe 内即时切换布局（避免等待父页面处理消息造成“闪一下/不跟手”）
   applyFullscreenMode(appContext, !appContext.state.isFullscreen);
-  window.parent.postMessage({ type: 'TOGGLE_FULLSCREEN_FROM_IFRAME' }, '*');
+  appContext.utils.postHostMessage({ type: 'TOGGLE_FULLSCREEN_FROM_IFRAME' });
 }
 
 function requestSidebarEdgeControlPointerDown(appContext, event) {
@@ -1181,12 +1175,12 @@ function requestSidebarEdgeControlPointerDown(appContext, event) {
 
   event.preventDefault();
   event.stopPropagation();
-  window.parent.postMessage({
+  appContext.utils.postHostMessage({
     type: 'SIDEBAR_EDGE_CONTROL_POINTER_DOWN',
     button: event.button,
     clientX: event.clientX,
     screenX: event.screenX
-  }, '*');
+  });
   return true;
 }
 
@@ -1195,7 +1189,7 @@ function requestToggleDockMode(appContext) {
     appContext.utils.showNotification('独立聊天页面不支持停靠模式');
     return;
   }
-  window.parent.postMessage({ type: 'TOGGLE_DOCK_MODE_FROM_IFRAME' }, '*');
+  appContext.utils.postHostMessage({ type: 'TOGGLE_DOCK_MODE_FROM_IFRAME' });
 }
 
 function setupFullscreenToggle(appContext) {
@@ -1292,11 +1286,11 @@ function setupAddSidebarButton(appContext) {
   }
   button.addEventListener('click', () => {
     try {
-      window.parent.postMessage({
+      appContext.utils.postHostMessage({
         type: isPrimarySidebar ? 'CREATE_ADDITIONAL_SIDEBAR' : 'CLOSE_SIDEBAR',
         source: 'cerebr-sidebar',
         instanceId: appContext.state.sidebarInstanceId || ''
-      }, '*');
+      });
     } catch (error) {
       console.error(isPrimarySidebar ? '请求新建并行侧栏失败:' : '请求关闭侧栏失败:', error);
       appContext.utils.showNotification?.({ message: isPrimarySidebar ? '新建侧栏失败' : '关闭侧栏失败', type: 'error' });
@@ -1308,9 +1302,8 @@ function setupAddSidebarButton(appContext) {
  * 监听来自 content script / background 的消息，完成状态同步与快捷操作。
  * @param {ReturnType<import('./sidebar_app_context.js').createSidebarAppContext>} appContext
  */
-function setupWindowMessageHandlers(appContext) {
-  window.addEventListener('message', (event) => {
-    const { data } = event;
+function setupHostBridgeMessageHandlers(appContext) {
+  appContext.utils.setHostMessageHandler((data) => {
     if (!data?.type) {
       return;
     }
@@ -1364,10 +1357,14 @@ function setupWindowMessageHandlers(appContext) {
         appContext.state.pageInfo = data;
         window.cerebr.pageInfo = data;
         appContext.services.chatHistoryUI.updatePageInfo(data);
+        appContext.utils.refreshStatusDot?.();
         if (appContext.dom.repomixButton) {
           const isGithubRepo = data.url?.includes('github.com');
           appContext.dom.repomixButton.style.display = isGithubRepo ? 'block' : 'none';
         }
+        break;
+      case 'CLEAR_CHAT_COMMAND':
+        appContext.dom.clearChat?.click();
         break;
       case 'UPDATE_PLACEHOLDER':
         if (appContext.dom.messageInput) {
@@ -1780,7 +1777,7 @@ function setupTempModeIndicator(appContext) {
     // 将临时模式变更同步给父页面，由父页面在内存里缓存，供 iframe 右键重载时恢复。
     if (!appContext.state.isStandalone) {
       try {
-        window.parent.postMessage({ type: 'TEMP_MODE_STATE_CHANGED', isOn }, '*');
+        appContext.utils.postHostMessage({ type: 'TEMP_MODE_STATE_CHANGED', isOn });
       } catch (_) {}
     }
   });
@@ -2083,11 +2080,11 @@ function setupMemoryManagement(appContext) {
 function scheduleInitialRequests(appContext) {
   setTimeout(() => {
     if (!appContext.state.isStandalone) {
-      window.parent.postMessage({ type: 'REQUEST_PAGE_INFO' }, '*');
-      window.parent.postMessage({ type: 'REQUEST_FULLSCREEN_STATE' }, '*');
-      window.parent.postMessage({ type: 'REQUEST_TEMP_MODE_STATE' }, '*');
-      window.parent.postMessage({ type: 'REQUEST_ALT_KEY_STATE' }, '*');
-      window.parent.postMessage({ type: 'REQUEST_HOST_EMBED_SCALE' }, '*');
+      appContext.utils.postHostMessage({ type: 'REQUEST_PAGE_INFO' });
+      appContext.utils.postHostMessage({ type: 'REQUEST_FULLSCREEN_STATE' });
+      appContext.utils.postHostMessage({ type: 'REQUEST_TEMP_MODE_STATE' });
+      appContext.utils.postHostMessage({ type: 'REQUEST_ALT_KEY_STATE' });
+      appContext.utils.postHostMessage({ type: 'REQUEST_HOST_EMBED_SCALE' });
     }
 
     if (appContext.state.isFullscreen) {
