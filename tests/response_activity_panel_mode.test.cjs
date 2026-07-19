@@ -61,21 +61,34 @@ test('思考中即使是 collapsed 手动态也只会显示 peek', async () => {
   });
 });
 
-test('思考结束后会自动完全收起一次并清掉思考期手动态', async () => {
+test('多次工具调用阶段切换不会覆盖用户手动展开状态', async () => {
   const { resolveResponseActivityPanelModeState } = await loadModule();
-  const state = resolveResponseActivityPanelModeState({
+  const betweenCallsState = resolveResponseActivityPanelModeState({
     manualState: 'expanded',
     lifecycleInitialized: true,
     autoCollapsedAfterFinish: false,
     isInProgress: false
   });
+  const nextCallState = resolveResponseActivityPanelModeState({
+    manualState: 'expanded',
+    lifecycleInitialized: betweenCallsState.lifecycleInitialized,
+    autoCollapsedAfterFinish: betweenCallsState.autoCollapsedAfterFinish,
+    isInProgress: true
+  });
 
-  assert.deepEqual(state, {
-    expanded: false,
+  assert.deepEqual(betweenCallsState, {
+    expanded: true,
     peek: false,
     lifecycleInitialized: true,
     autoCollapsedAfterFinish: true,
-    clearManualState: true
+    clearManualState: false
+  });
+  assert.deepEqual(nextCallState, {
+    expanded: true,
+    peek: false,
+    lifecycleInitialized: true,
+    autoCollapsedAfterFinish: false,
+    clearManualState: false
   });
 });
 

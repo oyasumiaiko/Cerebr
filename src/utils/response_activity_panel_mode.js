@@ -64,6 +64,18 @@ export function resolveResponseActivityPanelModeState(options = {}) {
     };
   }
 
+  // 用户已经明确选择展开或收起时，阶段切换只能结束自动生命周期，不能覆盖用户选择。
+  // Responses 的多次工具 follow-up 之间可能短暂离开 thinking 状态；清掉手动态会导致每次新调用都重新收起。
+  if (manualState) {
+    return {
+      expanded: manualState === 'expanded',
+      peek: false,
+      lifecycleInitialized: true,
+      autoCollapsedAfterFinish: true,
+      clearManualState: false
+    };
+  }
+
   if (!autoCollapsedAfterFinish) {
     return {
       expanded: false,
@@ -71,16 +83,6 @@ export function resolveResponseActivityPanelModeState(options = {}) {
       lifecycleInitialized: true,
       autoCollapsedAfterFinish: true,
       clearManualState: true
-    };
-  }
-
-  if (manualState === 'expanded') {
-    return {
-      expanded: true,
-      peek: false,
-      lifecycleInitialized: true,
-      autoCollapsedAfterFinish: true,
-      clearManualState: false
     };
   }
 
