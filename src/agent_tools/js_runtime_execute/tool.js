@@ -12,6 +12,7 @@ import {
 } from '../shared/model_tool_contract.js';
 
 export const JS_RUNTIME_EXECUTE_TOOL_NAME = 'js_runtime_execute';
+export const JS_RUNTIME_MAX_TIMEOUT_MS = 2_147_000_000;
 
 /**
  * 构造给 Responses API 使用的 js_runtime_execute 自定义函数工具定义。
@@ -72,7 +73,8 @@ export function buildJsRuntimeExecuteFunctionToolDefinition(pageToolEnvironment 
       timeout_ms: {
         type: ['integer', 'null'],
         minimum: 1,
-        description: '执行超时毫秒数。传 null 使用当前环境默认策略；只有确实需要限制长任务时才传正整数。'
+        maximum: JS_RUNTIME_MAX_TIMEOUT_MS,
+        description: `执行超时毫秒数。传 null 使用当前环境默认策略；传值必须是正整数，最大 ${JS_RUNTIME_MAX_TIMEOUT_MS}ms。`
       },
       frame_ids: exposeHostPageTools
         ? {
@@ -114,6 +116,9 @@ export function normalizeJsRuntimeExecuteToolArguments(rawArgs, options = {}) {
     }
     if (parsed <= 0) {
       throw new Error('js_runtime_execute 参数错误：timeout_ms 必须大于 0。');
+    }
+    if (parsed > JS_RUNTIME_MAX_TIMEOUT_MS) {
+      throw new Error(`js_runtime_execute 参数错误：timeout_ms 不能超过 ${JS_RUNTIME_MAX_TIMEOUT_MS}。`);
     }
     return Math.trunc(parsed);
   })();

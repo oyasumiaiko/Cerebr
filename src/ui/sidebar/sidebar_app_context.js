@@ -27,11 +27,21 @@ import {
   toLayoutPixels
 } from '../../utils/coordinate_space.js';
 import { isPureConversationApiConfig } from '../../api/api_request_mode.js';
+import { JS_RUNTIME_MAX_TIMEOUT_MS } from '../../agent_tools/js_runtime_execute/tool.js';
 
 const JS_RUNTIME_STATUS_TIMEOUT_MS = 5000;
 const JS_RUNTIME_FRAME_SNAPSHOT_TIMEOUT_MS = 5000;
 const JS_RUNTIME_EXECUTION_TIMEOUT_MS = 30000;
-const SKILL_REGISTRY_TIMEOUT_MS = 10000;
+const JS_RUNTIME_EXECUTION_RESPONSE_GRACE_MS = 1000;
+const SKILL_REGISTRY_READ_TIMEOUT_MS = 10000;
+const SKILL_REGISTRY_READ_ACTIONS = new Set([
+  'list',
+  'list_files',
+  'search_files',
+  'read_detail',
+  'read_package',
+  'read_file'
+]);
 const JS_RUNTIME_RUNNER_MESSAGE_FLAG = '__cerebrJsRuntimeRunner';
 
 function resolveSidebarInstanceIdFromLocation() {
@@ -1455,7 +1465,7 @@ export function registerSidebarUtilities(appContext) {
           tabId: targetTabId,
           isolateFromHostPage
         }),
-        SKILL_REGISTRY_TIMEOUT_MS,
+        SKILL_REGISTRY_READ_TIMEOUT_MS,
         '读取当前页面匹配的技能摘要超时'
       );
     } catch (error) {
@@ -1486,16 +1496,17 @@ export function registerSidebarUtilities(appContext) {
       const targetTabId = isolateFromHostPage
         ? null
         : await resolveBoundSidebarTargetTabId();
-      return await raceWithTimeout(
-        chrome.runtime.sendMessage({
-          type: 'SKILL_REGISTRY_ACTION',
-          tabId: Number.isFinite(targetTabId) ? targetTabId : null,
-          isolateFromHostPage,
-          payload: (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {}
-        }),
-        SKILL_REGISTRY_TIMEOUT_MS,
-        '执行 skill_registry 操作超时'
-      );
+      const action = typeof payload?.action === 'string' ? payload.action.trim().toLowerCase() : '';
+      const request = chrome.runtime.sendMessage({
+        type: 'SKILL_REGISTRY_ACTION',
+        tabId: Number.isFinite(targetTabId) ? targetTabId : null,
+        isolateFromHostPage,
+        payload: (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {}
+      });
+      if (!SKILL_REGISTRY_READ_ACTIONS.has(action)) {
+        return await request;
+      }
+      return await raceWithTimeout(request, SKILL_REGISTRY_READ_TIMEOUT_MS, '执行 skill_registry 读取超时');
     } catch (error) {
       return {
         success: false,
@@ -1578,7 +1589,12 @@ export function registerSidebarUtilities(appContext) {
       const raw = options?.timeoutMs;
       if (raw === null || typeof raw === 'undefined') return JS_RUNTIME_EXECUTION_TIMEOUT_MS;
       const parsed = Number(raw);
-      return Number.isFinite(parsed) ? Math.max(1, Math.trunc(parsed)) : JS_RUNTIME_EXECUTION_TIMEOUT_MS;
+      if (!Number.isFinite(parsed)) return JS_RUNTIME_EXECUTION_TIMEOUT_MS;
+      const normalized = Math.max(1, Math.trunc(parsed));
+      if (normalized > JS_RUNTIME_MAX_TIMEOUT_MS) {
+        throw new Error(`JS Runtime timeoutMs 不能超过 ${JS_RUNTIME_MAX_TIMEOUT_MS}。`);
+      }
+      return normalized;
     })();
     const signal = (options?.signal && typeof options.signal === 'object')
       ? options.signal
@@ -1637,7 +1653,7 @@ export function registerSidebarUtilities(appContext) {
         };
       const executePromise = requestJsRuntimeRunner(
         executeRequest,
-        timeoutMs,
+        timeoutMs + JS_RUNTIME_EXECUTION_RESPONSE_GRACE_MS,
         '执行 JS Runtime 超时'
       );
       if (!signal) {

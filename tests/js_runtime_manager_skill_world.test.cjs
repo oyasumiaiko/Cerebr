@@ -88,7 +88,16 @@ test('createJsRuntimeManager.execute 会在用户代码前升级已打开页面�
         async configureWorld() {},
         async execute(options) {
           capturedSource = options.js[0].code;
-          return [];
+          return [{
+            frameId: 0,
+            documentId: 'doc-upgrade',
+            result: {
+              __cerebrJsRuntimeEnvelope: true,
+              value: null,
+              logs: [],
+              error: null
+            }
+          }];
         }
       }
     };
@@ -122,6 +131,69 @@ test('createJsRuntimeManager.execute 会在用户代码前升级已打开页面�
     else globalThis.$skill = previousSkill;
     if (previousMethods === undefined) delete globalThis.$methods;
     else globalThis.$methods = previousMethods;
+  }
+});
+
+test('createJsRuntimeManager.execute 会拒绝空 frame 结果', async () => {
+  const { createJsRuntimeManager } = await loadJsRuntimeManagerModule();
+  const previousChrome = global.chrome;
+
+  try {
+    global.chrome = {
+      userScripts: {
+        async getScripts() { return []; },
+        async configureWorld() {},
+        async execute() { return []; }
+      }
+    };
+    const manager = createJsRuntimeManager();
+    await assert.rejects(
+      () => manager.execute({ tabId: 9, code: 'return 1;' }),
+      (error) => error?.name === 'NoExecutionResultError'
+    );
+  } finally {
+    if (previousChrome === undefined) delete global.chrome;
+    else global.chrome = previousChrome;
+  }
+});
+
+test('createJsRuntimeManager.execute 并发执行不会改写共享 globalThis.console', async () => {
+  const { createJsRuntimeManager } = await loadJsRuntimeManagerModule();
+  const previousChrome = global.chrome;
+  const originalConsole = globalThis.console;
+
+  try {
+    global.chrome = {
+      userScripts: {
+        async getScripts() { return []; },
+        async configureWorld() {},
+        async execute(options) {
+          const envelope = await eval(options.js[0].code);
+          return [{ frameId: 0, documentId: 'doc-console', result: envelope }];
+        }
+      }
+    };
+    const manager = createJsRuntimeManager();
+    const [fast, slow] = await Promise.all([
+      manager.execute({
+        tabId: 9,
+        timeoutMs: 100,
+        code: `await new Promise((resolve) => setTimeout(resolve, 5)); console.log('fast'); return 'fast';`
+      }),
+      manager.execute({
+        tabId: 9,
+        timeoutMs: 100,
+        code: `await new Promise((resolve) => setTimeout(resolve, 20)); console.log('slow'); return 'slow';`
+      })
+    ]);
+
+    assert.equal(globalThis.console, originalConsole);
+    assert.deepEqual(fast.logs.map((entry) => entry.text), ['fast']);
+    assert.deepEqual(slow.logs.map((entry) => entry.text), ['slow']);
+  } finally {
+    if (previousChrome === undefined) delete global.chrome;
+    else global.chrome = previousChrome;
+    globalThis.console = originalConsole;
   }
 });
 

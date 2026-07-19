@@ -12,6 +12,7 @@ import {
   CEREBR_SKILL_WORLD_ID,
   buildRuntimeBootstrapSource
 } from './skill_runtime.js';
+import { JS_RUNTIME_MAX_TIMEOUT_MS } from '../agent_tools/js_runtime_execute/tool.js';
 
 /**
  * 将错误对象压缩成适合 UI 展示的轻量结构。
@@ -244,6 +245,7 @@ function buildUserScriptSource(userCode, timeoutMs = 0, executionId = '') {
       && __cerebrAbortRegistry.has(__cerebrExecutionId)
     );
     let __cerebrAbortListener = null;
+    let __cerebrTimeoutId = null;
     const __cerebrAbortPromise = !__cerebrExecutionId
       ? null
       : new Promise((_, reject) => {
@@ -286,7 +288,6 @@ function buildUserScriptSource(userCode, timeoutMs = 0, executionId = '') {
     });
     const console = __cerebrConsole;
     try {
-      globalThis.console = __cerebrConsole;
       const __cerebrRunUserCode = async () => {
 ${body}
       };
@@ -294,7 +295,7 @@ ${body}
         ? Promise.race([
             __cerebrRunUserCode(),
             new Promise((_, reject) => {
-              setTimeout(() => {
+              __cerebrTimeoutId = setTimeout(() => {
                 const error = new Error(\`JS Runtime 执行超时（\${__cerebrTimeoutMs}ms）。\`);
                 reject(error);
                 __cerebrAbortController.abort(error);
@@ -336,7 +337,9 @@ ${body}
       if (__cerebrExecutionId && __cerebrAbortRegistry instanceof Set) {
         __cerebrAbortRegistry.delete(__cerebrExecutionId);
       }
-      globalThis.console = __cerebrOriginalConsole;
+      if (__cerebrTimeoutId !== null) {
+        clearTimeout(__cerebrTimeoutId);
+      }
     }
   })();
 `.trim();
@@ -474,6 +477,9 @@ export function createJsRuntimeManager() {
     if (!code.trim()) {
       throw new Error('执行 JS Runtime 失败：代码内容为空。');
     }
+    if (timeoutMs > JS_RUNTIME_MAX_TIMEOUT_MS) {
+      throw new Error(`执行 JS Runtime 失败：timeoutMs 不能超过 ${JS_RUNTIME_MAX_TIMEOUT_MS}。`);
+    }
 
     const availability = await getAvailability();
     if (!availability.available) {
@@ -510,6 +516,11 @@ export function createJsRuntimeManager() {
     const items = Array.isArray(rawItems)
       ? rawItems.map(normalizeExecuteResultItem)
       : [];
+    if (items.length <= 0) {
+      const error = new Error('JS Runtime 未返回任何 frame 执行结果，目标文档可能已经导航或销毁。');
+      error.name = 'NoExecutionResultError';
+      throw error;
+    }
     const successfulItems = items.filter(item => !item.error);
     const logs = items.flatMap((item) => {
       if (!Array.isArray(item?.logs)) return [];

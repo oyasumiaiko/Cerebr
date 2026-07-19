@@ -24,6 +24,7 @@ test('js_runtime_execute 暴露 timeout_ms 并把它接到 sidebar 与 backgroun
   assert.equal(toolDefinition.name, 'js_runtime_execute');
   assert.equal(toolDefinition.strict, true);
   assert.match(toolDefinition.parameters.properties.timeout_ms.description, /超时毫秒数/);
+  assert.match(toolDefinition.parameters.properties.timeout_ms.description, new RegExp(String(jsRuntimeToolModule.JS_RUNTIME_MAX_TIMEOUT_MS)));
   assert.match(toolDefinition.description, /AbortSignal 变量 `signal`/);
   assert.match(toolDefinition.description, /协作式取消/);
   assert.equal(Object.hasOwn(toolDefinition.parameters.properties.timeout_ms, 'minimum'), false);
@@ -60,6 +61,13 @@ test('js_runtime_execute 暴露 timeout_ms 并把它接到 sidebar 与 backgroun
     () => jsRuntimeToolModule.normalizeJsRuntimeExecuteToolArguments({ code: 'return 1;', timeout_ms: 0 }),
     /timeout_ms 必须大于 0/
   );
+  assert.throws(
+    () => jsRuntimeToolModule.normalizeJsRuntimeExecuteToolArguments({
+      code: 'return 1;',
+      timeout_ms: jsRuntimeToolModule.JS_RUNTIME_MAX_TIMEOUT_MS + 1
+    }),
+    /timeout_ms 不能超过/
+  );
 
   assert.match(
     messageSenderSource,
@@ -76,8 +84,11 @@ test('js_runtime_execute 暴露 timeout_ms 并把它接到 sidebar 与 backgroun
   );
   assert.match(
     sidebarAppContextSource,
-    /timeoutMs,\s*'执行 JS Runtime 超时'/
+    /timeoutMs \+ JS_RUNTIME_EXECUTION_RESPONSE_GRACE_MS,\s*'执行 JS Runtime 超时'/
   );
+  assert.match(sidebarAppContextSource, /const SKILL_REGISTRY_READ_TIMEOUT_MS = 10000;/);
+  assert.match(sidebarAppContextSource, /if \(!SKILL_REGISTRY_READ_ACTIONS\.has\(action\)\) \{\s*return await request;/s);
+  assert.match(sidebarAppContextSource, /raceWithTimeout\(request, SKILL_REGISTRY_READ_TIMEOUT_MS/);
 
   assert.match(
     backgroundSource,
