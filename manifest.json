@@ -78,6 +78,8 @@
       "src/ui/sidebar/sidebar.html",
       "src/ui/sidebar/js_sandbox_frame.html",
       "src/ui/sidebar/js_sandbox_frame.js",
+      "src/ui/js_runtime_runner/js_runtime_runner.html",
+      "src/ui/js_runtime_runner/js_runtime_runner.js",
       "src/ui/html_preview_sandbox/*",
       "lib/*"
     ],

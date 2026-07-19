@@ -7,13 +7,272 @@ let currentSelection = "";
 // 存储已附加监听器的 iframe 窗口，防止重复操作
 const monitoredFrames = new WeakSet();
 
-function buildSidebarFrameUrl(instanceId, isPrimary) {
+const JS_RUNTIME_RUNNER_MESSAGE_FLAG = '__cerebrJsRuntimeRunner';
+const JS_RUNTIME_RUNNER_READY_TIMEOUT_MS = 10000;
+const JS_RUNTIME_RUNNER_WATCHDOG_GRACE_MS = 1500;
+const JS_RUNTIME_RUNNER_DEFAULT_TIMEOUT_MS = 5000;
+const JS_RUNTIME_RUNNER_ALLOWED_MESSAGE_TYPES = new Set([
+    'GET_JS_RUNTIME_STATUS',
+    'GET_JS_RUNTIME_FRAMES',
+    'EXECUTE_JS_RUNTIME',
+    'ABORT_JS_RUNTIME'
+]);
+
+function createOpaqueChannelId(prefix) {
+    try {
+        if (typeof crypto?.randomUUID === 'function') {
+            return `${prefix}_${crypto.randomUUID()}`;
+        }
+    } catch (_) {}
+    return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 12)}`;
+}
+
+function buildSidebarFrameUrl(instanceId, isPrimary, bridgeChannelId) {
     const safeInstanceId = (typeof instanceId === 'string' && instanceId.trim())
         ? instanceId.trim()
         : `sidebar_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    const safeBridgeChannelId = (typeof bridgeChannelId === 'string' && bridgeChannelId.trim())
+        ? bridgeChannelId.trim()
+        : createOpaqueChannelId('sidebar_bridge');
     return chrome.runtime.getURL(
-        `src/ui/sidebar/sidebar.html?instanceId=${encodeURIComponent(safeInstanceId)}&isPrimary=${isPrimary ? '1' : '0'}`
+        `src/ui/sidebar/sidebar.html?instanceId=${encodeURIComponent(safeInstanceId)}&isPrimary=${isPrimary ? '1' : '0'}&bridgeChannelId=${encodeURIComponent(safeBridgeChannelId)}`
     );
+}
+
+function buildJsRuntimeRunnerFrameUrl(generation, channelId) {
+    return chrome.runtime.getURL(
+        `src/ui/js_runtime_runner/js_runtime_runner.html?generation=${encodeURIComponent(String(generation))}&channelId=${encodeURIComponent(channelId)}`
+    );
+}
+
+/**
+ * 在宿主页中维护一个可牺牲的隐藏 JS Runtime runner iframe。
+ *
+ * runner 只接管扩展侧消息等待与结果接收，真正的用户代码仍由 background 通过
+ * chrome.userScripts.execute() 注入宿主页，因此现有 DOM 能力与 frame_ids 语义不变。
+ * runner 失联时直接替换该 iframe，侧栏对话与 UI 状态不会被销毁。
+ */
+class CerebrJsRuntimeRunner {
+    constructor(options = {}) {
+        this.resolveSidebarById = typeof options?.resolveSidebarById === 'function'
+            ? options.resolveSidebarById
+            : () => null;
+        this.container = null;
+        this.shadowRoot = null;
+        this.iframe = null;
+        this.messagePort = null;
+        this.generation = 0;
+        this.channelId = '';
+        this.readyPromise = null;
+        this.resolveReady = null;
+        this.rejectReady = null;
+        this.readyTimeoutId = null;
+        this.pendingRequests = new Map();
+    }
+
+    clearReadyState() {
+        if (this.readyTimeoutId) {
+            clearTimeout(this.readyTimeoutId);
+            this.readyTimeoutId = null;
+        }
+        this.readyPromise = null;
+        this.resolveReady = null;
+        this.rejectReady = null;
+    }
+
+    settleReadySuccess() {
+        const resolve = this.resolveReady;
+        this.clearReadyState();
+        resolve?.(true);
+    }
+
+    settleReadyError(error) {
+        const reject = this.rejectReady;
+        this.clearReadyState();
+        reject?.(error);
+    }
+
+    createFrame() {
+        this.generation += 1;
+        const generation = this.generation;
+        this.channelId = createOpaqueChannelId('js_runtime_runner');
+
+        const container = document.createElement('cerebr-js-runtime-root');
+        container.dataset.cerebrJsRuntimeRunner = 'true';
+        Object.assign(container.style, {
+            position: 'fixed',
+            width: '0',
+            height: '0',
+            overflow: 'hidden',
+            pointerEvents: 'none',
+            opacity: '0'
+        });
+        const shadow = container.attachShadow({ mode: 'closed' });
+        const iframe = document.createElement('iframe');
+        iframe.className = 'cerebr-js-runtime-runner__iframe';
+        iframe.dataset.cerebrJsRuntimeRunner = 'true';
+        iframe.setAttribute('aria-hidden', 'true');
+        iframe.tabIndex = -1;
+        iframe.src = buildJsRuntimeRunnerFrameUrl(this.generation, this.channelId);
+        Object.assign(iframe.style, {
+            width: '0',
+            height: '0',
+            border: '0',
+            visibility: 'hidden'
+        });
+        iframe.addEventListener('error', () => {
+            if (generation !== this.generation || iframe !== this.iframe) return;
+            this.reset(new Error('隐藏 JS Runtime runner iframe 加载失败。'), { recreate: true });
+        }, { once: true });
+        iframe.addEventListener('load', () => {
+            if (generation !== this.generation || iframe !== this.iframe) return;
+            const channel = new MessageChannel();
+            this.messagePort?.close?.();
+            this.messagePort = channel.port1;
+            this.messagePort.onmessage = (event) => this.handlePortMessage(event?.data);
+            this.messagePort.start?.();
+            iframe.contentWindow?.postMessage({
+                [JS_RUNTIME_RUNNER_MESSAGE_FLAG]: true,
+                type: 'connect',
+                generation,
+                channelId: this.channelId
+            }, '*', [channel.port2]);
+        }, { once: true });
+
+        shadow.appendChild(iframe);
+        (document.documentElement || document.body).appendChild(container);
+
+        this.container = container;
+        this.shadowRoot = shadow;
+        this.iframe = iframe;
+        this.readyPromise = new Promise((resolve, reject) => {
+            this.resolveReady = resolve;
+            this.rejectReady = reject;
+            this.readyTimeoutId = window.setTimeout(() => {
+                this.reset(new Error('等待隐藏 JS Runtime runner 就绪超时。'));
+            }, JS_RUNTIME_RUNNER_READY_TIMEOUT_MS);
+        });
+        return iframe;
+    }
+
+    ensureReady() {
+        if (!this.iframe?.isConnected || !this.container?.isConnected) {
+            this.createFrame();
+        }
+        return this.readyPromise || Promise.resolve(true);
+    }
+
+    postResponseToSidebar(sidebarInstanceId, requestId, response) {
+        const sidebar = this.resolveSidebarById(sidebarInstanceId);
+        if (!sidebar) return;
+        sidebar.postToJsRuntimeBridge({
+            [JS_RUNTIME_RUNNER_MESSAGE_FLAG]: true,
+            type: 'response',
+            requestId,
+            response
+        });
+    }
+
+    rejectPendingRequests(error) {
+        const message = error?.message || '隐藏 JS Runtime runner 已重建。';
+        for (const [requestId, pending] of this.pendingRequests.entries()) {
+            if (pending.timeoutId) clearTimeout(pending.timeoutId);
+            this.postResponseToSidebar(pending.sidebarInstanceId, requestId, {
+                success: false,
+                error: message
+            });
+        }
+        this.pendingRequests.clear();
+    }
+
+    reset(error = new Error('隐藏 JS Runtime runner 已重建。'), options = {}) {
+        this.rejectPendingRequests(error);
+        this.settleReadyError(error);
+        try { this.container?.remove?.(); } catch (_) {}
+        try { this.messagePort?.close?.(); } catch (_) {}
+        this.container = null;
+        this.shadowRoot = null;
+        this.iframe = null;
+        this.messagePort = null;
+        this.channelId = '';
+        if (options?.recreate === true) {
+            queueMicrotask(() => {
+                if (this.iframe || this.container) return;
+                this.ensureReady().catch(() => null);
+            });
+        }
+    }
+
+    async forwardRequest(sidebar, data = {}) {
+        const requestId = typeof data?.requestId === 'string' ? data.requestId.trim() : '';
+        const runtimeMessage = data?.runtimeMessage;
+        const runtimeMessageType = typeof runtimeMessage?.type === 'string' ? runtimeMessage.type : '';
+        if (!sidebar || !requestId || data?.bridgeChannelId !== sidebar.bridgeChannelId) return;
+        if (!JS_RUNTIME_RUNNER_ALLOWED_MESSAGE_TYPES.has(runtimeMessageType)) {
+            this.postResponseToSidebar(sidebar.instanceId, requestId, {
+                success: false,
+                error: '不支持的 JS Runtime runner 请求。'
+            });
+            return;
+        }
+        if (
+            (this.iframe && !this.iframe.isConnected)
+            || (this.container && !this.container.isConnected)
+        ) {
+            this.reset(new Error('隐藏 JS Runtime runner 已从宿主页分离。'));
+        }
+
+        const requestedTimeoutMs = Number(data?.timeoutMs);
+        const timeoutMs = Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
+            ? Math.trunc(requestedTimeoutMs) + JS_RUNTIME_RUNNER_WATCHDOG_GRACE_MS
+            : JS_RUNTIME_RUNNER_DEFAULT_TIMEOUT_MS + JS_RUNTIME_RUNNER_WATCHDOG_GRACE_MS;
+        const generation = this.generation + ((!this.iframe?.isConnected || !this.container?.isConnected) ? 1 : 0);
+        const timeoutId = window.setTimeout(() => {
+            if (generation !== this.generation) return;
+            this.reset(new Error(`隐藏 JS Runtime runner 响应超时（${timeoutMs}ms）。`), { recreate: true });
+        }, timeoutMs);
+        this.pendingRequests.set(requestId, {
+            sidebarInstanceId: sidebar.instanceId,
+            timeoutId,
+            generation
+        });
+
+        try {
+            await this.ensureReady();
+            const pending = this.pendingRequests.get(requestId);
+            if (!pending || pending.generation !== this.generation) return;
+            this.messagePort?.postMessage({
+                [JS_RUNTIME_RUNNER_MESSAGE_FLAG]: true,
+                type: 'request',
+                generation: this.generation,
+                channelId: this.channelId,
+                requestId,
+                runtimeMessage
+            });
+        } catch (error) {
+            if (this.pendingRequests.has(requestId)) {
+                this.reset(error);
+            }
+        }
+    }
+
+    handlePortMessage(data = {}) {
+        if (data?.[JS_RUNTIME_RUNNER_MESSAGE_FLAG] !== true) return;
+        if (data.generation !== this.generation || data.channelId !== this.channelId) return;
+
+        if (data.type === 'ready') {
+            this.settleReadySuccess();
+            return;
+        }
+        if (data.type !== 'response') return;
+
+        const requestId = typeof data.requestId === 'string' ? data.requestId : '';
+        const pending = this.pendingRequests.get(requestId);
+        if (!pending || pending.generation !== this.generation) return;
+        if (pending.timeoutId) clearTimeout(pending.timeoutId);
+        this.pendingRequests.delete(requestId);
+        this.postResponseToSidebar(pending.sidebarInstanceId, requestId, data.response);
+    }
 }
 
 // 统一的 sync 写入入口：优先走写入队列，避免高频触发配额
@@ -274,6 +533,7 @@ class CerebrSidebar {
     this.instanceId = (typeof options?.instanceId === 'string' && options.instanceId.trim())
       ? options.instanceId.trim()
       : `sidebar_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    this.bridgeChannelId = createOpaqueChannelId('sidebar_bridge');
     this.isPrimary = options?.isPrimary === true;
     this.stackOffsetPx = 0;
     this.readyPromise = new Promise((resolve) => {
@@ -287,6 +547,7 @@ class CerebrSidebar {
     this.isFullscreen = false;
     this.isDisposed = false;
     this.container = null;
+    this.jsRuntimeBridgePort = null;
     this.restoreObserver = null;
     this.restoreTimeoutId = null;
     // 临时模式状态由父页面内存维护，用于 iframe 右键重载恢复，F5 刷新时自动重置。
@@ -320,6 +581,30 @@ class CerebrSidebar {
     return true;
   }
 
+  connectJsRuntimeBridge() {
+    const iframe = this.getIframe();
+    if (!iframe?.contentWindow) return false;
+    try { this.jsRuntimeBridgePort?.close?.(); } catch (_) {}
+    const channel = new MessageChannel();
+    this.jsRuntimeBridgePort = channel.port1;
+    this.jsRuntimeBridgePort.onmessage = (event) => {
+      this.manager?.handleJsRuntimeBridgeMessage?.(this, event?.data);
+    };
+    this.jsRuntimeBridgePort.start?.();
+    iframe.contentWindow.postMessage({
+      [JS_RUNTIME_RUNNER_MESSAGE_FLAG]: true,
+      type: 'connect_sidebar',
+      bridgeChannelId: this.bridgeChannelId
+    }, '*', [channel.port2]);
+    return true;
+  }
+
+  postToJsRuntimeBridge(message) {
+    if (!this.jsRuntimeBridgePort) return false;
+    this.jsRuntimeBridgePort.postMessage(message);
+    return true;
+  }
+
   reloadIframe() {
     const iframe = this.getIframe();
     if (!iframe) {
@@ -330,7 +615,7 @@ class CerebrSidebar {
       };
     }
 
-    const frameUrl = iframe.src || buildSidebarFrameUrl(this.instanceId, this.isPrimary);
+    const frameUrl = iframe.src || buildSidebarFrameUrl(this.instanceId, this.isPrimary, this.bridgeChannelId);
 
     try {
       // 从宿主页侧直接重载 iframe，不依赖 iframe 内部 JS；即使侧栏页面脚本崩溃，
@@ -859,13 +1144,18 @@ class CerebrSidebar {
       const iframe = document.createElement('iframe');
       iframe.className = 'cerebr-sidebar__iframe';
       iframe.dataset.cerebrSidebarInstanceId = this.instanceId;
-      iframe.src = buildSidebarFrameUrl(this.instanceId, this.isPrimary);
+      iframe.src = buildSidebarFrameUrl(this.instanceId, this.isPrimary, this.bridgeChannelId);
       iframe.allow = 'clipboard-write; file-system-access; fullscreen';
 
       // 重要：当用户在 DevTools 中对 iframe 执行「重新加载框架」时，iframe 内部状态会被重置；
       // 但父页面仍持有全屏/临时模式状态，因此需要在 iframe 每次 load 完成后同步一次，
       // 以便右键重载时保留状态，同时在 F5 刷新页面时由父页面自动回到默认值。
       iframe.addEventListener('load', () => {
+        try {
+          this.connectJsRuntimeBridge();
+        } catch (e) {
+          console.warn('连接隐藏 JS Runtime runner 通道失败（忽略）:', e);
+        }
         try {
           this.notifyIframeFullscreenState(this.isFullscreen);
         } catch (e) {
@@ -1277,6 +1567,9 @@ class CerebrSidebar {
       this.postToIframe({ type: 'BLUR_INPUT' });
     } catch (_) {}
 
+    try { this.jsRuntimeBridgePort?.close?.(); } catch (_) {}
+    this.jsRuntimeBridgePort = null;
+
     try {
       if (this.container?.parentNode) {
         this.container.parentNode.removeChild(this.container);
@@ -1304,6 +1597,9 @@ class CerebrSidebarManager {
     // 全屏分栏比例只服务当前页面当前生命周期，不写入 chrome.storage；
     // 这样用户可以临时拖出适合本次阅读/对话的比例，刷新页面后自然回到默认平分。
     this.fullscreenSplitRatioById = new Map();
+    this.jsRuntimeRunner = new CerebrJsRuntimeRunner({
+      resolveSidebarById: (instanceId) => this.getSidebarById(instanceId)
+    });
     this.createSidebar({ show: false, isPrimary: true });
     this.setupUrlChangeListener();
     this.setupHostEventListeners();
@@ -1383,6 +1679,12 @@ class CerebrSidebarManager {
 
   getSidebarByWindow(sourceWindow) {
     return this.sidebars.find((item) => item.ownsWindow(sourceWindow)) || null;
+  }
+
+  handleJsRuntimeBridgeMessage(sidebar, data = {}) {
+    if (!sidebar || data?.[JS_RUNTIME_RUNNER_MESSAGE_FLAG] !== true) return;
+    if (data.type !== 'request') return;
+    this.jsRuntimeRunner?.forwardRequest?.(sidebar, data);
   }
 
   destroySidebar(sidebarInstance) {

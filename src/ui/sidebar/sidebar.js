@@ -234,6 +234,7 @@ function attachDebugShortcuts(appContext) {
     resaveImagesWithNewScheme: (opts) => chatHistoryUI?.resaveImagesWithNewScheme?.(opts),
     scanDataUrlsInDb: (limit) => chatHistoryUI?.scanDataUrlsInDb?.(limit),
     getJsRuntimeStatus: () => appContext.utils.getJsRuntimeStatus?.(),
+    getJsRuntimeFrames: (options) => appContext.utils.getJsRuntimeFrames?.(options),
     executeJsRuntime: (code, options) => appContext.utils.executeJsRuntime?.(code, options),
     // 仅暴露给本地调试 / 浏览器回归脚本：
     // - chatHistoryUI 便于在页面重载后重新载入指定会话；

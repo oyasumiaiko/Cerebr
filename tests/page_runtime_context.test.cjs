@@ -218,6 +218,8 @@ test('page runtime context 会过滤高频挑战 iframe 与无描述 blank 辅�
       { frameId: 18141, isTop: false, url: 'https://www.google.com/recaptcha/api2/anchor?ar=1&k=abc&cb=foo', title: '' },
       { frameId: 18149, isTop: false, url: 'https://www.google.com/recaptcha/api2/bframe?hl=zh-CN&v=test', title: '' },
       { frameId: 18143, isTop: false, url: 'about:blank', title: '' },
+      { frameId: 18144, isTop: false, url: 'chrome-extension://example/src/ui/sidebar/sidebar.html', title: 'Cerebr' },
+      { frameId: 18145, isTop: false, url: 'chrome-extension://example/src/ui/js_runtime_runner/js_runtime_runner.html', title: 'Cerebr JS Runtime Runner' },
       { frameId: 22, isTop: false, url: 'https://platform.worldquantbrain.com/embed/panel', title: 'Research Panel' }
     ]
   });
@@ -228,6 +230,8 @@ test('page runtime context 会过滤高频挑战 iframe 与无描述 blank 辅�
   const text = buildPageRuntimeContextInputItems(payload)[0].content[0].text;
   assert.doesNotMatch(text, /recaptcha/);
   assert.doesNotMatch(text, /about:blank/);
+  assert.doesNotMatch(text, /chrome-extension:/);
+  assert.doesNotMatch(text, /JS Runtime Runner/);
   assert.doesNotMatch(text, /<frame id="0" top="true">/);
   assert.match(text, /Research Panel/);
 });

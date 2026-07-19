@@ -32,6 +32,7 @@ const JS_RUNTIME_STATUS_TIMEOUT_MS = 5000;
 const JS_RUNTIME_FRAME_SNAPSHOT_TIMEOUT_MS = 5000;
 const JS_RUNTIME_EXECUTION_TIMEOUT_MS = 30000;
 const SKILL_REGISTRY_TIMEOUT_MS = 10000;
+const JS_RUNTIME_RUNNER_MESSAGE_FLAG = '__cerebrJsRuntimeRunner';
 
 function resolveSidebarInstanceIdFromLocation() {
   try {
@@ -65,6 +66,16 @@ function resolveSidebarIsPrimaryFromLocation() {
     }
   } catch (_) {}
   return false;
+}
+
+function resolveSidebarBridgeChannelIdFromLocation() {
+  try {
+    const currentUrl = new URL(window.location.href);
+    const channelId = currentUrl.searchParams.get('bridgeChannelId');
+    return typeof channelId === 'string' ? channelId.trim() : '';
+  } catch (_) {
+    return '';
+  }
 }
 
 function raceWithTimeout(promise, timeoutMs, timeoutMessage) {
@@ -192,6 +203,7 @@ export function createSidebarAppContext(isStandalone) {
     state: {
       isStandalone,
       sidebarInstanceId: resolveSidebarInstanceIdFromLocation(),
+      bridgeChannelId: resolveSidebarBridgeChannelIdFromLocation(),
       isPrimarySidebar: resolveSidebarIsPrimaryFromLocation(),
       isFullscreen: false,
       hostEmbedScale: 1,
@@ -222,6 +234,60 @@ export function registerSidebarUtilities(appContext) {
     ownerWindow: window,
     ownerDocument: document
   });
+  let jsRuntimeRunnerRequestSeq = 0;
+  let jsRuntimeRunnerPort = null;
+  const jsRuntimeRunnerPendingRequests = new Map();
+
+  window.addEventListener('message', (event) => {
+    if (event.source !== window.parent) return;
+    const data = event.data || {};
+    if (data?.[JS_RUNTIME_RUNNER_MESSAGE_FLAG] !== true || data.type !== 'connect_sidebar') return;
+    if (data.bridgeChannelId !== appContext.state.bridgeChannelId) return;
+    const port = event.ports?.[0];
+    if (!port) return;
+    try { jsRuntimeRunnerPort?.close?.(); } catch (_) {}
+    jsRuntimeRunnerPort = port;
+    jsRuntimeRunnerPort.onmessage = (portEvent) => {
+      const responseData = portEvent?.data || {};
+      if (responseData?.[JS_RUNTIME_RUNNER_MESSAGE_FLAG] !== true || responseData.type !== 'response') return;
+      const requestId = typeof responseData.requestId === 'string' ? responseData.requestId : '';
+      const pending = jsRuntimeRunnerPendingRequests.get(requestId);
+      if (!pending) return;
+      jsRuntimeRunnerPendingRequests.delete(requestId);
+      if (pending.timeoutId) window.clearTimeout(pending.timeoutId);
+      pending.resolve(responseData.response);
+    };
+    jsRuntimeRunnerPort.start?.();
+  });
+
+  function requestJsRuntimeRunner(runtimeMessage, timeoutMs, timeoutMessage) {
+    const bridgeChannelId = appContext.state.bridgeChannelId;
+    if (!bridgeChannelId || !jsRuntimeRunnerPort || window.parent === window) {
+      return Promise.reject(new Error('当前侧栏没有可用的宿主页 JS Runtime runner。'));
+    }
+    jsRuntimeRunnerRequestSeq += 1;
+    const sidebarInstanceId = appContext.state.sidebarInstanceId || 'sidebar';
+    const requestId = `js_runtime_runner_${sidebarInstanceId}_${Date.now()}_${jsRuntimeRunnerRequestSeq}`;
+    const normalizedTimeoutMs = Number.isFinite(Number(timeoutMs))
+      ? Math.max(1, Math.trunc(Number(timeoutMs)))
+      : JS_RUNTIME_EXECUTION_TIMEOUT_MS;
+
+    return new Promise((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => {
+        jsRuntimeRunnerPendingRequests.delete(requestId);
+        reject(new Error(timeoutMessage || 'JS Runtime runner 请求超时'));
+      }, normalizedTimeoutMs);
+      jsRuntimeRunnerPendingRequests.set(requestId, { resolve, reject, timeoutId });
+      jsRuntimeRunnerPort.postMessage({
+        [JS_RUNTIME_RUNNER_MESSAGE_FLAG]: true,
+        type: 'request',
+        bridgeChannelId,
+        requestId,
+        timeoutMs: normalizedTimeoutMs,
+        runtimeMessage
+      });
+    });
+  }
 
   function resolveCurrentPageToolEnvironment(options = {}) {
     const explicitTemporaryMode = (typeof options?.isTemporaryMode === 'boolean')
@@ -1297,8 +1363,8 @@ export function registerSidebarUtilities(appContext) {
       };
     }
     try {
-      return await raceWithTimeout(
-        chrome.runtime.sendMessage({ type: 'GET_JS_RUNTIME_STATUS' }),
+      return await requestJsRuntimeRunner(
+        { type: 'GET_JS_RUNTIME_STATUS' },
         JS_RUNTIME_STATUS_TIMEOUT_MS,
         '获取 JS Runtime 状态超时'
       );
@@ -1346,8 +1412,8 @@ export function registerSidebarUtilities(appContext) {
           error: '当前侧栏尚未解析出稳定的宿主标签页，暂时无法读取 JS Runtime frame 快照。'
         };
       }
-      return await raceWithTimeout(
-        chrome.runtime.sendMessage({ type: 'GET_JS_RUNTIME_FRAMES', tabId: targetTabId }),
+      return await requestJsRuntimeRunner(
+        { type: 'GET_JS_RUNTIME_FRAMES', tabId: targetTabId },
         JS_RUNTIME_FRAME_SNAPSHOT_TIMEOUT_MS,
         '获取 JS Runtime frame 快照超时'
       );
@@ -1569,13 +1635,13 @@ export function registerSidebarUtilities(appContext) {
           frameIds: Array.isArray(options?.frameIds) ? options.frameIds : null,
           injectImmediately: options?.injectImmediately === true
         };
-      const executePromise = chrome.runtime.sendMessage(executeRequest);
+      const executePromise = requestJsRuntimeRunner(
+        executeRequest,
+        timeoutMs,
+        '执行 JS Runtime 超时'
+      );
       if (!signal) {
-        return await raceWithTimeout(
-          executePromise,
-          timeoutMs,
-          '执行 JS Runtime 超时'
-        );
+        return await executePromise;
       }
 
       let cleanedUp = false;
@@ -1589,12 +1655,12 @@ export function registerSidebarUtilities(appContext) {
       };
       const handleAbort = () => {
         cleanupAbortListener();
-        chrome.runtime.sendMessage({
+        requestJsRuntimeRunner({
           type: 'ABORT_JS_RUNTIME',
           tabId: targetTabId,
           executionId,
           frameIds: Array.isArray(options?.frameIds) ? options.frameIds : null
-        }).catch(() => null);
+        }, JS_RUNTIME_STATUS_TIMEOUT_MS, '中止 JS Runtime 超时').catch(() => null);
       };
       const abortPromise = new Promise((_, reject) => {
         abortListener = () => {
@@ -1608,11 +1674,7 @@ export function registerSidebarUtilities(appContext) {
         try { signal.addEventListener?.('abort', abortListener, { once: true }); } catch (_) {}
       });
 
-      return await raceWithTimeout(
-        Promise.race([executePromise, abortPromise]).finally(cleanupAbortListener),
-        timeoutMs,
-        '执行 JS Runtime 超时'
-      );
+      return await Promise.race([executePromise, abortPromise]).finally(cleanupAbortListener);
     } catch (error) {
       if (error?.name === 'AbortError') {
         throw error;

@@ -32,8 +32,8 @@ test('content script creates embedded sidebar iframes with explicit instanceId q
 
   assert.match(source, /class CerebrSidebarManager/);
   assert.match(source, /generateInstanceId\(\)/);
-  assert.match(source, /function buildSidebarFrameUrl\(instanceId, isPrimary\)/);
-  assert.match(source, /iframe\.src = buildSidebarFrameUrl\(this\.instanceId, this\.isPrimary\)/);
+  assert.match(source, /function buildSidebarFrameUrl\(instanceId, isPrimary, bridgeChannelId\)/);
+  assert.match(source, /iframe\.src = buildSidebarFrameUrl\(this\.instanceId, this\.isPrimary, this\.bridgeChannelId\)/);
   assert.match(source, /case 'CREATE_ADDITIONAL_SIDEBAR':/);
   assert.match(source, /case 'CLOSE_SIDEBAR':/);
 });
@@ -43,7 +43,9 @@ test('sidebar app context reads instance metadata without using shared storage',
 
   assert.match(source, /function resolveSidebarInstanceIdFromLocation\(\)/);
   assert.match(source, /function resolveSidebarIsPrimaryFromLocation\(\)/);
+  assert.match(source, /function resolveSidebarBridgeChannelIdFromLocation\(\)/);
   assert.match(source, /sidebarInstanceId: resolveSidebarInstanceIdFromLocation\(\)/);
+  assert.match(source, /bridgeChannelId: resolveSidebarBridgeChannelIdFromLocation\(\)/);
   assert.match(source, /isPrimarySidebar: resolveSidebarIsPrimaryFromLocation\(\)/);
 
   const instanceBody = extractFunctionBody(source, 'resolveSidebarInstanceIdFromLocation');
@@ -52,6 +54,17 @@ test('sidebar app context reads instance metadata without using shared storage',
   assert.match(primaryBody, /searchParams\.get\('isPrimary'\)/);
   assert.doesNotMatch(instanceBody, /localStorage|sessionStorage|chrome\.storage/);
   assert.doesNotMatch(primaryBody, /localStorage|sessionStorage|chrome\.storage/);
+});
+
+test('sidebar and JS runtime runner use separate closed shadow roots', async () => {
+  const source = await readRepoFile('src/extension/content.js');
+
+  assert.match(source, /const shadow = container\.attachShadow\(\{ mode: 'closed' \}\);/);
+  assert.match(source, /class CerebrJsRuntimeRunner/);
+  assert.match(source, /document\.createElement\('cerebr-js-runtime-root'\)/);
+  assert.match(source, /container\.attachShadow\(\{ mode: 'closed' \}\)/);
+  assert.match(source, /shadow\.appendChild\(iframe\);/);
+  assert.match(source, /this\.reset\(new Error\(`隐藏 JS Runtime runner 响应超时/);
 });
 
 test('parallel sidebar button closes non-primary sidebars', async () => {

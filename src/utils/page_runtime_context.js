@@ -86,6 +86,13 @@ function shouldIncludePageRuntimeContextFrame(frame) {
   const url = (typeof frame.url === 'string') ? frame.url.trim().toLowerCase() : '';
   const title = (typeof frame.title === 'string') ? frame.title.trim() : '';
   if (!url) return !!title;
+  if (
+    url.startsWith('chrome-extension://')
+    || url.startsWith('edge-extension://')
+    || url.startsWith('moz-extension://')
+  ) {
+    return false;
+  }
 
   const isAuxiliaryBlankFrame = (
     url === 'about:blank'
