@@ -1184,12 +1184,15 @@ function requestSidebarEdgeControlPointerDown(appContext, event) {
   return true;
 }
 
-function requestToggleDockMode(appContext) {
+function requestDockMode(appContext, isDocked) {
   if (appContext.state.isStandalone) {
     appContext.utils.showNotification('独立聊天页面不支持停靠模式');
     return;
   }
-  appContext.utils.postHostMessage({ type: 'TOGGLE_DOCK_MODE_FROM_IFRAME' });
+  appContext.utils.postHostMessage({
+    type: 'SET_DOCK_MODE_FROM_IFRAME',
+    isDocked: !!isDocked
+  });
 }
 
 function applyDockModeState(appContext, isDocked) {
@@ -1252,10 +1255,11 @@ function setupFullscreenToggle(appContext) {
 }
 
 function setupDockModeToggle(appContext) {
-  if (!appContext.dom.dockModeToggle) return;
-  appContext.dom.dockModeToggle.addEventListener('click', (event) => {
-    event.preventDefault();
-    requestToggleDockMode(appContext);
+  if (!appContext.dom.dockModeSwitch) return;
+  appContext.dom.dockModeSwitch.addEventListener('change', (event) => {
+    const isDocked = event.target instanceof HTMLInputElement && event.target.checked;
+    applyDockModeState(appContext, isDocked);
+    requestDockMode(appContext, isDocked);
   });
   applyDockModeState(appContext, false);
 }

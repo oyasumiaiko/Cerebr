@@ -1719,9 +1719,9 @@ class CerebrSidebarManager {
       case 'SIDEBAR_EDGE_CONTROL_POINTER_DOWN':
         this.startSidebarEdgeControlInteraction(sourceSidebar, data);
         break;
-      case 'TOGGLE_DOCK_MODE_FROM_IFRAME':
+      case 'SET_DOCK_MODE_FROM_IFRAME':
         {
-          const nextDocked = !sourceSidebar.isDocked;
+          const nextDocked = data.isDocked === true;
           if (nextDocked) {
             this.sidebars.forEach((item) => {
               if (item !== sourceSidebar) item.setDockMode(false);

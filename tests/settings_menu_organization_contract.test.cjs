@@ -57,11 +57,16 @@ test('右下角菜单只迁移点名设置，并保留新对话、停靠开关�
   const favoritesIndex = sidebarHtml.indexOf('id="favorite-apis"');
   assert.ok(historyIndex >= 0 && favoritesIndex > historyIndex);
   assert.match(sidebarHtml, /id="clear-chat"(?![^>]*display:\s*none)[^>]*>[\s\S]*?新对话/);
-  assert.match(sidebarHtml, /class="menu-item menu-item--toggle" id="dock-mode-toggle"[\s\S]*?fa-sidebar[\s\S]*?id="dock-mode-switch"/);
+  assert.match(sidebarHtml, /<label class="menu-item menu-item--toggle" id="dock-mode-toggle"[\s\S]*?fa-sidebar[\s\S]*?id="dock-mode-switch"/);
   assert.match(sidebarAppContextSource, /dockModeSwitch:\s*document\.getElementById\('dock-mode-switch'\)/);
   assert.match(sidebarEventsSource, /case 'CLEAR_CHAT_COMMAND':[\s\S]*?appContext\.dom\.clearChat\?\.click\(\)/);
   assert.match(sidebarEventsSource, /appContext\.dom\.clearChat\.addEventListener\('click',[\s\S]*?clearChatHistory\(\)/);
   assert.match(sidebarEventsSource, /case 'DOCK_MODE_STATE_SYNC':[\s\S]*?applyDockModeState\(appContext, data\.isDocked\)/);
+  assert.match(sidebarEventsSource, /dockModeSwitch\.addEventListener\('change',[\s\S]*?requestDockMode\(appContext, isDocked\)/);
+  assert.match(contentSource, /case 'SET_DOCK_MODE_FROM_IFRAME':[\s\S]*?const nextDocked = data\.isDocked === true/);
+  const dockSetupStart = sidebarEventsSource.indexOf('function setupDockModeToggle');
+  const dockSetupEnd = sidebarEventsSource.indexOf('\nfunction ', dockSetupStart + 1);
+  assert.doesNotMatch(sidebarEventsSource.slice(dockSetupStart, dockSetupEnd), /preventDefault/);
   assert.match(contentSource, /setDockMode\(isDocked\)[\s\S]*?this\.notifyIframeDockModeState\(\)/);
   assert.match(contentSource, /type:\s*'DOCK_MODE_STATE_SYNC'[\s\S]*?isDocked:\s*!!this\.isDocked/);
 });
