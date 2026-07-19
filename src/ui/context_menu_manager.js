@@ -32,6 +32,7 @@ import {
  * @param {HTMLElement} appContext.dom.forkConversationButton - 创建分支对话按钮
  * @param {Function} appContext.services.chatHistoryUI.createForkConversation - 创建分支对话函数
  * @param {HTMLElement} appContext.dom.screenshotMenu - 截图子菜单入口按钮
+ * @param {HTMLElement} appContext.dom.downloadAsImageButton - 下载消息截图按钮
  * @param {HTMLElement} appContext.dom.selectForImageButton - 将消息加入长截图选择的按钮
  * @returns {Object} 上下文菜单管理器实例
  */
@@ -56,7 +57,8 @@ export function createContextMenuManager(appContext) {
   const forkConversationButton = dom.forkConversationButton;
   const forkConversationArrow = forkConversationButton?.querySelector('.context-menu-item__arrow');
   const screenshotMenu = dom.screenshotMenu || document.getElementById('message-screenshot-menu');
-  const copyAsImageButton = dom.copyAsImageButton; // Assuming it's in dom
+  const copyAsImageButton = dom.copyAsImageButton;
+  const downloadAsImageButton = dom.downloadAsImageButton || document.getElementById('download-as-image');
   const selectForImageButton = dom.selectForImageButton || document.getElementById('select-for-image');
   const editMessageButton = document.getElementById('edit-message');
   const insertMessageMenu = document.getElementById('insert-message-menu');
@@ -119,6 +121,7 @@ export function createContextMenuManager(appContext) {
     toolbar: null
   };
   let isMessageScreenshotExporting = false;
+  let messageScreenshotExportTarget = null;
 
   function clampNumberInRange(value, min, max, fallback, step = 0) {
     const numeric = Number(value);
@@ -348,6 +351,10 @@ export function createContextMenuManager(appContext) {
         <i class="far fa-images" aria-hidden="true"></i>
         <span>复制</span>
       </button>
+      <button class="message-screenshot-selection-toolbar__button" type="button" data-action="download" title="下载长截图" aria-label="下载长截图">
+        <i class="fa-solid fa-download" aria-hidden="true"></i>
+        <span>下载</span>
+      </button>
       <button class="message-screenshot-selection-toolbar__button" type="button" data-action="clear" title="清空选择" aria-label="清空选择">
         <i class="far fa-eraser" aria-hidden="true"></i>
       </button>
@@ -365,6 +372,8 @@ export function createContextMenuManager(appContext) {
       const action = target.getAttribute('data-action');
       if (action === 'copy') {
         copyMessageAsImage();
+      } else if (action === 'download') {
+        downloadMessageAsImage();
       } else if (action === 'clear') {
         clearMessageScreenshotSelection({ keepMode: true });
       } else if (action === 'exit') {
@@ -376,14 +385,23 @@ export function createContextMenuManager(appContext) {
     return toolbar;
   }
 
-  function syncCopyAsImageMenuLabel() {
-    if (!copyAsImageButton) return;
+  function syncScreenshotExportMenuLabels() {
     const selectedCount = messageScreenshotSelection.selectedIds.size;
     if (selectedCount > 0) {
-      setContextMenuItemLabel(copyAsImageButton, 'far fa-images', `复制已选 ${selectedCount} 条为图片`);
+      if (copyAsImageButton) {
+        setContextMenuItemLabel(copyAsImageButton, 'far fa-images', `复制已选 ${selectedCount} 条为图片`);
+      }
+      if (downloadAsImageButton) {
+        setContextMenuItemLabel(downloadAsImageButton, 'fa-solid fa-download', `下载已选 ${selectedCount} 条长截图`);
+      }
       return;
     }
-    setContextMenuItemLabel(copyAsImageButton, 'far fa-image', '复制当前消息截图');
+    if (copyAsImageButton) {
+      setContextMenuItemLabel(copyAsImageButton, 'far fa-image', '复制当前消息截图');
+    }
+    if (downloadAsImageButton) {
+      setContextMenuItemLabel(downloadAsImageButton, 'fa-solid fa-download', '下载当前消息截图');
+    }
   }
 
   function updateMessageScreenshotSelectionToolbar() {
@@ -391,24 +409,29 @@ export function createContextMenuManager(appContext) {
     const count = messageScreenshotSelection.selectedIds.size;
     toolbar.hidden = !messageScreenshotSelection.active;
     toolbar.querySelector('.message-screenshot-selection-toolbar__count').textContent = `已选 ${count} 条`;
-    const copyButton = toolbar.querySelector('[data-action="copy"]');
-    if (copyButton instanceof HTMLButtonElement) {
-      copyButton.disabled = count === 0 || isMessageScreenshotExporting;
-      copyButton.classList.toggle('is-busy', isMessageScreenshotExporting);
-      copyButton.setAttribute('aria-busy', isMessageScreenshotExporting ? 'true' : 'false');
-      const icon = copyButton.querySelector('i');
+    ['copy', 'download'].forEach((action) => {
+      const button = toolbar.querySelector(`[data-action="${action}"]`);
+      if (!(button instanceof HTMLButtonElement)) return;
+      const isBusy = isMessageScreenshotExporting && messageScreenshotExportTarget === action;
+      button.disabled = count === 0 || isMessageScreenshotExporting;
+      button.classList.toggle('is-busy', isBusy);
+      button.setAttribute('aria-busy', isBusy ? 'true' : 'false');
+      const icon = button.querySelector('i');
       if (icon) {
-        icon.className = isMessageScreenshotExporting ? 'far fa-spinner' : 'far fa-images';
+        icon.className = isBusy
+          ? 'far fa-spinner'
+          : (action === 'copy' ? 'far fa-images' : 'fa-solid fa-download');
       }
-      const label = copyButton.querySelector('span');
+      const label = button.querySelector('span');
       if (label) {
-        label.textContent = isMessageScreenshotExporting ? '正在截图...' : '复制';
+        label.textContent = isBusy ? '正在截图...' : (action === 'copy' ? '复制' : '下载');
       }
-    }
+    });
   }
 
-  function setMessageScreenshotExporting(isExporting) {
+  function setMessageScreenshotExporting(isExporting, target = null) {
     isMessageScreenshotExporting = !!isExporting;
+    messageScreenshotExportTarget = isMessageScreenshotExporting ? target : null;
     updateMessageScreenshotSelectionToolbar();
   }
 
@@ -488,7 +511,7 @@ export function createContextMenuManager(appContext) {
     });
     document.body.classList.toggle(MESSAGE_SCREENSHOT_SELECTION_MODE_CLASS, messageScreenshotSelection.active);
     updateMessageScreenshotSelectionToolbar();
-    syncCopyAsImageMenuLabel();
+    syncScreenshotExportMenuLabels();
   }
 
   function enterMessageScreenshotSelectionMode(container, seedMessageElement = null) {
@@ -1172,6 +1195,7 @@ export function createContextMenuManager(appContext) {
     if (editMessageButton) editMessageButton.style.display = 'flex';
     if (deleteMessageButton) deleteMessageButton.style.display = 'flex';
     if (copyAsImageButton) copyAsImageButton.style.display = 'flex';
+    if (downloadAsImageButton) downloadAsImageButton.style.display = 'flex';
 
     // 获取点击的代码块元素
     const codeBlock = e.target.closest('pre code');
@@ -1250,7 +1274,7 @@ export function createContextMenuManager(appContext) {
         );
       }
     }
-    syncCopyAsImageMenuLabel();
+    syncScreenshotExportMenuLabels();
     if (screenshotMenu) {
       screenshotMenu.style.display = 'flex';
       updateSubmenuDirection(screenshotMenu, screenshotSubmenu, null);
@@ -2141,16 +2165,16 @@ export function createContextMenuManager(appContext) {
     return canvasToPngBlob(newCanvas);
   }
 
-  async function writeScreenshotBlobToClipboardOrDownload(blob, filenamePrefix = '消息截图') {
-    try {
+  async function writeScreenshotBlob(blob, target, filenamePrefix = '消息截图') {
+    if (target === 'copy') {
       await navigator.clipboard.write([
         new ClipboardItem({
           'image/png': blob
         })
       ]);
       return 'clipboard';
-    } catch (err) {
-      console.error('复制图片到剪贴板失败:', err);
+    }
+    if (target === 'download') {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -2161,12 +2185,13 @@ export function createContextMenuManager(appContext) {
       URL.revokeObjectURL(url);
       return 'download';
     }
+    throw new Error(`不支持的截图导出目标: ${target}`);
   }
 
   /**
-   * 将消息元素复制为图片并复制到剪贴板
+   * 使用同一套截图渲染管线，按用户明确选择复制或下载。
    */
-  async function copyMessageAsImage() {
+  async function exportMessageAsImage(target) {
     const messageElement = currentMessageElement;
     if (isMessageScreenshotExporting) {
       utils?.showNotification?.({ message: '截图正在生成中', type: 'info', duration: 1400 });
@@ -2180,9 +2205,8 @@ export function createContextMenuManager(appContext) {
 
     let snapshot = null;
     let progressToast = null;
-    const originalText = copyAsImageButton.innerHTML;
     hideContextMenu();
-    setMessageScreenshotExporting(true);
+    setMessageScreenshotExporting(true, target);
     progressToast = showMessageScreenshotExportNotification(messageElements);
     try {
       const exportOptions = resolveMessageImageExportOptions();
@@ -2194,12 +2218,13 @@ export function createContextMenuManager(appContext) {
         ? getActiveScreenshotSelectionContainer(messageElements[0])
         : messageElements[0];
       const blob = await renderMessageScreenshotSnapshotToBlob(snapshot, exportOptions, backgroundReference);
-      const target = await writeScreenshotBlobToClipboardOrDownload(
+      const exportResult = await writeScreenshotBlob(
         blob,
+        target,
         isMultiMessageExport ? '对话长截图' : '消息截图'
       );
       updateMessageScreenshotExportNotification(progressToast, 'success', {
-        target,
+        target: exportResult,
         count: messageElements.length
       });
     } catch (err) {
@@ -2213,9 +2238,16 @@ export function createContextMenuManager(appContext) {
         snapshot.cleanup();
       }
       setMessageScreenshotExporting(false);
-      copyAsImageButton.innerHTML = originalText;
-      syncCopyAsImageMenuLabel();
+      syncScreenshotExportMenuLabels();
     }
+  }
+
+  function copyMessageAsImage() {
+    return exportMessageAsImage('copy');
+  }
+
+  function downloadMessageAsImage() {
+    return exportMessageAsImage('download');
   }
 
   /**
@@ -2457,6 +2489,9 @@ export function createContextMenuManager(appContext) {
     
     // 添加复制为图片按钮点击事件
     copyAsImageButton.addEventListener(MENU_ACTIVATE_EVENT, copyMessageAsImage);
+    if (downloadAsImageButton) {
+      downloadAsImageButton.addEventListener(MENU_ACTIVATE_EVENT, downloadMessageAsImage);
+    }
     if (selectForImageButton) {
       selectForImageButton.addEventListener(MENU_ACTIVATE_EVENT, () => {
         const messageElement = currentMessageElement;
@@ -2729,6 +2764,7 @@ export function createContextMenuManager(appContext) {
     copyMessageContent,
     copyCodeContent,
     copyMessageAsImage,
+    downloadMessageAsImage,
     enterMessageScreenshotSelectionMode,
     exitMessageScreenshotSelectionMode,
     clearMessageScreenshotSelection,
