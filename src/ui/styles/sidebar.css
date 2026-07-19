@@ -934,13 +934,13 @@ html:not(.fullscreen-mode) #chat-container {
     height: 0;
 }
 
-/* 全屏滚动缩略图（MiniMap）：
+/* 全屏滚动迷你图（MiniMap）：
    - 仅在全屏布局下由脚本按需激活；
    - 位置由脚本按主聊天/线程模式动态决定。 */
 .chat-scroll-minimap {
     position: absolute;
     width: var(--cerebr-scroll-minimap-width, 24px);
-    /* thumb 透明度跟随“缩略图透明度”设置，同时保留较高基础可见性。 */
+    /* thumb 透明度跟随“迷你图透明度”设置，同时保留较高基础可见性。 */
     --cerebr-scroll-minimap-thumb-opacity-base: clamp(0.68, var(--cerebr-scroll-minimap-opacity, 0.94), 0.96);
     --cerebr-scroll-minimap-thumb-opacity-hover: clamp(0.82, calc(var(--cerebr-scroll-minimap-opacity, 0.94) + 0.08), 0.94);
     pointer-events: none;

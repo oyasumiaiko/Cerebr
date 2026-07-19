@@ -20,7 +20,7 @@ test('滚动缩略图的按消息滚轮导航默认关闭，并保留普通滚�
   );
   assert.match(
     settingsSource,
-    /key:\s*'scrollMinimapWheelMessageStep'[\s\S]*?label:\s*'缩略图滚轮按消息滚动'[\s\S]*?apply:\s*\(v\)\s*=>\s*applyScrollMinimapWheelMessageStep\(v\)/s
+    /key:\s*'scrollMinimapWheelMessageStep'[\s\S]*?label:\s*'迷你图滚轮按消息滚动'[\s\S]*?apply:\s*\(v\)\s*=>\s*applyScrollMinimapWheelMessageStep\(v\)/s
   );
   assert.match(
     settingsSource,

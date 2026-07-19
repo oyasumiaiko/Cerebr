@@ -146,7 +146,7 @@ export function createSettingsManager(appContext) {
     // 全屏模式下当聊天区已有消息时，是否隐藏背景“原图层”，仅保留氛围层。
     fullscreenHideOriginalOnChat: false,
     backgroundOverallOpacity: 1,
-    // 全屏滚动缩略图（MiniMap）：显示开关、滚轮行为、宽度与透明度
+    // 全屏滚动迷你图（MiniMap）：显示开关、滚轮行为、宽度与透明度
     enableScrollMinimap: true,
     // 关闭时，鼠标悬停缩略图滚轮仍按聊天容器的原生像素滚动处理；
     // 开启后才恢复“一格滚轮跳到上一条/下一条消息”的导航语义。
@@ -1265,7 +1265,7 @@ export function createSettingsManager(appContext) {
       key: 'enableScrollMinimap',
       type: 'toggle',
       group: 'layout',
-      label: '启用滚动缩略图',
+      label: '启用滚动迷你图',
       defaultValue: DEFAULT_SETTINGS.enableScrollMinimap,
       apply: (v) => applyScrollMinimapEnabled(v)
     },
@@ -1273,7 +1273,7 @@ export function createSettingsManager(appContext) {
       key: 'scrollMinimapWheelMessageStep',
       type: 'toggle',
       group: 'layout',
-      label: '缩略图滚轮按消息滚动',
+      label: '迷你图滚轮按消息滚动',
       defaultValue: DEFAULT_SETTINGS.scrollMinimapWheelMessageStep,
       apply: (v) => applyScrollMinimapWheelMessageStep(v)
     },
@@ -1281,7 +1281,7 @@ export function createSettingsManager(appContext) {
       key: 'scrollMinimapWidth',
       type: 'range',
       group: 'layout',
-      label: '缩略图宽度',
+      label: '迷你图宽度',
       min: 14,
       max: 100,
       step: 1,
@@ -1292,8 +1292,8 @@ export function createSettingsManager(appContext) {
     {
       key: 'scrollMinimapOpacity',
       type: 'range',
-      group: 'display',
-      label: '缩略图透明度',
+      group: 'layout',
+      label: '迷你图透明度',
       min: 0.2,
       max: 1,
       step: 0.05,
@@ -1304,16 +1304,16 @@ export function createSettingsManager(appContext) {
     {
       key: 'scrollMinimapAutoHide',
       type: 'toggle',
-      group: 'display',
-      label: '缩略图自动隐藏',
+      group: 'layout',
+      label: '迷你图自动隐藏',
       defaultValue: DEFAULT_SETTINGS.scrollMinimapAutoHide,
       apply: (v) => applyScrollMinimapAutoHide(v)
     },
     {
       key: 'scrollMinimapMessageMode',
       type: 'select',
-      group: 'display',
-      label: '缩略图消息模式',
+      group: 'layout',
+      label: '迷你图消息模式',
       options: [
         { label: '按实际高度比例', value: 'proportional' },
         { label: '固定消息高度', value: 'fixed' }

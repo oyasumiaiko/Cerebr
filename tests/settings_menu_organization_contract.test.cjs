@@ -40,6 +40,18 @@ test('右下角菜单只迁移点名设置，并保留新对话、停靠开关�
   ]) {
     assert.doesNotMatch(readSettingDefinition(settingsSource, key), /menu:\s*'quick'/);
   }
+  for (const key of [
+    'enableScrollMinimap',
+    'scrollMinimapWheelMessageStep',
+    'scrollMinimapWidth',
+    'scrollMinimapOpacity',
+    'scrollMinimapAutoHide',
+    'scrollMinimapMessageMode'
+  ]) {
+    assert.match(readSettingDefinition(settingsSource, key), /group:\s*'layout'/);
+  }
+  assert.match(settingsSource, /label:\s*'启用滚动迷你图'/);
+  assert.doesNotMatch(settingsSource, /label:\s*'缩略图(?:宽度|透明度|自动隐藏|消息模式|滚轮)/);
 
   const historyIndex = sidebarHtml.indexOf('id="chat-history-menu"');
   const favoritesIndex = sidebarHtml.indexOf('id="favorite-apis"');
