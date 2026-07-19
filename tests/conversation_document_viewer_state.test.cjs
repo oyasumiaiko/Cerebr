@@ -23,7 +23,8 @@ test('对 md/txt/code 文件会推断出正确的默认显示模式', async () =
 
   const txtState = resolveConversationDocumentRenderState('notes.txt', {});
   assert.equal(txtState.mode, CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN);
-  assert.equal(txtState.allowMarkdownToggle, true);
+  assert.equal(txtState.allowMarkdownToggle, false);
+  assert.deepEqual(txtState.allowedModes, [CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN]);
 
   const codeState = resolveConversationDocumentRenderState('src/sample.js', {});
   assert.equal(codeState.mode, CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT);
@@ -45,17 +46,22 @@ test('对 md/txt/code 文件会推断出正确的默认显示模式', async () =
   assert.equal(otherState.allowMarkdownToggle, false);
 });
 
-test('全局默认值与按路径 override 会正确合并', async () => {
+test('Markdown 默认偏好、固定 TXT 纯文本与按路径 override 会正确合并', async () => {
   const {
     CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN,
     CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN,
     resolveConversationDocumentRenderState
   } = await importViewerStateModule();
 
-  const txtMarkdownState = resolveConversationDocumentRenderState('notes.txt', {
+  const txtPlainState = resolveConversationDocumentRenderState('notes.txt', {
     documentRenderMarkdownForTxt: true
   });
-  assert.equal(txtMarkdownState.mode, CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN);
+  assert.equal(txtPlainState.mode, CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN);
+
+  const plainMdState = resolveConversationDocumentRenderState('notes.md', {
+    documentRenderMarkdownForMd: false
+  });
+  assert.equal(plainMdState.mode, CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN);
 
   const overriddenMdState = resolveConversationDocumentRenderState('plan.md', {
     documentRenderMarkdownForMd: true,
@@ -71,6 +77,13 @@ test('全局默认值与按路径 override 会正确合并', async () => {
     }
   });
   assert.equal(overriddenHtmlState.mode, 'code-highlight');
+
+  const overriddenCodeState = resolveConversationDocumentRenderState('src/main.js', {
+    documentViewModeOverrides: {
+      'src/main.js': 'plain'
+    }
+  });
+  assert.equal(overriddenCodeState.mode, CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN);
 });
 
 test('代码语言会按扩展名映射，未知扩展回退空字符串', async () => {

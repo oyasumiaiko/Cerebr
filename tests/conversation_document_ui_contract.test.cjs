@@ -66,6 +66,10 @@ test('conversation_document_viewer 使用无边框图标按钮承载基础文档
   assert.match(source, /fa-brands fa-html5/);
   assert.match(source, /fa-solid fa-code/);
   assert.match(source, /fa-solid fa-expand/);
+  assert.match(source, /modeButtons: new Map\(\)/);
+  assert.match(source, /modeButton\.dataset\.documentViewMode = mode/);
+  assert.match(source, /button\.setAttribute\('aria-pressed', active === true \? 'true' : 'false'\)/);
+  assert.doesNotMatch(source, /cycleConversationDocumentViewMode/);
 });
 
 test('conversation_document_viewer 会通过 manifest sandbox page 渲染 HTML 文件预览', async () => {
@@ -115,8 +119,8 @@ test('settings_manager 已注册文档渲染默认值偏好', async () => {
 
   assert.match(source, /documentFontSizePercent/);
   assert.match(source, /documentRenderMarkdownForMd/);
-  assert.match(source, /documentRenderMarkdownForTxt/);
-  assert.match(source, /documentHighlightCodeByExtension/);
+  assert.doesNotMatch(source, /documentRenderMarkdownForTxt/);
+  assert.doesNotMatch(source, /documentHighlightCodeByExtension/);
   assert.match(source, /documentViewModeOverrides/);
 });
 

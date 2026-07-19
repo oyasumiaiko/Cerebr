@@ -4,8 +4,6 @@ export const CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT = 'code-highlight';
 export const CONVERSATION_DOCUMENT_VIEW_MODE_HTML_PREVIEW = 'html-preview';
 
 export const DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD = 'documentRenderMarkdownForMd';
-export const DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT = 'documentRenderMarkdownForTxt';
-export const DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION = 'documentHighlightCodeByExtension';
 export const DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES = 'documentViewModeOverrides';
 export const DOCUMENT_VIEWER_SETTING_FONT_SIZE_PERCENT = 'documentFontSizePercent';
 
@@ -122,10 +120,6 @@ function normalizeConversationDocumentViewerSettings(settings = {}) {
   return {
     [DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD]:
       safeSettings[DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD] !== false,
-    [DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT]:
-      safeSettings[DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT] === true,
-    [DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION]:
-      safeSettings[DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION] !== false,
     [DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES]:
       normalizeConversationDocumentViewModeOverridesSetting(
         safeSettings[DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES]
@@ -160,21 +154,14 @@ export function resolveConversationDocumentRenderState(path, settings = {}) {
       ? CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN
       : CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN;
   } else if (extension === 'txt') {
-    allowedModes = [
-      CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN,
-      CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN
-    ];
-    defaultMode = normalizedSettings[DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT]
-      ? CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN
-      : CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN;
+    allowedModes = [CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN];
+    defaultMode = CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN;
   } else if (language) {
     allowedModes = [
       CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN,
       CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT
     ];
-    defaultMode = normalizedSettings[DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION]
-      ? CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT
-      : CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN;
+    defaultMode = CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT;
   }
 
   const overrideMode = normalizeConversationDocumentViewMode(overrides[normalizedPath], '');
@@ -191,19 +178,4 @@ export function resolveConversationDocumentRenderState(path, settings = {}) {
     allowMarkdownToggle: allowedModes.includes(CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN),
     allowCodeHighlightToggle: allowedModes.includes(CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT)
   };
-}
-
-export function buildNextConversationDocumentRenderMode(path, currentMode, settings = {}) {
-  const renderState = resolveConversationDocumentRenderState(path, settings);
-  const allowedModes = Array.isArray(renderState.allowedModes) ? renderState.allowedModes : [];
-  if (allowedModes.length <= 1) {
-    return renderState.mode;
-  }
-  const currentIndex = allowedModes.indexOf(
-    normalizeConversationDocumentViewMode(currentMode, renderState.mode)
-  );
-  if (currentIndex < 0) {
-    return allowedModes[0];
-  }
-  return allowedModes[(currentIndex + 1) % allowedModes.length];
 }

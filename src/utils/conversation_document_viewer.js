@@ -1,16 +1,13 @@
 import { renderMarkdownSafe } from './markdown_renderer.js';
 import {
   clampConversationDocumentFontSizePercent,
-  buildNextConversationDocumentRenderMode,
   CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT,
   CONVERSATION_DOCUMENT_VIEW_MODE_HTML_PREVIEW,
   CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN,
   CONVERSATION_DOCUMENT_VIEW_MODE_PLAIN,
   DOCUMENT_VIEWER_SETTING_FONT_SIZE_PERCENT,
-  DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION,
   DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES,
   DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD,
-  DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT,
   getConversationDocumentFileExtension,
   isConversationDocumentHtmlPreviewPath,
   resolveConversationDocumentCodeLanguage,
@@ -57,7 +54,7 @@ function resolveConversationDocumentFileIconClass(path) {
   return 'fa-solid fa-file-lines';
 }
 
-function buildHtmlPreviewModeDescriptor(mode) {
+function buildDocumentViewModeDescriptor(mode) {
   if (mode === CONVERSATION_DOCUMENT_VIEW_MODE_HTML_PREVIEW) {
     return {
       iconClass: 'fa-brands fa-html5',
@@ -68,6 +65,12 @@ function buildHtmlPreviewModeDescriptor(mode) {
     return {
       iconClass: 'fa-solid fa-code',
       label: '源码高亮'
+    };
+  }
+  if (mode === CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN) {
+    return {
+      iconClass: 'fa-brands fa-markdown',
+      label: 'Markdown 渲染'
     };
   }
   return {
@@ -121,6 +124,7 @@ function applyToolButtonVisualState(button, { iconClass = '', active = false, ti
     icon.className = iconClass;
   }
   button.classList.toggle('is-active', active === true);
+  button.setAttribute('aria-pressed', active === true ? 'true' : 'false');
   button.title = title || ariaLabel || '';
   button.setAttribute('aria-label', ariaLabel || title || '');
 }
@@ -170,10 +174,6 @@ export function createConversationDocumentViewer(options = {}) {
         ),
       [DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD]:
         settingsManager?.getSetting?.(DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD) !== false,
-      [DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT]:
-        settingsManager?.getSetting?.(DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT) === true,
-      [DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION]:
-        settingsManager?.getSetting?.(DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION) !== false,
       [DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES]:
         settingsManager?.getSetting?.(DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES) || {}
     };
@@ -237,7 +237,7 @@ export function createConversationDocumentViewer(options = {}) {
         refs: {
           meta: null,
           body: null,
-          modeButton: null,
+          modeButtons: new Map(),
           htmlFullscreenButton: null
         }
       };
@@ -260,53 +260,18 @@ export function createConversationDocumentViewer(options = {}) {
     );
   }
 
-  function syncConversationDocumentModeButton(card) {
+  function syncConversationDocumentModeButtons(card) {
     const state = getConversationDocumentCardState(card);
-    const button = state.refs.modeButton;
-    if (!button) return;
-
     const renderState = resolveCardRenderState(card);
-    const hasToggle = renderState.allowHtmlPreviewToggle || renderState.allowMarkdownToggle || renderState.allowCodeHighlightToggle;
-    button.hidden = !hasToggle;
-    button.disabled = !hasToggle;
-    if (!hasToggle) {
-      return;
-    }
-
-    if (renderState.allowHtmlPreviewToggle) {
-      const currentDescriptor = buildHtmlPreviewModeDescriptor(renderState.mode);
-      const nextMode = buildNextConversationDocumentRenderMode(
-        card?.dataset?.documentPath || '',
-        renderState.mode,
-        getViewerSettingsSnapshot()
-      );
-      const nextDescriptor = buildHtmlPreviewModeDescriptor(nextMode);
+    state.refs.modeButtons.forEach((button, mode) => {
+      const descriptor = buildDocumentViewModeDescriptor(mode);
+      const active = renderState.mode === mode;
       applyToolButtonVisualState(button, {
-        iconClass: currentDescriptor.iconClass,
-        active: renderState.mode === CONVERSATION_DOCUMENT_VIEW_MODE_HTML_PREVIEW,
-        title: `当前为 ${currentDescriptor.label}，点击切换为 ${nextDescriptor.label}`,
-        ariaLabel: `切换为${nextDescriptor.label}`
+        iconClass: descriptor.iconClass,
+        active,
+        title: active ? `当前为${descriptor.label}` : `切换为${descriptor.label}`,
+        ariaLabel: active ? `当前为${descriptor.label}` : `切换为${descriptor.label}`
       });
-      return;
-    }
-
-    if (renderState.allowMarkdownToggle) {
-      const isMarkdown = renderState.mode === CONVERSATION_DOCUMENT_VIEW_MODE_MARKDOWN;
-      applyToolButtonVisualState(button, {
-        iconClass: isMarkdown ? 'fa-brands fa-markdown' : 'fa-solid fa-paragraph',
-        active: isMarkdown,
-        title: isMarkdown ? '当前按 Markdown 渲染，点击切换为纯文本' : '当前按纯文本显示，点击切换为 Markdown 渲染',
-        ariaLabel: isMarkdown ? '切换为纯文本视图' : '切换为 Markdown 视图'
-      });
-      return;
-    }
-
-    const isHighlighted = renderState.mode === CONVERSATION_DOCUMENT_VIEW_MODE_CODE_HIGHLIGHT;
-    applyToolButtonVisualState(button, {
-      iconClass: isHighlighted ? 'fa-solid fa-code' : 'fa-solid fa-file-lines',
-      active: isHighlighted,
-      title: isHighlighted ? '当前已启用代码高亮，点击切换为纯文本' : '当前按纯文本显示，点击切换为代码高亮',
-      ariaLabel: isHighlighted ? '切换为纯文本视图' : '切换为代码高亮视图'
     });
   }
 
@@ -488,7 +453,7 @@ export function createConversationDocumentViewer(options = {}) {
       card.classList.add('is-missing');
       state.missing = true;
       state.file = null;
-      syncConversationDocumentModeButton(card);
+      syncConversationDocumentModeButtons(card);
       syncConversationDocumentHtmlFullscreenButton(card);
       return;
     }
@@ -523,7 +488,7 @@ export function createConversationDocumentViewer(options = {}) {
     }
     card.classList.remove('is-missing');
     state.missing = false;
-    syncConversationDocumentModeButton(card);
+    syncConversationDocumentModeButtons(card);
     syncConversationDocumentHtmlFullscreenButton(card);
 
     const metaParts = [];
@@ -600,19 +565,12 @@ export function createConversationDocumentViewer(options = {}) {
     textarea.style.height = `${Math.min(520, Math.max(textarea.scrollHeight, 140))}px`;
   }
 
-  async function cycleConversationDocumentViewMode(card) {
+  async function setConversationDocumentViewMode(card, nextMode) {
     const renderState = resolveCardRenderState(card);
-    if ((renderState.allowedModes || []).length <= 1) return;
-
-    const nextMode = buildNextConversationDocumentRenderMode(
-      card.dataset.documentPath || '',
-      renderState.mode,
-      getViewerSettingsSnapshot()
-    );
-    if (nextMode === renderState.mode) return;
+    if (nextMode === renderState.mode || !renderState.allowedModes.includes(nextMode)) return;
 
     persistConversationDocumentViewMode(card, nextMode);
-    syncConversationDocumentModeButton(card);
+    syncConversationDocumentModeButtons(card);
     const state = getConversationDocumentCardState(card);
     if (state.file) {
       renderConversationDocumentCardContent(card, state.file);
@@ -776,15 +734,22 @@ export function createConversationDocumentViewer(options = {}) {
     actions.className = 'conversation-document-card__actions';
 
     const state = getConversationDocumentCardState(card);
-    const modeButton = createDocumentActionIconButton({
-      iconClass: 'fa-brands fa-markdown',
-      title: '切换文件显示模式',
-      ariaLabel: '切换文件显示模式',
-      className: 'conversation-document-card__tool-button--mode',
-      onClick: () => cycleConversationDocumentViewMode(card)
-    });
-    state.refs.modeButton = modeButton;
-    actions.appendChild(modeButton);
+    const initialRenderState = resolveCardRenderState(card);
+    if (initialRenderState.allowedModes.length > 1) {
+      initialRenderState.allowedModes.forEach((mode) => {
+        const descriptor = buildDocumentViewModeDescriptor(mode);
+        const modeButton = createDocumentActionIconButton({
+          iconClass: descriptor.iconClass,
+          title: `切换为${descriptor.label}`,
+          ariaLabel: `切换为${descriptor.label}`,
+          className: 'conversation-document-card__tool-button--mode',
+          onClick: () => setConversationDocumentViewMode(card, mode)
+        });
+        modeButton.dataset.documentViewMode = mode;
+        state.refs.modeButtons.set(mode, modeButton);
+        actions.appendChild(modeButton);
+      });
+    }
     const htmlFullscreenButton = createDocumentActionIconButton({
       iconClass: 'fa-solid fa-expand',
       title: '全屏预览 HTML',
@@ -832,7 +797,7 @@ export function createConversationDocumentViewer(options = {}) {
     card.appendChild(summary);
     card.appendChild(meta);
     card.appendChild(body);
-    syncConversationDocumentModeButton(card);
+    syncConversationDocumentModeButtons(card);
     syncConversationDocumentHtmlFullscreenButton(card);
     card.addEventListener('toggle', () => {
       if (card.open && !state.editing) {

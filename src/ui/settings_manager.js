@@ -14,10 +14,8 @@ import {
 import {
   clampConversationDocumentFontSizePercent,
   DOCUMENT_VIEWER_SETTING_FONT_SIZE_PERCENT,
-  DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION,
   DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES,
   DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD,
-  DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT,
   normalizeConversationDocumentViewModeOverridesSetting
 } from '../utils/conversation_document_viewer_state.js';
 import { takeBackgroundImageBlob } from '../storage/background_image_blob_store.js';
@@ -109,8 +107,6 @@ export function createSettingsManager(appContext) {
     fontSize: 14,
     documentFontSizePercent: 100,
     documentRenderMarkdownForMd: true,
-    documentRenderMarkdownForTxt: false,
-    documentHighlightCodeByExtension: true,
     documentViewModeOverrides: {},
     renderMarkdownForUserMessages: false,
     showCodeBlockToolbar: true,
@@ -1239,7 +1235,7 @@ export function createSettingsManager(appContext) {
     {
       key: 'sidebarWidth',
       type: 'range',
-      menu: 'quick',
+      uiHidden: true,
       group: 'layout',
       id: 'sidebar-width',
       label: '侧栏宽度',
@@ -1268,7 +1264,6 @@ export function createSettingsManager(appContext) {
     {
       key: 'enableScrollMinimap',
       type: 'toggle',
-      menu: 'quick',
       group: 'layout',
       label: '启用滚动缩略图',
       defaultValue: DEFAULT_SETTINGS.enableScrollMinimap,
@@ -1277,7 +1272,6 @@ export function createSettingsManager(appContext) {
     {
       key: 'scrollMinimapWheelMessageStep',
       type: 'toggle',
-      menu: 'quick',
       group: 'layout',
       label: '缩略图滚轮按消息滚动',
       defaultValue: DEFAULT_SETTINGS.scrollMinimapWheelMessageStep,
@@ -1286,7 +1280,6 @@ export function createSettingsManager(appContext) {
     {
       key: 'scrollMinimapWidth',
       type: 'range',
-      menu: 'quick',
       group: 'layout',
       label: '缩略图宽度',
       min: 14,
@@ -1299,7 +1292,6 @@ export function createSettingsManager(appContext) {
     {
       key: 'scrollMinimapOpacity',
       type: 'range',
-      menu: 'quick',
       group: 'display',
       label: '缩略图透明度',
       min: 0.2,
@@ -1312,7 +1304,6 @@ export function createSettingsManager(appContext) {
     {
       key: 'scrollMinimapAutoHide',
       type: 'toggle',
-      menu: 'quick',
       group: 'display',
       label: '缩略图自动隐藏',
       defaultValue: DEFAULT_SETTINGS.scrollMinimapAutoHide,
@@ -1321,7 +1312,6 @@ export function createSettingsManager(appContext) {
     {
       key: 'scrollMinimapMessageMode',
       type: 'select',
-      menu: 'quick',
       group: 'display',
       label: '缩略图消息模式',
       options: [
@@ -1371,26 +1361,9 @@ export function createSettingsManager(appContext) {
     {
       key: DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD,
       type: 'toggle',
-      menu: 'quick',
       group: 'display',
       label: 'Markdown 文件默认渲染',
       defaultValue: DEFAULT_SETTINGS[DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD]
-    },
-    {
-      key: DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT,
-      type: 'toggle',
-      menu: 'quick',
-      group: 'display',
-      label: 'TXT 默认按 Markdown 渲染',
-      defaultValue: DEFAULT_SETTINGS[DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT]
-    },
-    {
-      key: DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION,
-      type: 'toggle',
-      menu: 'quick',
-      group: 'display',
-      label: '代码文件默认高亮',
-      defaultValue: DEFAULT_SETTINGS[DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION]
     },
     // 缩放比例
     {
@@ -1547,11 +1520,7 @@ export function createSettingsManager(appContext) {
     if (key === 'scrollMinimapWheelMessageStep') {
       return !!value;
     }
-    if (
-      key === DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD
-      || key === DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_TXT
-      || key === DOCUMENT_VIEWER_SETTING_HIGHLIGHT_CODE_BY_EXTENSION
-    ) {
+    if (key === DOCUMENT_VIEWER_SETTING_RENDER_MARKDOWN_FOR_MD) {
       return !!value;
     }
     if (key === DOCUMENT_VIEWER_SETTING_MODE_OVERRIDES) {
