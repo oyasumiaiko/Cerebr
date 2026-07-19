@@ -10,7 +10,7 @@ async function loadSkillContextModule() {
   return import(dataUrl);
 }
 
-test('resolveSkillContextAttachment 只在首次页面命中时注入官方风格说明与最小 skill 摘要', async () => {
+test('resolveSkillContextAttachment 会在 URL 或 skill 集合变化后重新注入最新摘要', async () => {
   const {
     buildSkillContextPayload,
     buildSkillContextInputItems,
@@ -59,6 +59,15 @@ test('resolveSkillContextAttachment 只在首次页面命中时注入官方风�
   assert.ok(first.signature);
   assert.equal(first.inputItems.length, 1);
 
+  const unchanged = resolveSkillContextAttachment({
+    payload,
+    previousEffectiveSignature: first.signature
+  });
+  assert.equal(unchanged.signature, null);
+  assert.equal(unchanged.inputItems, null);
+  assert.equal(unchanged.status, 'reused');
+  assert.equal(unchanged.reason, 'signature_unchanged');
+
   const laterPayload = buildSkillContextPayload({
     mode: 'host_page',
     url: 'https://another.example.com/app',
@@ -74,10 +83,11 @@ test('resolveSkillContextAttachment 只在首次页面命中时注入官方风�
     payload: laterPayload,
     previousEffectiveSignature: first.signature
   });
-  assert.equal(second.signature, null);
-  assert.equal(second.inputItems, null);
-  assert.equal(second.status, 'reused');
-  assert.equal(second.reason, 'skill_context_already_injected');
+  assert.ok(second.signature);
+  assert.equal(second.inputItems.length, 1);
+  assert.equal(second.status, 'injected');
+  assert.equal(second.reason, 'signature_changed');
+  assert.match(second.inputItems[0].content[0].text, /another-page-skill/);
 });
 
 test('空 skill 集始终不注入 skill_context', async () => {

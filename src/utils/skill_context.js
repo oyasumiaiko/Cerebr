@@ -4,7 +4,7 @@
  * 设计目标：
  * - 尽量贴近官方 Codex skills section，只注入轻量 skill 摘要；
  * - 每轮只统一注入一次 how-to-use，而不是给每个 skill 都重复一遍调用说明；
- * - 只在当前页面实际命中 skill 时注入，且同一条对话里只注入第一次命中的 skill_context；
+ * - 只在当前页面实际命中 skill 时注入；URL 或 skill 集合变化后重新注入最新摘要；
  * - 具体细节仍然由模型按需去读目标 skill 的 `SKILL.md` 与相关文件。
  */
 
@@ -147,15 +147,13 @@ export function resolveSkillContextAttachment(options = {}) {
     };
   }
 
-  if (previousEffectiveSignature) {
+  if (previousEffectiveSignature && previousEffectiveSignature === signature) {
     return {
       signature: null,
       inputItems: null,
       currentSignature: signature,
       status: 'reused',
-      reason: previousEffectiveSignature === signature
-        ? 'signature_unchanged'
-        : 'skill_context_already_injected'
+      reason: 'signature_unchanged'
     };
   }
 
@@ -164,6 +162,6 @@ export function resolveSkillContextAttachment(options = {}) {
     inputItems,
     currentSignature: signature,
     status: 'injected',
-    reason: 'initial'
+    reason: previousEffectiveSignature ? 'signature_changed' : 'initial'
   };
 }
