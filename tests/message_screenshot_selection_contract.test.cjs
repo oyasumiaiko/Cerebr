@@ -10,14 +10,18 @@ async function readWorkspaceFile(relativePath) {
 test('多消息长截图选择入口与导出管线保持同一套复制为图片实现', async () => {
   const [
     contextMenuSource,
+    contentSource,
     sidebarHtml,
     sidebarAppContextSource,
-    sidebarCss
+    sidebarCss,
+    manifestSource
   ] = await Promise.all([
     readWorkspaceFile('src/ui/context_menu_manager.js'),
+    readWorkspaceFile('src/extension/content.js'),
     readWorkspaceFile('src/ui/sidebar/sidebar.html'),
     readWorkspaceFile('src/ui/sidebar/sidebar_app_context.js'),
-    readWorkspaceFile('src/ui/styles/sidebar.css')
+    readWorkspaceFile('src/ui/styles/sidebar.css'),
+    readWorkspaceFile('manifest.json')
   ]);
 
   assert.match(
@@ -56,7 +60,7 @@ test('多消息长截图选择入口与导出管线保持同一套复制为图�
   );
   assert.match(
     contextMenuSource,
-    /async function exportMessageAsImage\(target\) \{[\s\S]*?const selectedMessageElements = getOrderedScreenshotSelectionMessageElements\(messageElement\);[\s\S]*?const isMultiMessageExport = messageElements\.length > 1;[\s\S]*?createMessagesScreenshotSnapshot\(messageElements, exportOptions\)/
+    /async function copyMessageAsImage\(\) \{[\s\S]*?const selectedMessageElements = getOrderedScreenshotSelectionMessageElements\(messageElement\);[\s\S]*?const isMultiMessageExport = messageElements\.length > 1;[\s\S]*?createMessagesScreenshotSnapshot\(messageElements, exportOptions\)/
   );
   assert.match(
     contextMenuSource,
@@ -68,11 +72,31 @@ test('多消息长截图选择入口与导出管线保持同一套复制为图�
   );
   assert.match(
     contextMenuSource,
-    /function writeScreenshotBlob\(blob, target,[\s\S]*?target === 'copy'[\s\S]*?navigator\.clipboard\.write[\s\S]*?target === 'download'[\s\S]*?a\.download/
+    /function writeScreenshotBlobToClipboard\(blob\) \{[\s\S]*?utils\?\.copyImageToHostClipboard[\s\S]*?await utils\.copyImageToHostClipboard\(blob\)/
   );
-  assert.doesNotMatch(
+  assert.match(
     contextMenuSource,
-    /复制图片到剪贴板失败[\s\S]*?a\.download/
+    /const blob = await renderMessageScreenshotSnapshotToBlob\([\s\S]*?writeScreenshotBlobToClipboard\(blob\)/
+  );
+  assert.match(
+    contextMenuSource,
+    /function downloadScreenshotBlob\(blob, filenamePrefix = '消息截图'\) \{[\s\S]*?a\.download[\s\S]*?return 'download'/
+  );
+  const clipboardWriterStart = contextMenuSource.indexOf('async function writeScreenshotBlobToClipboard');
+  const clipboardWriterEnd = contextMenuSource.indexOf('\n  function downloadScreenshotBlob', clipboardWriterStart);
+  assert.ok(clipboardWriterStart >= 0 && clipboardWriterEnd > clipboardWriterStart);
+  assert.doesNotMatch(
+    contextMenuSource.slice(clipboardWriterStart, clipboardWriterEnd),
+    /a\.download/
+  );
+  assert.doesNotMatch(manifestSource, /"clipboardWrite"/);
+  assert.match(
+    sidebarAppContextSource,
+    /appContext\.utils\.copyImageToHostClipboard = async \(blob\) => \{[\s\S]*?COPY_IMAGE_TO_CLIPBOARD/
+  );
+  assert.match(
+    contentSource,
+    /case 'COPY_IMAGE_TO_CLIPBOARD':[\s\S]*?navigator\.clipboard\.write[\s\S]*?COPY_IMAGE_TO_CLIPBOARD_RESULT/
   );
   assert.match(
     contextMenuSource,

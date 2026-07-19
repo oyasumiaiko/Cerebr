@@ -1749,6 +1749,27 @@ class CerebrSidebarManager {
       case 'CAPTURE_SCREENSHOT':
         captureAndDropScreenshot(sourceSidebar);
         break;
+      case 'COPY_IMAGE_TO_CLIPBOARD':
+        (async () => {
+          const requestId = typeof data.requestId === 'string' ? data.requestId : '';
+          try {
+            if (!(data.blob instanceof Blob) || data.blob.type !== 'image/png') {
+              throw new Error('截图数据无效');
+            }
+            await navigator.clipboard.write([
+              new ClipboardItem({ 'image/png': data.blob })
+            ]);
+            sourceSidebar.postToIframe({ type: 'COPY_IMAGE_TO_CLIPBOARD_RESULT', requestId, success: true });
+          } catch (error) {
+            sourceSidebar.postToIframe({
+              type: 'COPY_IMAGE_TO_CLIPBOARD_RESULT',
+              requestId,
+              success: false,
+              error: error?.message || '复制截图失败'
+            });
+          }
+        })();
+        break;
       case 'OPEN_MARKDOWN_LINK':
         openMarkdownLinkInPage(data.url);
         break;

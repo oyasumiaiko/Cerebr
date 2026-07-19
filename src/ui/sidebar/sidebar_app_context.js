@@ -253,6 +253,8 @@ export function registerSidebarUtilities(appContext) {
   const pendingHostBridgeMessages = [];
   let hostMessageHandler = null;
   const jsRuntimeRunnerPendingRequests = new Map();
+  const hostClipboardPendingRequests = new Map();
+  let hostClipboardRequestSeq = 0;
 
   function postHostMessage(message) {
     if (appContext.state.isStandalone || window.parent === window) return false;
@@ -291,6 +293,19 @@ export function registerSidebarUtilities(appContext) {
         pending.resolve(responseData.response);
         return;
       }
+      if (responseData?.type === 'COPY_IMAGE_TO_CLIPBOARD_RESULT') {
+        const requestId = typeof responseData.requestId === 'string' ? responseData.requestId : '';
+        const pending = hostClipboardPendingRequests.get(requestId);
+        if (!pending) return;
+        hostClipboardPendingRequests.delete(requestId);
+        window.clearTimeout(pending.timeoutId);
+        if (responseData.success === true) {
+          pending.resolve();
+        } else {
+          pending.reject(new Error(responseData.error || '复制截图失败'));
+        }
+        return;
+      }
       if (hostMessageHandler) {
         hostMessageHandler(responseData);
       } else {
@@ -300,6 +315,24 @@ export function registerSidebarUtilities(appContext) {
     hostBridgePort.start?.();
     pendingHostMessages.splice(0).forEach((message) => hostBridgePort.postMessage(message));
   });
+
+  appContext.utils.copyImageToHostClipboard = async (blob) => {
+    if (appContext.state.isStandalone || window.parent === window) {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      return;
+    }
+
+    hostClipboardRequestSeq += 1;
+    const requestId = `copy_image_${Date.now()}_${hostClipboardRequestSeq}`;
+    return await new Promise((resolve, reject) => {
+      const timeoutId = window.setTimeout(() => {
+        hostClipboardPendingRequests.delete(requestId);
+        reject(new Error('复制截图超时'));
+      }, 15_000);
+      hostClipboardPendingRequests.set(requestId, { resolve, reject, timeoutId });
+      postHostMessage({ type: 'COPY_IMAGE_TO_CLIPBOARD', requestId, blob });
+    });
+  };
 
   function requestJsRuntimeRunner(runtimeMessage, timeoutMs, timeoutMessage) {
     const bridgeChannelId = appContext.state.bridgeChannelId;

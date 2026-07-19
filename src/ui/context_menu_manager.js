@@ -2165,33 +2165,76 @@ export function createContextMenuManager(appContext) {
     return canvasToPngBlob(newCanvas);
   }
 
-  async function writeScreenshotBlob(blob, target, filenamePrefix = '消息截图') {
-    if (target === 'copy') {
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          'image/png': blob
-        })
-      ]);
-      return 'clipboard';
+  async function writeScreenshotBlobToClipboard(blob) {
+    if (typeof utils?.copyImageToHostClipboard !== 'function') {
+      throw new Error('当前环境不支持截图复制');
     }
-    if (target === 'download') {
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${filenamePrefix}_${new Date().toISOString().replace(/:/g, '-')}.png`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      return 'download';
-    }
-    throw new Error(`不支持的截图导出目标: ${target}`);
+    await utils.copyImageToHostClipboard(blob);
+    return 'clipboard';
   }
 
-  /**
-   * 使用同一套截图渲染管线，按用户明确选择复制或下载。
-   */
-  async function exportMessageAsImage(target) {
+  function downloadScreenshotBlob(blob, filenamePrefix = '消息截图') {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${filenamePrefix}_${new Date().toISOString().replace(/:/g, '-')}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    return 'download';
+  }
+
+  async function copyMessageAsImage() {
+    const messageElement = currentMessageElement;
+    if (isMessageScreenshotExporting) {
+      utils?.showNotification?.({ message: '截图正在生成中', type: 'info', duration: 1400 });
+      return;
+    }
+    const selectedMessageElements = getOrderedScreenshotSelectionMessageElements(messageElement);
+    const messageElements = selectedMessageElements.length > 0
+      ? selectedMessageElements
+      : (messageElement ? [messageElement] : []);
+    if (!messageElements.length) return;
+
+    let snapshot = null;
+    let progressToast = null;
+    const originalText = copyAsImageButton.innerHTML;
+    hideContextMenu();
+    setMessageScreenshotExporting(true, 'copy');
+    progressToast = showMessageScreenshotExportNotification(messageElements);
+    try {
+      const exportOptions = resolveMessageImageExportOptions();
+      const isMultiMessageExport = messageElements.length > 1;
+      snapshot = isMultiMessageExport
+        ? createMessagesScreenshotSnapshot(messageElements, exportOptions)
+        : createMessageScreenshotSnapshot(messageElements[0], exportOptions);
+      const backgroundReference = isMultiMessageExport
+        ? getActiveScreenshotSelectionContainer(messageElements[0])
+        : messageElements[0];
+      const blob = await renderMessageScreenshotSnapshotToBlob(snapshot, exportOptions, backgroundReference);
+      const exportResult = await writeScreenshotBlobToClipboard(blob);
+      updateMessageScreenshotExportNotification(progressToast, 'success', {
+        target: exportResult,
+        count: messageElements.length
+      });
+    } catch (err) {
+      console.error('生成图片过程中出错:', err);
+      updateMessageScreenshotExportNotification(progressToast, 'error', {
+        error: err,
+        count: messageElements.length
+      });
+    } finally {
+      if (snapshot?.cleanup) {
+        snapshot.cleanup();
+      }
+      setMessageScreenshotExporting(false);
+      copyAsImageButton.innerHTML = originalText;
+      syncScreenshotExportMenuLabels();
+    }
+  }
+
+  async function downloadMessageAsImage() {
     const messageElement = currentMessageElement;
     if (isMessageScreenshotExporting) {
       utils?.showNotification?.({ message: '截图正在生成中', type: 'info', duration: 1400 });
@@ -2206,7 +2249,7 @@ export function createContextMenuManager(appContext) {
     let snapshot = null;
     let progressToast = null;
     hideContextMenu();
-    setMessageScreenshotExporting(true, target);
+    setMessageScreenshotExporting(true, 'download');
     progressToast = showMessageScreenshotExportNotification(messageElements);
     try {
       const exportOptions = resolveMessageImageExportOptions();
@@ -2218,9 +2261,8 @@ export function createContextMenuManager(appContext) {
         ? getActiveScreenshotSelectionContainer(messageElements[0])
         : messageElements[0];
       const blob = await renderMessageScreenshotSnapshotToBlob(snapshot, exportOptions, backgroundReference);
-      const exportResult = await writeScreenshotBlob(
+      const exportResult = downloadScreenshotBlob(
         blob,
-        target,
         isMultiMessageExport ? '对话长截图' : '消息截图'
       );
       updateMessageScreenshotExportNotification(progressToast, 'success', {
@@ -2240,14 +2282,6 @@ export function createContextMenuManager(appContext) {
       setMessageScreenshotExporting(false);
       syncScreenshotExportMenuLabels();
     }
-  }
-
-  function copyMessageAsImage() {
-    return exportMessageAsImage('copy');
-  }
-
-  function downloadMessageAsImage() {
-    return exportMessageAsImage('download');
   }
 
   /**
