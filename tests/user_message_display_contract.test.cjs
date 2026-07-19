@@ -13,7 +13,7 @@ test('settings_manager 已注册用户消息 Markdown 渲染开关', async () =>
 
   assert.match(
     source,
-    /key:\s*'renderMarkdownForUserMessages'[\s\S]*?menu:\s*'quick'[\s\S]*?label:\s*'用户消息 Markdown'/
+    /key:\s*'renderMarkdownForUserMessages'[\s\S]*?menu:\s*'quick'[\s\S]*?label:\s*'Markdown 渲染用户消息'/
   );
 });
 

@@ -1128,7 +1128,7 @@ export function createSettingsManager(appContext) {
       type: 'toggle',
       menu: 'quick',
       group: 'display',
-      label: '用户消息 Markdown',
+      label: 'Markdown 渲染用户消息',
       defaultValue: DEFAULT_SETTINGS.renderMarkdownForUserMessages
     },
     {
@@ -1215,7 +1215,7 @@ export function createSettingsManager(appContext) {
       type: 'toggle',
       menu: 'quick',
       group: 'display',
-      label: '$ / $$ 数学公式',
+      label: '使用 $ / $$ 公式分隔符',
       defaultValue: DEFAULT_SETTINGS.enableDollarMath
     },
     // 侧边栏位置
