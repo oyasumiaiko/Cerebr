@@ -173,6 +173,8 @@ function buildUserScriptSource(userCode, timeoutMs = 0, executionId = '') {
     const __cerebrExecutionId = ${JSON.stringify(normalizedExecutionId)};
     const __cerebrAbortEventName = '__cerebrJsRuntimeAbort';
     const __cerebrAbortRegistry = globalThis.__cerebrJsRuntimeAbortRegistry ??= new Set();
+    const __cerebrAbortController = new AbortController();
+    const signal = __cerebrAbortController.signal;
     const __cerebrBuildReplacer = () => {
       const seen = new WeakSet();
       return (_key, value) => {
@@ -247,7 +249,9 @@ function buildUserScriptSource(userCode, timeoutMs = 0, executionId = '') {
       : new Promise((_, reject) => {
           const __cerebrRejectIfAborted = () => {
             if (!__cerebrIsAborted()) return;
-            reject(__cerebrBuildAbortError());
+            const error = __cerebrBuildAbortError();
+            reject(error);
+            __cerebrAbortController.abort(error);
           };
           __cerebrAbortListener = (event) => {
             const detailExecutionId = (typeof event?.detail?.executionId === 'string')
@@ -290,7 +294,11 @@ ${body}
         ? Promise.race([
             __cerebrRunUserCode(),
             new Promise((_, reject) => {
-              setTimeout(() => reject(new Error(\`JS Runtime 执行超时（\${__cerebrTimeoutMs}ms）。\`)), __cerebrTimeoutMs);
+              setTimeout(() => {
+                const error = new Error(\`JS Runtime 执行超时（\${__cerebrTimeoutMs}ms）。\`);
+                reject(error);
+                __cerebrAbortController.abort(error);
+              }, __cerebrTimeoutMs);
             })
           ])
         : __cerebrRunUserCode());

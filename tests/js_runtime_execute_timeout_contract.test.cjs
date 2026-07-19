@@ -24,6 +24,8 @@ test('js_runtime_execute 暴露 timeout_ms 并把它接到 sidebar 与 backgroun
   assert.equal(toolDefinition.name, 'js_runtime_execute');
   assert.equal(toolDefinition.strict, true);
   assert.match(toolDefinition.parameters.properties.timeout_ms.description, /超时毫秒数/);
+  assert.match(toolDefinition.description, /AbortSignal 变量 `signal`/);
+  assert.match(toolDefinition.description, /协作式取消/);
   assert.equal(Object.hasOwn(toolDefinition.parameters.properties.timeout_ms, 'minimum'), false);
   assert.deepEqual(toolDefinition.parameters.required, ['code', 'timeout_ms', 'frame_ids']);
   assert.deepEqual(
@@ -93,6 +95,8 @@ test('js_runtime_execute 在纯对话模式下的工具说明不再指向宿主�
   assert.match(toolDefinition.description, /不要用它读取当前网页、URL、标题或 frame/);
   assert.match(toolDefinition.parameters.properties.frame_ids.description, /不绑定宿主页 frame/);
   assert.doesNotMatch(toolDefinition.description, /当前页面是单页应用/);
+  assert.doesNotMatch(toolDefinition.description, /AbortSignal 变量 `signal`/);
+  assert.doesNotMatch(toolDefinition.description, /协作式取消/);
 });
 
 test('纯对话 JS Runtime 使用 manifest sandbox classic script，避免 module 握手超时', async () => {

@@ -59,6 +59,8 @@ test('js_runtime_execute 中止链会把 AbortSignal 贯穿到 sender/sidebar/ba
     jsRuntimeManagerSource,
     /const __cerebrAbortPromise = !__cerebrExecutionId/
   );
+  assert.match(jsRuntimeManagerSource, /const __cerebrAbortController = new AbortController\(\);/);
+  assert.match(jsRuntimeManagerSource, /const signal = __cerebrAbortController\.signal;/);
   assert.match(
     jsRuntimeManagerSource,
     /async function abort\(request = \{\}\)/

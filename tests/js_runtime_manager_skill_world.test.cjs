@@ -125,6 +125,45 @@ test('createJsRuntimeManager.execute 会在用户代码前升级已打开页面�
   }
 });
 
+test('createJsRuntimeManager.execute 超时时会通过词法 signal 通知协作式取消', async () => {
+  const { createJsRuntimeManager } = await loadJsRuntimeManagerModule();
+  const previousChrome = global.chrome;
+
+  try {
+    global.chrome = {
+      userScripts: {
+        async getScripts() { return []; },
+        async configureWorld() {},
+        async execute(options) {
+          const envelope = await eval(options.js[0].code);
+          return [{
+            frameId: 0,
+            documentId: 'doc-timeout',
+            result: envelope
+          }];
+        }
+      }
+    };
+
+    const manager = createJsRuntimeManager();
+    const result = await manager.execute({
+      tabId: 9,
+      timeoutMs: 10,
+      code: `
+signal.addEventListener('abort', () => console.log('signal-aborted:' + signal.aborted), { once: true });
+await new Promise(() => {});
+`
+    });
+
+    assert.equal(result.ok, false);
+    assert.match(result.items[0].error.message, /执行超时（10ms）/);
+    assert.equal(result.logs.some((entry) => entry.text === 'signal-aborted:true'), true);
+  } finally {
+    if (previousChrome === undefined) delete global.chrome;
+    else global.chrome = previousChrome;
+  }
+});
+
 test('createJsRuntimeManager.abort 会在同一 worldId 下发送 executionId 中止脚本', async () => {
   const { createJsRuntimeManager } = await loadJsRuntimeManagerModule();
   const { CEREBR_SKILL_WORLD_ID } = await loadSkillRuntimeModule();
