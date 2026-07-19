@@ -23,10 +23,9 @@ import {
 } from '../agent_tools/skill/registry_tool.js';
 import { applySkillPackagePatch } from '../agent_tools/skill/skill_apply_patch.js';
 import {
+  CEREBR_SKILL_SCRIPT_ID_PREFIX,
   buildSkillDocumentRefreshSource,
   buildSkillMountOnCurrentPageSource,
-  buildRegisteredSkillScriptId,
-  buildRegisteredSkillUserScript,
   buildSkillUnmountFromCurrentPageSource
 } from './skill_runtime.js';
 import { createIndexedDbSkillStore } from '../storage/skill_store.js';
@@ -184,8 +183,6 @@ export function createSkillManager(options = {}) {
     if (
       !userScriptsApi
       || typeof userScriptsApi.getScripts !== 'function'
-      || typeof userScriptsApi.register !== 'function'
-      || typeof userScriptsApi.update !== 'function'
       || typeof userScriptsApi.unregister !== 'function'
     ) {
       throw new Error('当前扩展环境没有可用的 chrome.userScripts 注册能力。');
@@ -198,15 +195,6 @@ export function createSkillManager(options = {}) {
       throw new Error('当前扩展环境没有可用的 chrome.tabs 能力。');
     }
     return tabsApi;
-  }
-
-  function isDuplicateScriptIdError(error, scriptId = '') {
-    const message = (typeof error?.message === 'string' && error.message.trim())
-      ? error.message.trim()
-      : '';
-    if (!message) return false;
-    if (!message.includes('Duplicate script ID')) return false;
-    return !scriptId || message.includes(scriptId);
   }
 
   async function listStoredRecords() {
@@ -259,106 +247,24 @@ export function createSkillManager(options = {}) {
   }
 
   async function persistMutatedSkillRecord(existingRecord, nextRecord) {
-    const normalizedExisting = normalizeStoredSkillRecord(existingRecord);
-    const normalizedNext = await saveStoredSkillPackage(nextRecord, store);
-
-    if (normalizedNext.enabled && normalizedNext.kind === 'page_runtime') {
-      if (normalizedExisting?.enabled === true && normalizedExisting?.kind === 'page_runtime') {
-        await updateSkillRecordRegistration(normalizedNext);
-      } else {
-        await registerSkillRecord(normalizedNext);
-      }
-    } else if (normalizedExisting?.enabled === true && normalizedExisting?.kind === 'page_runtime') {
-      await unregisterSkillName(normalizedExisting.name);
-    }
-
-    return normalizedNext;
-  }
-
-  async function registerSkillRecord(record) {
-    const skill = normalizeStoredSkillRecord(record);
-    if (!skill || skill.enabled !== true || skill.kind !== 'page_runtime') return null;
-    const api = ensureUserScriptsApi();
-    const definition = buildRegisteredSkillUserScript(skill);
-    try {
-      await api.register([definition]);
-    } catch (error) {
-      if (!isDuplicateScriptIdError(error, definition.id)) {
-        throw error;
-      }
-      await api.update([definition]);
-    }
-    return definition;
-  }
-
-  async function updateSkillRecordRegistration(record) {
-    const skill = normalizeStoredSkillRecord(record);
-    if (!skill || skill.enabled !== true || skill.kind !== 'page_runtime') return null;
-    const api = ensureUserScriptsApi();
-    const definition = buildRegisteredSkillUserScript(skill);
-    await api.update([definition]);
-    return definition;
-  }
-
-  async function unregisterSkillName(skillName) {
-    const api = ensureUserScriptsApi();
-    await api.unregister({
-      ids: [buildRegisteredSkillScriptId(skillName)]
-    });
+    return await saveStoredSkillPackage(nextRecord, store);
   }
 
   async function runReconcileRegisteredSkillsPass() {
     const api = ensureUserScriptsApi();
-    const desiredManifests = (await listStoredRecords())
-      .filter((record) => record.enabled === true && record.kind === 'page_runtime');
-    const desiredRecords = (await Promise.all(
-      desiredManifests.map((record) => getStoredSkillPackage(record.name, store))
-    )).filter(Boolean);
-    const desiredById = new Map(
-      desiredRecords.map((record) => [buildRegisteredSkillScriptId(record.name), buildRegisteredSkillUserScript(record)])
-    );
-
     const existingDefinitions = await api.getScripts();
-    const existingById = new Map(
-      (Array.isArray(existingDefinitions) ? existingDefinitions : [])
-        .filter((definition) => String(definition?.id || '').startsWith('cerebr-skill--'))
-        .map((definition) => [String(definition.id), definition])
-    );
-
-    const idsToUnregister = Array.from(existingById.keys()).filter((id) => !desiredById.has(id));
-    const definitionsToRegister = Array.from(desiredById.entries())
-      .filter(([id]) => !existingById.has(id))
-      .map(([, definition]) => definition);
-    const definitionsToUpdate = Array.from(desiredById.entries())
-      .filter(([id]) => existingById.has(id))
-      .map(([, definition]) => definition);
+    const idsToUnregister = (Array.isArray(existingDefinitions) ? existingDefinitions : [])
+      .map((definition) => String(definition?.id || ''))
+      .filter((id) => id.startsWith(CEREBR_SKILL_SCRIPT_ID_PREFIX));
 
     if (idsToUnregister.length > 0) {
       await api.unregister({ ids: idsToUnregister });
     }
-    let registeredCount = 0;
-    let updatedCount = 0;
-    for (const definition of definitionsToRegister) {
-      try {
-        await api.register([definition]);
-        registeredCount += 1;
-      } catch (error) {
-        if (!isDuplicateScriptIdError(error, definition.id)) {
-          throw error;
-        }
-        await api.update([definition]);
-        updatedCount += 1;
-      }
-    }
-    if (definitionsToUpdate.length > 0) {
-      await api.update(definitionsToUpdate);
-      updatedCount += definitionsToUpdate.length;
-    }
 
     return {
       ok: true,
-      registered_count: registeredCount,
-      updated_count: updatedCount,
+      registered_count: 0,
+      updated_count: 0,
       unregistered_count: idsToUnregister.length
     };
   }
@@ -595,9 +501,6 @@ export function createSkillManager(options = {}) {
       throw new Error(`技能 ${nextRecord.name} 已存在，不能重复 create。`);
     }
     await saveStoredSkillPackage(nextRecord, store);
-    if (nextRecord.enabled && nextRecord.kind === 'page_runtime') {
-      await registerSkillRecord(nextRecord);
-    }
     if (createMode === 'template') {
       const createdFiles = Array.isArray(nextRecord.files)
         ? nextRecord.files.map((file) => file.path)
@@ -880,9 +783,6 @@ export function createSkillManager(options = {}) {
     }
 
     await deleteStoredSkillPackage(existing.name, store);
-    if (existing.enabled === true && existing.kind === 'page_runtime') {
-      await unregisterSkillName(existing.name);
-    }
 
     return {
       ok: true,

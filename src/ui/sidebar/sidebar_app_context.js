@@ -1470,7 +1470,7 @@ export function registerSidebarUtilities(appContext) {
    * 统一执行扩展侧 skill_registry 动作。
    *
    * 说明：
-   * - 所有真正会改 registry / 动态 userScripts 的动作都交给 background；
+   * - 所有真正会改 registry / skill 生命周期的动作都交给 background；
    * - sidebar 只负责把当前绑定 tabId 一并传过去，供 refresh 当前文档使用。
    */
   appContext.utils.executeSkillRegistryAction = async (payload = {}) => {

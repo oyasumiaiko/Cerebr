@@ -48,12 +48,11 @@ function buildSkill(name) {
   };
 }
 
-test('buildSkillDocumentRefreshSource 与 buildRegisteredSkillUserScript 生成可编译源码', async () => {
+test('buildSkillDocumentRefreshSource 只清理失效 revision，不再生成 document_start runtime', async () => {
   const {
     buildSkillDocumentRefreshSource,
     buildSkillMountOnCurrentPageSource,
-    buildSkillUnmountFromCurrentPageSource,
-    buildRegisteredSkillUserScript
+    buildSkillUnmountFromCurrentPageSource
   } = await loadSkillRuntimeModule();
 
   const refreshSource = buildSkillDocumentRefreshSource([
@@ -66,11 +65,48 @@ test('buildSkillDocumentRefreshSource 与 buildRegisteredSkillUserScript 生成�
   assert.doesNotThrow(() => new AsyncFunction(refreshSource));
   assert.doesNotThrow(() => new AsyncFunction(mountSource));
   assert.doesNotThrow(() => new AsyncFunction(unmountSource));
+  assert.doesNotMatch(refreshSource, /readValue/);
+  assert.match(refreshSource, /__desiredSkillRevisions/);
+});
 
-  const registered = buildRegisteredSkillUserScript(buildSkill('dom-probe'));
-  assert.equal(registered.world, 'USER_SCRIPT');
-  assert.equal(registered.js.length, 1);
-  assert.doesNotThrow(() => new Function(registered.js[0].code));
+test('document refresh 保留同 revision，更新时只卸载旧实例并等待下次 $invoke', async () => {
+  const {
+    buildSkillDocumentRefreshSource,
+    buildSkillMountOnCurrentPageSource
+  } = await loadSkillRuntimeModule();
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  const previousRuntime = globalThis.__cerebrSkills;
+  const previousSkill = globalThis.$skill;
+  const previousInvoke = globalThis.$invoke;
+  const previousMethods = globalThis.$methods;
+
+  try {
+    delete globalThis.__cerebrSkills;
+    delete globalThis.$skill;
+    delete globalThis.$invoke;
+    delete globalThis.$methods;
+
+    const skill = buildSkill('lazy-probe');
+    await new AsyncFunction(buildSkillMountOnCurrentPageSource(skill))();
+    await new AsyncFunction(buildSkillDocumentRefreshSource([skill]))();
+    assert.equal(globalThis.$skill('lazy-probe')?.label, 'lazy-probe');
+
+    await new AsyncFunction(buildSkillDocumentRefreshSource([{
+      ...skill,
+      revision: 2,
+      updated_at: '2026-01-02T00:00:00.000Z'
+    }]))();
+    assert.equal(globalThis.$skill('lazy-probe'), null);
+  } finally {
+    if (previousRuntime === undefined) delete globalThis.__cerebrSkills;
+    else globalThis.__cerebrSkills = previousRuntime;
+    if (previousSkill === undefined) delete globalThis.$skill;
+    else globalThis.$skill = previousSkill;
+    if (previousInvoke === undefined) delete globalThis.$invoke;
+    else globalThis.$invoke = previousInvoke;
+    if (previousMethods === undefined) delete globalThis.$methods;
+    else globalThis.$methods = previousMethods;
+  }
 });
 
 test('runtime bootstrap 会暴露 $skill/$invoke/$methods facade 且与内部注册表共用状态', async () => {

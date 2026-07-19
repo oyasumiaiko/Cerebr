@@ -127,7 +127,7 @@ function buildLongSkillInput(name = 'long-dom-probe') {
   };
 }
 
-test('create/update/delete/enable/disable 会驱动 register/update/unregister 与当前文档 refresh', async () => {
+test('create/update/delete/enable/disable 只持久化并刷新当前文档，不再注册 eager runtime', async () => {
   const { createSkillManager } = await loadSkillManagerModule();
   const {
     buildSkillRegistryFileActionPayloadFromVirtualFileAction,
@@ -177,7 +177,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     skill: buildSkillInput()
   }, { tabId: 11 });
   assert.equal(created.ok, true);
-  assert.equal(calls.register.length, 1);
+  assert.equal(calls.register.length, 0);
   assert.equal(calls.execute.length, 1);
 
   const updated = await manager.executeRegistryAction({
@@ -204,7 +204,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     }
   }, { tabId: 11 });
   assert.equal(updated.ok, true);
-  assert.equal(calls.update.length, 1);
+  assert.equal(calls.update.length, 0);
   assert.equal(calls.execute.length, 2);
 
   const readFile = await manager.executeRegistryAction({
@@ -252,7 +252,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     modified: [],
     deleted: []
   });
-  assert.equal(calls.update.length, 2);
+  assert.equal(calls.update.length, 0);
   assert.equal(calls.execute.length, 3);
 
   const patchedManifestDescription = await manager.executeRegistryAction({
@@ -269,7 +269,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   }, { tabId: 11 });
   assert.equal(patchedManifestDescription.ok, true);
   assert.equal(patchedManifestDescription.skill.description, '读取页面标题、链接与路径信息');
-  assert.equal(calls.update.length, 3);
+  assert.equal(calls.update.length, 0);
   assert.equal(calls.execute.length, 4);
 
   const patchedFile = await manager.executeRegistryAction({
@@ -290,7 +290,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     modified: ['src/helpers/url.js'],
     deleted: []
   });
-  assert.equal(calls.update.length, 4);
+  assert.equal(calls.update.length, 0);
   assert.equal(calls.execute.length, 5);
 
   const patchedManifest = await manager.executeRegistryAction({
@@ -312,7 +312,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     deleted: []
   });
   assert.equal(patchedManifest.skill.enabled, false);
-  assert.equal(calls.unregister.length, 1);
+  assert.equal(calls.unregister.length, 0);
   assert.equal(calls.execute.length, 6);
 
   const reenabledViaManifest = await manager.executeRegistryAction({
@@ -328,7 +328,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     ].join('\n')
   }, { tabId: 11 });
   assert.equal(reenabledViaManifest.ok, true);
-  assert.equal(calls.register.length, 2);
+  assert.equal(calls.register.length, 0);
   assert.equal(calls.execute.length, 7);
 
   const deletedFile = await manager.executeRegistryAction({
@@ -338,7 +338,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
   }, { tabId: 11 });
   assert.equal(deletedFile.ok, true);
   assert.equal(deletedFile.files.total_count, 4);
-  assert.equal(calls.update.length, 5);
+  assert.equal(calls.update.length, 0);
   assert.equal(calls.execute.length, 8);
 
   const disabled = await manager.executeRegistryAction({
@@ -346,7 +346,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     skill_name: 'dom-probe'
   }, { tabId: 11 });
   assert.equal(disabled.ok, true);
-  assert.equal(calls.unregister.length, 2);
+  assert.equal(calls.unregister.length, 0);
   assert.equal(calls.execute.length, 9);
 
   const enabled = await manager.executeRegistryAction({
@@ -354,7 +354,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     skill_name: 'dom-probe'
   }, { tabId: 11 });
   assert.equal(enabled.ok, true);
-  assert.equal(calls.register.length, 3);
+  assert.equal(calls.register.length, 0);
   assert.equal(calls.execute.length, 10);
 
   const removed = await manager.executeRegistryAction({
@@ -362,7 +362,7 @@ test('create/update/delete/enable/disable 会驱动 register/update/unregister �
     skill_name: 'dom-probe'
   }, { tabId: 11 });
   assert.equal(removed.ok, true);
-  assert.equal(calls.unregister.length, 3);
+  assert.equal(calls.unregister.length, 0);
   assert.equal(calls.execute.length, 11);
 });
 
@@ -419,7 +419,7 @@ test('copy_file/move_file/delete_file 支持 skill 虚拟文件管理', async ()
   assert.equal(deleted.ok, true);
   assert.deepEqual(deleted.affected_files.deleted, ['src/helpers/dom-renamed.js']);
   assert.equal(deleted.files.total_count, 4);
-  assert.ok(calls.update.length >= 3);
+  assert.equal(calls.update.length, 0);
 });
 
 test('模板式 create_skill 默认禁用且不会自动 refresh 当前文档', async () => {
@@ -681,7 +681,7 @@ test('skill 可以在后续 patch 后从 guidance 演进成 page runtime，再�
     skill_name: 'runtime-probe'
   }, { tabId: 11 });
   assert.equal(enabled.skill.kind, 'page_runtime');
-  assert.equal(calls.register.length, 1);
+  assert.equal(calls.register.length, 0);
 
   const mounted = await manager.executeRegistryAction({
     action: 'mount_on_current_page',
@@ -708,7 +708,7 @@ test('skill 可以在后续 patch 后从 guidance 演进成 page runtime，再�
     ].join('\n')
   }, { tabId: 11 });
   assert.equal(reverted.skill.kind, 'guidance');
-  assert.equal(calls.unregister.length, 1);
+  assert.equal(calls.unregister.length, 0);
 
   const revertedInstruction = await manager.executeRegistryAction({
     action: 'read_file',
@@ -1142,7 +1142,7 @@ test('list_files/search_files 支持单 skill 与全局搜索闭环', async () =
   assert.match(targetedRead.skill.file.numbered_content, new RegExp(`^${globalSearch.matches[0].line_number} \\| `, 'm'));
 });
 
-test('reconcileRegisteredSkills 会对现有动态脚本做 register/update/unregister 分流', async () => {
+test('reconcileRegisteredSkills 会清理旧版 document_start skill 注册且不再新增', async () => {
   const { createSkillManager } = await loadSkillManagerModule();
 
   const calls = {
@@ -1192,59 +1192,15 @@ test('reconcileRegisteredSkills 会对现有动态脚本做 register/update/unre
 
   const result = await manager.reconcileRegisteredSkills();
   assert.equal(result.ok, true);
-  assert.equal(calls.register.length, 1);
-  assert.equal(calls.update.length, 1);
+  assert.equal(result.registered_count, 0);
+  assert.equal(result.updated_count, 0);
+  assert.equal(result.unregistered_count, 2);
+  assert.equal(calls.register.length, 0);
+  assert.equal(calls.update.length, 0);
   assert.equal(calls.unregister.length, 1);
   assert.deepEqual(calls.unregister[0], {
-    ids: ['cerebr-skill--stale-old-skill']
+    ids: ['cerebr-skill--dom-probe', 'cerebr-skill--stale-old-skill']
   });
-});
-
-test('reconcileRegisteredSkills 遇到 Duplicate script ID 时会回退到 update 而不是整体失败', async () => {
-  const { createSkillManager } = await loadSkillManagerModule();
-
-  const calls = {
-    register: [],
-    update: []
-  };
-
-  const manager = createSkillManager({
-    store: createMockStore([
-      {
-        ...buildSkillInput('worldquant-brain-sim-state'),
-        match: ['https://platform.worldquantbrain.com/*'],
-        created_at: '2026-01-01T00:00:00.000Z',
-        updated_at: '2026-01-02T00:00:00.000Z',
-        revision: 1
-      }
-    ]),
-    userScriptsApi: {
-      async getScripts() { return []; },
-      async register(definitions) {
-        calls.register.push(clone(definitions));
-        throw new Error("Duplicate script ID 'cerebr-skill--worldquant-brain-sim-state'");
-      },
-      async update(definitions) { calls.update.push(clone(definitions)); },
-      async unregister() {}
-    },
-    tabsApi: {
-      async get() {
-        return { url: 'https://platform.worldquantbrain.com/', title: 'BRAIN' };
-      }
-    },
-    jsRuntimeManager: {
-      async execute() {
-        return { ok: true, tabId: 1, value: null, logs: [], items: [] };
-      }
-    }
-  });
-
-  const result = await manager.reconcileRegisteredSkills();
-  assert.equal(result.ok, true);
-  assert.equal(result.registered_count, 0);
-  assert.equal(result.updated_count, 1);
-  assert.equal(calls.register.length, 1);
-  assert.equal(calls.update.length, 1);
 });
 
 test('listMatchingSkillSummariesForTab 只返回当前 URL 命中的轻量摘要', async () => {

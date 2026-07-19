@@ -387,6 +387,16 @@ async function main() {
     }
     result.steps.push('skill_enabled');
 
+    const eagerDefinitions = await sidebarFrame.evaluate(async (skillNameValue) => (
+      await chrome.userScripts.getScripts({
+        ids: [`cerebr-skill--${encodeURIComponent(skillNameValue)}`]
+      })
+    ), skillName);
+    if (Array.isArray(eagerDefinitions) && eagerDefinitions.length > 0) {
+      throw new Error(`enabled skill was still registered at document_start: ${JSON.stringify(eagerDefinitions)}`);
+    }
+    result.steps.push('eager_runtime_absent');
+
     const autoInvokeState = await sidebarFrame.evaluate(async (skillNameValue) => (
       await window.cerebr.debug.executeJsRuntime(
         `await globalThis.__cerebrSkills?.unmount(${JSON.stringify(skillNameValue)});\n`

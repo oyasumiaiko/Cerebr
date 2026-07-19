@@ -23,10 +23,6 @@ function indentCodeBlock(code, indent = '        ') {
     .join('\n');
 }
 
-export function buildRegisteredSkillScriptId(skillName) {
-  return `${CEREBR_SKILL_SCRIPT_ID_PREFIX}${encodeURIComponent(String(skillName || ''))}`;
-}
-
 export function buildRuntimeBootstrapSource() {
   return `
 const __cerebrEnsureSkillRuntime = () => {
@@ -387,28 +383,24 @@ export function buildSkillDocumentRefreshSource(records) {
   const skills = Array.isArray(records)
     ? records.map((record) => normalizeStoredSkillRecord(record)).filter(Boolean)
     : [];
-  const desiredNamesJson = encodeInlineJson(skills.map((skill) => skill.name));
-  const mountBlocks = skills
-    .map((skill) => buildSkillMountSource(skill, { includeBootstrap: false }))
-    .join('\n');
+  const desiredRevisionsJson = encodeInlineJson(skills.map((skill) => [skill.name, skill.revision]));
 
   return `
 ${buildRuntimeBootstrapSource()}
-const __desiredSkillNames = new Set(${desiredNamesJson});
+const __desiredSkillRevisions = new Map(${desiredRevisionsJson});
 for (const __name of Object.keys(__cerebrSkillRuntime.skills)) {
   const __meta = __cerebrSkillRuntime.skillMeta[__name];
-  if (!__meta || !__desiredSkillNames.has(__name)) {
+  const __desiredRevision = __desiredSkillRevisions.get(__name);
+  if (!__meta || __desiredRevision === undefined || Number(__meta.revision) !== Number(__desiredRevision)) {
     await __cerebrSkillRuntime.unmount(__name);
   }
 }
-${mountBlocks}
 return {
   mount_surface: ${encodeInlineJson(CEREBR_SKILL_MOUNT_SURFACE)},
   active_skills: __cerebrSkillRuntime.list()
 };
 `.trim();
 }
-
 export function buildSkillMountOnCurrentPageSource(record) {
   const skill = normalizeStoredSkillRecord(record);
   if (!skill) {
@@ -442,29 +434,4 @@ return {
   active_skills: __cerebrSkillRuntime.list()
 };
 `.trim();
-}
-
-export function buildRegisteredSkillUserScript(record) {
-  const skill = normalizeStoredSkillRecord(record);
-  if (!skill) {
-    throw new Error('无法为无效的skill 构造动态 userScripts 注册项。');
-  }
-  if (skill.kind !== 'page_runtime') {
-    throw new Error(`skill ${skill.name} 不是页面 runtime skill，不能注册 userScripts。`);
-  }
-
-  return {
-    id: buildRegisteredSkillScriptId(skill.name),
-    matches: [...skill.match],
-    js: [{
-      code: `
-(async () => {
-  ${buildSkillMountSource(skill)}
-})();
-`.trim()
-    }],
-    runAt: 'document_start',
-    world: 'USER_SCRIPT',
-    worldId: CEREBR_SKILL_WORLD_ID
-  };
 }

@@ -23,6 +23,7 @@ test('USER_SCRIPT world 只通过专用消息入口请求当前 frame 的单 ski
   assert.match(backgroundSource, /documentIds: documentId \? \[documentId\] : null/);
   assert.match(backgroundSource, /frameIds: !documentId && Number\.isFinite\(frameId\).*\[frameId\]/s);
   assert.doesNotMatch(managerSource, /currentPageMountPromises/);
+  assert.doesNotMatch(managerSource, /buildRegisteredSkillUserScript|registerSkillRecord/);
   assert.match(managerSource, /documentIds: Array\.isArray\(options\?\.documentIds\)/);
   assert.match(managerSource, /frameIds: Array\.isArray\(options\?\.frameIds\)/);
 });
