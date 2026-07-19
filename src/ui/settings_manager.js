@@ -1126,6 +1126,7 @@ export function createSettingsManager(appContext) {
     {
       key: 'renderMarkdownForUserMessages',
       type: 'toggle',
+      menu: 'quick',
       group: 'display',
       label: '用户消息启用 Markdown 渲染',
       defaultValue: DEFAULT_SETTINGS.renderMarkdownForUserMessages

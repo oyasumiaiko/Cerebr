@@ -5841,6 +5841,7 @@ export function createMessageProcessor(appContext) {
     syncAssistantMessageView,
     syncAssistantMessageMetadata,
     syncUserContextualInputDebugView,
+    renderUserMessageTextContent,
     clearResponseActivityUiState,
     renderAssistantApiFooter,
     processMathAndMarkdown,

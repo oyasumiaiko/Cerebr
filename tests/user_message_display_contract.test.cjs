@@ -11,8 +11,10 @@ async function readWorkspaceFile(relativePath) {
 test('settings_manager 已注册用户消息 Markdown 渲染开关', async () => {
   const source = await readWorkspaceFile('src/ui/settings_manager.js');
 
-  assert.match(source, /renderMarkdownForUserMessages/);
-  assert.match(source, /label: '用户消息启用 Markdown 渲染'/);
+  assert.match(
+    source,
+    /key:\s*'renderMarkdownForUserMessages'[\s\S]*?menu:\s*'quick'[\s\S]*?label:\s*'用户消息启用 Markdown 渲染'/
+  );
 });
 
 test('message_processor 会按设置对用户消息走 Markdown 渲染，且不再挂载展开按钮', async () => {
@@ -22,6 +24,7 @@ test('message_processor 会按设置对用户消息走 Markdown 渲染，且不�
   assert.match(source, /shouldRenderUserMessagesAsMarkdown/);
   assert.match(source, /renderMarkdownSafe\(messageText \|\| '', \{/);
   assert.match(source, /renderUserMessageTextContent\(messageDiv, textContentDiv, messageText\)/);
+  assert.match(source, /return \{[\s\S]*?renderUserMessageTextContent,/);
   assert.match(source, /syncConversationDocumentAttachmentStrip\(messageDiv\)/);
   assert.match(source, /syncUserContextualInputDebugView/);
   assert.match(source, /contextual-input-debug/);
@@ -30,6 +33,14 @@ test('message_processor 会按设置对用户消息走 Markdown 渲染，且不�
   assert.match(source, /detectContextualInputTextType\(text\)/);
   assert.match(source, /entry\.status === 'injected' && entry\.text/);
   assert.match(source, /subscribe\?\.\('renderMarkdownForUserMessages'/);
+  assert.match(
+    senderSource,
+    /function updateVisibleMessageElementForEdit[\s\S]*?messageProcessor\.renderUserMessageTextContent\(messageElement, textDiv, newText\)/
+  );
+  assert.doesNotMatch(
+    senderSource,
+    /String\(role \|\| ''\)\.toLowerCase\(\) === 'user'[\s\S]*?textDiv\.innerText = newText/
+  );
   assert.doesNotMatch(source, /user-message-text-content__toggle/);
   assert.doesNotMatch(source, /userMessageExpanded/);
   assert.doesNotMatch(source, /createUserMessageToggleButton/);

@@ -4806,7 +4806,7 @@ export function createMessageSender(appContext) {
     const textDiv = messageElement.querySelector('.text-content');
     if (textDiv) {
       if (String(role || '').toLowerCase() === 'user') {
-        textDiv.innerText = newText;
+        messageProcessor.renderUserMessageTextContent(messageElement, textDiv, newText);
       } else {
         const processed = messageProcessor.processMathAndMarkdown(newText);
         textDiv.innerHTML = processed;
