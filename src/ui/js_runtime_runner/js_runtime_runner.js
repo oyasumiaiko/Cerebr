@@ -23,23 +23,42 @@ function resolveRunnerIdentity() {
 
 const identity = resolveRunnerIdentity();
 const jsRuntimeManager = createJsRuntimeManager();
+let hostTabIdPromise = null;
 let hostPort = null;
 
+async function resolveHostTabId() {
+  if (!hostTabIdPromise) {
+    hostTabIdPromise = chrome.tabs.getCurrent().then((tab) => {
+      const tabId = Number(tab?.id);
+      if (!Number.isSafeInteger(tabId) || tabId < 0) {
+        throw new Error('隐藏 JS Runtime runner 无法解析所在宿主 tab。');
+      }
+      return tabId;
+    }).catch((error) => {
+      hostTabIdPromise = null;
+      throw error;
+    });
+  }
+  return await hostTabIdPromise;
+}
+
 async function executeRuntimeMessage(runtimeMessage) {
-  const tabId = Number(runtimeMessage?.tabId);
   switch (runtimeMessage?.type) {
     case 'GET_JS_RUNTIME_STATUS':
       return {
         success: true,
         status: await jsRuntimeManager.getAvailability()
       };
-    case 'GET_JS_RUNTIME_FRAMES':
+    case 'GET_JS_RUNTIME_FRAMES': {
+      const tabId = await resolveHostTabId();
       return {
         success: true,
         tabId,
         ...(await jsRuntimeManager.listFrames({ tabId }))
       };
-    case 'EXECUTE_JS_RUNTIME':
+    }
+    case 'EXECUTE_JS_RUNTIME': {
+      const tabId = await resolveHostTabId();
       return {
         success: true,
         tabId,
@@ -53,7 +72,9 @@ async function executeRuntimeMessage(runtimeMessage) {
           injectImmediately: runtimeMessage?.injectImmediately === true
         }))
       };
-    case 'ABORT_JS_RUNTIME':
+    }
+    case 'ABORT_JS_RUNTIME': {
+      const tabId = await resolveHostTabId();
       return {
         success: true,
         tabId,
@@ -64,6 +85,7 @@ async function executeRuntimeMessage(runtimeMessage) {
           allFrames: runtimeMessage?.allFrames === true
         }))
       };
+    }
     default:
       throw new Error(`隐藏 JS Runtime runner 不支持消息类型：${runtimeMessage?.type || 'unknown'}`);
   }

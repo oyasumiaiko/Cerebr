@@ -86,6 +86,11 @@ async function main() {
       page.frames().find((frame) => frame.url().includes('/src/ui/js_runtime_runner/js_runtime_runner.html')) || null
     ), { timeoutMs: 10_000, intervalMs: 100, label: 'initial JS runtime runner frame' });
     result.runnerUrlBefore = runnerFrameBefore.url();
+    const runnerHostTabId = await runnerFrameBefore.evaluate(async () => (await chrome.tabs.getCurrent())?.id ?? null);
+    if (runnerHostTabId !== firstResult.tabId) {
+      throw new Error(`runner 未绑定到自身宿主 tab：runner=${runnerHostTabId}, execute=${firstResult.tabId}`);
+    }
+    result.runnerHostTabId = runnerHostTabId;
 
     logProgress('验证长任务执行不再依赖 background 消息通道');
     await runnerFrameBefore.evaluate(() => {
