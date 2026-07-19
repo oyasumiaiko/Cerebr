@@ -861,7 +861,7 @@ function buildSkillRuntimeHint(record) {
       has_runtime: true,
       runtime_entry_path: skill.runtime.entry_path,
       runtime_file_count: runtimeFileCount,
-      runtime_hint: `This skill includes JS runtime files. Read SKILL.md first. To call mounted methods, use js_runtime_execute and write code as an async function body, for example: return await $invoke("${skill.name}", "methodName", args).`
+      runtime_hint: `This skill includes JS runtime files. Read SKILL.md first. Call its methods through $invoke inside js_runtime_execute; matching enabled skills are mounted automatically, for example: return await $invoke("${skill.name}", "methodName", args).`
     };
   }
   return {

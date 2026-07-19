@@ -68,8 +68,9 @@ export function buildDefaultSkillMountContract() {
     'Recommended helpers: `globalThis.$skill(name)`, `globalThis.$invoke(skillName, methodName, ...args)`, `globalThis.$methods(name)`.',
     '`$skill(name)` returns mounted exports or `null`.',
     '`$methods(name)` returns the callable top-level method names exposed by the mounted exports.',
-    '`$invoke(skillName, methodName, ...args)` calls a mounted top-level method with clearer parameter boundaries.',
+    '`$invoke(skillName, methodName, ...args)` calls a top-level method; if an enabled matching page runtime skill is not mounted yet, Cerebr mounts it automatically and continues the same call.',
     'Typical call shape inside `js_runtime_execute`: `return await $invoke("skill-name", "methodName", args);`',
+    '`mount_on_current_page` is not a prerequisite for `$invoke`; reserve it for explicit remounting or diagnostics.',
     'Compatibility runtime registry: `globalThis.__cerebrSkills`.',
     'Runtime source files run as async CommonJS-like bodies with `ctx`, `module`, `exports`, `require` available.',
     '`require()` is async in this runtime, so helper imports should use `await require("./helper.js")`.',
@@ -321,7 +322,7 @@ export function buildSkillScaffoldNextSteps(options = {}) {
     'Forward-test complex skills with realistic requests and raw artifacts when an independent review surface is available; do not leak the expected answer.',
     'If this skill later needs browser runtime code, patch manifest.json to add match and runtime.entry_path, then add the corresponding JS files with apply_patch.',
     enabled
-      ? 'If you intentionally enabled the skill already, verify the summary and files first; only call mount_on_current_page after the skill truly becomes a page runtime skill.'
-      : 'When the skill is ready, call enable_skill; only call mount_on_current_page after the skill truly becomes a page runtime skill.'
+      ? 'If you intentionally enabled the skill already, verify the summary and files first; call runtime methods directly through $invoke, which mounts matching page runtime skills automatically.'
+      : 'When the skill is ready, call enable_skill; runtime calls through $invoke mount matching page runtime skills automatically, so no separate mount step is required.'
   ];
 }

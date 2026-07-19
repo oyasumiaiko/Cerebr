@@ -62,10 +62,13 @@ test('通用 skill scaffold 的 scripts 示例已适配为 js_runtime_execute �
   const mountContract = buildDefaultSkillMountContract();
   assert.match(mountContract, /only available inside `js_runtime_execute`/);
   assert.match(mountContract, /return await \$invoke\("skill-name", "methodName", args\)/);
+  assert.match(mountContract, /mounts it automatically/);
+  assert.match(mountContract, /not a prerequisite for `\$invoke`/);
 
   const nextSteps = buildSkillScaffoldNextSteps({ resources: ['scripts'], examples: true });
   assert.equal(nextSteps.some((step) => /manifest\.json\.description/.test(step)), true);
   assert.equal(nextSteps.some((step) => /Forward-test complex skills/.test(step)), true);
+  assert.equal(nextSteps.some((step) => /no separate mount step is required/.test(step)), true);
 });
 
 test('内置 skill-creator 指导不再把 scripts 描述成 shell 或 python 可直接运行入口', async () => {
@@ -91,8 +94,10 @@ test('内置 skill-creator 指导不再把 scripts 描述成 shell 或 python �
   assert.match(instructionFile.content, /await require\("\.\/helper\.js"\)/);
   assert.match(instructionFile.content, /只让它进入显式 skill_registry 可见列表/);
   assert.match(instructionFile.content, /return await \$invoke\("<skill-name>", "methodName", args\)/);
+  assert.match(instructionFile.content, /不需要预先执行 `mount_on_current_page`/);
+  assert.match(instructionFile.content, /正常调用由 `\$invoke` 自动处理挂载/);
   assert.match(instructionFile.content, /不是可直接运行的 Python、Bash 或 shell 入口/);
   assert.doesNotMatch(instructionFile.content, /可执行辅助脚本/);
   assert.doesNotMatch(instructionFile.content, /init_skill\.py|generate_openai_yaml\.py|quick_validate\.py|\$CODEX_HOME|agents\/openai\.yaml/);
-  assert.equal(record.revision, 2);
+  assert.equal(record.revision, 3);
 });

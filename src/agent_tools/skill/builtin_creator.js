@@ -58,10 +58,10 @@ function buildSkillCreatorInstruction() {
     '- `scripts/` 中的文件是源码素材，不是可直接运行的 Python、Bash 或 shell 入口。需要执行时，读取 JavaScript 后放进 `js_runtime_execute.code`；该字段按 async 函数体运行，可直接使用 await、return 和 console.log。',
     '- 只有 2-3 个代表性页面任务都出现可复现的确定性提取失败，并且稳定 DOM 规则能够解决时，才 patch `manifest.json` 的 `match` 与 `runtime.entry_path` 并新增 JS 入口。',
     '- runtime 入口按 async CommonJS-like 函数体运行，可 `return { methods... }` 或赋值 `module.exports`；本地 helper 使用 `await require("./helper.js")`。在 `SKILL.md` 写明导出方法、输入和调用示例。',
-    '- runtime 验证使用 `js_runtime_execute`。挂载后可在其 code 中写 `return await $invoke("<skill-name>", "methodName", args);`。',
+    '- runtime 验证使用 `js_runtime_execute`，直接在其 code 中写 `return await $invoke("<skill-name>", "methodName", args);`。若目标 skill 尚未挂载，runtime 会按名称自动挂载并继续调用，不需要预先执行 `mount_on_current_page`。',
     '- 当前没有独立的 skill validator。保存时的结构校验不能代替内容验证；必须通过 read/list/search 回读和真实任务测试完成检查。',
     '- 若当前运行端明确提供独立代理、新会话或其他模型复核能力，可用原始任务和产物做前向测试；不要提供预期答案或拟定修复。会耗时、需要额外授权或可能改动真实系统时先征得用户同意。',
-    '- 是否启用与挂载放在最后：guidance 的 `enable_skill` 只让它进入显式 skill_registry 可见列表，不会自动执行或进入隐藏上下文；只有 page runtime skill 才调用 `mount_on_current_page`。',
+    '- 是否启用放在最后：guidance 的 `enable_skill` 只让它进入显式 skill_registry 可见列表，不会自动执行或进入隐藏上下文；page runtime skill 完成验证后启用即可，正常调用由 `$invoke` 自动处理挂载。`mount_on_current_page` 只用于显式重挂载或诊断。',
     '- 自动隐藏上下文只包含当前 URL 匹配的 page runtime skill 摘要；内置和普通 guidance skill 通过 `skill_registry` 显式发现和读取。',
     '',
     '## 常见错误',
@@ -72,7 +72,7 @@ function buildSkillCreatorInstruction() {
     '- 把 scripts 当成可直接运行的 Python/Bash，或没有实际执行就声称脚本已经验证。',
     '- 前向测试时把预期答案、已知 bug 或修复方案告诉验证者，得到失真的成功结果。',
     '- 修改已有 skill 时整体重写整包，而不是先 search/read，再用 apply_patch 精确增量修改。',
-    '- 未完成内容验证就 enable，或在没有 runtime 的 skill 上调用 mount_on_current_page。'
+    '- 未完成内容验证就 enable，或把 `mount_on_current_page` 误当成调用 runtime 方法前的必需步骤。'
   ].join('\n');
 }
 
@@ -120,8 +120,8 @@ export function buildBuiltinSkillCreatorRecord() {
       ...buildSkillCreatorTemplateFiles()
     ],
     created_at: '2026-04-12T00:00:00.000Z',
-    updated_at: '2026-07-16T00:00:00.000Z',
-    revision: 2
+    updated_at: '2026-07-19T00:00:00.000Z',
+    revision: 3
   };
 }
 

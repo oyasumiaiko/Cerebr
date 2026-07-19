@@ -232,6 +232,7 @@ test('buildStoredSkillRecord / saveStoredSkillPackage / getStoredSkillPackage ä¿
   assert.equal(instructionFile.runtime_file_count, 2);
   assert.match(instructionFile.runtime_hint, /Read SKILL\.md first/);
   assert.match(instructionFile.runtime_hint, /js_runtime_execute/);
+  assert.match(instructionFile.runtime_hint, /mounted automatically/);
 
   const searchResult = searchSkillFiles(loaded, {
     requestedSkillName: 'dom-probe',
