@@ -41,6 +41,7 @@ if (!repoRoot || !outputDir) {
 const runHeadless = shouldRunHeadless();
 const { chromium } = loadPlaywright(repoRoot);
 const skillName = `example-dom-skill-${Date.now()}`;
+const longArchiveContent = `完整导出探针-${'0123456789abcdef'.repeat(4000)}`;
 const startedAt = Date.now();
 
 function logProgress(message) {
@@ -301,6 +302,21 @@ async function main() {
     };
     result.steps.push('skill_created');
 
+    const longFilePatched = await applySkillPatchThroughModelFacingRoute(
+      sidebarFrame,
+      skillName,
+      [
+        '*** Begin Patch',
+        '*** Add File: references/long-export.txt',
+        `+${longArchiveContent}`,
+        '*** End Patch'
+      ].join('\n')
+    );
+    if (!longFilePatched?.success || longFilePatched?.ok !== true) {
+      throw new Error(`add long export fixture failed: ${JSON.stringify(longFilePatched)}`);
+    }
+    result.steps.push('long_export_fixture_added');
+
     await waitFor(async () => {
       const ready = await sidebarFrame.evaluate(() => Boolean(window.cerebr?.debug?.chatHistoryUI));
       return ready ? true : null;
@@ -345,15 +361,21 @@ async function main() {
     const archivePaths = Object.keys(archive).sort();
     const manifestPath = `${skillName}/manifest.json`;
     const instructionPath = `${skillName}/SKILL.md`;
-    if (!archivePaths.includes(manifestPath) || !archivePaths.includes(instructionPath)) {
+    const longFilePath = `${skillName}/references/long-export.txt`;
+    if (!archivePaths.includes(manifestPath) || !archivePaths.includes(instructionPath) || !archivePaths.includes(longFilePath)) {
       throw new Error(`downloaded ZIP is missing core skill files: ${JSON.stringify(archivePaths)}`);
     }
     if (!strFromU8(archive[instructionPath]).includes(`name: "${skillName}"`)) {
       throw new Error('downloaded ZIP SKILL.md does not belong to the selected skill');
     }
+    const expectedLongArchiveContent = `${longArchiveContent}\n`;
+    if (strFromU8(archive[longFilePath]) !== expectedLongArchiveContent) {
+      throw new Error(`downloaded ZIP truncated long skill file: ${strFromU8(archive[longFilePath]).length}/${expectedLongArchiveContent.length}`);
+    }
     result.downloadedZip = {
       suggestedFilename: download.suggestedFilename(),
-      files: archivePaths
+      files: archivePaths,
+      verifiedLongFileChars: expectedLongArchiveContent.length
     };
     result.steps.push('skill_zip_downloaded');
 
