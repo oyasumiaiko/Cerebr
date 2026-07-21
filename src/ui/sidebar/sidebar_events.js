@@ -629,7 +629,7 @@ function setupEmptyStateHandlers(appContext) {
 
     appContext.dom.emptyStatePageContent.addEventListener('contextmenu', async (event) => {
       event.preventDefault();
-      if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') {
+      if (typeof appContext.utils?.writeClipboardText !== 'function') {
         appContext.utils.showNotification({ message: '当前环境不支持复制到剪贴板', type: 'warning' });
         return;
       }
@@ -637,7 +637,7 @@ function setupEmptyStateHandlers(appContext) {
       if (!snapshot) return;
       const text = buildPageContentText(snapshot, { withPrefix: false });
       try {
-        await navigator.clipboard.writeText(text);
+        await appContext.utils.writeClipboardText(text);
         appContext.utils.showNotification({ message: '页面内容已复制到剪贴板', type: 'success' });
       } catch (error) {
         console.error('复制页面内容失败:', error);
@@ -815,8 +815,7 @@ function setupEmptyStateHandlers(appContext) {
     button.addEventListener('contextmenu', async (event) => {
       event.preventDefault();
 
-      // 检查 Clipboard API 支持
-      if (!navigator.clipboard || typeof navigator.clipboard.write !== 'function') {
+      if (typeof appContext.utils?.copyImageToHostClipboard !== 'function') {
         showNotification?.({
           message: '当前环境不支持复制图片到剪贴板',
           type: 'warning',
@@ -834,18 +833,8 @@ function setupEmptyStateHandlers(appContext) {
       try {
         const blob = await fetchBackgroundBlob(imageUrl, '获取背景图片失败，无法复制到剪贴板');
         if (!blob) return;
-        if (typeof ClipboardItem === 'undefined') {
-          showNotification?.({
-            message: '当前环境不支持图片剪贴板写入',
-            type: 'error',
-            duration: 2600
-          });
-          return;
-        }
-
         const pngBlob = await ensurePngBlob(blob);
-        const item = new ClipboardItem({ 'image/png': pngBlob });
-        await navigator.clipboard.write([item]);
+        await appContext.utils.copyImageToHostClipboard(pngBlob);
 
         showNotification?.({
           message: '已将背景图片以 PNG 格式复制到剪贴板',

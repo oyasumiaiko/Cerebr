@@ -1749,23 +1749,26 @@ class CerebrSidebarManager {
       case 'CAPTURE_SCREENSHOT':
         captureAndDropScreenshot(sourceSidebar);
         break;
-      case 'COPY_IMAGE_TO_CLIPBOARD':
+      case 'WRITE_CLIPBOARD':
         (async () => {
           const requestId = typeof data.requestId === 'string' ? data.requestId : '';
           try {
-            if (!(data.blob instanceof Blob) || data.blob.type !== 'image/png') {
-              throw new Error('截图数据无效');
+            if (typeof data.text === 'string') {
+              await navigator.clipboard.writeText(data.text);
+            } else if (data.blob instanceof Blob && data.blob.type === 'image/png') {
+              await navigator.clipboard.write([
+                new ClipboardItem({ 'image/png': data.blob })
+              ]);
+            } else {
+              throw new Error('剪贴板数据无效');
             }
-            await navigator.clipboard.write([
-              new ClipboardItem({ 'image/png': data.blob })
-            ]);
-            sourceSidebar.postToIframe({ type: 'COPY_IMAGE_TO_CLIPBOARD_RESULT', requestId, success: true });
+            sourceSidebar.postToIframe({ type: 'WRITE_CLIPBOARD_RESULT', requestId, success: true });
           } catch (error) {
             sourceSidebar.postToIframe({
-              type: 'COPY_IMAGE_TO_CLIPBOARD_RESULT',
+              type: 'WRITE_CLIPBOARD_RESULT',
               requestId,
               success: false,
-              error: error?.message || '复制截图失败'
+              error: error?.message || '写入剪贴板失败'
             });
           }
         })();

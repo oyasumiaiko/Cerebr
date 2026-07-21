@@ -74,6 +74,7 @@ if (!repoRoot || !outputDir || (launchMode === 'stable' && !chromePath)) {
 }
 
 const runHeadless = shouldRunHeadless();
+const clipboardOnly = String(process.env.CEREBR_DOCUMENT_CLIPBOARD_ONLY || '').trim().toLowerCase() === 'true';
 const { chromium } = loadPlaywright(repoRoot);
 
 function createApplyPatchPayload() {
@@ -536,7 +537,7 @@ async function main() {
       await page.goto(`${mockServer.origin}/`, { waitUntil: 'domcontentloaded' });
       result.steps.push('page_loaded');
     } else {
-      await reloadUnpackedExtension(context, { timeoutMs: 30_000 });
+      await reloadUnpackedExtension(context, { timeoutMs: 30_000, unpackedPath: repoRoot });
       await page.goto(`${mockServer.origin}/`, { waitUntil: 'domcontentloaded' });
       result.steps.push('page_loaded');
     }
@@ -689,6 +690,20 @@ async function main() {
       intervalMs: 250,
       label: 'initial markdown document content'
     });
+
+    if (clipboardOnly) {
+      await mdCardRoot.locator('.conversation-document-card__tool-button[aria-label="复制文件内容"]').click();
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      if (result.pageError) {
+        throw new Error(`copy document emitted page error: ${result.pageError}`);
+      }
+      result.expectedClipboardText = INITIAL_MD_DOC_CONTENT;
+      result.steps.push('document_copied');
+      result.ok = true;
+      result.finishedAt = new Date().toISOString();
+      await writeResultSnapshot(outputDir, result);
+      return;
+    }
 
     await mdCardRoot.locator('.conversation-document-card__tool-button--mode').click();
     result.toggledMarkdownPlainState = await waitFor(async () => {

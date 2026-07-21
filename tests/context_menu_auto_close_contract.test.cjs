@@ -13,11 +13,11 @@ test('上下文菜单的异步动作会先关闭菜单再继续执行', async ()
 
   assert.match(
     source,
-    /function copyMessageContent\(\) \{\s*const messageElement = currentMessageElement;[\s\S]*?hideContextMenu\(\);\s*navigator\.clipboard\.writeText\(originalText\)/s
+    /async function copyMessageContent\(\) \{\s*const messageElement = currentMessageElement;[\s\S]*?hideContextMenu\(\);\s*await utils\.writeClipboardText\(originalText\)/s
   );
   assert.match(
     source,
-    /function copyCodeContent\(\) \{\s*const codeBlock = currentCodeBlock;[\s\S]*?hideContextMenu\(\);\s*navigator\.clipboard\.writeText\(codeContent\)/s
+    /async function copyCodeContent\(\) \{\s*const codeBlock = currentCodeBlock;[\s\S]*?hideContextMenu\(\);\s*await utils\.writeClipboardText\(codeContent\)/s
   );
   assert.match(
     source,

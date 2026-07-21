@@ -4810,12 +4810,12 @@ export function createApiManager(appContext) {
     if (userMessageTemplateCopyBtn) {
       userMessageTemplateCopyBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        if (!navigator?.clipboard?.writeText) {
+        if (typeof utils?.writeClipboardText !== 'function') {
           utils?.showNotification?.({ message: '当前环境不支持剪贴板复制', type: 'warning', duration: 2200 });
           return;
         }
         try {
-          await navigator.clipboard.writeText(USER_MESSAGE_TEMPLATE_INJECT_SNIPPET);
+          await utils.writeClipboardText(USER_MESSAGE_TEMPLATE_INJECT_SNIPPET);
           utils?.showNotification?.({ message: '已复制角色块', type: 'success', duration: 1800 });
         } catch (error) {
           console.error('复制角色块失败:', error);

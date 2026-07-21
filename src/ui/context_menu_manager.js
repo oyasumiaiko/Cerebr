@@ -1354,12 +1354,12 @@ export function createContextMenuManager(appContext) {
   /**
    * 复制消息内容
    */
-  function copyMessageContent() {
+  async function copyMessageContent() {
     const messageElement = currentMessageElement;
     if (!messageElement) return;
     const originalText = messageElement.getAttribute('data-original-text') || '';
     hideContextMenu();
-    navigator.clipboard.writeText(originalText).catch(err => {
+    await utils.writeClipboardText(originalText).catch(err => {
       console.error('复制失败:', err);
     });
   }
@@ -1472,12 +1472,12 @@ export function createContextMenuManager(appContext) {
   /**
    * 复制代码块内容
    */
-  function copyCodeContent() {
+  async function copyCodeContent() {
     const codeBlock = currentCodeBlock;
     if (!codeBlock) return;
     const codeContent = codeBlock.textContent || '';
     hideContextMenu();
-    navigator.clipboard.writeText(codeContent).catch(err => {
+    await utils.writeClipboardText(codeContent).catch(err => {
       console.error('复制失败:', err);
     });
   }

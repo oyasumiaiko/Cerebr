@@ -92,11 +92,11 @@ test('多消息长截图选择入口与导出管线保持同一套复制为图�
   assert.doesNotMatch(manifestSource, /"clipboardWrite"/);
   assert.match(
     sidebarAppContextSource,
-    /appContext\.utils\.copyImageToHostClipboard = async \(blob\) => \{[\s\S]*?COPY_IMAGE_TO_CLIPBOARD/
+    /appContext\.utils\.copyImageToHostClipboard = \(blob\) => writeClipboard\(\{ blob \}\)/
   );
   assert.match(
     contentSource,
-    /case 'COPY_IMAGE_TO_CLIPBOARD':[\s\S]*?navigator\.clipboard\.write[\s\S]*?COPY_IMAGE_TO_CLIPBOARD_RESULT/
+    /case 'WRITE_CLIPBOARD':[\s\S]*?navigator\.clipboard\.write[\s\S]*?WRITE_CLIPBOARD_RESULT/
   );
   assert.match(
     contextMenuSource,

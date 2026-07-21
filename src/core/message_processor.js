@@ -272,6 +272,7 @@ export function createMessageProcessor(appContext) {
     executeAction: executeConversationDocumentUiAction,
     resolveConversationId: resolveCurrentConversationDocumentId,
     settingsManager,
+    writeClipboardText: appContext.utils.writeClipboardText,
     enhanceMarkdownContent(rootElement) {
       enhanceMarkdownContent(rootElement);
     }
@@ -5478,9 +5479,9 @@ export function createMessageProcessor(appContext) {
         event.preventDefault();
         event.stopPropagation();
         const sourceText = typeof codeBlock.textContent === 'string' ? codeBlock.textContent : '';
-        if (!sourceText || !navigator.clipboard?.writeText) return;
+        if (!sourceText || typeof appContext.utils?.writeClipboardText !== 'function') return;
         try {
-          await navigator.clipboard.writeText(sourceText);
+          await appContext.utils.writeClipboardText(sourceText);
           const icon = copyButton.querySelector('.cerebr-markdown-code-block__action-icon');
           const label = copyButton.querySelector('.cerebr-markdown-code-block__action-label');
           if (icon) {
