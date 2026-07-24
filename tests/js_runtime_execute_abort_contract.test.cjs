@@ -63,6 +63,7 @@ test('js_runtime_execute 中止链会把 AbortSignal 贯穿到 sender/sidebar/ba
   assert.match(jsRuntimeManagerSource, /const signal = __cerebrAbortController\.signal;/);
   assert.match(jsRuntimeManagerSource, /clearTimeout\(__cerebrTimeoutId\)/);
   assert.doesNotMatch(jsRuntimeManagerSource, /globalThis\.console = __cerebrConsole/);
+  assert.doesNotMatch(jsRuntimeManagerSource, /__cerebrMaxLogs|__cerebrMaxLogChars/);
   assert.match(
     jsRuntimeManagerSource,
     /async function abort\(request = \{\}\)/

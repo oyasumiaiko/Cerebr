@@ -68,7 +68,7 @@ test('buildAskOtherAiFunctionToolDefinition 包含更明确的使用边界说明
 
   const listSpec = buildListAskableModelsFunctionToolDefinition();
   assert.equal(listSpec.name, LIST_ASKABLE_MODELS_TOOL_NAME);
-  assert.equal(listSpec.parameters.required.length, 0);
+  assert.deepEqual(listSpec.parameters.required, ['max_output_chars']);
 });
 
 test('normalizeAskOtherAiArguments 支持多 request 且严格校验必填字段', async () => {

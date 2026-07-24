@@ -12,6 +12,13 @@
  *   条件分支塞进模型不一定稳定支持的 JSON Schema 组合关键字。
  */
 
+const RESPONSES_TOOL_OUTPUT_MAX_CHARS_PARAMETER = 'max_output_chars';
+
+const RESPONSES_TOOL_OUTPUT_MAX_CHARS_PROPERTY = Object.freeze({
+  type: ['integer', 'null'],
+  description: '本次调用最终返回给模型的文本字符上限。传正整数时统一截断；传 null 时不额外截断。工具自身的分页或读取范围参数仍独立生效，图片不计入。'
+});
+
 const PORTABLE_STRICT_SCHEMA_OMITTED_KEYWORDS = new Set([
   'minimum',
   'maximum',
@@ -148,11 +155,39 @@ export function buildStrictFunctionToolDefinition(options = {}) {
   if (!description) {
     throw new Error(`模型工具契约错误：${name} description 不能为空。`);
   }
+  const properties = {
+    ...(options?.properties || {}),
+    [RESPONSES_TOOL_OUTPUT_MAX_CHARS_PARAMETER]: RESPONSES_TOOL_OUTPUT_MAX_CHARS_PROPERTY
+  };
   return {
     type: 'function',
     name,
     description,
     strict: true,
-    parameters: buildStrictObjectSchema(options?.properties || {})
+    parameters: buildStrictObjectSchema(properties)
   };
+}
+
+/**
+ * 从模型参数中拆出统一输出控制项，避免各工具执行器重复认识该协议字段。
+ *
+ * @param {any} rawArgs
+ * @returns {{toolArgs:Object, maxOutputChars:number|null}}
+ */
+export function splitResponsesToolOutputControl(rawArgs) {
+  const toolArgs = (
+    rawArgs
+    && typeof rawArgs === 'object'
+    && !Array.isArray(rawArgs)
+  ) ? { ...rawArgs } : {};
+  const rawMaxOutputChars = toolArgs[RESPONSES_TOOL_OUTPUT_MAX_CHARS_PARAMETER];
+  delete toolArgs[RESPONSES_TOOL_OUTPUT_MAX_CHARS_PARAMETER];
+
+  if (rawMaxOutputChars == null) {
+    return { toolArgs, maxOutputChars: null };
+  }
+  if (!Number.isSafeInteger(rawMaxOutputChars) || rawMaxOutputChars <= 0) {
+    throw new Error('工具参数错误：max_output_chars 必须是正安全整数或 null。');
+  }
+  return { toolArgs, maxOutputChars: rawMaxOutputChars };
 }

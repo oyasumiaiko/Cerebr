@@ -55,13 +55,12 @@ test('buildJsSandboxSuccessEnvelope 会生成稳定 frame 结果', async () => {
 
 test('buildJsSandboxSuccessEnvelope 会保留 console logs', async () => {
   const { buildJsSandboxSuccessEnvelope } = await loadJsSandboxTransportModule();
-  const envelope = buildJsSandboxSuccessEnvelope('done', [
-    { level: 'log', text: 'alpha' },
-    { level: 'warn', text: 'beta' }
-  ]);
-  assert.deepEqual(envelope.logs, [
-    { frameId: 0, level: 'log', text: 'alpha' },
-    { frameId: 0, level: 'warn', text: 'beta' }
-  ]);
+  const logs = Array.from({ length: 55 }, (_, index) => ({
+    level: index === 54 ? 'warn' : 'log',
+    text: index === 54 ? 'Z'.repeat(5000) : `entry-${index}`
+  }));
+  const envelope = buildJsSandboxSuccessEnvelope('done', logs);
+  assert.equal(envelope.logs.length, 55);
+  assert.equal(envelope.logs[54].text, 'Z'.repeat(5000));
   assert.deepEqual(envelope.items[0].logs, envelope.logs);
 });

@@ -76,8 +76,12 @@ import {
   buildResponsesRequestUserInputToolOutputContentItems,
   buildResponsesConversationDocumentToolOutputContentItems,
   buildResponsesSkillRegistryToolOutputContentItems,
-  buildResponsesGenericXmlToolOutputContentItems
+  buildResponsesGenericXmlToolOutputContentItems,
+  applyResponsesToolOutputLimit
 } from '../agent_tools/shared/responses_tool_output.js';
+import {
+  splitResponsesToolOutputControl
+} from '../agent_tools/shared/model_tool_contract.js';
 import {
   adaptResponsesCustomFunctionToolsForHostedToolSearch,
   hasResponsesHostedToolSearchTool
@@ -121,9 +125,6 @@ import {
   buildRequestUserInputResult,
   normalizeRequestUserInputArguments
 } from '../agent_tools/request_user_input/tool.js';
-import {
-  SKILL_READ_MAX_CHARS
-} from '../agent_tools/skill/registry_tool.js';
 import {
   CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME,
   VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
@@ -8613,7 +8614,7 @@ export function createMessageSender(appContext) {
    * 统一走 XML 分块文本：
    * - metadata 用小 JSON；
    * - 其它正文块用纯文本；
-   * - 超过统一上限时按字符数做中间截断。
+   * - 字符预算由 function_call_output 的统一出口处理。
    *
    * @param {any} value
    * @returns {Array<{type:'input_text', text:string}>}
@@ -8631,21 +8632,11 @@ export function createMessageSender(appContext) {
 
   function serializeResponsesSkillRegistryFunctionToolOutput(value) {
     try {
-      return buildResponsesSkillRegistryToolOutputContentItems(value, {
-        blockTruncation: {
-          maxChars: SKILL_READ_MAX_CHARS,
-          mode: 'tail'
-        }
-      });
+      return buildResponsesSkillRegistryToolOutputContentItems(value);
     } catch (error) {
       return buildResponsesSkillRegistryToolOutputContentItems({
         ok: false,
         error: normalizeResponsesCustomToolError(error)
-      }, {
-        blockTruncation: {
-          maxChars: SKILL_READ_MAX_CHARS,
-          mode: 'tail'
-        }
       });
     }
   }
@@ -9652,43 +9643,58 @@ export function createMessageSender(appContext) {
       };
     }
 
+    let toolArgs = parsedArgs;
+    let maxOutputChars = null;
+    try {
+      ({ toolArgs, maxOutputChars } = splitResponsesToolOutputControl(parsedArgs));
+    } catch (error) {
+      return {
+        type: 'function_call_output',
+        call_id: callId,
+        output: serializeResponsesFunctionToolOutput({
+          ok: false,
+          error: normalizeResponsesCustomToolError(error)
+        })
+      };
+    }
+
     let outputPayload = null;
     switch (localToolSpec?.handlerKey) {
       case 'js_runtime_execute':
-        outputPayload = await executeResponsesJsRuntimeFunction(parsedArgs, options);
+        outputPayload = await executeResponsesJsRuntimeFunction(toolArgs, options);
         break;
       case 'virtual_file':
-        outputPayload = await executeResponsesVirtualFileFunction(localFunctionName, parsedArgs, options);
+        outputPayload = await executeResponsesVirtualFileFunction(localFunctionName, toolArgs, options);
         break;
       case 'skill_registry':
-        outputPayload = await executeResponsesSkillRegistryFunction(parsedArgs, options);
+        outputPayload = await executeResponsesSkillRegistryFunction(toolArgs, options);
         break;
       case 'request_user_input':
-        outputPayload = await executeResponsesRequestUserInputFunction(parsedArgs, options);
+        outputPayload = await executeResponsesRequestUserInputFunction(toolArgs, options);
         break;
       case 'list_askable_models':
-        outputPayload = await executeResponsesListAskableModelsFunction(parsedArgs, options);
+        outputPayload = await executeResponsesListAskableModelsFunction(toolArgs, options);
         break;
       case 'ask_other_ai':
-        outputPayload = await executeResponsesAskOtherAiFunction(parsedArgs, options);
+        outputPayload = await executeResponsesAskOtherAiFunction(toolArgs, options);
         break;
       case 'page_content_read':
-        outputPayload = await executeResponsesPageContentFunction(parsedArgs);
+        outputPayload = await executeResponsesPageContentFunction(toolArgs);
         break;
       case 'pdf_content_read':
-        outputPayload = await executeResponsesPdfContentFunction(parsedArgs);
+        outputPayload = await executeResponsesPdfContentFunction(toolArgs);
         break;
       case 'webpage_screenshot':
-        outputPayload = await executeResponsesWebpageScreenshotFunction(parsedArgs);
+        outputPayload = await executeResponsesWebpageScreenshotFunction(toolArgs);
         break;
       case 'view_image':
-        outputPayload = await executeResponsesViewImageFunction(parsedArgs);
+        outputPayload = await executeResponsesViewImageFunction(toolArgs);
         break;
       case 'history_search':
-        outputPayload = await executeResponsesHistorySearchFunction(parsedArgs, options);
+        outputPayload = await executeResponsesHistorySearchFunction(toolArgs, options);
         break;
       case 'history_read':
-        outputPayload = await executeResponsesHistoryReadFunction(parsedArgs, options);
+        outputPayload = await executeResponsesHistoryReadFunction(toolArgs, options);
         break;
       default:
         outputPayload = {
@@ -9749,7 +9755,7 @@ export function createMessageSender(appContext) {
     return {
       type: 'function_call_output',
       call_id: callId,
-      output: serializedOutput
+      output: applyResponsesToolOutputLimit(serializedOutput, maxOutputChars)
     };
   }
 

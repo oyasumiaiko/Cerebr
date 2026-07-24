@@ -24,8 +24,10 @@ test('统一工具注册表已注册对话文档工具，message_sender 保留�
   ]) {
     assert.match(registrySource, new RegExp(`\\b${builderName}\\(`));
   }
-  assert.match(source, /case 'virtual_file':\s*outputPayload = await executeResponsesVirtualFileFunction\(localFunctionName, parsedArgs, options\)/s);
+  assert.match(source, /case 'virtual_file':\s*outputPayload = await executeResponsesVirtualFileFunction\(localFunctionName, toolArgs, options\)/s);
   assert.match(source, /case 'virtual_file':\s*serializedOutput = serializeResponsesConversationDocumentFunctionToolOutput\(localFunctionName, outputPayload\)/s);
+  assert.match(source, /splitResponsesToolOutputControl\(parsedArgs\)/);
+  assert.match(source, /applyResponsesToolOutputLimit\(serializedOutput, maxOutputChars\)/);
   assert.match(source, /consumePendingUploadedFileEnvironmentEntries/);
   assert.match(source, /uploadedFiles: uploadedFileEnvironmentEntries/);
 });

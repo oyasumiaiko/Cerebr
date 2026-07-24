@@ -67,7 +67,7 @@ test('buildWebpageScreenshotFunctionToolDefinition 与 Codex 风格保持一致'
   assert.equal(spec.parameters.type, 'object');
   assert.equal(spec.parameters.additionalProperties, false);
   assert.equal(Array.isArray(spec.parameters.properties.detail.type), true);
-  assert.deepEqual(spec.parameters.required, ['detail']);
+  assert.deepEqual(spec.parameters.required, ['detail', 'max_output_chars']);
   assert.deepEqual(spec.parameters.properties.detail.enum, ['original', null]);
   assert.match(spec.parameters.properties.detail.description, /唯一可选字符串值是 `original`/);
 });

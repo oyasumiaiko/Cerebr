@@ -28,7 +28,7 @@ test('js_runtime_execute 暴露 timeout_ms 并把它接到 sidebar 与 backgroun
   assert.match(toolDefinition.description, /AbortSignal 变量 `signal`/);
   assert.match(toolDefinition.description, /协作式取消/);
   assert.equal(Object.hasOwn(toolDefinition.parameters.properties.timeout_ms, 'minimum'), false);
-  assert.deepEqual(toolDefinition.parameters.required, ['code', 'timeout_ms', 'frame_ids']);
+  assert.deepEqual(toolDefinition.parameters.required, ['code', 'timeout_ms', 'frame_ids', 'max_output_chars']);
   assert.deepEqual(
     jsRuntimeToolModule.normalizeJsRuntimeExecuteToolArguments({
       code: 'return 1;',
@@ -123,4 +123,5 @@ test('纯对话 JS Runtime 使用 manifest sandbox classic script，避免 modul
   assert.doesNotMatch(frameHtmlSource, /type="module"/);
   assert.doesNotMatch(frameSource, /^\s*import\s/m);
   assert.match(frameSource, /postSandboxMessage\('ready'\);/);
+  assert.doesNotMatch(frameSource, /JS_SANDBOX_MAX_LOGS|JS_SANDBOX_MAX_LOG_TEXT/);
 });

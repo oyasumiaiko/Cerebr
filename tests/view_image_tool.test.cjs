@@ -67,7 +67,7 @@ test('buildViewImageFunctionToolDefinition 与 Codex 风格保持一致并声明
   assert.equal(spec.strict, true);
   assert.equal(spec.parameters.type, 'object');
   assert.equal(spec.parameters.additionalProperties, false);
-  assert.deepEqual(spec.parameters.required, ['path', 'detail']);
+  assert.deepEqual(spec.parameters.required, ['path', 'detail', 'max_output_chars']);
   assert.match(spec.parameters.properties.path.description, /http\(s\)\/data URL/);
   assert.deepEqual(spec.parameters.properties.detail.enum, ['original', null]);
   assert.match(spec.parameters.properties.detail.description, /唯一可选字符串值是 `original`/);

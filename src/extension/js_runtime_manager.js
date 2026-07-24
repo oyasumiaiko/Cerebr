@@ -168,8 +168,6 @@ function buildUserScriptSource(userCode, timeoutMs = 0, executionId = '') {
   return `
   (async () => {
     ${buildRuntimeBootstrapSource()}
-    const __cerebrMaxLogs = 50;
-    const __cerebrMaxLogChars = 4000;
     const __cerebrTimeoutMs = ${normalizedTimeoutMs};
     const __cerebrExecutionId = ${JSON.stringify(normalizedExecutionId)};
     const __cerebrAbortEventName = '__cerebrJsRuntimeAbort';
@@ -233,7 +231,6 @@ function buildUserScriptSource(userCode, timeoutMs = 0, executionId = '') {
       }
     };
     const __cerebrLogs = [];
-    let __cerebrOmittedLogs = 0;
     const __cerebrBuildAbortError = () => {
       const error = new Error('JS Runtime 执行已被中止。');
       error.name = 'AbortError';
@@ -271,14 +268,10 @@ function buildUserScriptSource(userCode, timeoutMs = 0, executionId = '') {
         : promise
     );
     const __cerebrPushLog = (level, args) => {
-      if (__cerebrLogs.length >= __cerebrMaxLogs) {
-        __cerebrOmittedLogs += 1;
-        return;
-      }
       const text = args.map((arg) => __cerebrFormatLogArg(arg)).join(' ');
       __cerebrLogs.push({
         level,
-        text: text.length <= __cerebrMaxLogChars ? text : \`\${text.slice(0, __cerebrMaxLogChars)}…\`
+        text
       });
     };
     const __cerebrOriginalConsole = globalThis.console;
@@ -303,12 +296,6 @@ ${body}
             })
           ])
         : __cerebrRunUserCode());
-      if (__cerebrOmittedLogs > 0) {
-        __cerebrLogs.push({
-          level: 'info',
-          text: \`[… \${__cerebrOmittedLogs} console entries omitted …]\`
-        });
-      }
       return {
         __cerebrJsRuntimeEnvelope: true,
         ok: true,
@@ -317,12 +304,6 @@ ${body}
         error: null
       };
     } catch (error) {
-      if (__cerebrOmittedLogs > 0) {
-        __cerebrLogs.push({
-          level: 'info',
-          text: \`[… \${__cerebrOmittedLogs} console entries omitted …]\`
-        });
-      }
       return {
         __cerebrJsRuntimeEnvelope: true,
         ok: false,

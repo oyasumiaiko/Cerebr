@@ -3,14 +3,11 @@
  *
  * 这里统一解决三件事：
  * 1. JS 工具返回对象 / 数组时，默认转成稳定、可读的 JSON 文本；
- * 2. 过长输出统一走可配置截断：默认尾截断，JS Runtime 明确使用中间截断；
+ * 2. 各工具只负责生成完整输出，最终字符预算由统一出口应用一次；
  * 3. 需要时把长文本切成多个 input_text content item，避免“大块 JSON 字符串二次转义”。
  */
-export const RESPONSES_TOOL_OUTPUT_MAX_CHARS = 5_000;
 export const RESPONSES_TOOL_OUTPUT_CHUNK_CHARS = 3_000;
 export const RESPONSES_TOOL_OUTPUT_PRETTY_JSON_MAX_CHARS = 1_000;
-const RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL = 'tail';
-const RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE = 'middle';
 
 function trimTrailingWhitespace(text) {
   return String(text ?? '').replace(/[ \t]+\n/g, '\n').trim();
@@ -93,47 +90,15 @@ function formatTruncationPercent(omittedChars, totalChars) {
   return ((omittedChars / totalChars) * 100).toFixed(2);
 }
 
-function normalizeResponsesToolOutputTruncationConfig(maxCharsOrOptions, maybeOptions = {}) {
-  const options = (
-    maxCharsOrOptions
-    && typeof maxCharsOrOptions === 'object'
-    && !Array.isArray(maxCharsOrOptions)
-  )
-    ? { ...maxCharsOrOptions }
-    : { ...maybeOptions, maxChars: maxCharsOrOptions };
-  const rawMode = typeof options.mode === 'string' ? options.mode.trim().toLowerCase() : '';
-  const mode = rawMode === RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
-    ? RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
-    : RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL;
-  const maxChars = Math.max(
-    0,
-    Math.trunc(Number(options.maxChars) || RESPONSES_TOOL_OUTPUT_MAX_CHARS)
-  );
-  return {
-    maxChars,
-    mode
-  };
-}
-
 function buildResponsesToolOutputNoticeText({
   omittedChars,
   totalChars,
   omittedPct,
-  omittedStart,
-  omittedEnd,
-  returnedStart = null,
-  returnedEnd = null,
-  mode = RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL
+  returnedStart,
+  returnedEnd
 }) {
   const base = `output too long; truncated ${omittedChars} chars out of ${totalChars} total chars (${omittedPct}%)`;
-  if (
-    mode !== RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
-    && Number.isFinite(returnedStart)
-    && Number.isFinite(returnedEnd)
-  ) {
-    return `[... ${base}; returned range [${returnedStart}, ${returnedEnd}) ...]`;
-  }
-  return `[... ${base}; omitted range [${omittedStart}, ${omittedEnd}) ...]`;
+  return `[... ${base}; returned range [${returnedStart}, ${returnedEnd}) ...]`;
 }
 
 function appendStandaloneNoticeLine(text, notice) {
@@ -142,14 +107,6 @@ function appendStandaloneNoticeLine(text, notice) {
   if (!normalizedNotice) return content;
   if (!content) return normalizedNotice;
   return `${content}\n${normalizedNotice}`;
-}
-
-function applyResponsesToolOutputTruncation(text, truncation) {
-  if (truncation === null || truncation === false) {
-    return typeof text === 'string' ? text : String(text ?? '');
-  }
-  const normalized = normalizeResponsesToolOutputTruncationConfig(truncation);
-  return truncateResponsesToolOutputText(text, normalized);
 }
 
 function buildResponsesToolOutputSelectionNoticeText(totalChars, rangeStart, rangeEnd) {
@@ -167,11 +124,8 @@ function buildResponsesToolOutputSelectionNoticeText(totalChars, rangeStart, ran
     omittedChars,
     totalChars: safeTotalChars,
     omittedPct: formatTruncationPercent(omittedChars, safeTotalChars),
-    omittedStart: normalizedStart,
-    omittedEnd: safeTotalChars,
     returnedStart: normalizedStart,
-    returnedEnd: normalizedEnd,
-    mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL
+    returnedEnd: normalizedEnd
   });
 }
 
@@ -187,153 +141,6 @@ function buildResponsesToolOutputLineSelectionNoticeText(totalLines, startLine, 
   const omittedLines = Math.max(0, safeTotalLines - returnedLines);
   if (omittedLines <= 0) return '';
   return `[... omitted ${omittedLines} lines out of ${safeTotalLines} total lines; returned line range [${normalizedStart}, ${normalizedEnd + 1}) ...]`;
-}
-
-export function buildResponsesToolOutputTruncationInfo(
-  text,
-  maxCharsOrOptions = RESPONSES_TOOL_OUTPUT_MAX_CHARS,
-  maybeOptions = {}
-) {
-  const content = typeof text === 'string' ? text : String(text ?? '');
-  const chars = Array.from(content);
-  const totalChars = chars.length;
-  const { maxChars: safeMaxChars, mode } = normalizeResponsesToolOutputTruncationConfig(
-    maxCharsOrOptions,
-    maybeOptions
-  );
-
-  if (totalChars <= safeMaxChars) {
-    return {
-      text: content,
-      notice: '',
-      truncated: false,
-      totalChars,
-      omittedChars: 0,
-      omittedPct: '0.00',
-      omittedStart: totalChars,
-      omittedEnd: totalChars,
-      returnedStart: 0,
-      returnedEnd: totalChars,
-      mode
-    };
-  }
-
-  if (mode === RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE) {
-    let prefixChars = Math.ceil(safeMaxChars / 2);
-    let suffixChars = safeMaxChars - prefixChars;
-    let omittedStart = prefixChars;
-    let omittedEnd = Math.max(omittedStart, totalChars - suffixChars);
-    let omittedChars = Math.max(0, omittedEnd - omittedStart);
-    let omittedPct = formatTruncationPercent(omittedChars, totalChars);
-    let notice = buildResponsesToolOutputNoticeText({
-      omittedChars,
-      totalChars,
-      omittedPct,
-      omittedStart,
-      omittedEnd,
-      mode
-    });
-
-    const availableChars = Math.max(0, safeMaxChars - Array.from(notice).length);
-    prefixChars = Math.ceil(availableChars / 2);
-    suffixChars = availableChars - prefixChars;
-    omittedStart = prefixChars;
-    omittedEnd = Math.max(omittedStart, totalChars - suffixChars);
-    omittedChars = Math.max(0, omittedEnd - omittedStart);
-    omittedPct = formatTruncationPercent(omittedChars, totalChars);
-    notice = buildResponsesToolOutputNoticeText({
-      omittedChars,
-      totalChars,
-      omittedPct,
-      omittedStart,
-      omittedEnd,
-      mode
-    });
-    const prefix = chars.slice(0, omittedStart).join('');
-    const suffix = chars.slice(omittedEnd).join('');
-
-    return {
-      text: [prefix, notice, suffix].filter(Boolean).join('\n'),
-      notice,
-      truncated: true,
-      totalChars,
-      omittedChars,
-      omittedPct,
-      omittedStart,
-      omittedEnd,
-      returnedStart: null,
-      returnedEnd: null,
-      mode
-    };
-  }
-
-  let returnedEnd = Math.min(totalChars, safeMaxChars);
-  let omittedChars = Math.max(0, totalChars - returnedEnd);
-  let omittedPct = formatTruncationPercent(omittedChars, totalChars);
-  let notice = buildResponsesToolOutputNoticeText({
-    omittedChars,
-    totalChars,
-    omittedPct,
-    omittedStart: returnedEnd,
-    omittedEnd: totalChars,
-    returnedStart: 0,
-    returnedEnd,
-    mode
-  });
-  const minimumWithNotice = Array.from(notice).length + 1;
-  if (safeMaxChars <= minimumWithNotice) {
-    return {
-      text: chars.slice(0, safeMaxChars).join(''),
-      notice: '',
-      truncated: true,
-      totalChars,
-      omittedChars: Math.max(0, totalChars - safeMaxChars),
-      omittedPct: formatTruncationPercent(Math.max(0, totalChars - safeMaxChars), totalChars),
-      omittedStart: safeMaxChars,
-      omittedEnd: totalChars,
-      returnedStart: 0,
-      returnedEnd: Math.min(totalChars, safeMaxChars),
-      mode
-    };
-  }
-
-  const availableChars = Math.max(0, safeMaxChars - minimumWithNotice);
-  returnedEnd = Math.min(totalChars, availableChars);
-  omittedChars = Math.max(0, totalChars - returnedEnd);
-  omittedPct = formatTruncationPercent(omittedChars, totalChars);
-  notice = buildResponsesToolOutputNoticeText({
-    omittedChars,
-    totalChars,
-    omittedPct,
-    omittedStart: returnedEnd,
-    omittedEnd: totalChars,
-    returnedStart: 0,
-    returnedEnd,
-    mode
-  });
-  const prefix = chars.slice(0, returnedEnd).join('');
-
-  return {
-    text: appendStandaloneNoticeLine(prefix, notice),
-    notice,
-    truncated: true,
-    totalChars,
-    omittedChars,
-    omittedPct,
-    omittedStart: returnedEnd,
-    omittedEnd: totalChars,
-    returnedStart: 0,
-    returnedEnd,
-    mode
-  };
-}
-
-export function truncateResponsesToolOutputText(
-  text,
-  maxCharsOrOptions = RESPONSES_TOOL_OUTPUT_MAX_CHARS,
-  maybeOptions = {}
-) {
-  return buildResponsesToolOutputTruncationInfo(text, maxCharsOrOptions, maybeOptions).text;
 }
 
 function chunkTextByChars(text, chunkChars = RESPONSES_TOOL_OUTPUT_CHUNK_CHARS) {
@@ -357,22 +164,13 @@ function chunkTextByChars(text, chunkChars = RESPONSES_TOOL_OUTPUT_CHUNK_CHARS) 
  * - 模型看到的是多段 input_text 文本，UI 也可以直接拼回自然文本展示。
  *
  * @param {any} value
- * @param {{maxChars?:number, chunkChars?:number}} [options]
+ * @param {{chunkChars?:number}} [options]
  * @returns {Array<{type:'input_text', text:string}>}
  */
 export function buildResponsesToolOutputContentItems(value, options = {}) {
   const serialized = stringifyResponsesToolOutputValue(value);
-  const truncated = truncateResponsesToolOutputText(
-    serialized,
-    {
-      maxChars: Number.isFinite(Number(options?.maxChars))
-        ? Number(options.maxChars)
-        : RESPONSES_TOOL_OUTPUT_MAX_CHARS,
-      mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL
-    }
-  );
   const chunks = chunkTextByChars(
-    truncated,
+    serialized,
     Number.isFinite(Number(options?.chunkChars))
       ? Number(options.chunkChars)
       : RESPONSES_TOOL_OUTPUT_CHUNK_CHARS
@@ -405,6 +203,70 @@ function xmlTextEscape(value) {
     .replace(/>/g, '&gt;');
 }
 
+function buildTruncatedResponsesToolOutputText(text, maxChars) {
+  const sourceChars = Array.from(typeof text === 'string' ? text : String(text ?? ''));
+  const limit = Math.max(0, Math.trunc(Number(maxChars) || 0));
+  if (sourceChars.length <= limit) return sourceChars.join('');
+
+  const buildEnvelope = (returnedChars) => {
+    const omittedChars = sourceChars.length - returnedChars;
+    const content = xmlTextEscape(sourceChars.slice(0, returnedChars).join(''));
+    return `<truncated_tool_output total_chars="${sourceChars.length}" returned_chars="${returnedChars}" omitted_chars="${omittedChars}">\n<content_prefix>\n${content}\n</content_prefix>\n</truncated_tool_output>`;
+  };
+
+  // 极小预算连合法 XML 外壳都放不下时，严格遵守模型指定的字符数。
+  if (Array.from(buildEnvelope(0)).length > limit) {
+    return sourceChars.slice(0, limit).join('');
+  }
+
+  let low = 0;
+  let high = Math.min(sourceChars.length, limit);
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (Array.from(buildEnvelope(middle)).length <= limit) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return buildEnvelope(low);
+}
+
+/**
+ * 在唯一的 function_call_output 出口应用模型指定的文本预算。
+ *
+ * 图片原样保留；文本合并后只截断一次，再重新分块。截断态使用完整 XML 外壳，避免
+ * 在各工具自己的 XML 节点中间截断并制造不闭合结构。
+ *
+ * @param {Array<Object>} contentItems
+ * @param {number|null} maxChars
+ * @returns {Array<Object>}
+ */
+export function applyResponsesToolOutputLimit(contentItems, maxChars) {
+  const items = Array.isArray(contentItems) ? contentItems : [];
+  if (maxChars == null) return items;
+  const text = items
+    .filter(item => item?.type === 'input_text' && typeof item.text === 'string')
+    .map(item => item.text)
+    .join('');
+  if (Array.from(text).length <= maxChars) return items;
+
+  const limitedTextItems = chunkTextByChars(
+    buildTruncatedResponsesToolOutputText(text, maxChars)
+  ).map(chunk => ({ type: 'input_text', text: chunk }));
+  const output = [];
+  let insertedText = false;
+  for (const item of items) {
+    if (item?.type === 'input_text') {
+      if (!insertedText) output.push(...limitedTextItems);
+      insertedText = true;
+      continue;
+    }
+    output.push(item);
+  }
+  return output;
+}
+
 function buildXmlTextBlock(tagName, body) {
   const text = trimTrailingWhitespace(body);
   if (!text) return '';
@@ -422,53 +284,16 @@ function buildTrustedXmlBlock(tagName, trustedMarkup) {
 }
 
 /**
- * 按完整子节点控制嵌套 XML 的体积，禁止在标签中间硬截断。
+ * 连接已完成叶子转义的 XML 子节点。
  *
  * @param {string[]} blocks 已经完成叶子转义的完整 XML 子节点
- * @param {number} [maxChars]
  * @returns {string}
  */
-function joinTrustedXmlBlocksWithinLimit(blocks, maxChars = RESPONSES_TOOL_OUTPUT_MAX_CHARS) {
-  const normalizedBlocks = (Array.isArray(blocks) ? blocks : [])
+function joinTrustedXmlBlocks(blocks) {
+  return (Array.isArray(blocks) ? blocks : [])
     .map(block => trimTrailingWhitespace(block))
-    .filter(Boolean);
-  if (normalizedBlocks.length <= 0) return '';
-  const normalizedMaxChars = Math.max(256, Math.trunc(Number(maxChars) || RESPONSES_TOOL_OUTPUT_MAX_CHARS));
-  const fullText = normalizedBlocks.join('\n\n');
-  if (fullText.length <= normalizedMaxChars) return fullText;
-
-  const selected = [];
-  let selectedChars = 0;
-  for (const block of normalizedBlocks) {
-    const separatorChars = selected.length > 0 ? 2 : 0;
-    const nextSelectedChars = selectedChars + separatorChars + block.length;
-    const nextNotice = buildXmlTextBlock(
-      'truncation_notice',
-      buildResponsesToolOutputSelectionNoticeText(fullText.length, 0, nextSelectedChars)
-    );
-    const nextTotalChars = nextSelectedChars + (nextNotice ? 2 + nextNotice.length : 0);
-    if (nextTotalChars > normalizedMaxChars) break;
-    selected.push(block);
-    selectedChars = nextSelectedChars;
-  }
-
-  let noticeBlock = buildXmlTextBlock(
-    'truncation_notice',
-    buildResponsesToolOutputSelectionNoticeText(fullText.length, 0, selectedChars)
-  );
-  while (
-    selected.length > 0
-    && selectedChars + (noticeBlock ? 2 + noticeBlock.length : 0) > normalizedMaxChars
-  ) {
-    selected.pop();
-    selectedChars = selected.length > 0 ? selected.join('\n\n').length : 0;
-    noticeBlock = buildXmlTextBlock(
-      'truncation_notice',
-      buildResponsesToolOutputSelectionNoticeText(fullText.length, 0, selectedChars)
-    );
-  }
-  if (noticeBlock) selected.push(noticeBlock);
-  return selected.join('\n\n');
+    .filter(Boolean)
+    .join('\n\n');
 }
 
 function trimJsonMetadataValue(value) {
@@ -607,46 +432,24 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
   };
 
   const blocks = [];
-  const metadataText = truncateResponsesToolOutputText(
-    trimJsonMetadataValue(metadata),
-    {
-      maxChars: RESPONSES_TOOL_OUTPUT_MAX_CHARS,
-      mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
-    }
-  );
+  const metadataText = trimJsonMetadataValue(metadata);
   blocks.push(buildXmlTextBlock('metadata', metadataText));
 
-  const returnValueText = truncateResponsesToolOutputText(
-    trimTrailingWhitespace(formatResponsesJsRuntimeValueText(normalized.value)),
-    {
-      maxChars: RESPONSES_TOOL_OUTPUT_MAX_CHARS,
-      mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
-    }
-  );
+  const returnValueText = trimTrailingWhitespace(formatResponsesJsRuntimeValueText(normalized.value));
   if (returnValueText && returnValueText !== 'null') {
     blocks.push(buildXmlTextBlock('return_value', returnValueText));
   }
 
   if (effectiveTopLevelLogs.length > 0 && items.length <= 1) {
-    const consoleLogsText = truncateResponsesToolOutputText(
-      trimTrailingWhitespace(effectiveTopLevelLogs.map((log) => formatResponsesJsRuntimeLogText(log)).filter(Boolean).join('\n')),
-      {
-        maxChars: RESPONSES_TOOL_OUTPUT_MAX_CHARS,
-        mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
-      }
+    const consoleLogsText = trimTrailingWhitespace(
+      effectiveTopLevelLogs.map((log) => formatResponsesJsRuntimeLogText(log)).filter(Boolean).join('\n')
     );
     if (consoleLogsText) {
       blocks.push(buildXmlTextBlock('console_logs', consoleLogsText));
     }
   }
 
-  const topLevelErrorText = truncateResponsesToolOutputText(
-    trimTrailingWhitespace(formatResponsesJsRuntimeErrorText(normalized.error)),
-    {
-      maxChars: RESPONSES_TOOL_OUTPUT_MAX_CHARS,
-      mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
-    }
-  );
+  const topLevelErrorText = trimTrailingWhitespace(formatResponsesJsRuntimeErrorText(normalized.error));
   if (topLevelErrorText) {
     blocks.push(buildXmlTextBlock('error', topLevelErrorText));
   }
@@ -663,48 +466,30 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
       const innerBlocks = [];
 
       if (item.error) {
-        const frameErrorText = truncateResponsesToolOutputText(
-          trimTrailingWhitespace(formatResponsesJsRuntimeErrorText(item.error)),
-          {
-            maxChars: 1_800,
-            mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
-          }
-        );
+        const frameErrorText = trimTrailingWhitespace(formatResponsesJsRuntimeErrorText(item.error));
         if (frameErrorText) innerBlocks.push(buildXmlTextBlock('error', frameErrorText));
       } else {
         // 单帧成功时 shouldRenderFrameResults 为 false，因此旧的 items.length === 1 比较分支不可达，
         // 却会在多帧结果中额外完整序列化 item.result 与 normalized.value。直接格式化当前帧即可保持输出不变。
-        const frameReturnValueText = truncateResponsesToolOutputText(
-          trimTrailingWhitespace(formatResponsesJsRuntimeValueText(item.result)),
-          {
-            maxChars: 2_200,
-            mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
-          }
-        );
+        const frameReturnValueText = trimTrailingWhitespace(formatResponsesJsRuntimeValueText(item.result));
         if (frameReturnValueText && frameReturnValueText !== 'null') {
           innerBlocks.push(buildXmlTextBlock('return_value', frameReturnValueText));
         }
       }
 
       if (Array.isArray(item.logs) && item.logs.length > 0) {
-        const frameLogsText = truncateResponsesToolOutputText(
-          trimTrailingWhitespace(item.logs.map((log) => formatResponsesJsRuntimeLogText(log, Number.isFinite(Number(item.frameId)) ? Number(item.frameId) : null)).filter(Boolean).join('\n')),
-          {
-            maxChars: 1_800,
-            mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_MIDDLE
-          }
+        const frameLogsText = trimTrailingWhitespace(
+          item.logs.map((log) => formatResponsesJsRuntimeLogText(log, Number.isFinite(Number(item.frameId)) ? Number(item.frameId) : null)).filter(Boolean).join('\n')
         );
         if (frameLogsText) innerBlocks.push(buildXmlTextBlock('console_logs', frameLogsText));
       }
 
-      const innerText = joinTrustedXmlBlocksWithinLimit(innerBlocks, 4_200);
+      const innerText = joinTrustedXmlBlocks(innerBlocks);
       if (!innerText) return '';
       return `<frame_result${attrs ? ` ${attrs}` : ''}>\n${innerText}\n</frame_result>`;
     }).filter(Boolean);
 
-    // frameBlocks 已经逐个对不可信叶子内容做过转义与截断；不能再从任意字符位置
-    // 截断内部 XML，否则可能切断 frame_result 闭合标签并重新制造结构歧义。
-    const frameResultsText = joinTrustedXmlBlocksWithinLimit(frameBlocks);
+    const frameResultsText = joinTrustedXmlBlocks(frameBlocks);
     if (frameResultsText) {
       blocks.push(buildTrustedXmlBlock('frame_results', frameResultsText));
     }
@@ -729,18 +514,6 @@ export function buildResponsesJsRuntimeToolOutputContentItems(result, options = 
 }
 
 function buildXmlToolResultText(rootTag, metadata, blocks = [], options = {}) {
-  const metadataTruncation = Object.prototype.hasOwnProperty.call(options, 'metadataTruncation')
-    ? options.metadataTruncation
-    : {
-      mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL,
-      maxChars: RESPONSES_TOOL_OUTPUT_MAX_CHARS
-    };
-  const defaultBlockTruncation = Object.prototype.hasOwnProperty.call(options, 'blockTruncation')
-    ? options.blockTruncation
-    : {
-      mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL,
-      maxChars: RESPONSES_TOOL_OUTPUT_MAX_CHARS
-    };
   const sections = [];
   if (metadata && typeof metadata === 'object') {
     const metadataWithStatus = {
@@ -749,10 +522,7 @@ function buildXmlToolResultText(rootTag, metadata, blocks = [], options = {}) {
         ? metadata.status.trim()
         : (metadata.ok === true ? 'succeeded' : (metadata.ok === false ? 'failed' : undefined))
     };
-    const metadataText = applyResponsesToolOutputTruncation(
-      trimJsonMetadataValue(metadataWithStatus),
-      metadataTruncation
-    );
+    const metadataText = trimJsonMetadataValue(metadataWithStatus);
     if (metadataText) sections.push(buildXmlTextBlock('metadata', metadataText));
   }
 
@@ -762,17 +532,9 @@ function buildXmlToolResultText(rootTag, metadata, blocks = [], options = {}) {
     if (!tag) continue;
     const rawText = trimTrailingWhitespace(block.text);
     if (!rawText) continue;
-    const blockTruncation = block.contentMode === 'trusted_xml'
-      ? null
-      : (Object.prototype.hasOwnProperty.call(block, 'truncation')
-          ? block.truncation
-          : defaultBlockTruncation);
-    // trusted_xml 只由本模块生成的完整子节点组成。对它做字符级截断会切断闭合标签，
-    // 因此仅允许叶子 text block 截断，容器本身保持完整。
-    const text = applyResponsesToolOutputTruncation(rawText, blockTruncation);
     sections.push(block.contentMode === 'trusted_xml'
-      ? buildTrustedXmlBlock(tag, text)
-      : buildXmlTextBlock(tag, text));
+      ? buildTrustedXmlBlock(tag, rawText)
+      : buildXmlTextBlock(tag, rawText));
   }
 
   const rootAttributes = {
@@ -1230,13 +992,10 @@ function buildResponsesSkillListToolOutputText(result) {
         runtime_entry_path: typeof skill?.runtime?.entry_path === 'string' ? skill.runtime.entry_path : null,
         file_count: Number.isFinite(Number(skill?.files?.total_count)) ? Number(skill.files.total_count) : null
       };
-      const summaryText = truncateResponsesToolOutputText(trimJsonMetadataValue(summary), {
-        maxChars: 3_200,
-        mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL
-      });
+      const summaryText = trimJsonMetadataValue(summary);
       return `<skill ${attrs}>\n${xmlTextEscape(summaryText)}\n</skill>`;
     });
-    const skillsText = joinTrustedXmlBlocksWithinLimit(skillBlocks);
+    const skillsText = joinTrustedXmlBlocks(skillBlocks);
     blocks.push({
       tag: 'skills',
       text: skillsText,
@@ -1289,8 +1048,7 @@ function buildResponsesPageContentToolOutputText(result) {
     );
     blocks.push({
       tag: 'content',
-      text: appendStandaloneNoticeLine(normalized.content, notice),
-      truncation: null
+      text: appendStandaloneNoticeLine(normalized.content, notice)
     });
   }
   if (normalized.error) {
@@ -1397,8 +1155,7 @@ function buildResponsesPdfContentToolOutputText(result) {
     );
     blocks.push({
       tag: 'content',
-      text: appendStandaloneNoticeLine(normalized.content, notice),
-      truncation: null
+      text: appendStandaloneNoticeLine(normalized.content, notice)
     });
   }
   if (normalized.error) {
@@ -1447,26 +1204,16 @@ function buildResponsesHistorySearchToolOutputText(result) {
         parts.push(buildXmlTextBlock('match', trimJsonMetadataValue(matchMetadata)));
       }
       if (matchExcerpts.length > 0) {
-        parts.push(buildXmlTextBlock('match_excerpts', truncateResponsesToolOutputText(
-          matchExcerpts.join('\n\n---\n\n'),
-          {
-            maxChars: 2_000,
-            mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL
-          }
-        )));
+        parts.push(buildXmlTextBlock('match_excerpts', matchExcerpts.join('\n\n---\n\n')));
       }
-      const innerText = joinTrustedXmlBlocksWithinLimit(parts.filter(Boolean), 4_200);
+      const innerText = joinTrustedXmlBlocks(parts.filter(Boolean));
       return `<conversation rank="${index + 1}">\n${innerText}\n</conversation>`;
     });
-    const resultsText = joinTrustedXmlBlocksWithinLimit(conversationBlocks);
+    const resultsText = joinTrustedXmlBlocks(conversationBlocks);
     blocks.push({
       tag: 'results',
       text: resultsText,
-      contentMode: 'trusted_xml',
-      truncation: {
-        mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL,
-        maxChars: RESPONSES_TOOL_OUTPUT_MAX_CHARS
-      }
+      contentMode: 'trusted_xml'
     });
   }
   if (normalized.error) {
@@ -1497,21 +1244,19 @@ function buildResponsesHistoryReadToolOutputText(result) {
         timestamp !== '' ? `timestamp="${xmlAttributeEscape(timestamp)}"` : ''
       ].filter(Boolean).join(' ');
       const content = typeof message?.content === 'string' ? message.content : '';
-      const selectedContent = content.length > 4_000 ? content.slice(0, 4_000) : content;
       const declaredTotalChars = Number.isFinite(Number(message?.content_total_chars))
         ? Math.max(0, Number(message.content_total_chars))
         : 0;
       const totalChars = Math.max(declaredTotalChars, content.length);
-      const notice = buildResponsesToolOutputSelectionNoticeText(totalChars, 0, selectedContent.length);
-      const contentWithNotice = appendStandaloneNoticeLine(selectedContent, notice);
+      const notice = buildResponsesToolOutputSelectionNoticeText(totalChars, 0, content.length);
+      const contentWithNotice = appendStandaloneNoticeLine(content, notice);
       return `<message${attrs ? ` ${attrs}` : ''}>\n${xmlTextEscape(contentWithNotice)}\n</message>`;
     });
-    const messageText = joinTrustedXmlBlocksWithinLimit(messageBlocks);
+    const messageText = joinTrustedXmlBlocks(messageBlocks);
     blocks.push({
       tag: 'messages',
       text: messageText,
-      contentMode: 'trusted_xml',
-      truncation: null
+      contentMode: 'trusted_xml'
     });
   }
   if (normalized.error) {
@@ -1555,13 +1300,10 @@ function buildResponsesAskableModelsToolOutputText(result) {
         is_favorite: model?.is_favorite === true,
         has_custom_system_prompt: model?.has_custom_system_prompt === true
       };
-      const modelMetadataText = truncateResponsesToolOutputText(trimJsonMetadataValue(modelMetadata), {
-        maxChars: 3_200,
-        mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL
-      });
+      const modelMetadataText = trimJsonMetadataValue(modelMetadata);
       return `<model${attrs ? ` ${attrs}` : ''}>\n${xmlTextEscape(modelMetadataText)}\n</model>`;
     });
-    const modelsText = joinTrustedXmlBlocksWithinLimit(modelBlocks);
+    const modelsText = joinTrustedXmlBlocks(modelBlocks);
     blocks.push({
       tag: 'models',
       text: modelsText,
@@ -1605,33 +1347,21 @@ function buildResponsesAskOtherAiToolOutputText(result) {
       ].filter(Boolean).join(' ');
       const innerBlocks = [];
       if (typeof item?.question === 'string' && item.question.trim()) {
-        innerBlocks.push(buildXmlTextBlock('question', truncateResponsesToolOutputText(item.question, {
-          maxChars: 1_000,
-          mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL
-        })));
+        innerBlocks.push(buildXmlTextBlock('question', item.question));
       }
       if (item?.usage && typeof item.usage === 'object') {
-        innerBlocks.push(buildXmlTextBlock('usage', truncateResponsesToolOutputText(trimJsonMetadataValue(item.usage), {
-          maxChars: 1_000,
-          mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL
-        })));
+        innerBlocks.push(buildXmlTextBlock('usage', trimJsonMetadataValue(item.usage)));
       }
       if (typeof item?.answer === 'string' && item.answer.trim()) {
-        innerBlocks.push(buildXmlTextBlock('answer', truncateResponsesToolOutputText(item.answer, {
-          maxChars: 3_000,
-          mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL
-        })));
+        innerBlocks.push(buildXmlTextBlock('answer', item.answer));
       }
       if (typeof item?.error === 'string' && item.error.trim()) {
-        innerBlocks.push(buildXmlTextBlock('error', truncateResponsesToolOutputText(item.error, {
-          maxChars: 1_000,
-          mode: RESPONSES_TOOL_OUTPUT_TRUNCATION_MODE_TAIL
-        })));
+        innerBlocks.push(buildXmlTextBlock('error', item.error));
       }
-      const innerText = joinTrustedXmlBlocksWithinLimit(innerBlocks.filter(Boolean), 4_200);
+      const innerText = joinTrustedXmlBlocks(innerBlocks.filter(Boolean));
       return `<response${attrs ? ` ${attrs}` : ''}>\n${innerText}\n</response>`;
     });
-    const answersText = joinTrustedXmlBlocksWithinLimit(responseBlocks);
+    const answersText = joinTrustedXmlBlocks(responseBlocks);
     blocks.push({
       tag: 'responses',
       text: answersText,

@@ -7,8 +7,6 @@ const JS_SANDBOX_MAX_ARRAY_ITEMS = 80;
 const JS_SANDBOX_MAX_OBJECT_KEYS = 80;
 const JS_SANDBOX_DOM_TEXT_PREVIEW = 400;
 const JS_SANDBOX_HTML_PREVIEW = 1200;
-const JS_SANDBOX_MAX_LOGS = 50;
-const JS_SANDBOX_MAX_LOG_TEXT = 4000;
 
 function previewLongString(value, maxChars) {
   if (typeof value !== 'string') return '';
@@ -144,9 +142,7 @@ function normalizeJsSandboxTransferValue(value, depth = 0, seen = new WeakSet())
 
 function normalizeJsSandboxConsoleLogs(logs, fallbackFrameId = 0) {
   if (!Array.isArray(logs) || logs.length <= 0) return [];
-  const normalized = logs
-    .slice(0, JS_SANDBOX_MAX_LOGS)
-    .map((entry) => {
+  return logs.map((entry) => {
       const log = (entry && typeof entry === 'object' && !Array.isArray(entry)) ? entry : {};
       const level = (typeof log.level === 'string' && log.level.trim()) ? log.level.trim().toLowerCase() : 'log';
       const frameId = Number.isFinite(Number(log.frameId)) ? Number(log.frameId) : fallbackFrameId;
@@ -156,17 +152,9 @@ function normalizeJsSandboxConsoleLogs(logs, fallbackFrameId = 0) {
       return {
         frameId,
         level,
-        text: text.length <= JS_SANDBOX_MAX_LOG_TEXT ? text : `${text.slice(0, JS_SANDBOX_MAX_LOG_TEXT)}…`
+        text
       };
     });
-  if (logs.length > JS_SANDBOX_MAX_LOGS) {
-    normalized.push({
-      frameId: fallbackFrameId,
-      level: 'info',
-      text: `[… ${logs.length - JS_SANDBOX_MAX_LOGS} console entries omitted …]`
-    });
-  }
-  return normalized;
 }
 
 function buildJsSandboxSuccessEnvelope(value, logs = []) {

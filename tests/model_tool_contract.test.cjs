@@ -212,7 +212,30 @@ test('全部 18 个模型工具具有唯一稳定名称和可独立判读的描�
     assert.equal(definition.strict, true, `${definition.name} 必须启用 strict mode`);
     assert.match(definition.description, /(?:^|\n)用途：\S/u, `${definition.name} 缺少“用途”说明`);
     assert.match(definition.description, /(?:^|\n)返回：\S/u, `${definition.name} 缺少“返回”说明`);
+    assert.deepEqual(
+      definition.parameters.properties.max_output_chars.type,
+      ['integer', 'null'],
+      `${definition.name} 缺少统一 max_output_chars 参数`
+    );
+    assert.match(definition.parameters.properties.max_output_chars.description, /null 时不额外截断/);
   }
+});
+
+test('统一输出控制参数会在执行前剥离并严格校验', async () => {
+  const { splitResponsesToolOutputControl } = await importSourceModule('src/agent_tools/shared/model_tool_contract.js');
+
+  assert.deepEqual(splitResponsesToolOutputControl({ query: 'x', max_output_chars: 12000 }), {
+    toolArgs: { query: 'x' },
+    maxOutputChars: 12000
+  });
+  assert.deepEqual(splitResponsesToolOutputControl({ query: 'x', max_output_chars: null }), {
+    toolArgs: { query: 'x' },
+    maxOutputChars: null
+  });
+  assert.throws(
+    () => splitResponsesToolOutputControl({ max_output_chars: 0 }),
+    /必须是正安全整数或 null/
+  );
 });
 
 test('全部模型工具的每一层 object schema 都遵循 Responses strict 契约', async () => {
