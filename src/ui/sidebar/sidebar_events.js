@@ -586,7 +586,8 @@ function setupEmptyStateHandlers(appContext) {
         const title = typeof payload?.title === 'string' ? payload.title.trim() : '';
         const url = typeof payload?.url === 'string' ? payload.url.trim() : '';
         const content = typeof payload?.content === 'string' ? payload.content.trim() : '';
-        if (payload?.ok !== true || !title || !url || !content) {
+        // content.js 返回的是原始页面快照，不额外包一层 ok=true；只有显式错误才拒绝。
+        if (payload?.ok === false || !title || !url || !content) {
           appContext.utils.showNotification({ message: '未能提取到页面内容', type: 'warning' });
           return null;
         }

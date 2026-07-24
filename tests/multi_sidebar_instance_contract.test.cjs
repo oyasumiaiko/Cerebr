@@ -186,4 +186,5 @@ test('host page tool requests carry sidebarInstanceId through sender and backgro
   assert.match(backgroundSource, /GET_PAGE_CONTENT_SNAPSHOT_INTERNAL[\s\S]*sidebarInstanceId: typeof message\?\.sidebarInstanceId === 'string'/);
   assert.match(backgroundSource, /GET_PDF_CONTENT_SNAPSHOT_INTERNAL[\s\S]*sidebarInstanceId: typeof message\?\.sidebarInstanceId === 'string'/);
   assert.match(backgroundSource, /GET_WEBPAGE_SCREENSHOT_RESULT_INTERNAL[\s\S]*sidebarInstanceId: typeof message\?\.sidebarInstanceId === 'string'/);
+  assert.match(sidebarEventsSource, /payload\?\.ok === false \|\| !title \|\| !url \|\| !content/);
 });
