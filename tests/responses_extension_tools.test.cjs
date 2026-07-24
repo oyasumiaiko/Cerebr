@@ -17,6 +17,7 @@ test('RESPONSES_EXTENSION_TOOL_SPECS 以稳定顺序登记扩展提供工具', a
     RESPONSES_EXTENSION_TOOL_SPECS.map(spec => spec.id),
     [
       'js_runtime_execute',
+      'read_tool_output',
       'apply_patch',
       'list_files',
       'read_file',
@@ -44,6 +45,10 @@ test('RESPONSES_EXTENSION_TOOL_SPECS 以稳定顺序登记扩展提供工具', a
     assert.equal(typeof spec.deferLoading, 'boolean');
   }
   assert.equal(RESPONSES_EXTENSION_TOOL_SPECS.find(spec => spec.id === 'view_image').sideEffect, 'network');
+  const readToolOutputSpec = RESPONSES_EXTENSION_TOOL_SPECS.find(spec => spec.id === 'read_tool_output');
+  assert.equal(readToolOutputSpec.alwaysEnabled, true);
+  assert.equal(readToolOutputSpec.configurable, false);
+  assert.equal(readToolOutputSpec.deferLoading, false);
 });
 
 test('manifest 的 handlerKey 与 outputKind 均有 sender 执行和序列化分支', async () => {
@@ -59,7 +64,7 @@ test('manifest 的 handlerKey 与 outputKind 均有 sender 执行和序列化分
     assert.match(senderSource, new RegExp(`case '${handlerKey}':\\s*outputPayload =`, 's'));
   }
   for (const outputKind of outputKinds) {
-    assert.match(senderSource, new RegExp(`case '${outputKind}':\\s*serializedOutput =`, 's'));
+    assert.match(senderSource, new RegExp(`case '${outputKind}':`, 's'));
   }
 });
 
@@ -85,6 +90,7 @@ test('reconcileResponsesAllowedToolChoice 会同步当前不可用的本地工�
   const { reconcileResponsesAllowedToolChoice } = await loadResponsesExtensionToolsModule();
   const finalTools = [
     { type: 'function', name: 'history_search' },
+    { type: 'function', name: 'read_tool_output' },
     { type: 'web_search' }
   ];
 
@@ -97,7 +103,7 @@ test('reconcileResponsesAllowedToolChoice 会同步当前不可用的本地工�
     {
       type: 'allowed_tools',
       mode: 'auto',
-      tools: ['history_search', 'web_search']
+      tools: ['history_search', 'web_search', 'read_tool_output']
     }
   );
   assert.equal(
@@ -115,6 +121,22 @@ test('reconcileResponsesAllowedToolChoice 会同步当前不可用的本地工�
       tools: ['page_content_read']
     }, finalTools),
     /当前不可用的本地工具：page_content_read/
+  );
+
+  assert.deepEqual(
+    reconcileResponsesAllowedToolChoice({
+      type: 'allowed_tools',
+      mode: 'required',
+      tools: [{ type: 'function', name: 'history_search' }]
+    }, finalTools),
+    {
+      type: 'allowed_tools',
+      mode: 'required',
+      tools: [
+        { type: 'function', name: 'history_search' },
+        'read_tool_output'
+      ]
+    }
   );
 });
 
@@ -143,6 +165,14 @@ test('isResponsesExtensionToolEnabled 默认全开，只有显式 false 才关�
     true
   );
   assert.equal(isResponsesExtensionToolEnabled({}, 'future_custom_tool'), true);
+  assert.equal(
+    isResponsesExtensionToolEnabled({
+      extension_tools: {
+        read_tool_output: { enabled: false }
+      }
+    }, 'read_tool_output'),
+    true
+  );
 });
 
 test('filterResponsesExtensionFunctionTools 会过滤被关闭的同名 function tools，并保持原数组不被就地修改', async () => {

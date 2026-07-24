@@ -31,8 +31,6 @@ import {
   CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
   CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
-  CONVERSATION_DOCUMENT_READ_DEFAULT_RANGE_CHARS,
-  CONVERSATION_DOCUMENT_READ_MAX_CHARS,
   CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS,
   CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
   CONVERSATION_DOCUMENT_SEARCH_MAX_RESULTS,
@@ -117,8 +115,6 @@ export {
   CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
   CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
-  CONVERSATION_DOCUMENT_READ_DEFAULT_RANGE_CHARS,
-  CONVERSATION_DOCUMENT_READ_MAX_CHARS,
   CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS,
   CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
   CONVERSATION_DOCUMENT_SEARCH_MAX_RESULTS,
@@ -192,11 +188,10 @@ function normalizeConversationDocumentReadRangeArgs(rawArgs, options = {}) {
   const allowLineRange = options?.allowLineRange === true;
   const explicitMode = normalizeString(args.mode).toLowerCase();
   const hasSkipChars = args.skip_chars != null;
-  const hasMaxChars = args.max_chars != null;
   const hasStartLine = args.start_line != null;
   const hasEndLine = args.end_line != null;
 
-  if ((hasStartLine || hasEndLine) && (hasSkipChars || hasMaxChars)) {
+  if ((hasStartLine || hasEndLine) && hasSkipChars) {
     throw new Error('virtual_file 参数错误：不能同时使用字符区间和行区间读取参数。');
   }
   if (!allowLineRange && (hasStartLine || hasEndLine)) {
@@ -207,15 +202,10 @@ function normalizeConversationDocumentReadRangeArgs(rawArgs, options = {}) {
   }
 
   const skipChars = hasSkipChars ? clampNonNegativeInt(args.skip_chars, 0) : null;
-  const maxChars = hasMaxChars
-    ? Math.max(1, Math.min(CONVERSATION_DOCUMENT_READ_MAX_CHARS, clampNonNegativeInt(args.max_chars, CONVERSATION_DOCUMENT_READ_DEFAULT_RANGE_CHARS)))
-    : null;
-
-  if (explicitMode === 'preview') {
+  if (explicitMode === 'preview' || explicitMode === 'full') {
     return {
-      mode: 'preview',
+      mode: 'full',
       skip_chars: 0,
-      max_chars: maxChars ?? CONVERSATION_DOCUMENT_READ_DEFAULT_RANGE_CHARS,
       start_line: null,
       end_line: null
     };
@@ -230,26 +220,23 @@ function normalizeConversationDocumentReadRangeArgs(rawArgs, options = {}) {
     return {
       mode: 'line_range',
       skip_chars: null,
-      max_chars: null,
       start_line: startLine,
       end_line: endLine
     };
   }
 
-  if (hasSkipChars || hasMaxChars) {
+  if (hasSkipChars) {
     return {
       mode: 'char_range',
       skip_chars: skipChars ?? 0,
-      max_chars: maxChars ?? CONVERSATION_DOCUMENT_READ_DEFAULT_RANGE_CHARS,
       start_line: null,
       end_line: null
     };
   }
 
   return {
-    mode: 'preview',
+    mode: 'full',
     skip_chars: 0,
-    max_chars: CONVERSATION_DOCUMENT_READ_DEFAULT_RANGE_CHARS,
     start_line: null,
     end_line: null
   };
@@ -303,22 +290,18 @@ function buildConversationDocumentReadResult(text, rawArgs, options = {}) {
   }
 
   const start = Math.min(range.skip_chars, totalChars);
-  const effectiveMaxChars = range.max_chars ?? CONVERSATION_DOCUMENT_READ_DEFAULT_RANGE_CHARS;
-  const end = Math.min(totalChars, start + effectiveMaxChars);
-  const content = sourceText.slice(start, end);
-  const omittedChars = Math.max(0, totalChars - content.length);
+  const content = sourceText.slice(start);
 
   return {
     mode: range.mode,
     total_chars: totalChars,
     total_lines: totalLines,
     skip_chars: start,
-    max_chars: effectiveMaxChars,
     returned_chars: content.length,
-    omitted_chars: omittedChars,
-    omitted_pct: formatPercent(omittedChars, totalChars),
-    truncated: omittedChars > 0,
-    has_more_after_range: end < totalChars,
+    omitted_chars: start,
+    omitted_pct: formatPercent(start, totalChars),
+    truncated: false,
+    has_more_after_range: false,
     content
   };
 }
@@ -1013,7 +996,6 @@ function normalizeActionArgs(action, rawArgs, options = {}) {
   const readOptions = {
     mode: args.mode,
     skip_chars: args.skip_chars,
-    max_chars: args.max_chars,
     start_line: args.start_line,
     end_line: args.end_line
   };

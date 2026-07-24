@@ -567,7 +567,7 @@ function setupEmptyStateHandlers(appContext) {
         const payload = await new Promise((resolve, reject) => {
           try {
             chrome.runtime.sendMessage({
-              type: 'GET_PAGE_CONTENT_READ_RESULT_FROM_SIDEBAR',
+              type: 'GET_PAGE_CONTENT_SNAPSHOT_FROM_SIDEBAR',
               tabId: Number.isFinite(Number(targetTabId)) ? Number(targetTabId) : null,
               sidebarInstanceId: appContext.state.sidebarInstanceId || '',
               args: null

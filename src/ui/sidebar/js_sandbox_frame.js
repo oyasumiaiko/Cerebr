@@ -2,17 +2,6 @@ const SANDBOX_MESSAGE_FLAG = '__cerebrJsSandbox';
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const activeExecutionAborters = new Map();
 const JS_SANDBOX_DOCUMENT_ID = 'cerebr-js-sandbox';
-const JS_SANDBOX_MAX_DEPTH = 6;
-const JS_SANDBOX_MAX_ARRAY_ITEMS = 80;
-const JS_SANDBOX_MAX_OBJECT_KEYS = 80;
-const JS_SANDBOX_DOM_TEXT_PREVIEW = 400;
-const JS_SANDBOX_HTML_PREVIEW = 1200;
-
-function previewLongString(value, maxChars) {
-  if (typeof value !== 'string') return '';
-  if (value.length <= maxChars) return value;
-  return `${value.slice(0, maxChars)}…`;
-}
 
 function isDomLikeValue(value) {
   return !!(
@@ -39,14 +28,8 @@ function normalizeDomLikeValue(value) {
     nodeName: (typeof value?.nodeName === 'string') ? value.nodeName : '',
     id: (typeof value?.id === 'string') ? value.id : '',
     className: (typeof value?.className === 'string') ? value.className : '',
-    textContent: previewLongString(
-      typeof value?.textContent === 'string' ? value.textContent : '',
-      JS_SANDBOX_DOM_TEXT_PREVIEW
-    ),
-    outerHTML: previewLongString(
-      typeof value?.outerHTML === 'string' ? value.outerHTML : '',
-      JS_SANDBOX_HTML_PREVIEW
-    )
+    textContent: typeof value?.textContent === 'string' ? value.textContent : '',
+    outerHTML: typeof value?.outerHTML === 'string' ? value.outerHTML : ''
   };
 }
 
@@ -62,7 +45,7 @@ function normalizeErrorLikeValue(value) {
 
 // 这个文件必须保持 classic script：manifest sandbox page 是唯一源环境，
 // module script 在这里会触发跨源加载限制，导致父级一直等不到 ready 握手。
-function normalizeJsSandboxTransferValue(value, depth = 0, seen = new WeakSet()) {
+function normalizeJsSandboxTransferValue(value, seen = new WeakSet()) {
   if (value == null) return value;
 
   const primitiveType = typeof value;
@@ -95,11 +78,6 @@ function normalizeJsSandboxTransferValue(value, depth = 0, seen = new WeakSet())
   if (isErrorLikeValue(value)) {
     return normalizeErrorLikeValue(value);
   }
-  if (depth >= JS_SANDBOX_MAX_DEPTH) {
-    return {
-      type: Array.isArray(value) ? 'truncated_array' : 'truncated_object'
-    };
-  }
   if (seen.has(value)) {
     return {
       type: 'circular_ref'
@@ -109,25 +87,13 @@ function normalizeJsSandboxTransferValue(value, depth = 0, seen = new WeakSet())
   seen.add(value);
   try {
     if (Array.isArray(value)) {
-      const items = value
-        .slice(0, JS_SANDBOX_MAX_ARRAY_ITEMS)
-        .map((item) => normalizeJsSandboxTransferValue(item, depth + 1, seen));
-      if (value.length > JS_SANDBOX_MAX_ARRAY_ITEMS) {
-        items.push({
-          type: 'truncated_items',
-          omitted_count: value.length - JS_SANDBOX_MAX_ARRAY_ITEMS
-        });
-      }
-      return items;
+      return value.map((item) => normalizeJsSandboxTransferValue(item, seen));
     }
 
     const entries = Object.entries(value);
     const result = {};
-    for (const [key, child] of entries.slice(0, JS_SANDBOX_MAX_OBJECT_KEYS)) {
-      result[key] = normalizeJsSandboxTransferValue(child, depth + 1, seen);
-    }
-    if (entries.length > JS_SANDBOX_MAX_OBJECT_KEYS) {
-      result.__truncated_keys__ = entries.length - JS_SANDBOX_MAX_OBJECT_KEYS;
+    for (const [key, child] of entries) {
+      result[key] = normalizeJsSandboxTransferValue(child, seen);
     }
     return result;
   } catch (error) {

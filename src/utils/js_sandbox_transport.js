@@ -8,11 +8,6 @@
 
 export const JS_SANDBOX_DOCUMENT_ID = 'cerebr-js-sandbox';
 export const JS_SANDBOX_TITLE = 'Cerebr JS Sandbox';
-const JS_SANDBOX_MAX_DEPTH = 6;
-const JS_SANDBOX_MAX_ARRAY_ITEMS = 80;
-const JS_SANDBOX_MAX_OBJECT_KEYS = 80;
-const JS_SANDBOX_DOM_TEXT_PREVIEW = 400;
-const JS_SANDBOX_HTML_PREVIEW = 1200;
 
 /**
  * 构造隔离沙箱的伪 frame 快照。
@@ -48,12 +43,6 @@ function isErrorLikeValue(value) {
   );
 }
 
-function previewLongString(value, maxChars) {
-  if (typeof value !== 'string') return '';
-  if (value.length <= maxChars) return value;
-  return `${value.slice(0, maxChars)}…`;
-}
-
 function normalizeDomLikeValue(value) {
   return {
     type: 'dom_node',
@@ -61,14 +50,8 @@ function normalizeDomLikeValue(value) {
     nodeName: (typeof value?.nodeName === 'string') ? value.nodeName : '',
     id: (typeof value?.id === 'string') ? value.id : '',
     className: (typeof value?.className === 'string') ? value.className : '',
-    textContent: previewLongString(
-      typeof value?.textContent === 'string' ? value.textContent : '',
-      JS_SANDBOX_DOM_TEXT_PREVIEW
-    ),
-    outerHTML: previewLongString(
-      typeof value?.outerHTML === 'string' ? value.outerHTML : '',
-      JS_SANDBOX_HTML_PREVIEW
-    )
+    textContent: typeof value?.textContent === 'string' ? value.textContent : '',
+    outerHTML: typeof value?.outerHTML === 'string' ? value.outerHTML : ''
   };
 }
 
@@ -91,11 +74,10 @@ function normalizeErrorLikeValue(value) {
  * - 这里只做“稳定化”，最终给模型的超长截断仍由 Responses 工具输出层负责。
  *
  * @param {any} value
- * @param {number} [depth]
  * @param {WeakSet<object>} [seen]
  * @returns {any}
  */
-export function normalizeJsSandboxTransferValue(value, depth = 0, seen = new WeakSet()) {
+export function normalizeJsSandboxTransferValue(value, seen = new WeakSet()) {
   if (value == null) return value;
 
   const primitiveType = typeof value;
@@ -128,11 +110,6 @@ export function normalizeJsSandboxTransferValue(value, depth = 0, seen = new Wea
   if (isErrorLikeValue(value)) {
     return normalizeErrorLikeValue(value);
   }
-  if (depth >= JS_SANDBOX_MAX_DEPTH) {
-    return {
-      type: Array.isArray(value) ? 'truncated_array' : 'truncated_object'
-    };
-  }
   if (seen.has(value)) {
     return {
       type: 'circular_ref'
@@ -142,25 +119,13 @@ export function normalizeJsSandboxTransferValue(value, depth = 0, seen = new Wea
   seen.add(value);
   try {
     if (Array.isArray(value)) {
-      const items = value
-        .slice(0, JS_SANDBOX_MAX_ARRAY_ITEMS)
-        .map((item) => normalizeJsSandboxTransferValue(item, depth + 1, seen));
-      if (value.length > JS_SANDBOX_MAX_ARRAY_ITEMS) {
-        items.push({
-          type: 'truncated_items',
-          omitted_count: value.length - JS_SANDBOX_MAX_ARRAY_ITEMS
-        });
-      }
-      return items;
+      return value.map((item) => normalizeJsSandboxTransferValue(item, seen));
     }
 
     const entries = Object.entries(value);
     const result = {};
-    for (const [key, child] of entries.slice(0, JS_SANDBOX_MAX_OBJECT_KEYS)) {
-      result[key] = normalizeJsSandboxTransferValue(child, depth + 1, seen);
-    }
-    if (entries.length > JS_SANDBOX_MAX_OBJECT_KEYS) {
-      result.__truncated_keys__ = entries.length - JS_SANDBOX_MAX_OBJECT_KEYS;
+    for (const [key, child] of entries) {
+      result[key] = normalizeJsSandboxTransferValue(child, seen);
     }
     return result;
   } catch (error) {

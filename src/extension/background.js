@@ -710,14 +710,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message.type === 'GET_PAGE_CONTENT_READ_RESULT_FROM_SIDEBAR') {
+  if (message.type === 'GET_PAGE_CONTENT_SNAPSHOT_FROM_SIDEBAR') {
     (async () => {
       const result = await relaySidebarContentRequestToTab({
         message,
         sender,
         logLabel: '获取 page_content_read 结果失败',
         contentMessage: {
-          type: 'GET_PAGE_CONTENT_READ_RESULT_INTERNAL',
+          type: 'GET_PAGE_CONTENT_SNAPSHOT_INTERNAL',
           sidebarInstanceId: typeof message?.sidebarInstanceId === 'string' ? message.sidebarInstanceId : '',
           args: message?.args ?? null
         }
@@ -727,14 +727,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message.type === 'GET_PDF_CONTENT_READ_RESULT_FROM_SIDEBAR') {
+  if (message.type === 'GET_PDF_CONTENT_SNAPSHOT_FROM_SIDEBAR') {
     (async () => {
       const result = await relaySidebarContentRequestToTab({
         message,
         sender,
         logLabel: '获取 pdf_content_read 结果失败',
         contentMessage: {
-          type: 'GET_PDF_CONTENT_READ_RESULT_INTERNAL',
+          type: 'GET_PDF_CONTENT_SNAPSHOT_INTERNAL',
           sidebarInstanceId: typeof message?.sidebarInstanceId === 'string' ? message.sidebarInstanceId : '',
           args: message?.args ?? null
         }

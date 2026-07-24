@@ -62,7 +62,7 @@ test('filterIncompleteResponsesToolCallReplayItems 会移除缺少 output 的半
       type: 'function_call',
       call_id: 'call_dangling',
       name: 'page_content_read',
-      arguments: '{"max_chars":5000}'
+      arguments: '{"max_output_chars":5000}'
     },
     {
       type: 'function_call',

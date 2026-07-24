@@ -22,13 +22,13 @@ test('buildPageContentReadFunctionToolDefinition 声明可选图片 URL 参数�
   assert.equal(spec.parameters.properties.include_image_urls.type[0], 'boolean');
   assert.ok(spec.parameters.required.includes('include_image_urls'));
   assert.match(spec.parameters.properties.include_image_urls.description, /false 或 null/);
-  assert.equal(Object.hasOwn(spec.parameters.properties.max_chars, 'maximum'), false);
-  assert.match(spec.parameters.properties.max_chars.description, /1-50000/);
+  assert.equal(spec.parameters.properties.max_chars, undefined);
+  assert.match(spec.parameters.properties.max_output_chars.description, /默认 50000/);
   assert.match(spec.description, /用途：/);
-  assert.match(spec.description, /next_skip_chars/);
+  assert.match(spec.description, /read_tool_output/);
 });
 
-test('buildPageContentReadResult 默认返回最多 50000 字符预览', async () => {
+test('buildPageContentReadResult 默认生成完整正文，统一出口再按 50000 分页', async () => {
   const { buildPageContentReadResult } = await loadPageContentReadToolModule();
   const result = buildPageContentReadResult({
     title: 'Example',
@@ -37,18 +37,17 @@ test('buildPageContentReadResult 默认返回最多 50000 字符预览', async (
   }, {});
 
   assert.equal(result.ok, true);
-  assert.equal(result.mode, 'preview');
-  assert.equal(result.max_chars, 50000);
-  assert.equal(result.truncated, true);
-  assert.equal(result.returned_chars, 50000);
-  assert.equal(result.omitted_chars, 12000);
-  assert.equal(result.omitted_pct, 19.35);
-  assert.equal(result.has_more_after_range, true);
-  assert.equal(result.next_skip_chars, 50000);
-  assert.equal(result.content.length, 50000);
+  assert.equal(result.mode, 'full');
+  assert.equal(result.max_output_chars, undefined);
+  assert.equal(result.truncated, false);
+  assert.equal(result.returned_chars, 62000);
+  assert.equal(result.omitted_chars, 0);
+  assert.equal(result.has_more_after_range, false);
+  assert.equal(result.next_skip_chars, null);
+  assert.equal(result.content.length, 62000);
 });
 
-test('buildPageContentReadResult 支持 skip_chars + max_chars 连续读取', async () => {
+test('buildPageContentReadResult 的 skip_chars 只选择源起点，不再叠加内部字符窗口', async () => {
   const { buildPageContentReadResult } = await loadPageContentReadToolModule();
   const result = buildPageContentReadResult({
     title: 'Example',
@@ -56,22 +55,42 @@ test('buildPageContentReadResult 支持 skip_chars + max_chars 连续读取', as
     content: '0123456789ABCDEFGHIJ'
   }, {
     skip_chars: 5,
-    max_chars: 6
+    max_output_chars: 6
   });
 
   assert.equal(result.ok, true);
   assert.equal(result.mode, 'range');
   assert.equal(result.skip_chars, 5);
-  assert.equal(result.max_chars, 6);
-  assert.equal(result.content, '56789A');
-  assert.equal(result.has_more_after_range, true);
-  assert.equal(result.next_skip_chars, 11);
+  assert.equal(result.max_output_chars, undefined);
+  assert.equal(result.content, '56789ABCDEFGHIJ');
+  assert.equal(result.has_more_after_range, false);
+  assert.equal(result.next_skip_chars, null);
 });
 
-test('content script 的网页与 PDF 运行时默认值同步为 50000', async () => {
-  const source = await fs.readFile(path.resolve(__dirname, '../src/extension/content.js'), 'utf8');
-  assert.match(source, /const PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS = 50_000;/);
-  assert.match(source, /const PDF_CONTENT_READ_DEFAULT_MAX_CHARS = 50_000;/);
+test('buildPageContentReadResult 不会在统一出口前按 max_output_chars 预截断', async () => {
+  const { buildPageContentReadResult } = await loadPageContentReadToolModule();
+  const result = buildPageContentReadResult({
+    title: 'Long page',
+    url: 'https://example.com/long',
+    content: 'P'.repeat(70000)
+  }, {
+    skip_chars: 0,
+    max_output_chars: 100
+  });
+
+  assert.equal(result.max_output_chars, undefined);
+  assert.equal(result.returned_chars, 70000);
+  assert.equal(result.content.length, 70000);
+});
+
+test('网页与 PDF 运行时只在共享契约中定义默认预算并复用纯结果构造器', async () => {
+  const contentSource = await fs.readFile(path.resolve(__dirname, '../src/extension/content.js'), 'utf8');
+  const senderSource = await fs.readFile(path.resolve(__dirname, '../src/core/message_sender.js'), 'utf8');
+  const contractSource = await fs.readFile(path.resolve(__dirname, '../src/agent_tools/shared/model_tool_contract.js'), 'utf8');
+  assert.match(contractSource, /RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS = 50_000/);
+  assert.doesNotMatch(contentSource, /build(?:Page|Pdf)ContentReadResultForTransport|CONTENT_READ_DEFAULT_MAX_OUTPUT_CHARS/);
+  assert.match(senderSource, /buildPageContentReadResult\(pageContent, rawArgs\)/);
+  assert.match(senderSource, /buildPdfContentReadResult\(pageContent, rawArgs\)/);
 });
 
 test('buildPageContentReadResult 默认不包含图片引用附录', async () => {
@@ -92,7 +111,7 @@ test('buildPageContentReadResult 默认不包含图片引用附录', async () =>
   assert.doesNotMatch(result.content, /\[img-1\]:/);
 });
 
-test('buildPageContentReadResult 显式开启后只附录本次片段实际出现的图片 URL', async () => {
+test('buildPageContentReadResult 显式开启后为完整所选正文附录图片 URL', async () => {
   const { buildPageContentReadResult } = await loadPageContentReadToolModule();
   const result = buildPageContentReadResult({
     title: 'Example',
@@ -104,16 +123,16 @@ test('buildPageContentReadResult 显式开启后只附录本次片段实际出�
       { id: 'img-2', title: 'Later', url: 'https://cdn.example.com/later.png' }
     ]
   }, {
-    max_chars: 24,
+    max_output_chars: 24,
     include_image_urls: true
   });
 
   assert.equal(result.include_image_urls, true);
-  assert.equal(result.image_reference_count, 1);
-  assert.equal(result.returned_chars, 24);
+  assert.equal(result.image_reference_count, 2);
+  assert.equal(result.returned_chars, 45);
   assert.match(result.content, /Alpha \[Hero\]\[img-1\] Beta/);
   assert.match(result.content, /\[img-1\]: https:\/\/cdn\.example\.com\/hero\.png/);
-  assert.doesNotMatch(result.content, /\[img-2\]:/);
+  assert.match(result.content, /\[img-2\]: https:\/\/cdn\.example\.com\/later\.png/);
 });
 
 test('buildPageContentReadResult 在无内容时返回明确错误', async () => {

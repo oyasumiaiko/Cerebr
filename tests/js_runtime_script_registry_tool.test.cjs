@@ -198,7 +198,7 @@ test('buildStoredSkillRecord / saveStoredSkillPackage / getStoredSkillPackage �
   const detail = buildSkillDetail(loaded);
   assert.equal(detail.instruction.path, 'SKILL.md');
   assert.match(detail.instruction.content, /DOM Probe/);
-  assert.equal(detail.instruction.content_read.mode, 'preview');
+  assert.equal(detail.instruction.content_read.mode, 'full');
   assert.equal(detail.files.virtual_manifest_path, 'manifest.json');
   assert.equal(detail.files.files[0].path, 'manifest.json');
   assert.equal(detail.files.files[0].content, undefined);
@@ -213,7 +213,7 @@ test('buildStoredSkillRecord / saveStoredSkillPackage / getStoredSkillPackage �
   const manifestFile = buildSkillFilePayload(loaded, 'manifest.json');
   assert.equal(manifestFile.file.path, 'manifest.json');
   assert.equal(manifestFile.file.is_manifest, true);
-  assert.equal(manifestFile.file.content_read.mode, 'preview');
+  assert.equal(manifestFile.file.content_read.mode, 'full');
   assert.doesNotMatch(manifestFile.file.content, /"name":/);
   assert.doesNotMatch(manifestFile.file.content, /"kind":/);
   assert.match(manifestFile.file.content, /"description": "读取页面标题和链接"/);
@@ -352,9 +352,8 @@ test('normalizeSkillRegistryToolArguments 会收敛为新的 package/file action
     context_after: 0,
     max_results: 50,
     read_options: {
-      mode: 'preview',
+      mode: 'full',
       skip_chars: 0,
-      max_chars: 10000,
       start_line: null,
       end_line: null
     },
@@ -488,7 +487,6 @@ test('skill 读取参数支持字符偏移与按行续读', async () => {
   assert.deepEqual(normalizedReadDetail.read_options, {
     mode: 'line_range',
     skip_chars: null,
-    max_chars: null,
     start_line: 3,
     end_line: 5
   });
@@ -498,12 +496,11 @@ test('skill 读取参数支持字符偏移与按行续读', async () => {
     skill_name: 'long-dom-probe',
     file_path: 'src/main.js',
     skip_chars: 120,
-    max_chars: 200
+    max_output_chars: 200
   });
   assert.deepEqual(normalizedReadFile.read_options, {
     mode: 'char_range',
     skip_chars: 120,
-    max_chars: 200,
     start_line: null,
     end_line: null
   });
@@ -523,9 +520,12 @@ test('skill 读取参数支持字符偏移与按行续读', async () => {
   });
   assert.equal(fileByChars.file.content_read.mode, 'char_range');
   assert.equal(fileByChars.file.content_read.skip_chars, 120);
-  assert.equal(fileByChars.file.content_read.max_chars, 200);
-  assert.equal(fileByChars.file.content.length, 200);
-  assert.equal(fileByChars.file.content_read.has_more_after_range, true);
+  assert.equal(fileByChars.file.content_read.max_output_chars, undefined);
+  assert.equal(
+    fileByChars.file.content.length,
+    record.files.find(file => file.path === 'src/main.js').content.length - 120
+  );
+  assert.equal(fileByChars.file.content_read.has_more_after_range, false);
 
   const numberedDetail = buildSkillDetail(record, {
     contentReadArgs: normalizedReadDetail.read_options,

@@ -9387,42 +9387,19 @@ export function createChatHistoryUI(appContext) {
   }
 
   /**
-   * ZIP 导出需要真实全文，不能直接使用面向模型的 10,000 字符预览。
-   * 这里沿用现有 read_file 字符区间协议分块读取，既保留模型输出保护，也避免另造后台导出协议。
+   * Skill 内部读取不再预截断，ZIP 导出可直接复用同一份完整文件结果。
    */
   async function readSkillViewerFileFully(skillName, filePath) {
-    const chunks = [];
-    let skipChars = 0;
-    let lastFile = null;
-
-    while (true) {
-      const result = await executeSkillViewerAction({
-        action: 'read_file',
-        skill_name: skillName,
-        file_path: filePath,
-        skip_chars: skipChars,
-        max_chars: 50000
-      });
-      const file = result?.skill?.file;
-      if (!file || typeof file.content !== 'string') {
-        throw new Error(`读取 skill 文件失败：${filePath}`);
-      }
-
-      chunks.push(file.content);
-      lastFile = file;
-      if (file.content_read?.has_more_after_range !== true) break;
-
-      const returnedChars = Number(file.content_read?.returned_chars);
-      if (!Number.isFinite(returnedChars) || returnedChars <= 0) {
-        throw new Error(`读取 skill 文件未能继续推进：${filePath}`);
-      }
-      skipChars += returnedChars;
+    const result = await executeSkillViewerAction({
+      action: 'read_file',
+      skill_name: skillName,
+      file_path: filePath
+    });
+    const file = result?.skill?.file;
+    if (!file || typeof file.content !== 'string') {
+      throw new Error(`读取 skill 文件失败：${filePath}`);
     }
-
-    return {
-      ...lastFile,
-      content: chunks.join('')
-    };
+    return file;
   }
 
   async function loadSkillSourcePackage(skillName) {

@@ -5,17 +5,19 @@ import {
 } from '../agent_tools/ask_other_ai/tool.js';
 import {
   HISTORY_READ_TOOL_NAME,
-  HISTORY_SEARCH_TOOL_NAME,
-  HISTORY_READ_MESSAGE_DEFAULT_MAX_CHARS
+  HISTORY_SEARCH_TOOL_NAME
 } from '../agent_tools/chat_history/tool.js';
 import {
-  PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS,
   PAGE_CONTENT_READ_TOOL_NAME
 } from '../agent_tools/page_content_read/tool.js';
 import {
-  PDF_CONTENT_READ_DEFAULT_MAX_CHARS,
   PDF_CONTENT_READ_TOOL_NAME
 } from '../agent_tools/pdf_content_read/tool.js';
+import {
+  RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS,
+  RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS
+} from '../agent_tools/shared/model_tool_contract.js';
+import { READ_TOOL_OUTPUT_TOOL_NAME } from '../agent_tools/read_tool_output/tool.js';
 import { REQUEST_USER_INPUT_TOOL_NAME } from '../agent_tools/request_user_input/tool.js';
 import { VIEW_IMAGE_TOOL_NAME } from '../agent_tools/view_image/tool.js';
 import { WEBPAGE_SCREENSHOT_TOOL_NAME } from '../agent_tools/webpage_screenshot/tool.js';
@@ -298,13 +300,13 @@ function summarizeImageSource(path) {
 
 function buildPageContentReadSummaryParts(args, options = {}) {
   const isInProgress = options?.isInProgress === true;
-  const hasExplicitRange = args?.skip_chars != null || args?.max_chars != null;
+  const hasExplicitRange = args?.skip_chars != null;
   const skipChars = Number.isFinite(Number(args?.skip_chars)) ? Number(args.skip_chars) : 0;
-  const maxChars = Number.isFinite(Number(args?.max_chars))
-    ? Number(args.max_chars)
-    : PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS;
+  const maxOutputChars = Number.isFinite(Number(args?.max_output_chars))
+    ? Number(args.max_output_chars)
+    : RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS;
   const metaParts = [
-    hasExplicitRange ? formatCharRangeSuffix(skipChars, maxChars) : '预览',
+    hasExplicitRange ? `从 C${skipChars} · ≤${maxOutputChars}字/页` : `全文 · ≤${maxOutputChars}字/页`,
     args?.include_image_urls === true ? '含图片URL' : ''
   ].filter(Boolean);
   return {
@@ -321,14 +323,14 @@ function buildPageContentReadSummaryParts(args, options = {}) {
 function buildPdfContentReadSummaryParts(args, options = {}) {
   const isInProgress = options?.isInProgress === true;
   const chapterId = normalizeSummaryText(args?.chapter_id);
-  const chunkIndex = Number.isFinite(Number(args?.chunk_index)) ? Math.max(0, Math.trunc(Number(args.chunk_index))) : 0;
-  const maxChars = Number.isFinite(Number(args?.max_chars))
-    ? Math.max(1, Math.trunc(Number(args.max_chars)))
-    : PDF_CONTENT_READ_DEFAULT_MAX_CHARS;
+  const maxOutputChars = Number.isFinite(Number(args?.max_output_chars))
+    ? Math.max(1, Math.trunc(Number(args.max_output_chars)))
+    : RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS;
   const includeOutline = args?.include_outline === true;
-  const hasExplicitChunkRequest = !!chapterId || args?.chunk_index != null || args?.max_chars != null;
+  const readDocument = args?.read_document === true;
+  const hasExplicitReadRequest = !!chapterId || readDocument;
 
-  if (!hasExplicitChunkRequest) {
+  if (!hasExplicitReadRequest) {
     return {
       action: isInProgress ? '正在读取目录' : '读取目录',
       value: '当前PDF',
@@ -346,8 +348,7 @@ function buildPdfContentReadSummaryParts(args, options = {}) {
       value: chapterId,
       valueUrl: '',
       meta: joinSummaryMeta([
-        `片段 ${chunkIndex}`,
-        formatCharRangeSuffix(chunkIndex * maxChars, maxChars),
+        `≤${maxOutputChars}字/页`,
         includeOutline ? '含目录' : ''
       ]),
       locationAction: '',
@@ -358,10 +359,10 @@ function buildPdfContentReadSummaryParts(args, options = {}) {
 
   return {
     action: isInProgress ? '正在读取全文' : '读取全文',
-    value: `片段 ${chunkIndex}`,
+    value: '当前PDF',
     valueUrl: '',
     meta: joinSummaryMeta([
-      formatCharRangeSuffix(chunkIndex * maxChars, maxChars),
+      `≤${maxOutputChars}字/页`,
       includeOutline ? '含目录' : ''
     ]),
     locationAction: '',
@@ -416,7 +417,9 @@ function buildHistoryReadSummaryParts(args, options = {}) {
     meta: joinSummaryMeta([
       threadRef ? `线程 #${threadRef}` : '主线',
       (start != null && end != null) ? `M${start}-M${Math.max(start, end)}` : '',
-      args?.read_full_messages === true ? '完整正文' : `单条≤${HISTORY_READ_MESSAGE_DEFAULT_MAX_CHARS}字`
+      `≤${Number.isFinite(Number(args?.max_output_chars))
+        ? Math.max(1, Math.trunc(Number(args.max_output_chars)))
+        : RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS}字`
     ]),
     locationAction: '',
     locationValue: '',
@@ -509,7 +512,26 @@ function buildViewImageSummaryParts(args, options = {}) {
   };
 }
 
+function buildReadToolOutputSummaryParts(args, options = {}) {
+  const isInProgress = options?.isInProgress === true;
+  const hasExplicitMaxOutputChars = args?.max_output_chars != null
+    && Number.isFinite(Number(args.max_output_chars));
+  const maxOutputChars = hasExplicitMaxOutputChars
+    ? Math.max(1, Math.trunc(Number(args.max_output_chars)))
+    : null;
+  return {
+    action: isInProgress ? '正在续读' : '续读',
+    value: '工具输出',
+    valueUrl: '',
+    meta: maxOutputChars ? `≤${maxOutputChars}字` : '沿用上页',
+    locationAction: '',
+    locationValue: '',
+    locationUrl: ''
+  };
+}
+
 const RESPONSE_ACTIVITY_CUSTOM_TOOL_SUMMARY_BUILDERS = new Map([
+  [READ_TOOL_OUTPUT_TOOL_NAME, { typeLabel: '工具', build: buildReadToolOutputSummaryParts }],
   [PAGE_CONTENT_READ_TOOL_NAME, { typeLabel: '页面', build: buildPageContentReadSummaryParts }],
   [PDF_CONTENT_READ_TOOL_NAME, { typeLabel: 'PDF', build: buildPdfContentReadSummaryParts }],
   [HISTORY_SEARCH_TOOL_NAME, { typeLabel: '历史', build: buildHistorySearchSummaryParts }],

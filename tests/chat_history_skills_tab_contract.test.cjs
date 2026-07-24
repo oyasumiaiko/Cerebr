@@ -48,14 +48,12 @@ test('Skill 查看器标题改为 Skill 管理', async () => {
   assert.match(source, /subtitle\.textContent = '查看当前扩展里已注册的浏览器 Skill，点列表查看详情；源码按需加载。';/);
 });
 
-test('Skill 查看器只在 ZIP 导出时分块读取全文，普通源码查看继续使用受限预览', async () => {
+test('Skill 查看器与 ZIP 导出复用不预截断的完整文件读取', async () => {
   const source = await readWorkspaceFile('src/ui/chat_history_ui.js');
 
   assert.match(source, /async function readSkillViewerFileFully\(skillName, filePath\) \{/);
-  assert.match(source, /action: 'read_file',[\s\S]*?skip_chars: skipChars,[\s\S]*?max_chars: 50000/s);
-  assert.match(source, /if \(file\.content_read\?\.has_more_after_range !== true\) break;/);
-  assert.match(source, /skipChars \+= returnedChars;/);
-  assert.match(source, /content: chunks\.join\(''\)/);
+  assert.match(source, /action: 'read_file',[\s\S]*?skill_name: skillName,[\s\S]*?file_path: filePath/s);
+  assert.doesNotMatch(source, /skipChars \+= returnedChars|content: chunks\.join\(''\)/);
   assert.match(source, /async function loadSkillArchivePackage\(skillName\) \{/);
   assert.match(source, /const files = await loadSkillArchivePackage\(skillName\);/);
   assert.match(

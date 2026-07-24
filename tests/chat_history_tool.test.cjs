@@ -178,12 +178,14 @@ test('executeHistorySearchTool 复用 query 语法并返回外部数字引用', 
   assert.equal(result.results[0].message_count, 2);
   assert.equal(result.results[0].thread_message_count, 0);
   assert.deepEqual(result.results[0].match.locations, [{ msg_index: 1 }]);
+  assert.deepEqual(result.results[0].match.excerpts, ['latest alpha beta']);
   assert.equal(result.results[1].conv_ref, 1);
   assert.equal(result.results[1].page_title, 'Alpha session');
   assert.equal(result.results[1].conversation_title, 'alpha summary');
   assert.equal(result.results[1].thread_message_count, 1);
   assert.equal(result.results[1].has_threads, true);
   assert.deepEqual(result.results[1].match.locations, [{ msg_index: 1 }, { thread_ref: 1, thread_msg_index: 1 }]);
+  assert.deepEqual(result.results[1].match.excerpts, ['alpha intro', 'thread alpha detail']);
   const serialized = JSON.stringify(result);
   assert.doesNotMatch(serialized, /conv_alpha|conv_beta|conv_recent|\"m1\"|\"m3_thread\"|\"b3\"|\"r1\"/);
 });
@@ -499,7 +501,7 @@ test('executeHistoryReadTool 支持主线与线程窗口读取', async () => {
   assert.doesNotMatch(serialized, /conv_alpha|conv_beta|conv_recent|\"m1\"|\"m3_thread\"|\"b3\"|\"r1\"/);
 });
 
-test('executeHistoryReadTool 默认按每条消息 5000 字符截断，但允许 read_full_messages 读取完整正文', async () => {
+test('executeHistoryReadTool 不再按单条消息做隐藏截断', async () => {
   const {
     buildConversationReferenceSnapshot,
     executeHistoryReadTool
@@ -523,34 +525,16 @@ test('executeHistoryReadTool 默认按每条消息 5000 字符截断，但允许
   ];
   const snapshot = buildConversationReferenceSnapshot(toMetas(conversations));
 
-  const truncatedResult = await executeHistoryReadTool(
-    { conv_ref: 1, start: 1, end: 1, thread_ref: null, read_full_messages: false },
+  const result = await executeHistoryReadTool(
+    { conv_ref: 1, start: 1, end: 1, thread_ref: null, max_output_chars: 10000 },
     {
       snapshot,
       loadConversationById: async (id) => conversations.find(item => item.id === id) || null
     }
   );
-  assert.equal(truncatedResult.ok, true);
-  assert.equal(truncatedResult.read_full_messages, false);
-  assert.equal(truncatedResult.message_truncation_max_chars, 5000);
-  assert.equal(truncatedResult.messages[0].content.length, 5000);
-  assert.equal(truncatedResult.messages[0].content_total_chars, 6200);
-  assert.equal(truncatedResult.messages[0].content_returned_chars, 5000);
-  assert.equal(truncatedResult.messages[0].content_omitted_chars, 1200);
-  assert.equal(truncatedResult.messages[0].content_omitted_pct, 19.35);
-  assert.equal(truncatedResult.messages[0].content_truncated, true);
-
-  const fullResult = await executeHistoryReadTool(
-    { conv_ref: 1, start: 1, end: 1, thread_ref: null, read_full_messages: true },
-    {
-      snapshot,
-      loadConversationById: async (id) => conversations.find(item => item.id === id) || null
-    }
-  );
-  assert.equal(fullResult.ok, true);
-  assert.equal(fullResult.read_full_messages, true);
-  assert.equal(fullResult.message_truncation_max_chars, null);
-  assert.equal(fullResult.messages[0].content.length, 6200);
-  assert.equal(fullResult.messages[0].content_truncated, false);
-  assert.equal(fullResult.messages[0].content_omitted_chars, 0);
+  assert.equal(result.ok, true);
+  assert.equal(result.messages[0].content.length, 6200);
+  assert.equal(result.read_full_messages, undefined);
+  assert.equal(result.message_truncation_max_chars, undefined);
+  assert.equal(result.messages[0].content_truncated, undefined);
 });

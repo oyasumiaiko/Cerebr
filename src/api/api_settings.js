@@ -4310,7 +4310,8 @@ export function createApiManager(appContext) {
         setResponsesSettingsSnapshot(draft);
       };
 
-      RESPONSES_EXTENSION_TOOL_SPECS.forEach((toolSpec) => {
+      for (const toolSpec of RESPONSES_EXTENSION_TOOL_SPECS) {
+        if (toolSpec.configurable === false) continue;
         const row = document.createElement('div');
         row.className = 'switch-row backup-form-row';
         if (toolSpec.description) {
@@ -4352,7 +4353,7 @@ export function createApiManager(appContext) {
         });
 
         grid.appendChild(row);
-      });
+      }
 
       return section;
     };

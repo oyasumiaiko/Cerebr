@@ -60,24 +60,24 @@ test('buildResponsesToolOutputContentItems 默认只分块而不截断', async (
   assert.equal(formatResponsesToolOutputForDisplay(items), 'x'.repeat(7000));
 });
 
-test('applyResponsesToolOutputLimit 在统一出口按本次调用预算截断文本并保留图片', async () => {
-  const { applyResponsesToolOutputLimit, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
+test('paginateResponsesToolOutputContentItems 在统一出口按本次调用预算分页文本并保留图片', async () => {
+  const { paginateResponsesToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const image = { type: 'input_image', image_url: 'data:image/png;base64,QUJD' };
-  const items = applyResponsesToolOutputLimit([
+  const items = paginateResponsesToolOutputContentItems([
     { type: 'input_text', text: '<tool_result>\n' + 'x'.repeat(7000) },
     { type: 'input_text', text: '\n</tool_result>' },
     image
-  ], 5000);
+  ], { maxOutputChars: 5000 }).contentItems;
   const text = formatResponsesToolOutputForDisplay(items.filter(item => item.type === 'input_text'));
   assert.ok(Array.from(text).length <= 5000);
-  assert.match(text, /^<truncated_tool_output /);
-  assert.match(text, /<content_prefix>/);
-  assert.match(text, /<\/truncated_tool_output>$/);
+  assert.match(text, /^<tool_output_page /);
+  assert.match(text, /<content>/);
+  assert.match(text, /<\/tool_output_page>$/);
   assert.equal(items.at(-1), image);
 
-  const tinyText = formatResponsesToolOutputForDisplay(applyResponsesToolOutputLimit([
+  const tinyText = formatResponsesToolOutputForDisplay(paginateResponsesToolOutputContentItems([
     { type: 'input_text', text: 'abcdefghijklmnopqrstuvwxyz' }
-  ], 8));
+  ], { maxOutputChars: 8 }).contentItems);
   assert.equal(tinyText, 'abcdefgh');
 });
 
@@ -282,7 +282,7 @@ test('buildResponsesPageContentToolOutputContentItems 使用 metadata + content 
   const { buildResponsesPageContentToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesPageContentToolOutputContentItems({
     ok: true,
-    mode: 'preview',
+    mode: 'full',
     title: 'Example',
     url: 'https://example.com',
     total_chars: 100,
@@ -293,32 +293,33 @@ test('buildResponsesPageContentToolOutputContentItems 使用 metadata + content 
   const text = formatResponsesToolOutputForDisplay(items);
   assert.match(text, /<page_content_read_result schema_version="2" trust="untrusted">/);
   assert.match(text, /<metadata>/);
-  assert.match(text, /"mode": "preview"/);
+  assert.match(text, /"mode": "full"/);
   assert.match(text, /"include_image_urls": true/);
   assert.match(text, /"image_reference_count": 1/);
   assert.match(text, /<content>\s*Alpha &lt;b&gt;Beta&lt;\/b&gt;/);
   assert.equal((text.match(/<content>/g) || []).length, 1);
 });
 
-test('buildResponsesPageContentToolOutputContentItems 复用页面工具自身的截断结果并附带统一提示', async () => {
+test('buildResponsesPageContentToolOutputContentItems 序列化完整正文且不做私有截断', async () => {
   const { buildResponsesPageContentToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesPageContentToolOutputContentItems({
     ok: true,
-    mode: 'preview',
+    mode: 'full',
     title: 'Example',
     url: 'https://example.com',
     total_chars: 12000,
     skip_chars: 0,
-    max_chars: 10000,
-    returned_chars: 10000,
-    omitted_chars: 2000,
-    omitted_pct: 16.67,
-    truncated: true,
-    content: 'A'.repeat(10000)
+    returned_chars: 12000,
+    omitted_chars: 0,
+    omitted_pct: 0,
+    truncated: false,
+    content: 'A'.repeat(12000)
   });
   const text = formatResponsesToolOutputForDisplay(items);
   assert.match(text, /<content>/);
-  assert.match(text, /\[\.\.\. output too long; truncated 2000 chars out of 12000 total chars \(16\.67%\); returned range \[0, 10000\) \.\.\.\]/);
+  assert.match(text, /"returned_chars": 12000/);
+  assert.match(text, /"omitted_chars": 0/);
+  assert.doesNotMatch(text, /output too long; truncated/);
 });
 
 test('buildResponsesGenericXmlToolOutputContentItems 在没有 value 字段时仍会显示其余 payload', async () => {
@@ -341,7 +342,7 @@ test('buildResponsesGenericXmlToolOutputContentItems 在没有 value 字段时�
 
 test('统一出口可以限制任意 serializer 生成的完整文本', async () => {
   const {
-    applyResponsesToolOutputLimit,
+    paginateResponsesToolOutputContentItems,
     buildResponsesGenericXmlToolOutputContentItems,
     formatResponsesToolOutputForDisplay
   } = await loadResponsesToolOutputModule();
@@ -355,10 +356,10 @@ test('统一出口可以限制任意 serializer 生成的完整文本', async ()
       }
     }
   });
-  const items = applyResponsesToolOutputLimit(fullItems, 10000);
+  const items = paginateResponsesToolOutputContentItems(fullItems, { maxOutputChars: 10000 }).contentItems;
   const text = formatResponsesToolOutputForDisplay(items);
   assert.ok(Array.from(text).length <= 10000);
-  assert.match(text, /^<truncated_tool_output /);
+  assert.match(text, /^<tool_output_page /);
   assert.match(text, /&lt;skill_registry_result/);
 });
 
@@ -593,7 +594,7 @@ test('buildResponsesSkillRegistryToolOutputContentItems 对带行号 read_file �
           mode: 'char_range',
           total_chars: 100,
           skip_chars: 11,
-          max_chars: 5,
+          max_output_chars: 5,
           returned_chars: 5,
           omitted_chars: 95,
           omitted_pct: '95.00',
@@ -754,16 +755,12 @@ test('buildResponsesPdfContentToolOutputContentItems 使用 overview / selection
   const { buildResponsesPdfContentToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesPdfContentToolOutputContentItems({
     ok: true,
-    mode: 'chapter_chunk',
+    mode: 'chapter',
     title: 'PDF',
     url: 'https://example.com/a.pdf',
     is_pdf: true,
     total_chars: 9000,
-    chunk_index: 1,
-    max_chars: 2000,
     returned_chars: 2000,
-    total_chunks: 3,
-    has_next_chunk: true,
     outline: [
       {
         chapter_id: '1',
@@ -791,7 +788,8 @@ test('buildResponsesPdfContentToolOutputContentItems 使用 overview / selection
   assert.match(text, /<selection>/);
   assert.match(text, /"chapter_id": "1"/);
   assert.match(text, /<content>\s*Alpha/);
-  assert.match(text, /\[\.\.\. output too long; truncated 2500 chars out of 4500 total chars \(55\.56%\); returned range \[2000, 4000\) \.\.\.\]/);
+  assert.match(text, /"returned_chars": 2000/);
+  assert.doesNotMatch(text, /output too long; truncated/);
 });
 
 test('buildResponsesHistorySearchToolOutputContentItems 使用 conversation XML 分块', async () => {
@@ -941,7 +939,7 @@ test('buildResponsesHistoryReadToolOutputContentItems 使用 messages XML 分块
   assert.equal((text.match(/<message\b/g) || []).length, 2);
 });
 
-test('buildResponsesHistoryReadToolOutputContentItems 只保留读取工具自身的范围提示', async () => {
+test('buildResponsesHistoryReadToolOutputContentItems 不再追加单消息隐藏截断提示', async () => {
   const { buildResponsesHistoryReadToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesHistoryReadToolOutputContentItems({
     ok: true,
@@ -960,8 +958,6 @@ test('buildResponsesHistoryReadToolOutputContentItems 只保留读取工具自�
     parent_conv_ref: null,
     has_api_lock: false,
     scope: 'main',
-    read_full_messages: false,
-    message_truncation_max_chars: 5000,
     start: 1,
     end: 1,
     messages: [
@@ -969,18 +965,14 @@ test('buildResponsesHistoryReadToolOutputContentItems 只保留读取工具自�
         msg_index: 1,
         role: 'user',
         timestamp: 1775458218025,
-        content: 'A'.repeat(5000),
-        content_total_chars: 6200,
-        content_returned_chars: 5000,
-        content_omitted_chars: 1200,
-        content_omitted_pct: 19.35,
-        content_truncated: true
+        content: 'A'.repeat(6200)
       }
     ]
   });
   const text = formatResponsesToolOutputForDisplay(items);
   assert.match(text, /<messages>/);
-  assert.match(text, /output too long; truncated 1200 chars out of 6200 total chars \(19\.35%\); returned range \[0, 5000\)/);
+  assert.match(text, new RegExp(`A{${6200}}`));
+  assert.doesNotMatch(text, /output too long; truncated/);
 });
 
 test('buildResponsesHistoryReadToolOutputContentItems 默认完整返回消息节点并清理错误堆栈', async () => {

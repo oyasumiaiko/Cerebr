@@ -1000,7 +1000,7 @@ test('内置 skill-creator 会自动出现在列表中且保持只读', async ()
   assert.equal(builtinSearch.matches[0].skill_name, 'skill-creator');
 });
 
-test('read_detail/read_file 支持截断预览、字符偏移与按行续读', async () => {
+test('read_detail/read_file 使用统一输出预算支持字符偏移与按行续读', async () => {
   const { createSkillManager } = await loadSkillManagerModule();
 
   const manager = createSkillManager({
@@ -1035,10 +1035,10 @@ test('read_detail/read_file 支持截断预览、字符偏移与按行续读', a
     skill_name: 'long-dom-probe'
   });
   assert.equal(detailPreview.ok, true);
-  assert.equal(detailPreview.skill.instruction.content_read.mode, 'preview');
-  assert.equal(detailPreview.skill.instruction.content_read.max_chars, 10000);
-  assert.equal(detailPreview.skill.instruction.content_read.truncated, true);
-  assert.equal(detailPreview.skill.instruction.content.length, 10000);
+  assert.equal(detailPreview.skill.instruction.content_read.mode, 'full');
+  assert.equal(detailPreview.skill.instruction.content_read.max_output_chars, undefined);
+  assert.equal(detailPreview.skill.instruction.content_read.truncated, false);
+  assert.equal(detailPreview.skill.instruction.content.length > 10000, true);
 
   const detailByLine = await manager.executeRegistryAction({
     action: 'read_detail',
@@ -1060,15 +1060,15 @@ test('read_detail/read_file 支持截断预览、字符偏移与按行续读', a
     skill_name: 'long-dom-probe',
     file_path: 'src/main.js',
     skip_chars: 200,
-    max_chars: 150,
+    max_output_chars: 150,
     include_line_numbers: true
   });
   assert.equal(fileByChars.ok, true);
   assert.equal(fileByChars.skill.file.content_read.mode, 'char_range');
   assert.equal(fileByChars.skill.file.content_read.skip_chars, 200);
-  assert.equal(fileByChars.skill.file.content_read.max_chars, 150);
-  assert.equal(fileByChars.skill.file.content.length, 150);
-  assert.equal(fileByChars.skill.file.content_read.has_more_after_range, true);
+  assert.equal(fileByChars.skill.file.content_read.max_output_chars, undefined);
+  assert.equal(fileByChars.skill.file.content.length > 150, true);
+  assert.equal(fileByChars.skill.file.content_read.has_more_after_range, false);
   assert.match(fileByChars.skill.file.numbered_content, /^\d+ \| /m);
 });
 

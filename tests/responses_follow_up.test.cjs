@@ -44,7 +44,7 @@ test('ensureResponsesReplayOutputItemsIncludeFunctionCalls 会补齐缺失的 fu
         call_id: 'call_123',
         item_id: 'fc_1',
         name: 'page_content_read',
-        arguments: '{"max_chars":5000}',
+        arguments: '{"max_output_chars":5000}',
         status: 'completed'
       }
     ]
@@ -56,7 +56,7 @@ test('ensureResponsesReplayOutputItemsIncludeFunctionCalls 会补齐缺失的 fu
     type: 'function_call',
     call_id: 'call_123',
     name: 'page_content_read',
-    arguments: '{"max_chars":5000}'
+    arguments: '{"max_output_chars":5000}'
   });
 });
 
@@ -69,7 +69,7 @@ test('ensureResponsesReplayOutputItemsIncludeFunctionCalls 不会重复追加已
         call_id: 'call_123',
         item_id: 'fc_1',
         name: 'page_content_read',
-        arguments: '{"max_chars":5000}'
+        arguments: '{"max_output_chars":5000}'
       }
     ],
     [
@@ -78,7 +78,7 @@ test('ensureResponsesReplayOutputItemsIncludeFunctionCalls 不会重复追加已
         call_id: 'call_123',
         item_id: 'fc_1',
         name: 'page_content_read',
-        arguments: '{"max_chars":5000}',
+        arguments: '{"max_output_chars":5000}',
         status: 'completed'
       }
     ]
@@ -89,7 +89,7 @@ test('ensureResponsesReplayOutputItemsIncludeFunctionCalls 不会重复追加已
     type: 'function_call',
     call_id: 'call_123',
     name: 'page_content_read',
-    arguments: '{"max_chars":5000}'
+    arguments: '{"max_output_chars":5000}'
   });
 });
 
@@ -128,14 +128,14 @@ test('sanitizeResponsesReplayItem 会移除不兼容 replay 的 item_id 运行�
     item_id: 'fc_1',
     status: 'completed',
     name: 'page_content_read',
-    arguments: '{"max_chars":5000}'
+    arguments: '{"max_output_chars":5000}'
   });
 
   assert.deepEqual(sanitized, {
     type: 'function_call',
     call_id: 'call_123',
     name: 'page_content_read',
-    arguments: '{"max_chars":5000}'
+    arguments: '{"max_output_chars":5000}'
   });
 });
 

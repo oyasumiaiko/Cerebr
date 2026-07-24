@@ -179,11 +179,11 @@ test('host page tool requests carry sidebarInstanceId through sender and backgro
   const sidebarEventsSource = await readRepoFile('src/ui/sidebar/sidebar_events.js');
   const backgroundSource = await readRepoFile('src/extension/background.js');
 
-  assert.match(messageSenderSource, /GET_PAGE_CONTENT_READ_RESULT_FROM_SIDEBAR[\s\S]*sidebarInstanceId: typeof state\?\.sidebarInstanceId === 'string'/);
-  assert.match(messageSenderSource, /GET_PDF_CONTENT_READ_RESULT_FROM_SIDEBAR[\s\S]*sidebarInstanceId: typeof state\?\.sidebarInstanceId === 'string'/);
+  assert.match(messageSenderSource, /GET_PAGE_CONTENT_SNAPSHOT_FROM_SIDEBAR[\s\S]*sidebarInstanceId: typeof state\?\.sidebarInstanceId === 'string'/);
+  assert.match(messageSenderSource, /GET_PDF_CONTENT_SNAPSHOT_FROM_SIDEBAR[\s\S]*sidebarInstanceId: typeof state\?\.sidebarInstanceId === 'string'/);
   assert.match(messageSenderSource, /GET_WEBPAGE_SCREENSHOT_RESULT_FROM_SIDEBAR[\s\S]*sidebarInstanceId: typeof state\?\.sidebarInstanceId === 'string'/);
-  assert.match(sidebarEventsSource, /GET_PAGE_CONTENT_READ_RESULT_FROM_SIDEBAR[\s\S]*sidebarInstanceId: appContext\.state\.sidebarInstanceId/);
-  assert.match(backgroundSource, /GET_PAGE_CONTENT_READ_RESULT_INTERNAL[\s\S]*sidebarInstanceId: typeof message\?\.sidebarInstanceId === 'string'/);
-  assert.match(backgroundSource, /GET_PDF_CONTENT_READ_RESULT_INTERNAL[\s\S]*sidebarInstanceId: typeof message\?\.sidebarInstanceId === 'string'/);
+  assert.match(sidebarEventsSource, /GET_PAGE_CONTENT_SNAPSHOT_FROM_SIDEBAR[\s\S]*sidebarInstanceId: appContext\.state\.sidebarInstanceId/);
+  assert.match(backgroundSource, /GET_PAGE_CONTENT_SNAPSHOT_INTERNAL[\s\S]*sidebarInstanceId: typeof message\?\.sidebarInstanceId === 'string'/);
+  assert.match(backgroundSource, /GET_PDF_CONTENT_SNAPSHOT_INTERNAL[\s\S]*sidebarInstanceId: typeof message\?\.sidebarInstanceId === 'string'/);
   assert.match(backgroundSource, /GET_WEBPAGE_SCREENSHOT_RESULT_INTERNAL[\s\S]*sidebarInstanceId: typeof message\?\.sidebarInstanceId === 'string'/);
 });

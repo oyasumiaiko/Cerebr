@@ -20,7 +20,7 @@ test('normalizeJsSandboxTransferValue 能稳定处理循环引用与 bigint', as
   assert.deepEqual(normalized.self, { type: 'circular_ref' });
 });
 
-test('normalizeJsSandboxTransferValue 会把 DOM-like 值压成可显示预览', async () => {
+test('normalizeJsSandboxTransferValue 会完整保留 DOM-like 文本', async () => {
   const { normalizeJsSandboxTransferValue } = await loadJsSandboxTransportModule();
   const normalized = normalizeJsSandboxTransferValue({
     nodeType: 1,
@@ -34,6 +34,32 @@ test('normalizeJsSandboxTransferValue 会把 DOM-like 值压成可显示预览',
   assert.equal(normalized.type, 'dom_node');
   assert.equal(normalized.nodeName, 'DIV');
   assert.equal(normalized.id, 'demo');
+});
+
+test('normalizeJsSandboxTransferValue 不再按深度、数组项或对象键隐藏截断', async () => {
+  const { normalizeJsSandboxTransferValue } = await loadJsSandboxTransportModule();
+  const deep = { value: 'leaf' };
+  for (let index = 0; index < 12; index += 1) {
+    deep.value = { index, child: deep.value };
+  }
+  const input = {
+    deep,
+    items: Array.from({ length: 120 }, (_, index) => index),
+    keys: Object.fromEntries(Array.from({ length: 120 }, (_, index) => [`key_${index}`, index])),
+    node: {
+      nodeType: 1,
+      nodeName: 'DIV',
+      textContent: 'T'.repeat(800),
+      outerHTML: `<div>${'H'.repeat(1600)}</div>`
+    }
+  };
+
+  const normalized = normalizeJsSandboxTransferValue(input);
+  assert.equal(normalized.items.length, 120);
+  assert.equal(Object.keys(normalized.keys).length, 120);
+  assert.equal(normalized.node.textContent.length, 800);
+  assert.equal(normalized.node.outerHTML.length, 1611);
+  assert.doesNotMatch(JSON.stringify(normalized), /truncated_(?:array|object|items)|__truncated_keys__/);
 });
 
 test('buildJsSandboxSuccessEnvelope 会生成稳定 frame 结果', async () => {

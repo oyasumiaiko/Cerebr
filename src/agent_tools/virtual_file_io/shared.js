@@ -1,7 +1,3 @@
-import {
-  PAGE_CONTENT_READ_MAX_CHARS
-} from '../page_content_read/tool.js';
-
 export const VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME = 'apply_patch';
 export const VIRTUAL_FILE_LIST_FILES_TOOL_NAME = 'list_files';
 export const VIRTUAL_FILE_READ_FILE_TOOL_NAME = 'read_file';
@@ -25,8 +21,6 @@ export const CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION = 'write_file';
 export const CONVERSATION_DOCUMENT_INTERNAL_READ_FILE_FULL_ACTION = 'read_file_full';
 export const CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME = 'cerebr-conversation-document-change';
 
-export const CONVERSATION_DOCUMENT_READ_DEFAULT_RANGE_CHARS = 10_000;
-export const CONVERSATION_DOCUMENT_READ_MAX_CHARS = PAGE_CONTENT_READ_MAX_CHARS;
 export const CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS = 50;
 export const CONVERSATION_DOCUMENT_SEARCH_MAX_RESULTS = 200;
 

@@ -232,7 +232,7 @@ test('skill_registry list 摘要会区分当前页面技能与全量技能', asy
   assert.equal(buildSkillRegistryPrimaryText(allSitesRecord), '查看技能列表 全部技能');
 });
 
-test('page_content_read 摘要会显示页面预览或字符范围', async () => {
+test('page_content_read 摘要会显示完整源选择与分页预算', async () => {
   const {
     buildResponseActivityCustomToolSummaryParts,
     buildResponseActivityCustomToolPrimaryText,
@@ -249,23 +249,39 @@ test('page_content_read 摘要会显示页面预览或字符范围', async () =>
     action: '读取',
     value: '当前页面',
     valueUrl: '',
-    meta: '预览',
+    meta: '全文 · ≤50000字/页',
     locationAction: '',
     locationValue: '',
     locationUrl: ''
   });
-  assert.equal(buildResponseActivityCustomToolPrimaryText(previewRecord), '读取 当前页面 预览');
+  assert.equal(buildResponseActivityCustomToolPrimaryText(previewRecord), '读取 当前页面 全文 · ≤50000字/页');
 
   const rangeRecord = {
     type: 'function_call',
     name: 'page_content_read',
     arguments: JSON.stringify({
       skip_chars: 200,
-      max_chars: 600,
+      max_output_chars: 600,
       include_image_urls: true
     })
   };
-  assert.equal(buildResponseActivityCustomToolPrimaryText(rangeRecord), '读取 当前页面 C200-C800 · 含图片URL');
+  assert.equal(buildResponseActivityCustomToolPrimaryText(rangeRecord), '读取 当前页面 从 C200 · ≤600字/页 · 含图片URL');
+});
+
+test('read_tool_output 摘要只显示续读预算，不暴露不透明 cursor', async () => {
+  const {
+    buildResponseActivityCustomToolPrimaryText,
+    getResponseActivityCustomToolTypeLabel
+  } = await loadModule();
+  const record = {
+    type: 'function_call',
+    name: 'read_tool_output',
+    arguments: JSON.stringify({ cursor: 'secret-cursor', max_output_chars: 24000 })
+  };
+
+  assert.equal(getResponseActivityCustomToolTypeLabel(record), '工具');
+  assert.equal(buildResponseActivityCustomToolPrimaryText(record), '续读 工具输出 ≤24000字');
+  assert.doesNotMatch(buildResponseActivityCustomToolPrimaryText(record), /secret-cursor/);
 });
 
 test('pdf_content_read 摘要会区分目录、章节和全文读取', async () => {
@@ -287,22 +303,22 @@ test('pdf_content_read 摘要会区分目录、章节和全文读取', async () 
     name: 'pdf_content_read',
     arguments: JSON.stringify({
       chapter_id: '2.1',
-      chunk_index: 1,
-      max_chars: 5000,
+      read_document: false,
+      max_output_chars: 5000,
       include_outline: true
     })
   };
-  assert.equal(buildResponseActivityCustomToolPrimaryText(chapterRecord), '读取章节 2.1 片段 1 · C5000-C10000 · 含目录');
+  assert.equal(buildResponseActivityCustomToolPrimaryText(chapterRecord), '读取章节 2.1 ≤5000字/页 · 含目录');
 
   const documentRecord = {
     type: 'function_call',
     name: 'pdf_content_read',
     arguments: JSON.stringify({
-      chunk_index: 2,
-      max_chars: 4000
+      read_document: true,
+      max_output_chars: 4000
     })
   };
-  assert.equal(buildResponseActivityCustomToolPrimaryText(documentRecord), '读取全文 片段 2 C8000-C12000');
+  assert.equal(buildResponseActivityCustomToolPrimaryText(documentRecord), '读取全文 当前PDF ≤4000字/页');
 });
 
 test('history_search 摘要会显示搜索主体与关键过滤条件', async () => {
@@ -351,12 +367,12 @@ test('history_read 摘要会显示会话、线程与消息窗口', async () => {
       thread_ref: 2,
       start: 1,
       end: 20,
-      read_full_messages: true
+      max_output_chars: 25000
     })
   };
 
   assert.equal(getResponseActivityCustomToolTypeLabel(record), '历史');
-  assert.equal(buildResponseActivityCustomToolPrimaryText(record), '读取 会话 #7 线程 #2 · M1-M20 · 完整正文');
+  assert.equal(buildResponseActivityCustomToolPrimaryText(record), '读取 会话 #7 线程 #2 · M1-M20 · ≤25000字');
 });
 
 test('模型与用户类工具会显示请求目标与数量', async () => {

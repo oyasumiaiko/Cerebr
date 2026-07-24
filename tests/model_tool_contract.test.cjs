@@ -5,6 +5,7 @@ const { pathToFileURL } = require('node:url');
 
 const EXPECTED_MODEL_TOOL_NAMES = Object.freeze([
   'js_runtime_execute',
+  'read_tool_output',
   'apply_patch',
   'list_files',
   'read_file',
@@ -32,6 +33,7 @@ function importSourceModule(relativePath) {
 async function loadModelToolModules() {
   const [
     jsRuntime,
+    readToolOutput,
     virtualFiles,
     skillRegistry,
     requestUserInput,
@@ -46,6 +48,7 @@ async function loadModelToolModules() {
     extensionToolRegistry
   ] = await Promise.all([
     importSourceModule('src/agent_tools/js_runtime_execute/tool.js'),
+    importSourceModule('src/agent_tools/read_tool_output/tool.js'),
     importSourceModule('src/agent_tools/virtual_file_io/index.js'),
     importSourceModule('src/agent_tools/skill/registry_tool.js'),
     importSourceModule('src/agent_tools/request_user_input/tool.js'),
@@ -62,6 +65,7 @@ async function loadModelToolModules() {
 
   return {
     jsRuntime,
+    readToolOutput,
     virtualFiles,
     skillRegistry,
     requestUserInput,
@@ -80,6 +84,7 @@ async function loadModelToolModules() {
 function buildAllModelToolDefinitions(modules, pageToolEnvironment = null) {
   const {
     jsRuntime,
+    readToolOutput,
     virtualFiles,
     skillRegistry,
     requestUserInput,
@@ -93,6 +98,7 @@ function buildAllModelToolDefinitions(modules, pageToolEnvironment = null) {
 
   return [
     jsRuntime.buildJsRuntimeExecuteFunctionToolDefinition(pageToolEnvironment),
+    readToolOutput.buildReadToolOutputFunctionToolDefinition(),
     virtualFiles.buildVirtualFileApplyPatchFunctionToolDefinition(),
     virtualFiles.buildVirtualFileListFilesFunctionToolDefinition(),
     virtualFiles.buildVirtualFileReadFileFunctionToolDefinition(),
@@ -198,12 +204,12 @@ function assertPortableFineTunedSchemaRecursively(schema, schemaPath, options = 
   }
 }
 
-test('全部 18 个模型工具具有唯一稳定名称和可独立判读的描述', async () => {
+test('全部 19 个模型工具具有唯一稳定名称和可独立判读的描述', async () => {
   const modules = await loadModelToolModules();
   const definitions = buildAllModelToolDefinitions(modules);
   const names = definitions.map(definition => definition.name);
 
-  assert.equal(definitions.length, 18);
+  assert.equal(definitions.length, 19);
   assert.deepEqual(names, EXPECTED_MODEL_TOOL_NAMES);
   assert.equal(new Set(names).size, definitions.length, '模型工具名称不得重复');
 
@@ -222,7 +228,7 @@ test('全部 18 个模型工具具有唯一稳定名称和可独立判读的描�
   }
 });
 
-test('统一输出控制参数会在执行前剥离并严格校验', async () => {
+test('统一输出控制参数会解析默认值、从业务参数剥离并严格校验', async () => {
   const { splitResponsesToolOutputControl } = await importSourceModule('src/agent_tools/shared/model_tool_contract.js');
 
   assert.deepEqual(splitResponsesToolOutputControl({ query: 'x', max_output_chars: 12000 }), {
@@ -281,7 +287,7 @@ test('关键枚举保持闭合，范围与数量通过 description 暴露且不�
     );
   }
 
-  assert.match(propertiesOf('read_file').max_chars.description, /1-50000/);
+  assert.equal(propertiesOf('read_file').max_chars, undefined);
   assert.match(propertiesOf('search_files').context.description, /0-10/);
   assert.match(propertiesOf('search_files').limit.description, /1-200/);
 
@@ -304,8 +310,9 @@ test('关键枚举保持闭合，范围与数量通过 description 暴露且不�
   );
   assert.match(propertiesOf('history_search').max_results.description, /1-100/);
   assert.match(propertiesOf('history_read').conv_ref.description, /1-based/);
-  assert.match(propertiesOf('pdf_content_read').max_chars.description, /1-50000/);
-  assert.match(propertiesOf('page_content_read').max_chars.description, /1-50000/);
+  assert.equal(propertiesOf('pdf_content_read').max_chars, undefined);
+  assert.equal(propertiesOf('page_content_read').max_chars, undefined);
+  assert.equal(propertiesOf('history_read').read_full_messages, undefined);
 
   const skillProperties = propertiesOf('skill_registry');
   assert.deepEqual(
@@ -361,7 +368,7 @@ test('js_runtime_execute 与 skill_registry 明确区分宿主页和隔离沙箱
   );
 });
 
-test('统一 registry 与 18 个 definition builder 和 manifest 保持逐项一致', async () => {
+test('统一 registry 与 19 个 definition builder 和 manifest 保持逐项一致', async () => {
   const modules = await loadModelToolModules();
   const {
     RESPONSES_EXTENSION_TOOL_SPECS
@@ -380,7 +387,7 @@ test('统一 registry 与 18 个 definition builder 和 manifest 保持逐项一
 
   assert.deepEqual(manifestNames, EXPECTED_MODEL_TOOL_NAMES);
   assert.deepEqual(registryNames, EXPECTED_MODEL_TOOL_NAMES);
-  assert.equal(new Set(registryNames).size, 18);
+  assert.equal(new Set(registryNames).size, 19);
 
   for (const toolName of EXPECTED_MODEL_TOOL_NAMES) {
     const registryDefinition = definitionBuildersById[toolName]({
@@ -413,6 +420,7 @@ test('统一 registry 为 HTML、PDF 与隔离模式暴露精确且互斥的工�
   }));
   assert.deepEqual(htmlNames, [
     'js_runtime_execute',
+    'read_tool_output',
     'apply_patch',
     'list_files',
     'read_file',
@@ -436,6 +444,7 @@ test('统一 registry 为 HTML、PDF 与隔离模式暴露精确且互斥的工�
   }));
   assert.deepEqual(pdfNames, [
     'js_runtime_execute',
+    'read_tool_output',
     'apply_patch',
     'list_files',
     'read_file',
@@ -460,6 +469,7 @@ test('统一 registry 为 HTML、PDF 与隔离模式暴露精确且互斥的工�
   }));
   assert.deepEqual(isolatedNames, [
     'js_runtime_execute',
+    'read_tool_output',
     'apply_patch',
     'list_files',
     'read_file',
@@ -501,10 +511,10 @@ test('hosted tool_search 的 searchable names 完整派生自 deferLoading manif
   );
   assert.deepEqual(
     RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES,
-    EXPECTED_MODEL_TOOL_NAMES
+    EXPECTED_MODEL_TOOL_NAMES.filter(name => name !== 'read_tool_output')
   );
   assert.equal(
     new Set(RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES).size,
-    EXPECTED_MODEL_TOOL_NAMES.length
+    EXPECTED_MODEL_TOOL_NAMES.length - 1
   );
 });

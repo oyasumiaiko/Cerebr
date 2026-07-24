@@ -85,64 +85,6 @@ export function stringifyResponsesToolOutputValue(value) {
   }
 }
 
-function formatTruncationPercent(omittedChars, totalChars) {
-  if (!Number.isFinite(omittedChars) || !Number.isFinite(totalChars) || totalChars <= 0) return '0.00';
-  return ((omittedChars / totalChars) * 100).toFixed(2);
-}
-
-function buildResponsesToolOutputNoticeText({
-  omittedChars,
-  totalChars,
-  omittedPct,
-  returnedStart,
-  returnedEnd
-}) {
-  const base = `output too long; truncated ${omittedChars} chars out of ${totalChars} total chars (${omittedPct}%)`;
-  return `[... ${base}; returned range [${returnedStart}, ${returnedEnd}) ...]`;
-}
-
-function appendStandaloneNoticeLine(text, notice) {
-  const content = typeof text === 'string' ? text : String(text ?? '');
-  const normalizedNotice = typeof notice === 'string' ? notice.trim() : '';
-  if (!normalizedNotice) return content;
-  if (!content) return normalizedNotice;
-  return `${content}\n${normalizedNotice}`;
-}
-
-function buildResponsesToolOutputSelectionNoticeText(totalChars, rangeStart, rangeEnd) {
-  const safeTotalChars = Number(totalChars);
-  const safeRangeStart = Number(rangeStart);
-  const safeRangeEnd = Number(rangeEnd);
-  if (!Number.isFinite(safeTotalChars) || safeTotalChars <= 0) return '';
-  if (!Number.isFinite(safeRangeStart) || !Number.isFinite(safeRangeEnd)) return '';
-  const normalizedStart = Math.max(0, Math.min(Math.trunc(safeRangeStart), safeTotalChars));
-  const normalizedEnd = Math.max(normalizedStart, Math.min(Math.trunc(safeRangeEnd), safeTotalChars));
-  const returnedChars = normalizedEnd - normalizedStart;
-  const omittedChars = Math.max(0, safeTotalChars - returnedChars);
-  if (omittedChars <= 0) return '';
-  return buildResponsesToolOutputNoticeText({
-    omittedChars,
-    totalChars: safeTotalChars,
-    omittedPct: formatTruncationPercent(omittedChars, safeTotalChars),
-    returnedStart: normalizedStart,
-    returnedEnd: normalizedEnd
-  });
-}
-
-function buildResponsesToolOutputLineSelectionNoticeText(totalLines, startLine, endLine) {
-  const safeTotalLines = Number(totalLines);
-  const safeStartLine = Number(startLine);
-  const safeEndLine = Number(endLine);
-  if (!Number.isFinite(safeTotalLines) || safeTotalLines <= 0) return '';
-  if (!Number.isFinite(safeStartLine) || !Number.isFinite(safeEndLine)) return '';
-  const normalizedStart = Math.max(1, Math.min(Math.trunc(safeStartLine), safeTotalLines));
-  const normalizedEnd = Math.max(normalizedStart, Math.min(Math.trunc(safeEndLine), safeTotalLines));
-  const returnedLines = normalizedEnd - normalizedStart + 1;
-  const omittedLines = Math.max(0, safeTotalLines - returnedLines);
-  if (omittedLines <= 0) return '';
-  return `[... omitted ${omittedLines} lines out of ${safeTotalLines} total lines; returned line range [${normalizedStart}, ${normalizedEnd + 1}) ...]`;
-}
-
 function chunkTextByChars(text, chunkChars = RESPONSES_TOOL_OUTPUT_CHUNK_CHARS) {
   const content = typeof text === 'string' ? text : String(text ?? '');
   if (!content) return [];
@@ -203,68 +145,117 @@ function xmlTextEscape(value) {
     .replace(/>/g, '&gt;');
 }
 
-function buildTruncatedResponsesToolOutputText(text, maxChars) {
-  const sourceChars = Array.from(typeof text === 'string' ? text : String(text ?? ''));
-  const limit = Math.max(0, Math.trunc(Number(maxChars) || 0));
-  if (sourceChars.length <= limit) return sourceChars.join('');
-
-  const buildEnvelope = (returnedChars) => {
-    const omittedChars = sourceChars.length - returnedChars;
-    const content = xmlTextEscape(sourceChars.slice(0, returnedChars).join(''));
-    return `<truncated_tool_output total_chars="${sourceChars.length}" returned_chars="${returnedChars}" omitted_chars="${omittedChars}">\n<content_prefix>\n${content}\n</content_prefix>\n</truncated_tool_output>`;
-  };
-
-  // 极小预算连合法 XML 外壳都放不下时，严格遵守模型指定的字符数。
-  if (Array.from(buildEnvelope(0)).length > limit) {
-    return sourceChars.slice(0, limit).join('');
-  }
-
-  let low = 0;
-  let high = Math.min(sourceChars.length, limit);
-  while (low < high) {
-    const middle = Math.ceil((low + high) / 2);
-    if (Array.from(buildEnvelope(middle)).length <= limit) {
-      low = middle;
-    } else {
-      high = middle - 1;
-    }
-  }
-  return buildEnvelope(low);
-}
-
-/**
- * 在唯一的 function_call_output 出口应用模型指定的文本预算。
- *
- * 图片原样保留；文本合并后只截断一次，再重新分块。截断态使用完整 XML 外壳，避免
- * 在各工具自己的 XML 节点中间截断并制造不闭合结构。
- *
- * @param {Array<Object>} contentItems
- * @param {number|null} maxChars
- * @returns {Array<Object>}
- */
-export function applyResponsesToolOutputLimit(contentItems, maxChars) {
-  const items = Array.isArray(contentItems) ? contentItems : [];
-  if (maxChars == null) return items;
-  const text = items
+function collectResponsesToolOutputText(contentItems) {
+  return (Array.isArray(contentItems) ? contentItems : [])
     .filter(item => item?.type === 'input_text' && typeof item.text === 'string')
     .map(item => item.text)
     .join('');
-  if (Array.from(text).length <= maxChars) return items;
+}
 
-  const limitedTextItems = chunkTextByChars(
-    buildTruncatedResponsesToolOutputText(text, maxChars)
-  ).map(chunk => ({ type: 'input_text', text: chunk }));
-  const output = [];
-  let insertedText = false;
-  for (const item of items) {
-    if (item?.type === 'input_text') {
-      if (!insertedText) output.push(...limitedTextItems);
-      insertedText = true;
-      continue;
-    }
-    output.push(item);
+function buildResponsesToolOutputPageEnvelope(sourceChars, rangeStart, returnedChars, nextCursor = '') {
+  const rangeEnd = rangeStart + returnedChars;
+  const hasMore = rangeEnd < sourceChars.length;
+  const cursorAttribute = hasMore && nextCursor
+    ? ` next_cursor="${xmlAttributeEscape(nextCursor)}"`
+    : '';
+  const content = xmlTextEscape(sourceChars.slice(rangeStart, rangeEnd).join(''));
+  return `<tool_output_page total_chars="${sourceChars.length}" range_start="${rangeStart}" range_end="${rangeEnd}" has_more="${hasMore}"${cursorAttribute}>\n<content>\n${content}\n</content>\n</tool_output_page>`;
+}
+
+/**
+ * 在唯一出口把完整工具文本切成一个可续读页。
+ *
+ * 该函数保持纯函数：调用方负责生成和缓存 nextCursor 对应的完整 contentItems。
+ * 第一页会保留图片；后续页只返回尚未读取的文本，避免视觉输入被重复塞入上下文。
+ *
+ * @param {Array<Object>} contentItems
+ * @param {{maxOutputChars:number, rangeStart?:number, nextCursor?:string}} options
+ * @returns {{contentItems:Array<Object>, totalChars:number, rangeStart:number, rangeEnd:number, hasMore:boolean, nextCursor:string}}
+ */
+export function paginateResponsesToolOutputContentItems(contentItems, options = {}) {
+  const items = Array.isArray(contentItems) ? contentItems : [];
+  const sourceChars = Array.from(collectResponsesToolOutputText(items));
+  const totalChars = sourceChars.length;
+  const maxOutputChars = Math.max(1, Math.trunc(Number(options?.maxOutputChars) || 0));
+  const rangeStart = Math.max(0, Math.min(
+    Math.trunc(Number(options?.rangeStart) || 0),
+    totalChars
+  ));
+  const nextCursor = typeof options?.nextCursor === 'string' ? options.nextCursor.trim() : '';
+
+  if (rangeStart === 0 && totalChars <= maxOutputChars) {
+    return {
+      contentItems: items,
+      totalChars,
+      rangeStart: 0,
+      rangeEnd: totalChars,
+      hasMore: false,
+      nextCursor: ''
+    };
   }
-  return output;
+
+  const remainingChars = totalChars - rangeStart;
+  const finalEnvelope = buildResponsesToolOutputPageEnvelope(
+    sourceChars,
+    rangeStart,
+    remainingChars
+  );
+  let pageText = finalEnvelope;
+  let returnedChars = remainingChars;
+  let cursorExposed = false;
+
+  if (Array.from(finalEnvelope).length > maxOutputChars) {
+    const buildEnvelope = returned => buildResponsesToolOutputPageEnvelope(
+      sourceChars,
+      rangeStart,
+      returned,
+      nextCursor
+    );
+    const emptyEnvelope = buildEnvelope(0);
+    if (Array.from(emptyEnvelope).length <= maxOutputChars) {
+      let low = 0;
+      let high = Math.min(remainingChars, maxOutputChars);
+      while (low < high) {
+        const middle = Math.ceil((low + high) / 2);
+        if (Array.from(buildEnvelope(middle)).length <= maxOutputChars) {
+          low = middle;
+        } else {
+          high = middle - 1;
+        }
+      }
+      returnedChars = low;
+      pageText = buildEnvelope(returnedChars);
+      cursorExposed = !!nextCursor;
+    } else {
+      // 极小预算放不下完整 XML 时，优先保留一个紧凑续读游标，再填充剩余正文。
+      const compactCursor = nextCursor ? `next_cursor=${nextCursor}\n` : '';
+      const compactCursorChars = Array.from(compactCursor);
+      if (compactCursorChars.length <= maxOutputChars && nextCursor) {
+        const availableContentChars = maxOutputChars - compactCursorChars.length;
+        returnedChars = Math.min(remainingChars, availableContentChars);
+        pageText = `${compactCursor}${sourceChars.slice(rangeStart, rangeStart + returnedChars).join('')}`;
+        cursorExposed = true;
+      } else {
+        returnedChars = Math.min(remainingChars, maxOutputChars);
+        pageText = sourceChars.slice(rangeStart, rangeStart + returnedChars).join('');
+      }
+    }
+  }
+
+  const rangeEnd = rangeStart + returnedChars;
+  const hasMore = rangeEnd < totalChars;
+  const textItems = chunkTextByChars(pageText).map(text => ({ type: 'input_text', text }));
+  const preservedNonTextItems = rangeStart === 0
+    ? items.filter(item => item?.type !== 'input_text')
+    : [];
+  return {
+    contentItems: [...textItems, ...preservedNonTextItems],
+    totalChars,
+    rangeStart,
+    rangeEnd,
+    hasMore,
+    nextCursor: hasMore && cursorExposed ? nextCursor : ''
+  };
 }
 
 function buildXmlTextBlock(tagName, body) {
@@ -303,14 +294,6 @@ function trimJsonMetadataValue(value) {
 function formatResponsesJsRuntimeSpecialValue(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   switch (value.type) {
-    case 'truncated_string':
-      return `${typeof value.preview === 'string' ? value.preview : ''}\n… string truncated from ${Number.isFinite(Number(value.length)) ? Number(value.length) : '?'} chars …`.trim();
-    case 'data_url':
-      return [
-        'data URL omitted',
-        `mime_type: ${typeof value.mime_type === 'string' ? value.mime_type : ''}`,
-        `length: ${Number.isFinite(Number(value.length)) ? Number(value.length) : '?'}`
-      ].join('\n');
     case 'dom_node':
       return [
         `DOM node: ${typeof value.nodeName === 'string' ? value.nodeName : ''}`,
@@ -325,14 +308,6 @@ function formatResponsesJsRuntimeSpecialValue(value) {
       return `[Function${value.name ? `: ${value.name}` : ''}]`;
     case 'circular_ref':
       return '[Circular]';
-    case 'truncated_array':
-      return '[array truncated]';
-    case 'truncated_object':
-      return '[object truncated]';
-    case 'truncated_structure':
-      return `[structure truncated: ${typeof value.value_type === 'string' ? value.value_type : 'unknown'}]`;
-    case 'truncated_items':
-      return `[… ${Number.isFinite(Number(value.omitted_count)) ? Number(value.omitted_count) : '?'} items omitted …]`;
     case 'normalization_error':
       return stringifyResponsesToolOutputValue(value.error || value);
     default:
@@ -644,25 +619,6 @@ function buildResponsesFileReadRangeAttribute(contentRead) {
   return '';
 }
 
-function buildResponsesFileReadNotice(contentRead, fallbackText = '') {
-  const normalized = isResponsesToolOutputPlainObject(contentRead) ? contentRead : {};
-  // 对显式范围读取，不再额外拼“output too long”提示。
-  // 这里的省略是调用方主动请求的范围结果，不是工具层为了压缩输出而被动截断。
-  if (normalized.mode === 'line_range' || normalized.mode === 'char_range') {
-    return '';
-  }
-  const totalChars = Number(normalized.total_chars);
-  const rangeStart = Number.isFinite(Number(normalized.skip_chars)) ? Number(normalized.skip_chars) : 0;
-  const returnedChars = Number.isFinite(Number(normalized.returned_chars))
-    ? Number(normalized.returned_chars)
-    : String(fallbackText ?? '').length;
-  return buildResponsesToolOutputSelectionNoticeText(
-    totalChars,
-    rangeStart,
-    rangeStart + Math.max(0, returnedChars)
-  );
-}
-
 function buildResponsesFileReadDisplayPath(result, file) {
   const normalized = isResponsesToolOutputPlainObject(file) ? file : {};
   const path = typeof normalized.path === 'string' ? normalized.path.trim() : '';
@@ -676,8 +632,7 @@ function buildResponsesFileReadPlainContent(file) {
   const preferredText = typeof normalized.numbered_content === 'string' && normalized.numbered_content.trim()
     ? normalized.numbered_content
     : (typeof normalized.content === 'string' ? normalized.content : '');
-  const notice = buildResponsesFileReadNotice(normalized.content_read, preferredText);
-  return appendStandaloneNoticeLine(preferredText, notice);
+  return preferredText;
 }
 
 function buildResponsesFileListLine(file) {
@@ -1022,7 +977,6 @@ function buildResponsesPageContentToolOutputText(result) {
     extraction_scope: typeof normalized.extraction_scope === 'string' ? normalized.extraction_scope : '',
     total_chars: Number.isFinite(Number(normalized.total_chars)) ? Number(normalized.total_chars) : null,
     skip_chars: Number.isFinite(Number(normalized.skip_chars)) ? Number(normalized.skip_chars) : null,
-    max_chars: Number.isFinite(Number(normalized.max_chars)) ? Number(normalized.max_chars) : null,
     returned_chars: Number.isFinite(Number(normalized.returned_chars)) ? Number(normalized.returned_chars) : null,
     omitted_chars: Number.isFinite(Number(normalized.omitted_chars)) ? Number(normalized.omitted_chars) : null,
     omitted_pct: Number.isFinite(Number(normalized.omitted_pct)) ? Number(normalized.omitted_pct) : null,
@@ -1036,19 +990,9 @@ function buildResponsesPageContentToolOutputText(result) {
   };
   const blocks = [];
   if (typeof normalized.content === 'string' && normalized.content.trim()) {
-    const rangeStart = Number.isFinite(Number(normalized.skip_chars)) ? Number(normalized.skip_chars) : 0;
-    const returnedChars = Number.isFinite(Number(normalized.returned_chars))
-      ? Number(normalized.returned_chars)
-      : normalized.content.length;
-    const rangeEnd = rangeStart + Math.max(0, returnedChars);
-    const notice = buildResponsesToolOutputSelectionNoticeText(
-      Number(normalized.total_chars) || 0,
-      rangeStart,
-      rangeEnd
-    );
     blocks.push({
       tag: 'content',
-      text: appendStandaloneNoticeLine(normalized.content, notice)
+      text: normalized.content
     });
   }
   if (normalized.error) {
@@ -1099,19 +1043,9 @@ function buildResponsesPdfContentToolOutputText(result) {
     total_chars: Number.isFinite(Number(normalized.total_chars)) ? Number(normalized.total_chars) : null,
     total_chapters: Number.isFinite(Number(normalized.total_chapters)) ? Number(normalized.total_chapters) : null,
     root_chapter_count: Number.isFinite(Number(normalized.root_chapter_count)) ? Number(normalized.root_chapter_count) : null,
-    default_max_chars: Number.isFinite(Number(normalized.default_max_chars)) ? Number(normalized.default_max_chars) : null,
-    outline_chunk_chars: Number.isFinite(Number(normalized.outline_chunk_chars)) ? Number(normalized.outline_chunk_chars) : null,
-    max_chars_limit: Number.isFinite(Number(normalized.max_chars_limit)) ? Number(normalized.max_chars_limit) : null,
-    document_chunk_count_default: Number.isFinite(Number(normalized.document_chunk_count_default)) ? Number(normalized.document_chunk_count_default) : null,
     chapter_id: typeof selection?.chapter_id === 'string' ? selection.chapter_id : null,
-    chunk_index: Number.isFinite(Number(normalized.chunk_index)) ? Number(normalized.chunk_index) : null,
-    max_chars: Number.isFinite(Number(normalized.max_chars)) ? Number(normalized.max_chars) : null,
     returned_chars: Number.isFinite(Number(normalized.returned_chars)) ? Number(normalized.returned_chars) : null,
-    total_chunks: Number.isFinite(Number(normalized.total_chunks)) ? Number(normalized.total_chunks) : null,
-    has_prev_chunk: normalized.has_prev_chunk === true,
-    has_next_chunk: normalized.has_next_chunk === true,
-    prev_chunk_index: Number.isFinite(Number(normalized.prev_chunk_index)) ? Number(normalized.prev_chunk_index) : null,
-    next_chunk_index: Number.isFinite(Number(normalized.next_chunk_index)) ? Number(normalized.next_chunk_index) : null
+    read_document: normalized.mode === 'document'
   };
 
   const blocks = [];
@@ -1134,28 +1068,9 @@ function buildResponsesPdfContentToolOutputText(result) {
     });
   }
   if (typeof normalized.content === 'string' && normalized.content.trim()) {
-    const scopeTotalChars = (() => {
-      if (normalized.mode === 'chapter_chunk') {
-        const chapterChars = Number(normalized?.selection?.char_count);
-        if (Number.isFinite(chapterChars) && chapterChars > 0) return chapterChars;
-      }
-      const total = Number(normalized.total_chars);
-      return Number.isFinite(total) && total > 0 ? total : 0;
-    })();
-    const rangeStart = Number.isFinite(Number(normalized.chunk_index)) && Number.isFinite(Number(normalized.max_chars))
-      ? Math.max(0, Math.trunc(Number(normalized.chunk_index)) * Math.max(1, Math.trunc(Number(normalized.max_chars))))
-      : 0;
-    const returnedChars = Number.isFinite(Number(normalized.returned_chars))
-      ? Number(normalized.returned_chars)
-      : normalized.content.length;
-    const notice = buildResponsesToolOutputSelectionNoticeText(
-      scopeTotalChars,
-      rangeStart,
-      rangeStart + Math.max(0, returnedChars)
-    );
     blocks.push({
       tag: 'content',
-      text: appendStandaloneNoticeLine(normalized.content, notice)
+      text: normalized.content
     });
   }
   if (normalized.error) {
@@ -1244,13 +1159,7 @@ function buildResponsesHistoryReadToolOutputText(result) {
         timestamp !== '' ? `timestamp="${xmlAttributeEscape(timestamp)}"` : ''
       ].filter(Boolean).join(' ');
       const content = typeof message?.content === 'string' ? message.content : '';
-      const declaredTotalChars = Number.isFinite(Number(message?.content_total_chars))
-        ? Math.max(0, Number(message.content_total_chars))
-        : 0;
-      const totalChars = Math.max(declaredTotalChars, content.length);
-      const notice = buildResponsesToolOutputSelectionNoticeText(totalChars, 0, content.length);
-      const contentWithNotice = appendStandaloneNoticeLine(content, notice);
-      return `<message${attrs ? ` ${attrs}` : ''}>\n${xmlTextEscape(contentWithNotice)}\n</message>`;
+      return `<message${attrs ? ` ${attrs}` : ''}>\n${xmlTextEscape(content)}\n</message>`;
     });
     const messageText = joinTrustedXmlBlocks(messageBlocks);
     blocks.push({

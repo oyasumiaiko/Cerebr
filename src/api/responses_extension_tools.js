@@ -44,6 +44,18 @@ export const RESPONSES_EXTENSION_TOOL_SPECS = Object.freeze([
     deferLoading: true
   }),
   createExtensionToolSpec({
+    id: 'read_tool_output',
+    title: '续读工具输出',
+    description: '允许模型通过游标继续读取已缓存的超长工具结果，而不重新执行原工具。',
+    exposure: 'always',
+    handlerKey: 'read_tool_output',
+    outputKind: 'tool_output_page',
+    sideEffect: 'read',
+    deferLoading: false,
+    alwaysEnabled: true,
+    configurable: false
+  }),
+  createExtensionToolSpec({
     id: 'apply_patch',
     title: '虚拟文件 Apply Patch',
     description: '允许模型对可写虚拟文件执行补丁式修改。',
@@ -283,9 +295,10 @@ function readAllowedLocalExtensionToolId(entry) {
  *
  * 页面环境与扩展开关会在请求最后阶段裁掉部分本地工具。如果 allowed_tools 仍引用
  * 这些工具，上游会收到“允许/要求一个未定义工具”的矛盾请求。这里仅处理 Cerebr
- * 自己登记的 18 个名称；hosted、MCP 与提供商私有条目保持原样。
+ * 自己登记的名称；hosted、MCP 与提供商私有条目保持原样。
  *
- * - 仍有可用条目：删除当前不可用的本地条目；
+ * - 仍有可用条目：删除当前不可用的本地条目；如果其中包含会经过统一分页出口的
+ *   Cerebr 本地工具，则自动允许内部 `read_tool_output`，保证超长结果可以续读；
  * - auto 且只剩不可用本地条目：收敛为 `none`；
  * - required 且只剩不可用本地条目：抛出明确配置错误，不静默改变用户意图。
  *
@@ -321,7 +334,29 @@ export function reconcileResponsesAllowedToolChoice(toolChoice, tools) {
     return false;
   });
 
-  if (unavailableLocalToolIds.length <= 0) return cloneJsonCompatible(toolChoice);
+  // allowed_tools 会延续到 function output 的后续请求。如果这里只允许原工具、却没有
+  // 同时允许续读工具，模型拿到 next_cursor 后仍无法翻页。read_tool_output 是统一输出
+  // 协议的一部分，只在至少一个其它 Cerebr 本地工具实际可用时补入，不影响 hosted/MCP。
+  const hasPageableLocalTool = reconciledTools.some((entry) => {
+    const localToolId = readAllowedLocalExtensionToolId(entry);
+    return !!localToolId
+      && localToolId !== 'read_tool_output'
+      && availableLocalFunctionNames.has(localToolId);
+  });
+  const hasReadToolOutput = reconciledTools.some(
+    entry => readAllowedLocalExtensionToolId(entry) === 'read_tool_output'
+  );
+  if (
+    hasPageableLocalTool
+    && !hasReadToolOutput
+    && availableLocalFunctionNames.has('read_tool_output')
+  ) {
+    reconciledTools.push('read_tool_output');
+  }
+
+  if (unavailableLocalToolIds.length <= 0 && reconciledTools.length === toolChoice.tools.length) {
+    return cloneJsonCompatible(toolChoice);
+  }
   if (reconciledTools.length > 0) {
     return {
       ...cloneJsonCompatible(toolChoice),
@@ -368,6 +403,7 @@ export function isResponsesExtensionToolEnabled(settings, toolId) {
   if (!normalizedToolId) return false;
   const spec = RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.get(normalizedToolId);
   if (!spec) return true;
+  if (spec.alwaysEnabled === true) return true;
   const toolSettings = getToolSettingsById(settings, normalizedToolId);
   if (!toolSettings) return spec.defaultEnabled !== false;
   if (toolSettings.enabled === false) return false;

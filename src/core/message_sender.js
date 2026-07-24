@@ -76,9 +76,11 @@ import {
   buildResponsesRequestUserInputToolOutputContentItems,
   buildResponsesConversationDocumentToolOutputContentItems,
   buildResponsesSkillRegistryToolOutputContentItems,
-  buildResponsesGenericXmlToolOutputContentItems,
-  applyResponsesToolOutputLimit
+  buildResponsesGenericXmlToolOutputContentItems
 } from '../agent_tools/shared/responses_tool_output.js';
+import {
+  createResponsesToolOutputPageCache
+} from '../agent_tools/shared/responses_tool_output_page_cache.js';
 import {
   splitResponsesToolOutputControl
 } from '../agent_tools/shared/model_tool_contract.js';
@@ -111,6 +113,15 @@ import {
 import {
   normalizeJsRuntimeExecuteToolArguments
 } from '../agent_tools/js_runtime_execute/tool.js';
+import {
+  normalizeReadToolOutputArguments
+} from '../agent_tools/read_tool_output/tool.js';
+import {
+  buildPageContentReadResult
+} from '../agent_tools/page_content_read/tool.js';
+import {
+  buildPdfContentReadResult
+} from '../agent_tools/pdf_content_read/tool.js';
 import {
   buildConversationReferenceSnapshot,
   executeHistoryReadTool,
@@ -215,6 +226,7 @@ export function createMessageSender(appContext) {
   const promptSettingsManager = services.promptSettingsManager;
   const showNotification = utils.showNotification;
   const responsesLocalCompactionRuns = new Map();
+  const responsesToolOutputPageCache = createResponsesToolOutputPageCache();
 
   /**
    * 将 API 返回的 inlineData 图片保存到本地下载目录，并返回可用于 <img src> 的本地文件链接。
@@ -7894,12 +7906,14 @@ export function createMessageSender(appContext) {
     try {
       console.log('发送 page_content_read 结果请求');
       const targetTabId = await utils?.resolveBoundSidebarTargetTabId?.();
-      return await chrome.runtime.sendMessage({
-        type: 'GET_PAGE_CONTENT_READ_RESULT_FROM_SIDEBAR',
+      const pageContent = await chrome.runtime.sendMessage({
+        type: 'GET_PAGE_CONTENT_SNAPSHOT_FROM_SIDEBAR',
         tabId: Number.isFinite(Number(targetTabId)) ? Number(targetTabId) : null,
         sidebarInstanceId: typeof state?.sidebarInstanceId === 'string' ? state.sidebarInstanceId : '',
         args: rawArgs && typeof rawArgs === 'object' ? rawArgs : null
       });
+      if (pageContent?.ok === false && pageContent?.error) return pageContent;
+      return buildPageContentReadResult(pageContent, rawArgs);
     } catch (error) {
       console.error('获取 page_content_read 结果失败:', error);
       return null;
@@ -7910,12 +7924,14 @@ export function createMessageSender(appContext) {
     try {
       console.log('发送 pdf_content_read 结果请求');
       const targetTabId = await utils?.resolveBoundSidebarTargetTabId?.();
-      return await chrome.runtime.sendMessage({
-        type: 'GET_PDF_CONTENT_READ_RESULT_FROM_SIDEBAR',
+      const pageContent = await chrome.runtime.sendMessage({
+        type: 'GET_PDF_CONTENT_SNAPSHOT_FROM_SIDEBAR',
         tabId: Number.isFinite(Number(targetTabId)) ? Number(targetTabId) : null,
         sidebarInstanceId: typeof state?.sidebarInstanceId === 'string' ? state.sidebarInstanceId : '',
         args: rawArgs && typeof rawArgs === 'object' ? rawArgs : null
       });
+      if (pageContent?.ok === false && pageContent?.error) return pageContent;
+      return buildPdfContentReadResult(pageContent, rawArgs);
     } catch (error) {
       console.error('获取 pdf_content_read 结果失败:', error);
       return null;
@@ -9593,6 +9609,22 @@ export function createMessageSender(appContext) {
     return await executeResponsesSkillRegistryInternalAction(rawArgs, options);
   }
 
+  function executeResponsesReadToolOutputFunction(rawArgs, maxOutputChars) {
+    try {
+      const { cursor } = normalizeReadToolOutputArguments(rawArgs);
+      const page = responsesToolOutputPageCache.read(cursor, maxOutputChars);
+      if (!page) {
+        throw new Error('read_tool_output 游标不存在或已失效，请重新调用原工具取得新的结果。');
+      }
+      return { ok: true, page };
+    } catch (error) {
+      return {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      };
+    }
+  }
+
   /**
    * 执行一个客户端负责落地的 Responses function_call。
    *
@@ -9662,6 +9694,12 @@ export function createMessageSender(appContext) {
 
     let outputPayload = null;
     switch (localToolSpec?.handlerKey) {
+      case 'read_tool_output':
+        outputPayload = executeResponsesReadToolOutputFunction(
+          toolArgs,
+          parsedArgs?.max_output_chars == null ? null : maxOutputChars
+        );
+        break;
       case 'js_runtime_execute':
         outputPayload = await executeResponsesJsRuntimeFunction(toolArgs, options);
         break;
@@ -9713,6 +9751,16 @@ export function createMessageSender(appContext) {
 
     let serializedOutput = null;
     switch (localToolSpec?.outputKind) {
+      case 'tool_output_page':
+        if (outputPayload?.ok === true && outputPayload?.page?.contentItems) {
+          return {
+            type: 'function_call_output',
+            call_id: callId,
+            output: outputPayload.page.contentItems
+          };
+        }
+        serializedOutput = serializeResponsesFunctionToolOutput(outputPayload);
+        break;
       case 'js_runtime':
         serializedOutput = serializeResponsesJsRuntimeFunctionToolOutput(outputPayload);
         break;
@@ -9754,10 +9802,14 @@ export function createMessageSender(appContext) {
         break;
     }
 
+    const paginatedOutput = responsesToolOutputPageCache.paginate(
+      serializedOutput,
+      maxOutputChars
+    );
     return {
       type: 'function_call_output',
       call_id: callId,
-      output: applyResponsesToolOutputLimit(serializedOutput, maxOutputChars)
+      output: paginatedOutput.contentItems
     };
   }
 

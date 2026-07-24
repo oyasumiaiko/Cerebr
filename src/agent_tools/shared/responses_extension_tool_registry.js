@@ -16,6 +16,10 @@ import {
   buildJsRuntimeExecuteFunctionToolDefinition
 } from '../js_runtime_execute/tool.js';
 import {
+  READ_TOOL_OUTPUT_TOOL_NAME,
+  buildReadToolOutputFunctionToolDefinition
+} from '../read_tool_output/tool.js';
+import {
   PAGE_CONTENT_READ_TOOL_NAME,
   buildPageContentReadFunctionToolDefinition
 } from '../page_content_read/tool.js';
@@ -76,6 +80,7 @@ export const definitionBuildersById = Object.freeze({
   [JS_RUNTIME_EXECUTE_TOOL_NAME]: ({ pageToolEnvironment }) => (
     buildJsRuntimeExecuteFunctionToolDefinition(pageToolEnvironment)
   ),
+  [READ_TOOL_OUTPUT_TOOL_NAME]: () => buildReadToolOutputFunctionToolDefinition(),
   [CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME]: () => buildVirtualFileApplyPatchFunctionToolDefinition(),
   [CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME]: () => buildVirtualFileListFilesFunctionToolDefinition(),
   [CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME]: () => buildVirtualFileReadFileFunctionToolDefinition(),

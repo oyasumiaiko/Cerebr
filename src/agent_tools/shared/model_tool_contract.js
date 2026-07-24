@@ -12,9 +12,9 @@
  *   条件分支塞进模型不一定稳定支持的 JSON Schema 组合关键字。
  */
 
-const RESPONSES_TOOL_OUTPUT_MAX_CHARS_PARAMETER = 'max_output_chars';
-const RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS = 10_000;
-const RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS = 50_000;
+export const RESPONSES_TOOL_OUTPUT_MAX_CHARS_PARAMETER = 'max_output_chars';
+export const RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS = 10_000;
+export const RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS = 50_000;
 const RESPONSES_CONTENT_READ_TOOL_NAMES = new Set([
   'page_content_read',
   'pdf_content_read'
@@ -22,7 +22,7 @@ const RESPONSES_CONTENT_READ_TOOL_NAMES = new Set([
 
 const RESPONSES_TOOL_OUTPUT_MAX_CHARS_PROPERTY = Object.freeze({
   type: ['integer', 'null'],
-  description: `本次调用最终返回给模型的文本字符上限。传正整数时使用该值；传 null 时普通工具默认 ${RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS}，page_content_read 与 pdf_content_read 默认 ${RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS}。工具自身的分页或读取范围参数仍独立生效，图片不计入。`
+  description: `本次调用每页最终返回给模型的文本字符上限。传正整数时使用该值；传 null 时普通工具默认 ${RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS}，page_content_read 与 pdf_content_read 默认 ${RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS}，read_tool_output 沿用上一页大小。超限结果会返回 next_cursor，可用 read_tool_output 无重执行续读；图片不计入。`
 });
 
 const PORTABLE_STRICT_SCHEMA_OMITTED_KEYWORDS = new Set([
@@ -175,7 +175,11 @@ export function buildStrictFunctionToolDefinition(options = {}) {
 }
 
 /**
- * 从模型参数中拆出统一输出控制项，避免各工具执行器重复认识该协议字段。
+ * 统一解析模型的输出字符预算。
+ *
+ * 输出控制字段只在这里解析，业务执行器看不到它。原工具先生成完整结果，最终出口
+ * 再按该预算分页并缓存；后续由 read_tool_output 续读缓存，避免任何工具私有的字符
+ * 截断、重复执行或重复前缀。
  *
  * @param {any} rawArgs
  * @param {{toolName?:string}} [options]
@@ -189,18 +193,14 @@ export function splitResponsesToolOutputControl(rawArgs, options = {}) {
   ) ? { ...rawArgs } : {};
   const rawMaxOutputChars = toolArgs[RESPONSES_TOOL_OUTPUT_MAX_CHARS_PARAMETER];
   delete toolArgs[RESPONSES_TOOL_OUTPUT_MAX_CHARS_PARAMETER];
-
-  if (rawMaxOutputChars == null) {
-    const toolName = typeof options?.toolName === 'string' ? options.toolName.trim() : '';
-    return {
-      toolArgs,
-      maxOutputChars: RESPONSES_CONTENT_READ_TOOL_NAMES.has(toolName)
-        ? RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS
-        : RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS
-    };
-  }
-  if (!Number.isSafeInteger(rawMaxOutputChars) || rawMaxOutputChars <= 0) {
+  const toolName = typeof options?.toolName === 'string' ? options.toolName.trim() : '';
+  const maxOutputChars = rawMaxOutputChars == null
+    ? (RESPONSES_CONTENT_READ_TOOL_NAMES.has(toolName)
+      ? RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS
+      : RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS)
+    : rawMaxOutputChars;
+  if (!Number.isSafeInteger(maxOutputChars) || maxOutputChars <= 0) {
     throw new Error('工具参数错误：max_output_chars 必须是正安全整数或 null。');
   }
-  return { toolArgs, maxOutputChars: rawMaxOutputChars };
+  return { toolArgs, maxOutputChars };
 }

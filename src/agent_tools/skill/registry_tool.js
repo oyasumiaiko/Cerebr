@@ -15,9 +15,6 @@
 import { getBuiltinSkillRecordByName, getBuiltinSkillRecords } from './builtin_creator.js';
 import { createIndexedDbSkillStore, SKILL_DB_NAME } from '../../storage/skill_store.js';
 import {
-  PAGE_CONTENT_READ_MAX_CHARS
-} from '../page_content_read/tool.js';
-import {
   buildDefaultSkillMountContract as buildSharedDefaultSkillMountContract,
   normalizeSkillScaffoldName,
   SKILL_SCAFFOLD_ALLOWED_RESOURCES,
@@ -36,8 +33,6 @@ export const SKILL_REGISTRY_VERSION = 2;
 export const SKILL_MATCH_ALL_URLS = '<all_urls>';
 export const CEREBR_SKILL_MOUNT_SURFACE = 'globalThis.__cerebrSkills';
 export const SKILL_VIRTUAL_MANIFEST_PATH = 'manifest.json';
-export const SKILL_READ_DEFAULT_RANGE_CHARS = 10_000;
-export const SKILL_READ_MAX_CHARS = PAGE_CONTENT_READ_MAX_CHARS;
 export const SKILL_SEARCH_DEFAULT_MAX_RESULTS = 50;
 export const SKILL_SEARCH_MAX_RESULTS = 200;
 
@@ -400,11 +395,10 @@ function normalizeSkillReadRangeArgs(rawArgs, options = {}) {
   const allowLineRange = options?.allowLineRange === true;
   const explicitMode = normalizeString(args.mode).toLowerCase();
   const hasSkipChars = args.skip_chars != null;
-  const hasMaxChars = args.max_chars != null;
   const hasStartLine = args.start_line != null;
   const hasEndLine = args.end_line != null;
 
-  if ((hasStartLine || hasEndLine) && (hasSkipChars || hasMaxChars)) {
+  if ((hasStartLine || hasEndLine) && hasSkipChars) {
     throw new Error('skill_registry 参数错误：不能同时使用字符区间和行区间读取参数。');
   }
   if (!allowLineRange && (hasStartLine || hasEndLine)) {
@@ -415,15 +409,10 @@ function normalizeSkillReadRangeArgs(rawArgs, options = {}) {
   }
 
   const skipChars = hasSkipChars ? clampNonNegativeInt(args.skip_chars, 0) : null;
-  const maxChars = hasMaxChars
-    ? Math.max(1, Math.min(SKILL_READ_MAX_CHARS, clampNonNegativeInt(args.max_chars, SKILL_READ_DEFAULT_RANGE_CHARS)))
-    : null;
-
-  if (explicitMode === 'preview') {
+  if (explicitMode === 'preview' || explicitMode === 'full') {
     return {
-      mode: 'preview',
+      mode: 'full',
       skip_chars: 0,
-      max_chars: maxChars ?? SKILL_READ_DEFAULT_RANGE_CHARS,
       start_line: null,
       end_line: null
     };
@@ -438,26 +427,23 @@ function normalizeSkillReadRangeArgs(rawArgs, options = {}) {
     return {
       mode: 'line_range',
       skip_chars: null,
-      max_chars: null,
       start_line: startLine,
       end_line: endLine
     };
   }
 
-  if (hasSkipChars || hasMaxChars) {
+  if (hasSkipChars) {
     return {
       mode: 'char_range',
       skip_chars: skipChars ?? 0,
-      max_chars: maxChars ?? SKILL_READ_DEFAULT_RANGE_CHARS,
       start_line: null,
       end_line: null
     };
   }
 
   return {
-    mode: 'preview',
+    mode: 'full',
     skip_chars: 0,
-    max_chars: SKILL_READ_DEFAULT_RANGE_CHARS,
     start_line: null,
     end_line: null
   };
@@ -534,22 +520,18 @@ function buildSkillTextReadResult(text, rawArgs, options = {}) {
   }
 
   const start = Math.min(range.skip_chars, totalChars);
-  const effectiveMaxChars = range.max_chars ?? SKILL_READ_DEFAULT_RANGE_CHARS;
-  const end = Math.min(totalChars, start + effectiveMaxChars);
-  const content = sourceText.slice(start, end);
-  const omittedChars = Math.max(0, totalChars - content.length);
+  const content = sourceText.slice(start);
 
   return {
     mode: range.mode,
     total_chars: totalChars,
     total_lines: totalLines,
     skip_chars: start,
-    max_chars: effectiveMaxChars,
     returned_chars: content.length,
-    omitted_chars: omittedChars,
-    omitted_pct: formatPercent(omittedChars, totalChars),
-    truncated: omittedChars > 0,
-    has_more_after_range: end < totalChars,
+    omitted_chars: start,
+    omitted_pct: formatPercent(start, totalChars),
+    truncated: false,
+    has_more_after_range: false,
     content
   };
 }

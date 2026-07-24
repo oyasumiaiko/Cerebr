@@ -187,7 +187,6 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
     file_path: 'spec.md',
     include_line_numbers: true,
     read_options: {
-      max_chars: undefined,
       start_line: 20,
       end_line: 40
     }
@@ -292,7 +291,8 @@ test('read_file/search_files 与文件操作工具定义暴露严格且低歧义
   assert.ok(readDefinition.parameters.properties.path);
   assert.ok(readDefinition.parameters.properties.line_range);
   assert.ok(readDefinition.parameters.properties.numbered);
-  assert.deepEqual(readDefinition.parameters.required, ['target', 'path', 'max_chars', 'line_range', 'numbered', 'max_output_chars']);
+  assert.deepEqual(readDefinition.parameters.required, ['target', 'path', 'line_range', 'numbered', 'max_output_chars']);
+  assert.equal(readDefinition.parameters.properties.max_chars, undefined);
   assert.equal(readDefinition.parameters.properties.file_path, undefined);
   assert.equal(readDefinition.parameters.properties.start_line, undefined);
   assert.equal(readDefinition.parameters.properties.include_line_numbers, undefined);
@@ -389,6 +389,32 @@ test('read_file 支持行范围与带行号输出', async () => {
   assert.equal(result.file.content, 'line2\nline3\n');
   assert.match(result.file.numbered_content, /2 \| line2/);
   assert.match(result.file.numbered_content, /3 \| line3/);
+});
+
+test('read_file 在统一分页出口前不按字符预算预截断', async () => {
+  const {
+    executeConversationDocumentAction,
+    CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME
+  } = await loadConversationDocumentToolsModule();
+  const store = createInMemoryDocumentStore({
+    'large.txt': 'F'.repeat(70000)
+  });
+
+  const result = await executeConversationDocumentAction(
+    CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
+    {
+      file_path: 'large.txt',
+      max_output_chars: 100
+    },
+    {
+      conversationId: 'conv-doc-large',
+      store
+    }
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.file.content_read.max_output_chars, undefined);
+  assert.equal(result.file.content.length, 70000);
 });
 
 test('search_files 会在当前对话文档里返回上下文命中', async () => {

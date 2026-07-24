@@ -123,5 +123,8 @@ test('纯对话 JS Runtime 使用 manifest sandbox classic script，避免 modul
   assert.doesNotMatch(frameHtmlSource, /type="module"/);
   assert.doesNotMatch(frameSource, /^\s*import\s/m);
   assert.match(frameSource, /postSandboxMessage\('ready'\);/);
-  assert.doesNotMatch(frameSource, /JS_SANDBOX_MAX_LOGS|JS_SANDBOX_MAX_LOG_TEXT/);
+  assert.doesNotMatch(
+    frameSource,
+    /JS_SANDBOX_MAX_LOGS|JS_SANDBOX_MAX_LOG_TEXT|JS_SANDBOX_MAX_DEPTH|JS_SANDBOX_MAX_ARRAY_ITEMS|JS_SANDBOX_MAX_OBJECT_KEYS|JS_SANDBOX_DOM_TEXT_PREVIEW|JS_SANDBOX_HTML_PREVIEW/
+  );
 });

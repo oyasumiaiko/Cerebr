@@ -27,7 +27,8 @@ test('统一工具注册表已注册对话文档工具，message_sender 保留�
   assert.match(source, /case 'virtual_file':\s*outputPayload = await executeResponsesVirtualFileFunction\(localFunctionName, toolArgs, options\)/s);
   assert.match(source, /case 'virtual_file':\s*serializedOutput = serializeResponsesConversationDocumentFunctionToolOutput\(localFunctionName, outputPayload\)/s);
   assert.match(source, /splitResponsesToolOutputControl\(parsedArgs, \{\s*toolName: localFunctionName\s*\}\)/s);
-  assert.match(source, /applyResponsesToolOutputLimit\(serializedOutput, maxOutputChars\)/);
+  assert.match(source, /responsesToolOutputPageCache\.paginate\(\s*serializedOutput,\s*maxOutputChars\s*\)/s);
+  assert.match(source, /case 'read_tool_output':\s*outputPayload = executeResponsesReadToolOutputFunction/s);
   assert.match(source, /consumePendingUploadedFileEnvironmentEntries/);
   assert.match(source, /uploadedFiles: uploadedFileEnvironmentEntries/);
 });
