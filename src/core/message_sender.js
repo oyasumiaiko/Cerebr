@@ -9646,7 +9646,9 @@ export function createMessageSender(appContext) {
     let toolArgs = parsedArgs;
     let maxOutputChars = null;
     try {
-      ({ toolArgs, maxOutputChars } = splitResponsesToolOutputControl(parsedArgs));
+      ({ toolArgs, maxOutputChars } = splitResponsesToolOutputControl(parsedArgs, {
+        toolName: localFunctionName
+      }));
     } catch (error) {
       return {
         type: 'function_call_output',

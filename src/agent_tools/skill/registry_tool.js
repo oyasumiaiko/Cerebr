@@ -15,7 +15,6 @@
 import { getBuiltinSkillRecordByName, getBuiltinSkillRecords } from './builtin_creator.js';
 import { createIndexedDbSkillStore, SKILL_DB_NAME } from '../../storage/skill_store.js';
 import {
-  PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS,
   PAGE_CONTENT_READ_MAX_CHARS
 } from '../page_content_read/tool.js';
 import {
@@ -37,7 +36,7 @@ export const SKILL_REGISTRY_VERSION = 2;
 export const SKILL_MATCH_ALL_URLS = '<all_urls>';
 export const CEREBR_SKILL_MOUNT_SURFACE = 'globalThis.__cerebrSkills';
 export const SKILL_VIRTUAL_MANIFEST_PATH = 'manifest.json';
-export const SKILL_READ_DEFAULT_RANGE_CHARS = PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS;
+export const SKILL_READ_DEFAULT_RANGE_CHARS = 10_000;
 export const SKILL_READ_MAX_CHARS = PAGE_CONTENT_READ_MAX_CHARS;
 export const SKILL_SEARCH_DEFAULT_MAX_RESULTS = 50;
 export const SKILL_SEARCH_MAX_RESULTS = 200;

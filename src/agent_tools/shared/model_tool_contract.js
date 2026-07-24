@@ -13,10 +13,16 @@
  */
 
 const RESPONSES_TOOL_OUTPUT_MAX_CHARS_PARAMETER = 'max_output_chars';
+const RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS = 10_000;
+const RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS = 50_000;
+const RESPONSES_CONTENT_READ_TOOL_NAMES = new Set([
+  'page_content_read',
+  'pdf_content_read'
+]);
 
 const RESPONSES_TOOL_OUTPUT_MAX_CHARS_PROPERTY = Object.freeze({
   type: ['integer', 'null'],
-  description: '本次调用最终返回给模型的文本字符上限。传正整数时统一截断；传 null 时不额外截断。工具自身的分页或读取范围参数仍独立生效，图片不计入。'
+  description: `本次调用最终返回给模型的文本字符上限。传正整数时使用该值；传 null 时普通工具默认 ${RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS}，page_content_read 与 pdf_content_read 默认 ${RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS}。工具自身的分页或读取范围参数仍独立生效，图片不计入。`
 });
 
 const PORTABLE_STRICT_SCHEMA_OMITTED_KEYWORDS = new Set([
@@ -172,9 +178,10 @@ export function buildStrictFunctionToolDefinition(options = {}) {
  * 从模型参数中拆出统一输出控制项，避免各工具执行器重复认识该协议字段。
  *
  * @param {any} rawArgs
- * @returns {{toolArgs:Object, maxOutputChars:number|null}}
+ * @param {{toolName?:string}} [options]
+ * @returns {{toolArgs:Object, maxOutputChars:number}}
  */
-export function splitResponsesToolOutputControl(rawArgs) {
+export function splitResponsesToolOutputControl(rawArgs, options = {}) {
   const toolArgs = (
     rawArgs
     && typeof rawArgs === 'object'
@@ -184,7 +191,13 @@ export function splitResponsesToolOutputControl(rawArgs) {
   delete toolArgs[RESPONSES_TOOL_OUTPUT_MAX_CHARS_PARAMETER];
 
   if (rawMaxOutputChars == null) {
-    return { toolArgs, maxOutputChars: null };
+    const toolName = typeof options?.toolName === 'string' ? options.toolName.trim() : '';
+    return {
+      toolArgs,
+      maxOutputChars: RESPONSES_CONTENT_READ_TOOL_NAMES.has(toolName)
+        ? RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS
+        : RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS
+    };
   }
   if (!Number.isSafeInteger(rawMaxOutputChars) || rawMaxOutputChars <= 0) {
     throw new Error('工具参数错误：max_output_chars 必须是正安全整数或 null。');

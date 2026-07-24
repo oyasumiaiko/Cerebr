@@ -15,7 +15,7 @@ import {
 } from '../shared/model_tool_contract.js';
 
 export const PAGE_CONTENT_READ_TOOL_NAME = 'page_content_read';
-export const PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS = 10_000;
+export const PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS = 50_000;
 export const PAGE_CONTENT_READ_MAX_CHARS = 50_000;
 
 /**

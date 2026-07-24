@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
@@ -27,24 +28,24 @@ test('buildPageContentReadFunctionToolDefinition 声明可选图片 URL 参数�
   assert.match(spec.description, /next_skip_chars/);
 });
 
-test('buildPageContentReadResult 默认返回安全预览而不是整篇正文', async () => {
+test('buildPageContentReadResult 默认返回最多 50000 字符预览', async () => {
   const { buildPageContentReadResult } = await loadPageContentReadToolModule();
   const result = buildPageContentReadResult({
     title: 'Example',
     url: 'https://example.com',
-    content: 'A'.repeat(12000)
+    content: 'A'.repeat(62000)
   }, {});
 
   assert.equal(result.ok, true);
   assert.equal(result.mode, 'preview');
-  assert.equal(result.max_chars, 10000);
+  assert.equal(result.max_chars, 50000);
   assert.equal(result.truncated, true);
-  assert.equal(result.returned_chars, 10000);
-  assert.equal(result.omitted_chars, 2000);
-  assert.equal(result.omitted_pct, 16.67);
+  assert.equal(result.returned_chars, 50000);
+  assert.equal(result.omitted_chars, 12000);
+  assert.equal(result.omitted_pct, 19.35);
   assert.equal(result.has_more_after_range, true);
-  assert.equal(result.next_skip_chars, 10000);
-  assert.equal(result.content.length, 10000);
+  assert.equal(result.next_skip_chars, 50000);
+  assert.equal(result.content.length, 50000);
 });
 
 test('buildPageContentReadResult 支持 skip_chars + max_chars 连续读取', async () => {
@@ -65,6 +66,12 @@ test('buildPageContentReadResult 支持 skip_chars + max_chars 连续读取', as
   assert.equal(result.content, '56789A');
   assert.equal(result.has_more_after_range, true);
   assert.equal(result.next_skip_chars, 11);
+});
+
+test('content script 的网页与 PDF 运行时默认值同步为 50000', async () => {
+  const source = await fs.readFile(path.resolve(__dirname, '../src/extension/content.js'), 'utf8');
+  assert.match(source, /const PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS = 50_000;/);
+  assert.match(source, /const PDF_CONTENT_READ_DEFAULT_MAX_CHARS = 50_000;/);
 });
 
 test('buildPageContentReadResult 默认不包含图片引用附录', async () => {

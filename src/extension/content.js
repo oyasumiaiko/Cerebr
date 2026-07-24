@@ -2912,9 +2912,9 @@ function isCurrentPagePdfLike() {
     || !!document.querySelector('iframe[src*="pdf.js"], iframe[src*=".pdf"]');
 }
 
-const PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS = 10_000;
+const PAGE_CONTENT_READ_DEFAULT_RANGE_CHARS = 50_000;
 const PAGE_CONTENT_READ_MAX_CHARS = 50_000;
-const PDF_CONTENT_READ_DEFAULT_MAX_CHARS = 10_000;
+const PDF_CONTENT_READ_DEFAULT_MAX_CHARS = 50_000;
 const PDF_CONTENT_READ_MAX_CHARS = 50_000;
 
 function clampNonNegativeInt(value, fallback) {
