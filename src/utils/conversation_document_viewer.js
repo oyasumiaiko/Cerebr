@@ -144,7 +144,6 @@ function applyToolButtonVisualState(button, { iconClass = '', active = false, ti
  *     getSetting?: (key: string) => any,
  *     setSettingValue?: (key: string, value: any) => void
  *   },
- *   writeClipboardText?: (text: string) => Promise<void>,
  *   enhanceMarkdownContent?: (rootElement: HTMLElement) => void
  * }} options
  */
@@ -156,9 +155,6 @@ export function createConversationDocumentViewer(options = {}) {
     ? options.resolveConversationId
     : (() => '');
   const settingsManager = options.settingsManager || null;
-  const writeClipboardText = typeof options.writeClipboardText === 'function'
-    ? options.writeClipboardText
-    : null;
   const enhanceMarkdownContent = typeof options.enhanceMarkdownContent === 'function'
     ? options.enhanceMarkdownContent
     : null;
@@ -646,8 +642,8 @@ export function createConversationDocumentViewer(options = {}) {
 
   async function copyConversationDocumentCard(card) {
     const result = await loadConversationDocumentCard(card);
-    if (result?.ok !== true || !result.file || !writeClipboardText) return;
-    await writeClipboardText(result.file.content || '');
+    if (result?.ok !== true || !result.file || !navigator.clipboard?.writeText) return;
+    await navigator.clipboard.writeText(result.file.content || '');
   }
 
   async function toggleConversationDocumentHtmlPopout(card) {

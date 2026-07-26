@@ -4507,7 +4507,7 @@ export function createChatHistoryUI(appContext) {
           const jsonStr = JSON.stringify(copyData, null, 2);
           
           // 复制到剪贴板
-          await appContext.utils.writeClipboardText(jsonStr);
+          await navigator.clipboard.writeText(jsonStr);
           
           showNotification({ message: '聊天记录已复制到剪贴板', duration: 2000 });
         }

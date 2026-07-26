@@ -1354,12 +1354,12 @@ export function createContextMenuManager(appContext) {
   /**
    * 复制消息内容
    */
-  async function copyMessageContent() {
+  function copyMessageContent() {
     const messageElement = currentMessageElement;
     if (!messageElement) return;
     const originalText = messageElement.getAttribute('data-original-text') || '';
     hideContextMenu();
-    await utils.writeClipboardText(originalText).catch(err => {
+    navigator.clipboard.writeText(originalText).catch(err => {
       console.error('复制失败:', err);
     });
   }
@@ -1472,12 +1472,12 @@ export function createContextMenuManager(appContext) {
   /**
    * 复制代码块内容
    */
-  async function copyCodeContent() {
+  function copyCodeContent() {
     const codeBlock = currentCodeBlock;
     if (!codeBlock) return;
     const codeContent = codeBlock.textContent || '';
     hideContextMenu();
-    await utils.writeClipboardText(codeContent).catch(err => {
+    navigator.clipboard.writeText(codeContent).catch(err => {
       console.error('复制失败:', err);
     });
   }
@@ -2166,10 +2166,11 @@ export function createContextMenuManager(appContext) {
   }
 
   async function writeScreenshotBlobToClipboard(blob) {
-    if (typeof utils?.copyImageToHostClipboard !== 'function') {
-      throw new Error('当前环境不支持截图复制');
-    }
-    await utils.copyImageToHostClipboard(blob);
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        'image/png': blob
+      })
+    ]);
     return 'clipboard';
   }
 

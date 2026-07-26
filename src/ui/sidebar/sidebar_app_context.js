@@ -253,8 +253,6 @@ export function registerSidebarUtilities(appContext) {
   const pendingHostBridgeMessages = [];
   let hostMessageHandler = null;
   const jsRuntimeRunnerPendingRequests = new Map();
-  const hostClipboardPendingRequests = new Map();
-  let hostClipboardRequestSeq = 0;
 
   function postHostMessage(message) {
     if (appContext.state.isStandalone || window.parent === window) return false;
@@ -293,19 +291,6 @@ export function registerSidebarUtilities(appContext) {
         pending.resolve(responseData.response);
         return;
       }
-      if (responseData?.type === 'WRITE_CLIPBOARD_RESULT') {
-        const requestId = typeof responseData.requestId === 'string' ? responseData.requestId : '';
-        const pending = hostClipboardPendingRequests.get(requestId);
-        if (!pending) return;
-        hostClipboardPendingRequests.delete(requestId);
-        window.clearTimeout(pending.timeoutId);
-        if (responseData.success === true) {
-          pending.resolve();
-        } else {
-          pending.reject(new Error(responseData.error || '写入剪贴板失败'));
-        }
-        return;
-      }
       if (hostMessageHandler) {
         hostMessageHandler(responseData);
       } else {
@@ -315,37 +300,6 @@ export function registerSidebarUtilities(appContext) {
     hostBridgePort.start?.();
     pendingHostMessages.splice(0).forEach((message) => hostBridgePort.postMessage(message));
   });
-
-  async function writeClipboard(payload) {
-    const text = typeof payload?.text === 'string' ? payload.text : null;
-    const blob = payload?.blob instanceof Blob ? payload.blob : null;
-    if (text === null && !blob) {
-      throw new Error('剪贴板数据无效');
-    }
-
-    if (appContext.state.isStandalone || window.parent === window) {
-      if (text !== null) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
-      }
-      return;
-    }
-
-    hostClipboardRequestSeq += 1;
-    const requestId = `write_clipboard_${Date.now()}_${hostClipboardRequestSeq}`;
-    return await new Promise((resolve, reject) => {
-      const timeoutId = window.setTimeout(() => {
-        hostClipboardPendingRequests.delete(requestId);
-        reject(new Error('写入剪贴板超时'));
-      }, 15_000);
-      hostClipboardPendingRequests.set(requestId, { resolve, reject, timeoutId });
-      postHostMessage({ type: 'WRITE_CLIPBOARD', requestId, text, blob });
-    });
-  }
-
-  appContext.utils.writeClipboardText = (text) => writeClipboard({ text: String(text ?? '') });
-  appContext.utils.copyImageToHostClipboard = (blob) => writeClipboard({ blob });
 
   function requestJsRuntimeRunner(runtimeMessage, timeoutMs, timeoutMessage) {
     const bridgeChannelId = appContext.state.bridgeChannelId;
