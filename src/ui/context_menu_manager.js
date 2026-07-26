@@ -57,7 +57,6 @@ export function createContextMenuManager(appContext) {
   const forkConversationButton = dom.forkConversationButton;
   const forkConversationArrow = forkConversationButton?.querySelector('.context-menu-item__arrow');
   const screenshotMenu = dom.screenshotMenu || document.getElementById('message-screenshot-menu');
-  const copyAsImageButton = dom.copyAsImageButton;
   const downloadAsImageButton = dom.downloadAsImageButton || document.getElementById('download-as-image');
   const selectForImageButton = dom.selectForImageButton || document.getElementById('select-for-image');
   const editMessageButton = document.getElementById('edit-message');
@@ -271,6 +270,14 @@ export function createContextMenuManager(appContext) {
     item.appendChild(text);
   }
 
+  function setScreenshotMenuLabel(iconClass, label) {
+    const labelRoot = screenshotMenu?.querySelector('.context-menu-item__label');
+    const icon = labelRoot?.querySelector('i');
+    const text = labelRoot?.querySelector('span');
+    if (icon) icon.className = iconClass;
+    if (text) text.textContent = label;
+  }
+
   function closeAndHideContextSubmenu(menuItem, submenu) {
     if (menuItem instanceof HTMLElement) {
       menuItem.style.display = 'none';
@@ -305,10 +312,6 @@ export function createContextMenuManager(appContext) {
     if (selectForImageButton) {
       selectForImageButton.style.display = 'none';
     }
-    if (copyAsImageButton) {
-      copyAsImageButton.style.display = 'none';
-    }
-
     const isPending = compactionMenuState.state === 'pending';
     stopUpdateButton.style.display = isPending ? 'flex' : 'none';
     if (isPending) {
@@ -388,17 +391,13 @@ export function createContextMenuManager(appContext) {
   function syncScreenshotExportMenuLabels() {
     const selectedCount = messageScreenshotSelection.selectedIds.size;
     if (selectedCount > 0) {
-      if (copyAsImageButton) {
-        setContextMenuItemLabel(copyAsImageButton, 'far fa-images', `复制已选 ${selectedCount} 条为图片`);
-      }
+      setScreenshotMenuLabel('far fa-images', `复制已选 ${selectedCount} 条为图片`);
       if (downloadAsImageButton) {
         setContextMenuItemLabel(downloadAsImageButton, 'fa-solid fa-download', `下载已选 ${selectedCount} 条长截图`);
       }
       return;
     }
-    if (copyAsImageButton) {
-      setContextMenuItemLabel(copyAsImageButton, 'far fa-image', '复制当前消息截图');
-    }
+    setScreenshotMenuLabel('far fa-camera', '截图');
     if (downloadAsImageButton) {
       setContextMenuItemLabel(downloadAsImageButton, 'fa-solid fa-download', '下载当前消息截图');
     }
@@ -1194,7 +1193,6 @@ export function createContextMenuManager(appContext) {
     copyMessageButton.style.display = 'flex';
     if (editMessageButton) editMessageButton.style.display = 'flex';
     if (deleteMessageButton) deleteMessageButton.style.display = 'flex';
-    if (copyAsImageButton) copyAsImageButton.style.display = 'flex';
     if (downloadAsImageButton) downloadAsImageButton.style.display = 'flex';
 
     // 获取点击的代码块元素
@@ -2200,7 +2198,6 @@ export function createContextMenuManager(appContext) {
 
     let snapshot = null;
     let progressToast = null;
-    const originalText = copyAsImageButton.innerHTML;
     hideContextMenu();
     setMessageScreenshotExporting(true, 'copy');
     progressToast = showMessageScreenshotExportNotification(messageElements);
@@ -2230,7 +2227,6 @@ export function createContextMenuManager(appContext) {
         snapshot.cleanup();
       }
       setMessageScreenshotExporting(false);
-      copyAsImageButton.innerHTML = originalText;
       syncScreenshotExportMenuLabels();
     }
   }
@@ -2522,8 +2518,11 @@ export function createContextMenuManager(appContext) {
       await clearChatHistory();
     });
     
-    // 添加复制为图片按钮点击事件
-    copyAsImageButton.addEventListener(MENU_ACTIVATE_EVENT, copyMessageAsImage);
+    screenshotMenu?.addEventListener(MENU_ACTIVATE_EVENT, (event) => {
+      const target = event?.target instanceof Element ? event.target : null;
+      if (target && target.closest('.context-menu-submenu')) return;
+      copyMessageAsImage();
+    });
     if (downloadAsImageButton) {
       downloadAsImageButton.addEventListener(MENU_ACTIVATE_EVENT, downloadMessageAsImage);
     }

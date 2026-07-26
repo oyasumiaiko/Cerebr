@@ -25,7 +25,7 @@ test('上下文菜单的异步动作会先关闭菜单再继续执行', async ()
   );
   assert.match(
     source,
-    /async function copyMessageAsImage\(\) \{\s*const messageElement = currentMessageElement;[\s\S]*?const originalText = copyAsImageButton\.innerHTML;\s*hideContextMenu\(\);/s
+    /async function copyMessageAsImage\(\) \{\s*const messageElement = currentMessageElement;[\s\S]*?let progressToast = null;\s*hideContextMenu\(\);/s
   );
   assert.match(
     source,

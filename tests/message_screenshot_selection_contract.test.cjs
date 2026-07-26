@@ -24,8 +24,9 @@ test('多消息长截图选择入口与导出管线保持同一套复制为图�
 
   assert.match(
     sidebarHtml,
-    /id="message-screenshot-menu"[\s\S]*?截图[\s\S]*?id="copy-as-image"[\s\S]*?复制当前消息截图[\s\S]*?id="download-as-image"[\s\S]*?下载当前消息截图[\s\S]*?id="select-for-image"[\s\S]*?选择长截图/
+    /id="message-screenshot-menu"[\s\S]*?截图[\s\S]*?id="download-as-image"[\s\S]*?下载当前消息截图[\s\S]*?id="select-for-image"[\s\S]*?选择长截图/
   );
+  assert.doesNotMatch(sidebarHtml, /id="copy-as-image"/);
   assert.match(
     sidebarAppContextSource,
     /screenshotMenu:\s*document\.getElementById\('message-screenshot-menu'\)/
@@ -98,7 +99,7 @@ test('多消息长截图选择入口与导出管线保持同一套复制为图�
   );
   assert.match(
     contextMenuSource,
-    /copyAsImageButton\.addEventListener\(MENU_ACTIVATE_EVENT, copyMessageAsImage\);[\s\S]*?downloadAsImageButton\.addEventListener\(MENU_ACTIVATE_EVENT, downloadMessageAsImage\);[\s\S]*?selectForImageButton\.addEventListener\(MENU_ACTIVATE_EVENT/
+    /screenshotMenu\?\.addEventListener\(MENU_ACTIVATE_EVENT,[\s\S]*?copyMessageAsImage\(\);[\s\S]*?downloadAsImageButton\.addEventListener\(MENU_ACTIVATE_EVENT, downloadMessageAsImage\);[\s\S]*?selectForImageButton\.addEventListener\(MENU_ACTIVATE_EVENT/
   );
   assert.match(contextMenuSource, /data-action="copy"[\s\S]*?data-action="download"/);
 
