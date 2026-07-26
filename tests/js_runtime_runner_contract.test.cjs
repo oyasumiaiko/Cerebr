@@ -17,8 +17,8 @@ test('host-page JS runtime requests are routed through a disposable hidden runne
   ]);
 
   assert.match(manifestSource, /src\/ui\/js_runtime_runner\/js_runtime_runner\.html/);
-  assert.match(manifestSource, /src\/ui\/js_runtime_runner\/js_runtime_runner\.js/);
-  assert.match(manifestSource, /"use_dynamic_url"\s*:\s*true/);
+  assert.match(manifestSource, /"resources"\s*:\s*\["src\/ui\/sidebar\/sidebar\.html"\][\s\S]*?"matches"\s*:\s*\["<all_urls>"\][\s\S]*?\}/);
+  assert.match(manifestSource, /src\/ui\/js_runtime_runner\/js_runtime_runner\.js[\s\S]*?"use_dynamic_url"\s*:\s*true/);
   assert.match(runnerHtml, /<script type="module" src="\.\/js_runtime_runner\.js"><\/script>/);
 
   assert.match(contentSource, /class CerebrJsRuntimeRunner/);

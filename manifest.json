@@ -73,19 +73,24 @@
       "src/ui/sidebar/js_sandbox_frame.html"
     ]
   },
-  "web_accessible_resources": [{
-    "resources": [
-      "src/ui/sidebar/sidebar.html",
+  "web_accessible_resources": [
+    {
+      "resources": ["src/ui/sidebar/sidebar.html"],
+      "matches": ["<all_urls>"]
+    },
+    {
+      "resources": [
       "src/ui/sidebar/js_sandbox_frame.html",
       "src/ui/sidebar/js_sandbox_frame.js",
       "src/ui/js_runtime_runner/js_runtime_runner.html",
       "src/ui/js_runtime_runner/js_runtime_runner.js",
       "src/ui/html_preview_sandbox/*",
       "lib/*"
-    ],
-    "matches": ["<all_urls>"],
-    "use_dynamic_url": true
-  }],
+      ],
+      "matches": ["<all_urls>"],
+      "use_dynamic_url": true
+    }
+  ],
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
