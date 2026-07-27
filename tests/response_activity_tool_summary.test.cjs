@@ -249,12 +249,12 @@ test('page_content_read 摘要会显示完整源选择与分页预算', async ()
     action: '读取',
     value: '当前页面',
     valueUrl: '',
-    meta: '全文 · ≤50000字/页',
+    meta: '全文 · ≤20000字/页',
     locationAction: '',
     locationValue: '',
     locationUrl: ''
   });
-  assert.equal(buildResponseActivityCustomToolPrimaryText(previewRecord), '读取 当前页面 全文 · ≤50000字/页');
+  assert.equal(buildResponseActivityCustomToolPrimaryText(previewRecord), '读取 当前页面 全文 · ≤20000字/页');
 
   const rangeRecord = {
     type: 'function_call',

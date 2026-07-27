@@ -223,8 +223,8 @@ test('全部 19 个模型工具具有唯一稳定名称和可独立判读的描�
       ['integer', 'null'],
       `${definition.name} 缺少统一 max_output_chars 参数`
     );
-    assert.match(definition.parameters.properties.max_output_chars.description, /普通工具默认 10000/);
-    assert.match(definition.parameters.properties.max_output_chars.description, /page_content_read 与 pdf_content_read 默认 50000/);
+    assert.match(definition.parameters.properties.max_output_chars.description, /传 null 时默认 5000/);
+    assert.match(definition.parameters.properties.max_output_chars.description, /page_content_read 默认 20000/);
   }
 });
 
@@ -237,15 +237,15 @@ test('统一输出控制参数会解析默认值、从业务参数剥离并严�
   });
   assert.deepEqual(splitResponsesToolOutputControl({ query: 'x', max_output_chars: null }), {
     toolArgs: { query: 'x' },
-    maxOutputChars: 10000
+    maxOutputChars: 5000
   });
   assert.deepEqual(splitResponsesToolOutputControl({ query: 'x' }, { toolName: 'page_content_read' }), {
     toolArgs: { query: 'x' },
-    maxOutputChars: 50000
+    maxOutputChars: 20000
   });
   assert.deepEqual(splitResponsesToolOutputControl({ max_output_chars: null }, { toolName: 'pdf_content_read' }), {
     toolArgs: {},
-    maxOutputChars: 50000
+    maxOutputChars: 5000
   });
   assert.throws(
     () => splitResponsesToolOutputControl({ max_output_chars: 0 }),

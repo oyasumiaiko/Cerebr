@@ -23,12 +23,12 @@ test('buildPageContentReadFunctionToolDefinition 声明可选图片 URL 参数�
   assert.ok(spec.parameters.required.includes('include_image_urls'));
   assert.match(spec.parameters.properties.include_image_urls.description, /false 或 null/);
   assert.equal(spec.parameters.properties.max_chars, undefined);
-  assert.match(spec.parameters.properties.max_output_chars.description, /默认 50000/);
+  assert.match(spec.parameters.properties.max_output_chars.description, /默认 20000/);
   assert.match(spec.description, /用途：/);
   assert.match(spec.description, /read_tool_output/);
 });
 
-test('buildPageContentReadResult 默认生成完整正文，统一出口再按 50000 分页', async () => {
+test('buildPageContentReadResult 默认生成完整正文，统一出口再按 20000 分页', async () => {
   const { buildPageContentReadResult } = await loadPageContentReadToolModule();
   const result = buildPageContentReadResult({
     title: 'Example',
@@ -87,7 +87,8 @@ test('网页与 PDF 运行时只在共享契约中定义默认预算并复用纯
   const contentSource = await fs.readFile(path.resolve(__dirname, '../src/extension/content.js'), 'utf8');
   const senderSource = await fs.readFile(path.resolve(__dirname, '../src/core/message_sender.js'), 'utf8');
   const contractSource = await fs.readFile(path.resolve(__dirname, '../src/agent_tools/shared/model_tool_contract.js'), 'utf8');
-  assert.match(contractSource, /RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS = 50_000/);
+  assert.match(contractSource, /RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS = 5_000/);
+  assert.match(contractSource, /RESPONSES_PAGE_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS = 20_000/);
   assert.doesNotMatch(contentSource, /build(?:Page|Pdf)ContentReadResultForTransport|CONTENT_READ_DEFAULT_MAX_OUTPUT_CHARS/);
   assert.match(senderSource, /buildPageContentReadResult\(pageContent, rawArgs\)/);
   assert.match(senderSource, /buildPdfContentReadResult\(pageContent, rawArgs\)/);

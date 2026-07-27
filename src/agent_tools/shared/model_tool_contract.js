@@ -13,16 +13,12 @@
  */
 
 export const RESPONSES_TOOL_OUTPUT_MAX_CHARS_PARAMETER = 'max_output_chars';
-export const RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS = 10_000;
-export const RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS = 50_000;
-const RESPONSES_CONTENT_READ_TOOL_NAMES = new Set([
-  'page_content_read',
-  'pdf_content_read'
-]);
+export const RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS = 5_000;
+export const RESPONSES_PAGE_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS = 20_000;
 
 const RESPONSES_TOOL_OUTPUT_MAX_CHARS_PROPERTY = Object.freeze({
   type: ['integer', 'null'],
-  description: `本次调用每页最终返回给模型的文本字符上限。传正整数时使用该值；传 null 时普通工具默认 ${RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS}，page_content_read 与 pdf_content_read 默认 ${RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS}，read_tool_output 沿用上一页大小。超限结果会返回 next_cursor，可用 read_tool_output 无重执行续读；图片不计入。`
+  description: `本次调用每页最终返回给模型的文本字符上限。传正整数时使用该值；传 null 时默认 ${RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS}，page_content_read 默认 ${RESPONSES_PAGE_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS}，read_tool_output 沿用上一页大小。超限结果会返回 next_cursor，可用 read_tool_output 无重执行续读；图片不计入。`
 });
 
 const PORTABLE_STRICT_SCHEMA_OMITTED_KEYWORDS = new Set([
@@ -195,8 +191,8 @@ export function splitResponsesToolOutputControl(rawArgs, options = {}) {
   delete toolArgs[RESPONSES_TOOL_OUTPUT_MAX_CHARS_PARAMETER];
   const toolName = typeof options?.toolName === 'string' ? options.toolName.trim() : '';
   const maxOutputChars = rawMaxOutputChars == null
-    ? (RESPONSES_CONTENT_READ_TOOL_NAMES.has(toolName)
-      ? RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS
+    ? (toolName === 'page_content_read'
+      ? RESPONSES_PAGE_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS
       : RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS)
     : rawMaxOutputChars;
   if (!Number.isSafeInteger(maxOutputChars) || maxOutputChars <= 0) {

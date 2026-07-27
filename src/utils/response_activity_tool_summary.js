@@ -14,7 +14,7 @@ import {
   PDF_CONTENT_READ_TOOL_NAME
 } from '../agent_tools/pdf_content_read/tool.js';
 import {
-  RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS,
+  RESPONSES_PAGE_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS,
   RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS
 } from '../agent_tools/shared/model_tool_contract.js';
 import { READ_TOOL_OUTPUT_TOOL_NAME } from '../agent_tools/read_tool_output/tool.js';
@@ -304,7 +304,7 @@ function buildPageContentReadSummaryParts(args, options = {}) {
   const skipChars = Number.isFinite(Number(args?.skip_chars)) ? Number(args.skip_chars) : 0;
   const maxOutputChars = Number.isFinite(Number(args?.max_output_chars))
     ? Number(args.max_output_chars)
-    : RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS;
+    : RESPONSES_PAGE_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS;
   const metaParts = [
     hasExplicitRange ? `从 C${skipChars} · ≤${maxOutputChars}字/页` : `全文 · ≤${maxOutputChars}字/页`,
     args?.include_image_urls === true ? '含图片URL' : ''
@@ -325,7 +325,7 @@ function buildPdfContentReadSummaryParts(args, options = {}) {
   const chapterId = normalizeSummaryText(args?.chapter_id);
   const maxOutputChars = Number.isFinite(Number(args?.max_output_chars))
     ? Math.max(1, Math.trunc(Number(args.max_output_chars)))
-    : RESPONSES_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS;
+    : RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS;
   const includeOutline = args?.include_outline === true;
   const readDocument = args?.read_document === true;
   const hasExplicitReadRequest = !!chapterId || readDocument;
