@@ -6,9 +6,10 @@
 import { 
   getAllConversationMetadata, 
   getAllConversations, 
+  compactConversationToMetadata,
   getConversationMetadataByIds,
   getConversationMetadataPageByEndTimeDesc,
-  getConversationSearchProjectionsByIds,
+  getConversationSearchCatalog,
   listConversationMetadataByUrlCandidates,
   putConversation, 
   deleteConversation, 
@@ -42,7 +43,6 @@ import {
   buildChatHistorySearchPlan as buildChatHistorySearchPlanShared,
   buildChatHistoryTextPlan as buildChatHistoryTextPlanShared,
   buildMetaSearchText as buildMetaSearchTextShared,
-  canConversationSearchProjectionMatch as canConversationSearchProjectionMatchShared,
   compareMessageDateRange as compareMessageDateRangeShared,
   compareNumericRange as compareNumericRangeShared,
   computeConversationMessageStats as computeConversationMessageStatsShared,
@@ -168,8 +168,7 @@ export function createChatHistoryUI(appContext) {
 
   // --- 元数据缓存（UI层） ---
   let metaCache = { data: null, time: 0, promise: null };
-  // 说明：默认列表使用 paged 模式，不会预先拉取全量元数据；一旦用户输入“全文搜索”，就必须拿到全量元数据。
-  // 为避免“输入停下后卡一秒才开始显示搜索进度”，这里把 TTL 设长一些，并对并发请求做去重。
+  // 默认列表与全文搜索都不会预拉取全量元数据；该缓存只服务树状视图、统计/维护等明确需要完整元数据的场景。
   const META_CACHE_TTL = 5 * 60 * 1000; // 5分钟缓存元数据（有显式 invalidateMetadataCache 兜底）
   // --- 数据趋势缓存（图表） ---
   const TREND_STATS_TTL = 5 * 60 * 1000; // 5分钟缓存趋势统计（会在清理/更新后失效）
@@ -1234,48 +1233,6 @@ export function createChatHistoryUI(appContext) {
       return await metaCache.promise;
     } finally {
       metaCache.promise = null;
-    }
-  }
-
-  function scheduleConversationMetadataWarmup(panel) {
-    // 说明：
-    // - 默认历史列表走 paged 模式，首屏速度快，但“第一次全文搜索”需要全量元数据；
-    // - 这里用 idle/延迟的方式预热元数据，降低用户输入后的启动延迟。
-    try {
-      if (!panel || !panel.classList.contains('visible')) return;
-    } catch (_) {
-      return;
-    }
-
-    // 已有缓存/正在加载则不重复预热
-    if (metaCache.data || metaCache.promise) return;
-
-    const runWarmup = async () => {
-      try {
-        await getAllConversationMetadataWithCache(false);
-      } catch (_) {}
-    };
-
-    if (typeof requestIdleCallback === 'function') {
-      requestIdleCallback(() => {
-        try {
-          if (!panel.classList.contains('visible')) return;
-        } catch (_) {
-          return;
-        }
-        if (metaCache.data || metaCache.promise) return;
-        runWarmup();
-      }, { timeout: 1200 });
-    } else {
-      setTimeout(() => {
-        try {
-          if (!panel.classList.contains('visible')) return;
-        } catch (_) {
-          return;
-        }
-        if (metaCache.data || metaCache.promise) return;
-        runWarmup();
-      }, 600);
     }
   }
 
@@ -5396,6 +5353,10 @@ export function createChatHistoryUI(appContext) {
     const hasFilterRules = Array.isArray(searchPlan.filters) && searchPlan.filters.length > 0;
     const hasTextQuery = textPlan.hasPositive || textPlan.hasNegative;
     const hasActiveQuery = hasFilterRules || hasTextQuery;
+    const textCatalogFilters = (Array.isArray(searchPlan.filters) ? searchPlan.filters : [])
+      .filter((filter) => filter?.key !== 'count');
+    const deferredTextFilters = (Array.isArray(searchPlan.filters) ? searchPlan.filters : [])
+      .filter((filter) => filter?.key === 'count');
     const resolvedScope = resolveSearchScope(textPlan);
     const shouldUseMetaMatch = resolvedScope === 'session';
 
@@ -5438,6 +5399,7 @@ export function createChatHistoryUI(appContext) {
     panel._historyDataSource = { mode: 'full' };
 
     let baseHistories = null;
+    let usesSearchCatalog = false;
 
     if (urlFilterMode) {
       const currentUrl = (state.pageInfo?.url || '').trim();
@@ -5475,13 +5437,10 @@ export function createChatHistoryUI(appContext) {
       baseHistories = [...pinnedMetas, ...(firstPage.items || [])];
     }
 
-    // 需要“全量元数据”的场景：消息数筛选 / 全文搜索
+    // 需要“全量候选”的场景：纯过滤读取完整元数据；全文搜索只读取索引 key 目录。
     if (!baseHistories) {
       panel._historyDataSource = { mode: 'full' };
 
-      // 说明：全文搜索需要先拿到“全量会话元数据列表”作为候选池，这一步在会话很多时可能需要 0.5~2s。
-      // 旧实现会等“元数据加载完成后”才插入进度条，导致用户感觉“停顿了一秒啥也没干”。
-      // 这里提前显示“准备阶段”，让用户能立刻看到反馈。
       const isFullTextSearch = hasTextQuery;
 
       if (canReuseSearchCache) {
@@ -5493,7 +5452,15 @@ export function createChatHistoryUI(appContext) {
           setSearchProgressStage(warmupIndicator, '正在准备搜索…（加载会话列表）');
         }
 
-        baseHistories = await getAllConversationMetadataWithCache();
+        if (isFullTextSearch) {
+          baseHistories = await getConversationSearchCatalog({
+            includeUrl: shouldUseMetaMatch || textCatalogFilters.some((filter) => filter?.key === 'url'),
+            includeDate: textCatalogFilters.some((filter) => filter?.key === 'date')
+          });
+          usesSearchCatalog = true;
+        } else {
+          baseHistories = await getAllConversationMetadataWithCache();
+        }
         if (panel.dataset.runId !== runId) {
           setSearchProgressVisible(warmupIndicator, false);
           return;
@@ -5501,10 +5468,11 @@ export function createChatHistoryUI(appContext) {
       }
     }
 
-    const applyMetaFilters = (list) => {
+    const applyMetaFilters = (list, filters = searchPlan.filters) => {
       const items = Array.isArray(list) ? list : [];
-      if (!hasFilterRules) return items;
-      return items.filter((meta) => evaluateChatHistoryFilters(meta, searchPlan.filters));
+      const filterList = Array.isArray(filters) ? filters : [];
+      if (filterList.length === 0) return items;
+      return items.filter((meta) => evaluateChatHistoryFilters(meta, filterList));
     };
 
     let sourceHistories = [];
@@ -5555,7 +5523,10 @@ export function createChatHistoryUI(appContext) {
           searchCache.contextKey === searchCacheContextKey
         );
 
-        const candidateMetas = applyMetaFilters(canReusePrefixCache ? searchCache.results.slice() : allHistoriesMeta);
+        const candidateMetas = applyMetaFilters(
+          canReusePrefixCache ? searchCache.results.slice() : allHistoriesMeta,
+          textCatalogFilters
+        );
         const totalItems = candidateMetas.length;
         let nextIndex = 0;
         let processedCount = 0;
@@ -5594,23 +5565,6 @@ export function createChatHistoryUI(appContext) {
         };
 
         updateProgress(true);
-
-        // 一次 transaction 预取本轮候选的轻量正文投影，避免每 12 条开启新事务；
-        // 若用户继续输入，取消检查会阻止后续完整会话读取。
-        const searchProjectionIds = candidateMetas.map((meta) => meta?.id).filter(Boolean);
-        const searchProjections = await getConversationSearchProjectionsByIds(searchProjectionIds);
-        if (isCancelled()) {
-          setSearchProgressVisible(searchProgressIndicator, false);
-          return;
-        }
-        const searchProjectionById = new Map();
-        for (const projection of searchProjections) {
-          if (projection?.id) searchProjectionById.set(projection.id, projection);
-        }
-        const missingProjectionIds = searchProjectionIds.filter((id) => !searchProjectionById.has(id));
-        if (missingProjectionIds.length > 0) {
-          throw new Error(`聊天搜索索引缺失：${missingProjectionIds.slice(0, 5).join(', ')}`);
-        }
 
         const workers = Array.from({ length: CONCURRENCY }).map(async () => {
           while (true) {
@@ -5655,8 +5609,10 @@ export function createChatHistoryUI(appContext) {
 
               const remainingTerms = Array.from(metaResult.remaining || []);
               const needsMessageScan = textPlan.hasNegative || remainingTerms.length > 0;
+              const needsHydration = usesSearchCatalog
+                || !Object.prototype.hasOwnProperty.call(historyMeta, 'messageCount');
 
-              if (!needsMessageScan) {
+              if (!needsMessageScan && !needsHydration && deferredTextFilters.length === 0) {
                 matchedEntries.push({ index: batchStart + offset, data: historyMeta });
                 matchInfoMap.set(historyMeta.id, {
                   messageId: null,
@@ -5668,7 +5624,12 @@ export function createChatHistoryUI(appContext) {
                 processedCount++;
                 updateProgress();
               } else {
-                batchToScan.push({ index: batchStart + offset, meta: historyMeta, remainingTerms });
+                batchToScan.push({
+                  index: batchStart + offset,
+                  meta: historyMeta,
+                  remainingTerms,
+                  metaOnlyMatch: !needsMessageScan
+                });
               }
             }
 
@@ -5676,23 +5637,10 @@ export function createChatHistoryUI(appContext) {
 
             // 2) 未命中元数据的条目：批量读取会话并扫描 messages（减少 transaction 次数）
             if (batchToScan.length > 0) {
-              const exactBatchToScan = [];
-              for (const item of batchToScan) {
-                const projection = searchProjectionById.get(item.meta.id);
-                if (canConversationSearchProjectionMatchShared(projection, textPlan, item.remainingTerms)) {
-                  exactBatchToScan.push(item);
-                } else {
-                  processedCount++;
-                  updateProgress();
-                }
-              }
-
-              if (exactBatchToScan.length === 0) continue;
-
               let conversations = [];
               try {
                 conversations = await getConversationsByIds(
-                  exactBatchToScan.map((item) => item.meta.id),
+                  batchToScan.map((item) => item.meta.id),
                   false
                 );
               } catch (error) {
@@ -5710,7 +5658,7 @@ export function createChatHistoryUI(appContext) {
                 if (conv?.id) conversationById.set(conv.id, conv);
               }
 
-              for (const item of exactBatchToScan) {
+              for (const item of batchToScan) {
                 if (isCancelled()) {
                   cancelled = true;
                   break;
@@ -5718,6 +5666,28 @@ export function createChatHistoryUI(appContext) {
 
                 const conv = conversationById.get(item.meta.id);
                 if (!conv || !Array.isArray(conv.messages)) {
+                  processedCount++;
+                  updateProgress();
+                  continue;
+                }
+
+                const hydratedMeta = compactConversationToMetadata(conv);
+                if (deferredTextFilters.length > 0
+                  && !evaluateChatHistoryFilters(hydratedMeta, deferredTextFilters)) {
+                  processedCount++;
+                  updateProgress();
+                  continue;
+                }
+
+                if (item.metaOnlyMatch) {
+                  matchInfoMap.set(item.meta.id, {
+                    messageId: null,
+                    excerpts: [],
+                    reason: 'meta',
+                    totalHitCount: 0,
+                    matchedMessageCount: 0
+                  });
+                  matchedEntries.push({ index: item.index, data: hydratedMeta });
                   processedCount++;
                   updateProgress();
                   continue;
@@ -5741,7 +5711,7 @@ export function createChatHistoryUI(appContext) {
 
                 if (inlineScan.matched) {
                   matchInfoMap.set(item.meta.id, inlineScan.matchInfo);
-                  matchedEntries.push({ index: item.index, data: item.meta });
+                  matchedEntries.push({ index: item.index, data: hydratedMeta });
                 }
 
                 processedCount++;
@@ -11120,9 +11090,6 @@ export function createChatHistoryUI(appContext) {
     // 说明：这里不 await，避免打开面板被 “图片/统计/API加载” 阻塞。
     void activateChatHistoryTab(panel, initialTab);
 
-    // 预热全量元数据（idle），降低“首次全文搜索”的启动延迟
-    scheduleConversationMetadataWarmup(panel);
-    
     // --- 修改开始：打开面板后聚焦到 filterInput ---
     // 确保在 'history' 标签页激活时聚焦
     const activeTab = panel.querySelector('.history-tab.active');

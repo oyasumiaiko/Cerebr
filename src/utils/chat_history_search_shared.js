@@ -140,61 +140,6 @@ export function extractMessagePlainText(message, options = {}) {
 }
 
 /**
- * 为聊天搜索构造持久化的轻量正文投影。
- *
- * 投影只保留搜索真正需要的小写正文，不复制 tool output、隐藏上下文、图片对象等重字段。
- * 它只用于快速排除不可能命中的会话；最终命中与摘录仍由完整消息扫描确认，因此不会改变搜索语义。
- *
- * @param {Object} conversation
- * @param {{includeHiddenThreadSelection?:boolean}} [options]
- * @returns {{id:string, textLower:string}}
- */
-export function buildConversationSearchProjection(conversation, options = {}) {
-  const id = typeof conversation?.id === 'string' ? conversation.id : '';
-  const messages = Array.isArray(conversation?.messages) ? conversation.messages : [];
-  const textParts = [];
-  for (const message of messages) {
-    const plainText = extractMessagePlainText(message, options);
-    if (plainText) textParts.push(plainText.toLowerCase());
-  }
-  return { id, textLower: textParts.join('\n') };
-}
-
-/**
- * 用轻量正文投影判断会话是否“可能”命中，供读取完整会话前做低成本裁剪。
- *
- * message scope 下，不同正向词可能分散在不同消息中，所以这里只能排除缺词会话；
- * session scope 下，正向词与否定词都可安全预判。返回 true 仍必须执行完整消息扫描。
- *
- * @param {{textLower?:string}} projection
- * @param {{positiveLower?:string[], negativeLower?:string[], hasNegative?:boolean, scope?:string}} textPlan
- * @param {string[]|null} [remainingTerms=null]
- * @returns {boolean}
- */
-export function canConversationSearchProjectionMatch(projection, textPlan, remainingTerms = null) {
-  const textLower = typeof projection?.textLower === 'string' ? projection.textLower : '';
-  const scope = resolveSearchScope(textPlan);
-  const positiveTerms = scope === 'message'
-    ? (Array.isArray(textPlan?.positiveLower) ? textPlan.positiveLower : [])
-    : (Array.isArray(remainingTerms)
-      ? remainingTerms
-      : (Array.isArray(textPlan?.positiveLower) ? textPlan.positiveLower : []));
-
-  for (const term of positiveTerms) {
-    if (term && !textLower.includes(term)) return false;
-  }
-
-  if (scope === 'session' && textPlan?.hasNegative) {
-    const negativeTerms = Array.isArray(textPlan?.negativeLower) ? textPlan.negativeLower : [];
-    for (const term of negativeTerms) {
-      if (term && textLower.includes(term)) return false;
-    }
-  }
-
-  return true;
-}
-
-/**
  * 统计会话的主线/线程消息结构。
  *
  * @param {Array<Object>} messages
