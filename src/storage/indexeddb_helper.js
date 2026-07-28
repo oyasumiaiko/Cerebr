@@ -2,8 +2,13 @@
  * IndexedDB 工具模块，用于存储聊天记录
  */
 
+import { buildConversationSearchProjection } from '../utils/chat_history_search_shared.js';
+
 const CONVERSATION_DOCUMENT_STORE = 'conversation_documents';
 const LOCAL_FILE_MOUNT_STORE = 'local_file_mounts';
+const CONVERSATION_METADATA_STORE = 'conversation_metadata';
+const CONVERSATION_SEARCH_STORE = 'conversation_search';
+const CHAT_HISTORY_DB_VERSION = 6;
 
 /**
  * 打开或创建 "ChatHistoryDB" 数据库以及 "conversations" 对象存储
@@ -20,11 +25,12 @@ export function openChatHistoryDB() {
   cachedDbPromise = new Promise((resolve, reject) => {
     // v4: 新增按会话归属的 conversation_documents store，用于保存“对话级虚拟文档”。
     // v5: 新增 local_file_mounts store，只保存用户授权的 FileSystemHandle 与虚拟挂载点。
-    // - conversations.endTime/url 仍用于历史列表与 URL 筛选；
+    // v6: 新增轻量元数据与正文搜索投影，避免搜索前后重复克隆完整 messages。
+    // - conversation_metadata.endTime/url 用于历史列表与 URL 筛选，避免读取完整 messages；
     // - conversation_documents 采用 [conversation_id, path] 复合主键，便于级联删除与全文列举。
     // - endTime：用于快速按“最近对话”分页加载（避免全量扫描 + 排序）
     // - url：用于“按当前 URL 快速筛选历史会话”（按前缀范围查询）
-    const request = indexedDB.open('ChatHistoryDB', 5);
+    const request = indexedDB.open('ChatHistoryDB', CHAT_HISTORY_DB_VERSION);
     request.onerror = () => {
       cachedDbPromise = null;
       reject(request.error);
@@ -66,6 +72,47 @@ export function openChatHistoryDB() {
         } catch (e) {
           console.warn('升级 conversations 索引失败（可能由浏览器兼容性/事务状态导致）:', e);
         }
+      }
+
+      let metadataStore = null;
+      if (!db.objectStoreNames.contains(CONVERSATION_METADATA_STORE)) {
+        metadataStore = db.createObjectStore(CONVERSATION_METADATA_STORE, { keyPath: 'id' });
+        metadataStore.createIndex('startTime', 'startTime', { unique: false });
+        metadataStore.createIndex('endTime', 'endTime', { unique: false });
+        metadataStore.createIndex('url', 'url', { unique: false });
+      } else {
+        metadataStore = tx.objectStore(CONVERSATION_METADATA_STORE);
+      }
+
+      let searchStore = null;
+      if (!db.objectStoreNames.contains(CONVERSATION_SEARCH_STORE)) {
+        searchStore = db.createObjectStore(CONVERSATION_SEARCH_STORE, { keyPath: 'id' });
+      } else {
+        searchStore = tx.objectStore(CONVERSATION_SEARCH_STORE);
+      }
+
+      // 旧库升级时一次性回填两个轻量投影。迁移失败会让版本事务直接中止，禁止留下半套索引静默运行。
+      if (event.oldVersion > 0 && event.oldVersion < 6) {
+        const migrationStartedAt = Date.now();
+        let migratedCount = 0;
+        console.info('[ChatHistoryDB] 开始回填聊天搜索索引');
+        const conversationStore = tx.objectStore('conversations');
+        const cursorRequest = conversationStore.openCursor();
+        cursorRequest.onsuccess = (cursorEvent) => {
+          const cursor = cursorEvent.target.result;
+          if (!cursor) {
+            console.info(`[ChatHistoryDB] 聊天搜索索引回填完成：${migratedCount} 条，耗时 ${Date.now() - migrationStartedAt}ms`);
+            return;
+          }
+          const conversation = cursor.value;
+          metadataStore.put(compactConversationToMetadata(conversation));
+          searchStore.put(buildConversationSearchProjection(conversation, { includeHiddenThreadSelection: true }));
+          migratedCount += 1;
+          cursor.continue();
+        };
+        cursorRequest.onerror = () => {
+          console.error('[ChatHistoryDB] 聊天搜索索引回填失败', cursorRequest.error);
+        };
       }
 
       if (!db.objectStoreNames.contains(CONVERSATION_DOCUMENT_STORE)) {
@@ -116,6 +163,9 @@ export function openChatHistoryDB() {
       }
       if (event.oldVersion < 5) {
         console.log('升级数据库：新增 local_file_mounts store（用于只读本地文件映射）');
+      }
+      if (event.oldVersion < 6) {
+        console.log('升级数据库：新增 conversation_metadata / conversation_search store（提升聊天搜索性能）');
       }
     };
   });
@@ -260,35 +310,29 @@ function compactConversationToMetadata(conv) {
 /**
  * 获取全部对话记录元数据（列表/筛选用的“轻量字段”）。
  *
- * 注意：
- * - 由于 conversations 记录本身包含 messages 大数组，IndexedDB 在读取时仍会结构化克隆整条记录；
- * - 这里的“轻量化”主要是为了减少上层长期保留的 JS 对象体积（避免把 messages/messageIds 留在内存里）。
+ * 数据来自独立的 conversation_metadata store，不会再结构化克隆完整 messages。
  *
  * @returns {Promise<Array<{id:string, url:string, title:string, summary:string, startTime:number, endTime:number, messageCount:number, mainMessageCount:number, threadMessageCount:number, threadCount:number, parentConversationId:string|null, forkedFromMessageId:string|null, apiLock:Object|null}>>}
  */
 export async function getAllConversationMetadata() {
   const db = await openChatHistoryDB();
   return new Promise((resolve, reject) => {
-    const transaction = db.transaction('conversations', 'readonly');
-    const store = transaction.objectStore('conversations');
+    const transaction = db.transaction(CONVERSATION_METADATA_STORE, 'readonly');
+    const store = transaction.objectStore(CONVERSATION_METADATA_STORE);
     const conversations = []; // 用于累积结果的数组
-    const request = store.openCursor(); // 使用游标代替 getAll()
+    const request = store.openCursor();
 
     request.onsuccess = (event) => {
       const cursor = event.target.result;
       if (cursor) {
-        const conv = cursor.value;
-        conversations.push(compactConversationToMetadata(conv));
-        
-        cursor.continue(); // 继续到下一条记录
+        conversations.push(cursor.value);
+        cursor.continue();
       } else {
-        // 没有更多记录了，游标遍历完成
         resolve(conversations);
       }
     };
 
     request.onerror = (event) => {
-      // 处理游标请求期间的错误
       reject(event.target.error);
     };
   });
@@ -304,13 +348,13 @@ export async function getConversationMetadataByIds(ids) {
   if (idList.length === 0) return [];
 
   const db = await openChatHistoryDB();
-  const transaction = db.transaction('conversations', 'readonly');
-  const store = transaction.objectStore('conversations');
+  const transaction = db.transaction(CONVERSATION_METADATA_STORE, 'readonly');
+  const store = transaction.objectStore(CONVERSATION_METADATA_STORE);
 
   const tasks = idList.map((id) => new Promise((resolve) => {
     try {
       const request = store.get(id);
-      request.onsuccess = () => resolve(request.result ? compactConversationToMetadata(request.result) : null);
+      request.onsuccess = () => resolve(request.result || null);
       request.onerror = () => resolve(null);
     } catch (_) {
       resolve(null);
@@ -318,6 +362,27 @@ export async function getConversationMetadataByIds(ids) {
   }));
 
   const results = await Promise.all(tasks);
+  return results.filter(Boolean);
+}
+
+/**
+ * 批量读取聊天正文搜索投影。投影只包含会话 id 与小写正文，用于完整会话读取前的候选裁剪。
+ *
+ * @param {string[]} ids
+ * @returns {Promise<Array<{id:string, textLower:string}>>}
+ */
+export async function getConversationSearchProjectionsByIds(ids) {
+  const idList = Array.isArray(ids) ? ids.filter(Boolean) : [];
+  if (idList.length === 0) return [];
+
+  const db = await openChatHistoryDB();
+  const transaction = db.transaction(CONVERSATION_SEARCH_STORE, 'readonly');
+  const store = transaction.objectStore(CONVERSATION_SEARCH_STORE);
+  const results = await Promise.all(idList.map((id) => new Promise((resolve, reject) => {
+    const request = store.get(id);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error);
+  })));
   return results.filter(Boolean);
 }
 
@@ -349,8 +414,8 @@ export async function getConversationMetadataPageByEndTimeDesc(options = {}) {
   })();
 
   const db = await openChatHistoryDB();
-  const transaction = db.transaction('conversations', 'readonly');
-  const store = transaction.objectStore('conversations');
+  const transaction = db.transaction(CONVERSATION_METADATA_STORE, 'readonly');
+  const store = transaction.objectStore(CONVERSATION_METADATA_STORE);
 
   // 优先走 endTime 索引（v3+）
   let endTimeIndex = null;
@@ -373,7 +438,7 @@ export async function getConversationMetadataPageByEndTimeDesc(options = {}) {
           resolve(out);
           return;
         }
-        out.push(compactConversationToMetadata(c.value));
+        out.push(c.value);
         c.continue();
       };
       req.onerror = (event) => reject(event.target.error);
@@ -402,8 +467,7 @@ export async function getConversationMetadataPageByEndTimeDesc(options = {}) {
         return;
       }
 
-      const conv = cursor.value;
-      const meta = compactConversationToMetadata(conv);
+      const meta = cursor.value;
 
       // 跳过：置顶/排除项
       if (!meta.id || excludeIds.has(meta.id)) {
@@ -461,7 +525,7 @@ export async function getConversationMetadataPageByEndTimeDesc(options = {}) {
  * 按“URL 前缀候选列表”筛选出匹配的会话元数据，并标注匹配等级。
  *
  * 说明：
- * - 若存在 conversations.url 索引（v3+），则用前缀范围查询以避免全库扫描；
+ * - 使用 conversation_metadata.url 索引按前缀查询，避免读取完整消息；
  * - 匹配等级以 candidateUrls 的索引为准：越靠前越“严格/具体”；
  * - 同一会话只会分配到最严格的那个等级（去重逻辑：先处理更严格的 candidate）。
  *
@@ -475,8 +539,8 @@ export async function listConversationMetadataByUrlCandidates(candidateUrls) {
   if (candidates.length === 0) return [];
 
   const db = await openChatHistoryDB();
-  const transaction = db.transaction('conversations', 'readonly');
-  const store = transaction.objectStore('conversations');
+  const transaction = db.transaction(CONVERSATION_METADATA_STORE, 'readonly');
+  const store = transaction.objectStore(CONVERSATION_METADATA_STORE);
 
   let urlIndex = null;
   try {
@@ -506,8 +570,7 @@ export async function listConversationMetadataByUrlCandidates(candidateUrls) {
             resolve();
             return;
           }
-          const conv = cursor.value;
-          const meta = compactConversationToMetadata(conv);
+          const meta = cursor.value;
           if (meta.id && !seenIds.has(meta.id)) {
             seenIds.add(meta.id);
             results.push({
@@ -535,8 +598,7 @@ export async function listConversationMetadataByUrlCandidates(candidateUrls) {
         resolve(out);
         return;
       }
-      const conv = cursor.value;
-      const meta = compactConversationToMetadata(conv);
+      const meta = cursor.value;
       const url = meta.url || '';
       const level = candidates.findIndex((prefix) => url.startsWith(prefix));
       if (level >= 0) {
@@ -582,8 +644,8 @@ export async function findMostRecentConversationMetadataByUrlCandidates(candidat
   if (candidates.length === 0) return null;
 
   const db = await openChatHistoryDB();
-  const transaction = db.transaction('conversations', 'readonly');
-  const store = transaction.objectStore('conversations');
+  const transaction = db.transaction(CONVERSATION_METADATA_STORE, 'readonly');
+  const store = transaction.objectStore(CONVERSATION_METADATA_STORE);
 
   // v3+：若存在 url 索引，优先走“前缀范围查询”，避免全量扫描
   let urlIndex = null;
@@ -717,16 +779,31 @@ export async function getAllConversations(loadFullContent = true) {
 export async function putConversation(conversation, separateContent = false) {
   void separateContent;
   const db = await openChatHistoryDB();
-  const transaction = db.transaction('conversations', 'readwrite');
-  const conversationStore = transaction.objectStore('conversations');
 
   // 复制会话对象，避免修改原始对象
   const conversationToStore = { ...conversation };
+  const metadataToStore = compactConversationToMetadata(conversationToStore);
+  const searchProjectionToStore = buildConversationSearchProjection(
+    conversationToStore,
+    { includeHiddenThreadSelection: true }
+  );
+
+  // 三份记录必须在同一个事务中提交：完整会话是事实源，另外两份只是可重建的查询投影。
+  const transaction = db.transaction(
+    ['conversations', CONVERSATION_METADATA_STORE, CONVERSATION_SEARCH_STORE],
+    'readwrite'
+  );
+  const conversationStore = transaction.objectStore('conversations');
+  const metadataStore = transaction.objectStore(CONVERSATION_METADATA_STORE);
+  const searchStore = transaction.objectStore(CONVERSATION_SEARCH_STORE);
 
   return new Promise((resolve, reject) => {
-    const request = conversationStore.put(conversationToStore);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(request.error);
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error);
+    transaction.onabort = () => reject(transaction.error);
+    conversationStore.put(conversationToStore);
+    metadataStore.put(metadataToStore);
+    searchStore.put(searchProjectionToStore);
   });
 }
 
@@ -738,8 +815,19 @@ export async function putConversation(conversation, separateContent = false) {
 export async function deleteConversation(conversationId) {
   const db = await openChatHistoryDB();
   
-  const transaction = db.transaction(['conversations', CONVERSATION_DOCUMENT_STORE, LOCAL_FILE_MOUNT_STORE], 'readwrite');
+  const transaction = db.transaction(
+    [
+      'conversations',
+      CONVERSATION_METADATA_STORE,
+      CONVERSATION_SEARCH_STORE,
+      CONVERSATION_DOCUMENT_STORE,
+      LOCAL_FILE_MOUNT_STORE
+    ],
+    'readwrite'
+  );
   const conversationStore = transaction.objectStore('conversations');
+  const metadataStore = transaction.objectStore(CONVERSATION_METADATA_STORE);
+  const searchStore = transaction.objectStore(CONVERSATION_SEARCH_STORE);
   const documentStore = transaction.objectStore(CONVERSATION_DOCUMENT_STORE);
   const localMountStore = transaction.objectStore(LOCAL_FILE_MOUNT_STORE);
   
@@ -749,6 +837,8 @@ export async function deleteConversation(conversationId) {
     transaction.onerror = () => reject(transaction.error);
     transaction.onabort = () => reject(transaction.error);
     const request = conversationStore.delete(conversationId);
+    metadataStore.delete(conversationId);
+    searchStore.delete(conversationId);
     request.onsuccess = () => {
       try {
         const index = documentStore.index('conversation_id');

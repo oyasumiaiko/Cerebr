@@ -8,15 +8,20 @@ async function readWorkspaceFile(relativePath) {
   return fs.readFile(filePath, 'utf8');
 }
 
-test('indexeddb_helper 已创建 conversation_documents store 并在删除会话时级联清理', async () => {
+test('indexeddb_helper 已创建轻量搜索投影并在删除会话时级联清理', async () => {
   const source = await readWorkspaceFile('src/storage/indexeddb_helper.js');
 
-  assert.match(source, /indexedDB\.open\('ChatHistoryDB', 5\)/);
+  assert.match(source, /const CHAT_HISTORY_DB_VERSION = 6;/);
+  assert.match(source, /indexedDB\.open\('ChatHistoryDB', CHAT_HISTORY_DB_VERSION\)/);
   assert.match(source, /const CONVERSATION_DOCUMENT_STORE = 'conversation_documents';/);
   assert.match(source, /const LOCAL_FILE_MOUNT_STORE = 'local_file_mounts';/);
+  assert.match(source, /const CONVERSATION_METADATA_STORE = 'conversation_metadata';/);
+  assert.match(source, /const CONVERSATION_SEARCH_STORE = 'conversation_search';/);
+  assert.match(source, /db\.createObjectStore\(CONVERSATION_METADATA_STORE, \{ keyPath: 'id' \}\)/);
+  assert.match(source, /db\.createObjectStore\(CONVERSATION_SEARCH_STORE, \{ keyPath: 'id' \}\)/);
   assert.match(source, /db\.createObjectStore\(CONVERSATION_DOCUMENT_STORE, \{\s*keyPath: \['conversation_id', 'path'\]/s);
   assert.match(source, /db\.createObjectStore\(LOCAL_FILE_MOUNT_STORE, \{\s*keyPath: \['conversation_id', 'mount_path'\]/s);
-  assert.match(source, /const transaction = db\.transaction\(\['conversations', CONVERSATION_DOCUMENT_STORE, LOCAL_FILE_MOUNT_STORE\], 'readwrite'\);/);
+  assert.match(source, /CONVERSATION_METADATA_STORE,[\s\S]*?CONVERSATION_SEARCH_STORE,[\s\S]*?CONVERSATION_DOCUMENT_STORE,[\s\S]*?LOCAL_FILE_MOUNT_STORE[\s\S]*?'readwrite'/s);
   assert.match(source, /const index = documentStore\.index\('conversation_id'\);/);
   assert.match(source, /const localIndex = localMountStore\.index\('conversation_id'\);/);
 });

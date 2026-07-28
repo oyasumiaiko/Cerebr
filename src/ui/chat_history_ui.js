@@ -8,6 +8,7 @@ import {
   getAllConversations, 
   getConversationMetadataByIds,
   getConversationMetadataPageByEndTimeDesc,
+  getConversationSearchProjectionsByIds,
   listConversationMetadataByUrlCandidates,
   putConversation, 
   deleteConversation, 
@@ -41,6 +42,7 @@ import {
   buildChatHistorySearchPlan as buildChatHistorySearchPlanShared,
   buildChatHistoryTextPlan as buildChatHistoryTextPlanShared,
   buildMetaSearchText as buildMetaSearchTextShared,
+  canConversationSearchProjectionMatch as canConversationSearchProjectionMatchShared,
   compareMessageDateRange as compareMessageDateRangeShared,
   compareNumericRange as compareNumericRangeShared,
   computeConversationMessageStats as computeConversationMessageStatsShared,
@@ -5593,6 +5595,23 @@ export function createChatHistoryUI(appContext) {
 
         updateProgress(true);
 
+        // 一次 transaction 预取本轮候选的轻量正文投影，避免每 12 条开启新事务；
+        // 若用户继续输入，取消检查会阻止后续完整会话读取。
+        const searchProjectionIds = candidateMetas.map((meta) => meta?.id).filter(Boolean);
+        const searchProjections = await getConversationSearchProjectionsByIds(searchProjectionIds);
+        if (isCancelled()) {
+          setSearchProgressVisible(searchProgressIndicator, false);
+          return;
+        }
+        const searchProjectionById = new Map();
+        for (const projection of searchProjections) {
+          if (projection?.id) searchProjectionById.set(projection.id, projection);
+        }
+        const missingProjectionIds = searchProjectionIds.filter((id) => !searchProjectionById.has(id));
+        if (missingProjectionIds.length > 0) {
+          throw new Error(`聊天搜索索引缺失：${missingProjectionIds.slice(0, 5).join(', ')}`);
+        }
+
         const workers = Array.from({ length: CONCURRENCY }).map(async () => {
           while (true) {
             const batchStart = nextIndex;
@@ -5657,10 +5676,25 @@ export function createChatHistoryUI(appContext) {
 
             // 2) 未命中元数据的条目：批量读取会话并扫描 messages（减少 transaction 次数）
             if (batchToScan.length > 0) {
-              const idsToLoad = batchToScan.map((item) => item.meta.id).filter(Boolean);
+              const exactBatchToScan = [];
+              for (const item of batchToScan) {
+                const projection = searchProjectionById.get(item.meta.id);
+                if (canConversationSearchProjectionMatchShared(projection, textPlan, item.remainingTerms)) {
+                  exactBatchToScan.push(item);
+                } else {
+                  processedCount++;
+                  updateProgress();
+                }
+              }
+
+              if (exactBatchToScan.length === 0) continue;
+
               let conversations = [];
               try {
-                conversations = await getConversationsByIds(idsToLoad, false);
+                conversations = await getConversationsByIds(
+                  exactBatchToScan.map((item) => item.meta.id),
+                  false
+                );
               } catch (error) {
                 console.error('批量加载会话失败（全文搜索）:', error);
                 conversations = [];
@@ -5676,7 +5710,7 @@ export function createChatHistoryUI(appContext) {
                 if (conv?.id) conversationById.set(conv.id, conv);
               }
 
-              for (const item of batchToScan) {
+              for (const item of exactBatchToScan) {
                 if (isCancelled()) {
                   cancelled = true;
                   break;
