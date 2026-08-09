@@ -49,7 +49,7 @@ function buildSkillCreatorInstruction() {
     '1. 用具体例子理解需求：列出真实用户会怎么问、哪些请求应触发、哪些相近请求不应触发。只有用法已经明确时才跳过。',
     '2. 规划可复用内容：逐个例子推演从零完成任务需要什么，把反复重写的 JS、详细文档和输出模板分别规划到 scripts、references、assets。',
     '3. 初始化或定位：新 skill 调用 `skill_registry(action="create_skill", skill={ name, description, interface, enabled:false, resources, examples })`；更新已有 skill 先 `skill_registry(action="list", include_all_sites=true)` 找到稳定 key。',
-    '4. 实现：先读目标 `SKILL.md`，再按需 `list_files` / `search_files` / `read_file`；文件修改使用 `apply_patch(target={kind:"skill",name}, patch=...)`，复制、移动和删除使用对应顶层文件工具。',
+    '4. 实现：先读目标 `SKILL.md`，再按需 `list_files` / `search_files` / `read_file`；修改 skill 时直接调用 Freeform `apply_patch`，并在 `*** Begin Patch` 后写 `*** Environment ID: skill:<stable-key>`；复制、移动和删除使用对应顶层文件工具。',
     '5. 验证：回读变更文件，检查 frontmatter 与 manifest 同步、TODO 和占位文件已清理、引用路径存在、说明足够短且可执行。',
     '6. 迭代：至少用 2-3 个有代表性的真实请求执行 skill，记录卡点，只修复可复现的问题；复杂 skill 在条件允许时做独立前向测试。',
     '',

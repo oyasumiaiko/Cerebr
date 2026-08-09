@@ -4285,7 +4285,7 @@ export function createApiManager(appContext) {
 
       const description = document.createElement('div');
       description.className = 'responses-settings-description';
-      description.textContent = '控制 Cerebr 暴露给 Responses API 的本地 function tools。关闭后，该工具不会进入最终请求体，即使自动注入链路本来支持它。';
+      description.textContent = '控制 Cerebr 暴露给 Responses API 的本地 function/custom tools。关闭后，该工具不会进入最终请求体，即使自动注入链路本来支持它。';
       body.appendChild(description);
 
       const grid = document.createElement('div');

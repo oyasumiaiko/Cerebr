@@ -43,7 +43,11 @@ test('RESPONSES_EXTENSION_TOOL_SPECS 以稳定顺序登记扩展提供工具', a
     assert.equal(typeof spec.outputKind, 'string');
     assert.equal(typeof spec.sideEffect, 'string');
     assert.equal(typeof spec.deferLoading, 'boolean');
+    assert.ok(spec.toolType === 'function' || spec.toolType === 'custom');
   }
+  const applyPatchSpec = RESPONSES_EXTENSION_TOOL_SPECS.find(spec => spec.id === 'apply_patch');
+  assert.equal(applyPatchSpec.toolType, 'custom');
+  assert.equal(applyPatchSpec.deferLoading, false);
   assert.equal(RESPONSES_EXTENSION_TOOL_SPECS.find(spec => spec.id === 'view_image').sideEffect, 'network');
   const readToolOutputSpec = RESPONSES_EXTENSION_TOOL_SPECS.find(spec => spec.id === 'read_tool_output');
   assert.equal(readToolOutputSpec.alwaysEnabled, true);
@@ -84,6 +88,12 @@ test('resolveResponsesExtensionToolSpecForCall 不会把 namespace 内同名函�
     ]).handlerKey,
     'virtual_file'
   );
+  assert.equal(resolveAuthorizedResponsesExtensionToolSpec('apply_patch', '', [
+    { type: 'function', name: 'apply_patch' }
+  ], 'custom'), null);
+  assert.equal(resolveAuthorizedResponsesExtensionToolSpec('apply_patch', '', [
+    { type: 'custom', name: 'apply_patch' }
+  ], 'custom').handlerKey, 'virtual_file');
 });
 
 test('reconcileResponsesAllowedToolChoice 会同步当前不可用的本地工具', async () => {
@@ -134,6 +144,29 @@ test('reconcileResponsesAllowedToolChoice 会同步当前不可用的本地工�
       mode: 'required',
       tools: [
         { type: 'function', name: 'history_search' },
+        'read_tool_output'
+      ]
+    }
+  );
+
+  const finalToolsWithCustomPatch = [
+    ...finalTools,
+    { type: 'custom', name: 'apply_patch' }
+  ];
+  assert.deepEqual(
+    reconcileResponsesAllowedToolChoice({
+      type: 'allowed_tools',
+      mode: 'required',
+      tools: [
+        { type: 'function', name: 'apply_patch' },
+        { type: 'custom', name: 'apply_patch' }
+      ]
+    }, finalToolsWithCustomPatch),
+    {
+      type: 'allowed_tools',
+      mode: 'required',
+      tools: [
+        { type: 'custom', name: 'apply_patch' },
         'read_tool_output'
       ]
     }
@@ -213,18 +246,22 @@ test('filterResponsesExtensionFunctionTools 会过滤被关闭的同名 function
 test('filterUnavailableResponsesExtensionFunctionTools 会阻止手写同名函数绕过本轮暴露环境', async () => {
   const { filterUnavailableResponsesExtensionFunctionTools } = await loadResponsesExtensionToolsModule();
   const tools = [
+    { type: 'function', name: 'apply_patch', description: 'legacy collision' },
+    { type: 'custom', name: 'apply_patch', description: 'raw custom collision' },
     { type: 'function', name: 'page_content_read', description: 'raw collision' },
     { type: 'function', name: 'history_search', description: 'raw collision' },
     { type: 'function', name: 'external_custom', description: 'user handler' },
     { type: 'web_search' }
   ];
   const available = [
+    { type: 'custom', name: 'apply_patch', description: 'cerebr custom definition' },
     { type: 'function', name: 'history_search', description: 'cerebr definition' }
   ];
 
   assert.deepEqual(
     filterUnavailableResponsesExtensionFunctionTools(tools, available),
     [
+      { type: 'custom', name: 'apply_patch', description: 'raw custom collision' },
       { type: 'function', name: 'history_search', description: 'raw collision' },
       { type: 'function', name: 'external_custom', description: 'user handler' },
       { type: 'web_search' }

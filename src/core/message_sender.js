@@ -90,7 +90,7 @@ import {
 } from '../agent_tools/shared/responses_custom_tool_search.js';
 import {
   RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES,
-  buildResponsesExtensionFunctionTools
+  buildResponsesExtensionTools
 } from '../agent_tools/shared/responses_extension_tool_registry.js';
 import {
   filterResponsesExtensionFunctionTools,
@@ -103,7 +103,7 @@ import {
   isUserMessageTemplateEnabled
 } from '../api/api_request_mode.js';
 import {
-  ensureResponsesReplayOutputItemsIncludeFunctionCalls
+  ensureResponsesReplayOutputItemsIncludeToolCalls
 } from '../utils/responses_follow_up.js';
 import {
   buildAssistantContentWithGeneratedImages,
@@ -143,6 +143,7 @@ import {
   buildConversationDocumentActionPayloadFromVirtualFileAction,
   buildSkillRegistryFileActionPayloadFromVirtualFileAction,
   executeConversationDocumentAction,
+  normalizeVirtualFileApplyPatchCustomInput,
   normalizeVirtualFileResultFromSkillRegistryAction,
   normalizeVirtualFileToolArguments
 } from '../agent_tools/virtual_file_io/index.js';
@@ -1284,6 +1285,13 @@ export function createMessageSender(appContext) {
     return undefined;
   }
 
+  function restoreResponsesCustomToolRawInput(normalized, source) {
+    if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) return normalized;
+    if (String(source?.type || '').trim().toLowerCase() !== 'custom_tool_call') return normalized;
+    if (typeof source?.input === 'string') normalized.input = source.input;
+    return normalized;
+  }
+
   /**
    * 规范化 Responses 工具返回里的 sources 条目，只保留 UI / 持久化真正会用到的轻量字段。
    * @param {any} source
@@ -1487,7 +1495,8 @@ export function createMessageSender(appContext) {
         ...entry,
         kind: 'tool_call'
       });
-      return (normalized && typeof normalized === 'object' && !Array.isArray(normalized)) ? normalized : null;
+      if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) return null;
+      return restoreResponsesCustomToolRawInput(normalized, entry);
     }
     return null;
   }
@@ -1522,12 +1531,15 @@ export function createMessageSender(appContext) {
     const itemId = (typeof item.item_id === 'string' && item.item_id)
       ? item.item_id
       : ((typeof item.id === 'string' && item.id) ? item.id : '');
-    const id = (type === 'function_call')
+    // 流式 custom input delta 只保证携带 item_id；完整 item 同时携带 id 与 call_id。
+    // 两者必须统一以 item_id/id 作为时间线主键，否则每个 delta 都会生成一张没有
+    // name 的孤立工具卡片，既无法累积 raw input，也无法在 done 前展示 patch 预览。
+    const id = (type === 'function_call' || type === 'custom_tool_call')
       ? (itemId || callId || '')
       : (callId || itemId || '');
     const status = (typeof item.status === 'string') ? item.status : '';
 
-    if (type === 'function_call') {
+    if (type === 'function_call' || type === 'custom_tool_call') {
       const namespace = (typeof item.namespace === 'string' && item.namespace.trim())
         ? item.namespace.trim()
         : '';
@@ -1539,9 +1551,12 @@ export function createMessageSender(appContext) {
         status,
         namespace,
         name: item.name || '',
-        arguments: item.arguments || ''
+        ...(type === 'custom_tool_call'
+          ? { input: item.input || '' }
+          : { arguments: item.arguments || '' })
       });
-      return (normalized && typeof normalized === 'object' && !Array.isArray(normalized)) ? normalized : null;
+      if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) return null;
+      return restoreResponsesCustomToolRawInput(normalized, item);
     }
 
     if (type === 'web_search_call') {
@@ -1608,7 +1623,8 @@ export function createMessageSender(appContext) {
       ...record,
       status: options.status || record.status || ''
     });
-    return (entry && typeof entry === 'object' && !Array.isArray(entry)) ? entry : null;
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+    return restoreResponsesCustomToolRawInput(entry, record);
   }
 
   function mergeResponsesActivityTimeline(existingTimeline, incomingTimeline) {
@@ -1645,6 +1661,7 @@ export function createMessageSender(appContext) {
             ...previous,
             ...normalized,
             arguments: mergeResponsesToolArguments(previous, normalized),
+            input: mergeResponsesToolInput(previous, normalized),
             sources: (Array.isArray(normalized.sources) && normalized.sources.length > 0)
               ? normalized.sources
               : previous.sources
@@ -1770,6 +1787,18 @@ export function createMessageSender(appContext) {
       }
     }
 
+    return mergeStreamingThoughts(prev, next);
+  }
+
+  function mergeResponsesToolInput(previous, normalized) {
+    const prev = (typeof previous?.input === 'string') ? previous.input : '';
+    const next = (typeof normalized?.input === 'string') ? normalized.input : '';
+    if (!prev) return next;
+    if (!next) return prev;
+    if (isResponsesActivityEntryCompleted(normalized)) {
+      if (next.startsWith(prev) || next.includes(prev) || next.length >= prev.length) return next;
+      if (prev.includes(next)) return prev;
+    }
     return mergeStreamingThoughts(prev, next);
   }
 
@@ -1954,24 +1983,25 @@ export function createMessageSender(appContext) {
     if (!Array.isArray(timeline) || timeline.length === 0) return null;
     const toolCalls = timeline
       .filter(entry => entry?.kind === 'tool_call')
-      .map((entry) => compactResponsesMetaValue({
-        type: entry.type,
-        id: entry.id,
-        item_id: entry.item_id,
-        call_id: entry.call_id,
-        status: entry.status,
-        action_type: entry.action_type,
-        query: entry.query,
-        queries: entry.queries,
-        url: entry.url,
-        title: entry.title,
-        pattern: entry.pattern,
-        name: entry.name,
-        arguments: entry.arguments,
-        revised_prompt: entry.revised_prompt,
-        result_image_url: entry.result_image_url,
-        sources: entry.sources
-      }))
+      .map((entry) => restoreResponsesCustomToolRawInput(compactResponsesMetaValue({
+          type: entry.type,
+          id: entry.id,
+          item_id: entry.item_id,
+          call_id: entry.call_id,
+          status: entry.status,
+          action_type: entry.action_type,
+          query: entry.query,
+          queries: entry.queries,
+          url: entry.url,
+          title: entry.title,
+          pattern: entry.pattern,
+          name: entry.name,
+          arguments: entry.arguments,
+          input: entry.input,
+          revised_prompt: entry.revised_prompt,
+          result_image_url: entry.result_image_url,
+          sources: entry.sources
+        }), entry))
       .filter(entry => entry && typeof entry === 'object' && !Array.isArray(entry));
     return toolCalls.length > 0 ? toolCalls : null;
   }
@@ -1988,7 +2018,7 @@ export function createMessageSender(appContext) {
   function mergeResponsesToolCallRecordLists(existingRecords, incomingRecords) {
     const merged = Array.isArray(existingRecords)
       ? existingRecords
-        .map(record => compactResponsesMetaValue(record))
+        .map(record => restoreResponsesCustomToolRawInput(compactResponsesMetaValue(record), record))
         .filter(record => record && typeof record === 'object' && !Array.isArray(record))
       : [];
     const keyToIndex = new Map();
@@ -1997,7 +2027,7 @@ export function createMessageSender(appContext) {
     });
 
     (Array.isArray(incomingRecords) ? incomingRecords : []).forEach((record, index) => {
-      const normalized = compactResponsesMetaValue(record);
+      const normalized = restoreResponsesCustomToolRawInput(compactResponsesMetaValue(record), record);
       if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) return;
       const key = getResponsesToolCallRecordKey(normalized, index);
       if (keyToIndex.has(key)) {
@@ -8472,7 +8502,7 @@ export function createMessageSender(appContext) {
 
 
   /**
-   * 返回当前这次发送应该暴露给 Responses API 的自定义函数工具列表。
+   * 返回当前这次发送应该暴露给 Responses API 的扩展工具列表。
    *
    * 当前工具暴露规则：
    * - 仅在 Responses API 场景下注入；
@@ -8483,10 +8513,10 @@ export function createMessageSender(appContext) {
    * @param {ReturnType<typeof resolvePageToolEnvironment>} pageToolEnvironment
    * @returns {Array<Object>}
    */
-  function getResponsesCustomFunctionTools(usedApiConfig, pageToolEnvironment = resolveResponsesPageToolEnvironment()) {
+  function getResponsesExtensionToolsForRequest(usedApiConfig, pageToolEnvironment = resolveResponsesPageToolEnvironment()) {
     if (!isOpenAIResponsesApiConfig(usedApiConfig)) return [];
     if (isPureConversationApiConfig(usedApiConfig)) return [];
-    const tools = buildResponsesExtensionFunctionTools({
+    const tools = buildResponsesExtensionTools({
       pageToolEnvironment,
       hasJsRuntime: typeof utils?.executeJsRuntime === 'function'
     });
@@ -8497,12 +8527,12 @@ export function createMessageSender(appContext) {
   }
 
   /**
-   * 把自定义函数工具合并进 Responses API requestBody.tools。
+   * 把扩展工具合并进 Responses API requestBody.tools。
    *
    * 合并规则：
    * - 普通内置工具仍按 type 去重；
-   * - function 工具按 type + name 去重；
-   * - 若同名 function 已存在，则以当前客户端定义覆盖，确保参数契约稳定。
+   * - function/custom 工具按 type + name 去重；
+   * - 若同 type、同名工具已存在，则以当前客户端定义覆盖，确保协议契约稳定。
    *
    * @param {Array<any>} existingTools
    * @param {Array<any>} customTools
@@ -8525,7 +8555,7 @@ export function createMessageSender(appContext) {
         if (!item || typeof item !== 'object' || Array.isArray(item)) return false;
         const itemType = (typeof item.type === 'string') ? item.type.trim() : '';
         if (itemType !== toolType) return false;
-        if (toolType === 'function') {
+        if (toolType === 'function' || toolType === 'custom') {
           return ((typeof item.name === 'string') ? item.name.trim() : '') === toolName;
         }
         return true;
@@ -8542,7 +8572,7 @@ export function createMessageSender(appContext) {
   }
 
   /**
-   * 在真正发请求前，把当前客户端支持的自定义 function tools 注入 Responses 请求体。
+   * 在真正发请求前，把当前客户端支持的 Responses 扩展工具注入请求体。
    *
    * @param {Object} requestBody
    * @param {Object|null|undefined} usedApiConfig
@@ -8562,7 +8592,7 @@ export function createMessageSender(appContext) {
     );
     const hostedToolSearchEnabled = hasResponsesHostedToolSearchTool(nextBody.tools);
     const customTools = adaptResponsesCustomFunctionToolsForHostedToolSearch(
-      getResponsesCustomFunctionTools(usedApiConfig, pageToolEnvironment),
+      getResponsesExtensionToolsForRequest(usedApiConfig, pageToolEnvironment),
       {
         hostedToolSearchEnabled,
         searchableToolNames: RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES
@@ -9635,6 +9665,65 @@ export function createMessageSender(appContext) {
    * @param {Object} toolCallRecord
    * @returns {Promise<{type:'function_call_output', call_id:string, output:Array<Object>}>}
    */
+  async function executeResponsesApplyPatchCustomToolCall(toolCallRecord, options = {}) {
+    const callId = (typeof toolCallRecord?.call_id === 'string' && toolCallRecord.call_id.trim())
+      ? toolCallRecord.call_id.trim()
+      : ((typeof toolCallRecord?.id === 'string') ? toolCallRecord.id.trim() : '');
+    const toolName = (typeof toolCallRecord?.name === 'string') ? toolCallRecord.name.trim() : '';
+    if (!callId) {
+      throw new Error(`Responses custom_tool_call 缺少 call_id，无法回传工具结果（${toolName || 'unknown'}）。`);
+    }
+
+    const localToolSpec = resolveAuthorizedResponsesExtensionToolSpec(
+      toolName,
+      '',
+      options?.requestBody?.tools,
+      'custom'
+    );
+    let outputPayload = null;
+    if (localToolSpec?.id !== 'apply_patch' || localToolSpec?.handlerKey !== 'virtual_file') {
+      outputPayload = {
+        ok: false,
+        error: {
+          name: 'UnsupportedCustomToolError',
+          message: `当前客户端尚未实现或未授权 custom tool ${toolName || '(unnamed)'}。`
+        }
+      };
+    } else {
+      try {
+        const normalizedArgs = normalizeVirtualFileApplyPatchCustomInput(
+          typeof toolCallRecord?.input === 'string' ? toolCallRecord.input : ''
+        );
+        outputPayload = await executeResponsesVirtualFileFunction(
+          localToolSpec.id,
+          normalizedArgs,
+          options
+        );
+      } catch (error) {
+        outputPayload = {
+          ok: false,
+          error: normalizeResponsesCustomToolError(error)
+        };
+      }
+    }
+
+    const serializedOutput = serializeResponsesConversationDocumentFunctionToolOutput(
+      localToolSpec?.id || toolName,
+      outputPayload
+    );
+    // Freeform custom tool 的输入必须保持纯 patch，不能混入 function tool 才有的
+    // max_output_chars 字段；它的结果仍走统一分页出口，并采用普通工具的 5000 字符默认值。
+    const { maxOutputChars } = splitResponsesToolOutputControl({}, {
+      toolName: localToolSpec?.id || toolName
+    });
+    const paginatedOutput = responsesToolOutputPageCache.paginate(serializedOutput, maxOutputChars);
+    return {
+      type: 'custom_tool_call_output',
+      call_id: callId,
+      output: paginatedOutput.contentItems
+    };
+  }
+
   async function executeResponsesCustomFunctionToolCall(toolCallRecord, options = {}) {
     const callId = (typeof toolCallRecord?.call_id === 'string' && toolCallRecord.call_id.trim())
       ? toolCallRecord.call_id.trim()
@@ -9813,6 +9902,14 @@ export function createMessageSender(appContext) {
     };
   }
 
+  async function executeResponsesLocalToolCall(toolCallRecord, options = {}) {
+    const toolCallType = String(toolCallRecord?.type || '').trim().toLowerCase();
+    if (toolCallType === 'custom_tool_call') {
+      return executeResponsesApplyPatchCustomToolCall(toolCallRecord, options);
+    }
+    return executeResponsesCustomFunctionToolCall(toolCallRecord, options);
+  }
+
   /**
    * 将本地 function_call_output 合并回 response_activity_timeline。
    *
@@ -9845,11 +9942,15 @@ export function createMessageSender(appContext) {
         ? outputItem.call_id.trim()
         : '';
       if (!callId) return;
+      const outputType = String(outputItem.type || '').trim().toLowerCase();
+      const expectedCallType = outputType === 'custom_tool_call_output'
+        ? 'custom_tool_call'
+        : 'function_call';
 
       let merged = false;
       nextTimeline = nextTimeline.map((entry) => {
         if (!entry || entry.kind !== 'tool_call') return entry;
-        if (String(entry.type || '').trim().toLowerCase() !== 'function_call') return entry;
+        if (String(entry.type || '').trim().toLowerCase() !== expectedCallType) return entry;
         if (String(entry.call_id || '').trim() !== callId) return entry;
         merged = true;
         return normalizeResponsesActivityTimelineEntry({
@@ -9862,7 +9963,7 @@ export function createMessageSender(appContext) {
       if (merged) return;
 
       nextTimeline = upsertResponsesToolTimeline(nextTimeline, {
-        type: 'function_call',
+        type: expectedCallType,
         call_id: callId,
         status: 'completed',
         output: cloneDataSafely(outputItem.output)
@@ -10363,9 +10464,12 @@ export function createMessageSender(appContext) {
         }
       }
 
-      const pendingFunctionCalls = Array.isArray(lastHandleResult?.responseToolCalls)
+      const pendingToolCalls = Array.isArray(lastHandleResult?.responseToolCalls)
         ? lastHandleResult.responseToolCalls
-          .filter(record => String(record?.type || '').trim().toLowerCase() === 'function_call')
+          .filter((record) => {
+            const type = String(record?.type || '').trim().toLowerCase();
+            return type === 'function_call' || type === 'custom_tool_call';
+          })
         : [];
 
       // 纯对话 API 即使遇到非预期的 provider tool_call，也只把它当作模型输出保存，
@@ -10378,7 +10482,7 @@ export function createMessageSender(appContext) {
         return lastHandleResult;
       }
 
-      if (pendingFunctionCalls.length <= 0) {
+      if (pendingToolCalls.length <= 0) {
         return lastHandleResult;
       }
 
@@ -10387,20 +10491,20 @@ export function createMessageSender(appContext) {
       });
       await persistAttemptConversationSnapshot(attemptState, { force: true });
 
-      const functionCallOutputs = [];
-      for (const toolCall of pendingFunctionCalls) {
+      const toolCallOutputs = [];
+      for (const toolCall of pendingToolCalls) {
         if (signal?.aborted) {
           throw new DOMException('The operation was aborted.', 'AbortError');
         }
-        functionCallOutputs.push(await executeResponsesCustomFunctionToolCall(toolCall, {
+        toolCallOutputs.push(await executeResponsesLocalToolCall(toolCall, {
           attemptState,
           usedApiConfig,
           requestBody: currentRequestBody
         }));
       }
-      const replayOutputItemsForFollowUp = ensureResponsesReplayOutputItemsIncludeFunctionCalls(
+      const replayOutputItemsForFollowUp = ensureResponsesReplayOutputItemsIncludeToolCalls(
         lastHandleResult?.responseOutputItems,
-        pendingFunctionCalls
+        pendingToolCalls
       );
 
       /**
@@ -10432,8 +10536,8 @@ export function createMessageSender(appContext) {
         });
         const mergedTimeline = mergeResponsesFunctionOutputsIntoTimeline(
           attemptState.responsesToolLoopAccumulatedTimeline || lastHandleResult?.responseActivityTimeline,
-          pendingFunctionCalls,
-          functionCallOutputs
+          pendingToolCalls,
+          toolCallOutputs
         );
         const mergedInputItems = mergeResponsesReplayOutputItems(
           attemptState.responsesToolLoopAccumulatedInputItems,
@@ -10441,7 +10545,7 @@ export function createMessageSender(appContext) {
         );
         const mergedInputItemsWithOutputs = mergeResponsesReplayOutputItems(
           mergedInputItems,
-          functionCallOutputs
+          toolCallOutputs
         );
         applyResponsesActivityTimelineToAttempt(attemptState, mergedTimeline);
         applyResponsesInputItemsToAttempt(attemptState, mergedInputItemsWithOutputs);
@@ -10451,7 +10555,7 @@ export function createMessageSender(appContext) {
       currentRequestBody = buildResponsesFunctionToolFollowUpRequest(
         requestBodySnapshot,
         replayOutputItemsForFollowUp,
-        functionCallOutputs,
+        toolCallOutputs,
         pendingSteerInputItemsForFollowUp
       );
       stagePendingSteersForFollowUp(
@@ -13632,6 +13736,30 @@ export function createMessageSender(appContext) {
             latestResponsesActivityTimeline,
             functionCallRecord,
             { status: eventType === 'response.function_call_arguments.done' ? 'completed' : (data?.status || 'streaming') }
+          );
+          hasToolCallsDelta = true;
+        } else if (eventType === 'response.custom_tool_call_input.delta' || eventType === 'response.custom_tool_call_input.done') {
+          const customToolCallRecord = normalizeResponsesToolCallRecord({
+            type: 'custom_tool_call',
+            item_id: data?.item_id,
+            call_id: data?.call_id,
+            id: data?.id,
+            name: data?.name,
+            input: (typeof data?.input === 'string')
+              ? data.input
+              : ((typeof data?.delta === 'string') ? data.delta : ''),
+            status: eventType === 'response.custom_tool_call_input.done'
+              ? 'completed'
+              : (data?.status || 'streaming')
+          });
+          latestResponsesActivityTimeline = upsertResponsesToolTimeline(
+            latestResponsesActivityTimeline,
+            customToolCallRecord,
+            {
+              status: eventType === 'response.custom_tool_call_input.done'
+                ? 'completed'
+                : (data?.status || 'streaming')
+            }
           );
           hasToolCallsDelta = true;
         } else if (eventType === 'response.completed') {

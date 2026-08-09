@@ -16,6 +16,7 @@ const MOVE_TO_MARKER = '*** Move to: ';
 const CHANGE_CONTEXT_MARKER = '@@ ';
 const EMPTY_CHANGE_CONTEXT_MARKER = '@@';
 const EOF_MARKER = '*** End of File';
+const ENVIRONMENT_ID_MARKER = '*** Environment ID:';
 
 function createInvalidPatchError(message) {
   const error = new Error(message);
@@ -30,241 +31,372 @@ function createInvalidHunkError(message, lineNumber) {
   return error;
 }
 
-function splitPatchLines(patch) {
-  const trimmed = String(patch || '').trim();
-  return trimmed ? trimmed.split(/\r?\n/) : [];
+function cloneHunks(hunks) {
+  return hunks.map((hunk) => ({
+    ...hunk,
+    ...(Array.isArray(hunk.chunks)
+      ? {
+        chunks: hunk.chunks.map((chunk) => ({
+          ...chunk,
+          old_lines: [...chunk.old_lines],
+          new_lines: [...chunk.new_lines]
+        }))
+      }
+      : {})
+  }));
 }
 
-function checkStartAndEndLinesStrict(firstLine, lastLine) {
-  const normalizedFirst = typeof firstLine === 'string' ? firstLine.trim() : null;
-  const normalizedLast = typeof lastLine === 'string' ? lastLine.trim() : null;
-
-  if (normalizedFirst === BEGIN_PATCH_MARKER && normalizedLast === END_PATCH_MARKER) {
-    return;
-  }
-  if (normalizedFirst !== BEGIN_PATCH_MARKER) {
-    throw createInvalidPatchError("The first line of the patch must be '*** Begin Patch'");
-  }
-  throw createInvalidPatchError("The last line of the patch must be '*** End Patch'");
+function clonePreviewFiles(files) {
+  return files.map((file) => ({
+    ...file,
+    lines: file.lines.map((line) => ({ ...line }))
+  }));
 }
 
-function checkPatchBoundariesStrict(lines) {
-  if (!Array.isArray(lines) || lines.length <= 0) {
-    checkStartAndEndLinesStrict(null, null);
-    return;
-  }
-  checkStartAndEndLinesStrict(lines[0], lines[lines.length - 1]);
-}
-
-function checkPatchBoundariesLenient(lines, originalError) {
-  if (!Array.isArray(lines) || lines.length < 4) {
-    throw originalError;
-  }
-  const first = lines[0];
-  const last = lines[lines.length - 1];
-  if (
-    (first === '<<EOF' || first === "<<'EOF'" || first === '<<"EOF"')
-    && last.endsWith('EOF')
-  ) {
-    const innerLines = lines.slice(1, -1);
-    checkPatchBoundariesStrict(innerLines);
-    return innerLines;
-  }
-  throw originalError;
-}
-
-function parseUpdateFileChunk(lines, lineNumber, allowMissingContext) {
-  if (!Array.isArray(lines) || lines.length <= 0) {
-    throw createInvalidHunkError('Update hunk does not contain any lines', lineNumber);
+/**
+ * Codex `StreamingPatchParser` 的 JavaScript 对齐实现。
+ *
+ * 同步基准：openai-codex `a16863f8704831d13e041ed7dba2c4a57a2a940b`。
+ * 解析器是执行 AST 与流式预览的唯一语法来源：只有被状态机接受的完整行才会
+ * 进入 previewFiles，非法完整行会携带精确行号抛错，UI 不再自行猜测 patch。
+ */
+export class StreamingApplyPatchParser {
+  constructor() {
+    this.lineBuffer = '';
+    this.mode = 'not_started';
+    this.hunkLineNumber = 0;
+    this.hunks = [];
+    this.previewFiles = [];
+    this.environmentId = null;
+    this.lineNumber = 0;
+    this.finished = false;
   }
 
-  let changeContext = null;
-  let startIndex = 0;
-  if (lines[0] === EMPTY_CHANGE_CONTEXT_MARKER) {
-    startIndex = 1;
-  } else if (typeof lines[0] === 'string' && lines[0].startsWith(CHANGE_CONTEXT_MARKER)) {
-    changeContext = lines[0].slice(CHANGE_CONTEXT_MARKER.length);
-    startIndex = 1;
-  } else if (!allowMissingContext) {
+  get environment_id() {
+    return this.environmentId;
+  }
+
+  getHunks() {
+    return cloneHunks(this.hunks);
+  }
+
+  getSnapshot(options = {}) {
+    return {
+      hunks: this.getHunks(),
+      environment_id: this.environmentId,
+      files: clonePreviewFiles(this.previewFiles),
+      line_number: this.lineNumber,
+      pending_line: this.lineBuffer,
+      complete: this.mode === 'ended_patch',
+      finished: options.finished === true || this.finished === true
+    };
+  }
+
+  getCurrentPreviewFile() {
+    return this.previewFiles[this.previewFiles.length - 1] || null;
+  }
+
+  appendPreviewLine(type, content, raw) {
+    const file = this.getCurrentPreviewFile();
+    if (!file) return;
+    file.lines.push({
+      type,
+      content,
+      raw,
+      line_number: this.lineNumber,
+      sequence: file.lines.length
+    });
+  }
+
+  ensureUpdateHunkIsNotEmpty(line) {
+    const lastHunk = this.hunks[this.hunks.length - 1];
+    if (!lastHunk || lastHunk.type !== 'update_file') return;
+    if (lastHunk.chunks.length === 0 && this.mode === 'update_file') {
+      throw createInvalidHunkError(
+        `Update file hunk for path '${lastHunk.path}' is empty`,
+        this.hunkLineNumber
+      );
+    }
+    const lastChunk = lastHunk.chunks[lastHunk.chunks.length - 1];
+    if (lastChunk && lastChunk.old_lines.length === 0 && lastChunk.new_lines.length === 0) {
+      if (line === END_PATCH_MARKER) {
+        throw createInvalidHunkError('Update hunk does not contain any lines', this.lineNumber);
+      }
+      throw createInvalidHunkError(
+        `Unexpected line found in update hunk: '${line}'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)`,
+        this.lineNumber
+      );
+    }
+  }
+
+  handleHunkHeadersAndEndPatch(trimmed) {
+    if (this.mode === 'started_patch' && trimmed.startsWith(ENVIRONMENT_ID_MARKER)) {
+      if (this.environmentId !== null) {
+        throw createInvalidPatchError('apply_patch environment_id cannot be specified more than once');
+      }
+      const environmentId = trimmed.slice(ENVIRONMENT_ID_MARKER.length).trim();
+      if (!environmentId) {
+        throw createInvalidPatchError('apply_patch environment_id cannot be empty');
+      }
+      this.environmentId = environmentId;
+      return true;
+    }
+    if (trimmed === END_PATCH_MARKER) {
+      this.ensureUpdateHunkIsNotEmpty(trimmed);
+      this.mode = 'ended_patch';
+      return true;
+    }
+    if (trimmed.startsWith(ADD_FILE_MARKER)) {
+      this.ensureUpdateHunkIsNotEmpty(trimmed);
+      const path = trimmed.slice(ADD_FILE_MARKER.length);
+      this.hunks.push({ type: 'add_file', path, contents: '' });
+      this.previewFiles.push({ operation: 'add', path, moveTo: '', lines: [] });
+      this.mode = 'add_file';
+      return true;
+    }
+    if (trimmed.startsWith(DELETE_FILE_MARKER)) {
+      this.ensureUpdateHunkIsNotEmpty(trimmed);
+      const path = trimmed.slice(DELETE_FILE_MARKER.length);
+      this.hunks.push({ type: 'delete_file', path });
+      this.previewFiles.push({ operation: 'delete', path, moveTo: '', lines: [] });
+      this.mode = 'delete_file';
+      return true;
+    }
+    if (trimmed.startsWith(UPDATE_FILE_MARKER)) {
+      this.ensureUpdateHunkIsNotEmpty(trimmed);
+      const path = trimmed.slice(UPDATE_FILE_MARKER.length);
+      this.hunks.push({ type: 'update_file', path, move_path: null, chunks: [] });
+      this.previewFiles.push({ operation: 'update', path, moveTo: '', lines: [] });
+      this.mode = 'update_file';
+      this.hunkLineNumber = this.lineNumber;
+      return true;
+    }
+    return false;
+  }
+
+  pushDelta(delta) {
+    if (this.finished) {
+      throw createInvalidPatchError('StreamingApplyPatchParser.finish() has already been called');
+    }
+    for (const character of String(delta || '')) {
+      if (character !== '\n') {
+        this.lineBuffer += character;
+        continue;
+      }
+      let line = this.lineBuffer;
+      this.lineBuffer = '';
+      if (line.endsWith('\r')) line = line.slice(0, -1);
+      this.lineNumber += 1;
+      this.processLine(line);
+    }
+    return this.getHunks();
+  }
+
+  finish() {
+    if (this.finished) return this.getHunks();
+    if (this.lineBuffer !== '') {
+      const line = this.lineBuffer;
+      this.lineBuffer = '';
+      this.lineNumber += 1;
+      if (line.trim() === END_PATCH_MARKER) {
+        this.ensureUpdateHunkIsNotEmpty(line.trim());
+        this.mode = 'ended_patch';
+      } else {
+        this.processLine(line);
+      }
+    }
+    if (this.mode !== 'ended_patch') {
+      throw createInvalidPatchError("The last line of the patch must be '*** End Patch'");
+    }
+    this.finished = true;
+    return this.getHunks();
+  }
+
+  processLine(line) {
+    const trimmed = line.trim();
+    if (this.mode === 'not_started') {
+      if (trimmed === BEGIN_PATCH_MARKER) {
+        this.mode = 'started_patch';
+        return;
+      }
+      throw createInvalidPatchError("The first line of the patch must be '*** Begin Patch'");
+    }
+
+    if (this.mode === 'started_patch') {
+      if (this.handleHunkHeadersAndEndPatch(trimmed)) return;
+      throw createInvalidHunkError(
+        `'${trimmed}' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'`,
+        this.lineNumber
+      );
+    }
+
+    if (this.mode === 'add_file') {
+      if (this.handleHunkHeadersAndEndPatch(trimmed)) return;
+      if (line.startsWith('+')) {
+        const content = line.slice(1);
+        this.hunks[this.hunks.length - 1].contents += `${content}\n`;
+        this.appendPreviewLine('add', content, line);
+        return;
+      }
+      throw createInvalidHunkError(
+        `'${trimmed}' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'`,
+        this.lineNumber
+      );
+    }
+
+    if (this.mode === 'delete_file') {
+      if (this.handleHunkHeadersAndEndPatch(trimmed)) return;
+      throw createInvalidHunkError(
+        `'${trimmed}' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'`,
+        this.lineNumber
+      );
+    }
+
+    if (this.mode === 'ended_patch') {
+      if (!trimmed) return;
+      throw createInvalidPatchError("The last line of the patch must be '*** End Patch'");
+    }
+
+    const updateLine = line.trimEnd();
+    if (this.handleHunkHeadersAndEndPatch(updateLine)) return;
+    const hunk = this.hunks[this.hunks.length - 1];
+    const chunks = hunk.chunks;
+    const lastChunk = () => chunks[chunks.length - 1] || null;
+
+    if (lastChunk()?.is_end_of_file) {
+      if (!updateLine) return;
+      if (updateLine !== EMPTY_CHANGE_CONTEXT_MARKER && !updateLine.startsWith(CHANGE_CONTEXT_MARKER)) {
+        throw createInvalidHunkError(
+          `Expected update hunk to start with a @@ context marker, got: '${line}'`,
+          this.lineNumber
+        );
+      }
+    }
+
+    if (chunks.length === 0 && !hunk.move_path && updateLine.startsWith(MOVE_TO_MARKER)) {
+      hunk.move_path = updateLine.slice(MOVE_TO_MARKER.length);
+      this.getCurrentPreviewFile().moveTo = hunk.move_path;
+      this.getCurrentPreviewFile().operation = 'move';
+      this.appendPreviewLine('move', hunk.move_path, line);
+      return;
+    }
+
+    if (
+      (updateLine === EMPTY_CHANGE_CONTEXT_MARKER || updateLine.startsWith(CHANGE_CONTEXT_MARKER))
+      && lastChunk()
+      && lastChunk().old_lines.length === 0
+      && lastChunk().new_lines.length === 0
+    ) {
+      throw createInvalidHunkError(
+        `Unexpected line found in update hunk: '${line}'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)`,
+        this.lineNumber
+      );
+    }
+
+    if (updateLine === EMPTY_CHANGE_CONTEXT_MARKER || updateLine.startsWith(CHANGE_CONTEXT_MARKER)) {
+      const changeContext = updateLine === EMPTY_CHANGE_CONTEXT_MARKER
+        ? null
+        : updateLine.slice(CHANGE_CONTEXT_MARKER.length);
+      chunks.push({
+        change_context: changeContext,
+        old_lines: [],
+        new_lines: [],
+        is_end_of_file: false
+      });
+      this.appendPreviewLine('hunk', changeContext || '', line);
+      return;
+    }
+
+    if (updateLine === EOF_MARKER) {
+      if (lastChunk() && lastChunk().old_lines.length === 0 && lastChunk().new_lines.length === 0) {
+        throw createInvalidHunkError('Update hunk does not contain any lines', this.lineNumber);
+      }
+      if (lastChunk()) lastChunk().is_end_of_file = true;
+      this.appendPreviewLine('eof', '', line);
+      return;
+    }
+
+    if (line === '') {
+      if (chunks.length === 0) {
+        chunks.push({ change_context: null, old_lines: [], new_lines: [], is_end_of_file: false });
+      }
+      lastChunk().old_lines.push('');
+      lastChunk().new_lines.push('');
+      this.appendPreviewLine('context', '', line);
+      return;
+    }
+
+    const prefix = line.charAt(0);
+    if (prefix === ' ' || prefix === '+' || prefix === '-') {
+      if (chunks.length === 0) {
+        chunks.push({ change_context: null, old_lines: [], new_lines: [], is_end_of_file: false });
+      }
+      const content = line.slice(1);
+      if (prefix === ' ') {
+        lastChunk().old_lines.push(content);
+        lastChunk().new_lines.push(content);
+        this.appendPreviewLine('context', content, line);
+      } else if (prefix === '+') {
+        lastChunk().new_lines.push(content);
+        this.appendPreviewLine('add', content, line);
+      } else {
+        lastChunk().old_lines.push(content);
+        this.appendPreviewLine('delete', content, line);
+      }
+      return;
+    }
+
+    if (lastChunk() && (lastChunk().old_lines.length > 0 || lastChunk().new_lines.length > 0)) {
+      throw createInvalidHunkError(
+        `Expected update hunk to start with a @@ context marker, got: '${line}'`,
+        this.lineNumber
+      );
+    }
     throw createInvalidHunkError(
-      `Expected update hunk to start with a @@ context marker, got: '${lines[0]}'`,
-      lineNumber
+      `Unexpected line found in update hunk: '${line}'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)`,
+      this.lineNumber
     );
   }
-
-  if (startIndex >= lines.length) {
-    throw createInvalidHunkError('Update hunk does not contain any lines', lineNumber + 1);
-  }
-
-  const chunk = {
-    change_context: changeContext,
-    old_lines: [],
-    new_lines: [],
-    is_end_of_file: false
-  };
-  let parsedLines = 0;
-
-  for (const lineContents of lines.slice(startIndex)) {
-    if (lineContents === EOF_MARKER) {
-      if (parsedLines === 0) {
-        throw createInvalidHunkError('Update hunk does not contain any lines', lineNumber + 1);
-      }
-      chunk.is_end_of_file = true;
-      parsedLines += 1;
-      break;
-    }
-
-    const firstChar = typeof lineContents === 'string' ? lineContents.charAt(0) : '';
-    if (!lineContents) {
-      chunk.old_lines.push('');
-      chunk.new_lines.push('');
-      parsedLines += 1;
-      continue;
-    }
-    if (firstChar === ' ') {
-      chunk.old_lines.push(lineContents.slice(1));
-      chunk.new_lines.push(lineContents.slice(1));
-      parsedLines += 1;
-      continue;
-    }
-    if (firstChar === '+') {
-      chunk.new_lines.push(lineContents.slice(1));
-      parsedLines += 1;
-      continue;
-    }
-    if (firstChar === '-') {
-      chunk.old_lines.push(lineContents.slice(1));
-      parsedLines += 1;
-      continue;
-    }
-    if (parsedLines === 0) {
-      throw createInvalidHunkError(
-        `Unexpected line found in update hunk: '${lineContents}'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)`,
-        lineNumber + 1
-      );
-    }
-    break;
-  }
-
-  return {
-    chunk,
-    parsed_lines: parsedLines + startIndex
-  };
 }
 
-function parseOneHunk(lines, lineNumber) {
-  const firstLine = String(lines[0] || '').trim();
-  if (firstLine.startsWith(ADD_FILE_MARKER)) {
-    const path = firstLine.slice(ADD_FILE_MARKER.length);
-    let parsedLines = 1;
-    let contents = '';
-    for (const addLine of lines.slice(parsedLines)) {
-      if (typeof addLine === 'string' && addLine.startsWith('+')) {
-        contents += `${addLine.slice(1)}\n`;
-        parsedLines += 1;
-        continue;
-      }
-      break;
-    }
-    return {
-      hunk: {
-        type: 'add_file',
-        path,
-        contents
-      },
-      parsed_lines: parsedLines
-    };
+/**
+ * 为流式 UI 构建 parser 快照。错误会保留已经验证的前缀，并以结构化字段返回；
+ * 执行路径则直接使用 `parseApplyPatch`，因此无法绕过同一状态机的拒绝结果。
+ */
+export function parseApplyPatchProgress(patch, options = {}) {
+  const parser = new StreamingApplyPatchParser();
+  let error = null;
+  try {
+    parser.pushDelta(String(patch || ''));
+    if (options.finish === true) parser.finish();
+  } catch (caught) {
+    error = caught;
   }
-
-  if (firstLine.startsWith(DELETE_FILE_MARKER)) {
-    return {
-      hunk: {
-        type: 'delete_file',
-        path: firstLine.slice(DELETE_FILE_MARKER.length)
-      },
-      parsed_lines: 1
-    };
-  }
-
-  if (firstLine.startsWith(UPDATE_FILE_MARKER)) {
-    const path = firstLine.slice(UPDATE_FILE_MARKER.length);
-    let remainingLines = lines.slice(1);
-    let parsedLines = 1;
-    let movePath = null;
-
-    if (remainingLines[0] && String(remainingLines[0]).trim().startsWith(MOVE_TO_MARKER)) {
-      movePath = String(remainingLines[0]).trim().slice(MOVE_TO_MARKER.length);
-      remainingLines = remainingLines.slice(1);
-      parsedLines += 1;
-    }
-
-    const chunks = [];
-    while (remainingLines.length > 0) {
-      if (!String(remainingLines[0] || '').trim()) {
-        remainingLines = remainingLines.slice(1);
-        parsedLines += 1;
-        continue;
+  return {
+    patch: String(patch || ''),
+    ...parser.getSnapshot({ finished: options.finish === true && !error }),
+    error: error
+      ? {
+        name: error.name || 'Error',
+        message: error.message || String(error),
+        line_number: Number.isFinite(Number(error.line_number))
+          ? Number(error.line_number)
+          : parser.lineNumber
       }
-      if (String(remainingLines[0]).startsWith('***')) {
-        break;
-      }
-
-      const { chunk, parsed_lines: chunkLines } = parseUpdateFileChunk(
-        remainingLines,
-        lineNumber + parsedLines,
-        chunks.length === 0
-      );
-      chunks.push(chunk);
-      remainingLines = remainingLines.slice(chunkLines);
-      parsedLines += chunkLines;
-    }
-
-    if (chunks.length <= 0) {
-      throw createInvalidHunkError(`Update file hunk for path '${path}' is empty`, lineNumber);
-    }
-
-    return {
-      hunk: {
-        type: 'update_file',
-        path,
-        move_path: movePath,
-        chunks
-      },
-      parsed_lines: parsedLines
-    };
-  }
-
-  throw createInvalidHunkError(
-    `'${firstLine}' is not a valid hunk header. Valid hunk headers: '*** Add File: {path}', '*** Delete File: {path}', '*** Update File: {path}'`,
-    lineNumber
-  );
+      : null
+  };
 }
 
 export function parseApplyPatch(patch, options = {}) {
-  const mode = options?.mode === 'lenient' ? 'lenient' : 'strict';
-  const rawLines = splitPatchLines(patch);
-  let lines = rawLines;
-
-  try {
-    checkPatchBoundariesStrict(rawLines);
-  } catch (error) {
-    if (mode !== 'lenient') throw error;
-    lines = checkPatchBoundariesLenient(rawLines, error);
+  if (options?.mode && options.mode !== 'strict') {
+    throw createInvalidPatchError(`Unsupported apply_patch parser mode: ${options.mode}`);
   }
-
-  const hunks = [];
-  const lastLineIndex = Math.max(lines.length - 1, 1);
-  let remainingLines = lines.slice(1, lastLineIndex);
-  let lineNumber = 2;
-  while (remainingLines.length > 0) {
-    const { hunk, parsed_lines: hunkLines } = parseOneHunk(remainingLines, lineNumber);
-    hunks.push(hunk);
-    remainingLines = remainingLines.slice(hunkLines);
-    lineNumber += hunkLines;
-  }
-
+  const parser = new StreamingApplyPatchParser();
+  parser.pushDelta(String(patch || ''));
+  const hunks = parser.finish();
   return {
-    patch: lines.join('\n'),
+    patch: String(patch || ''),
+    environment_id: parser.environment_id,
     hunks
   };
 }

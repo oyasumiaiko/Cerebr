@@ -18,6 +18,15 @@ test('response activity 会为顶层 apply_patch 渲染虚拟文件 diff 预览'
   assert.match(messageProcessorSource, /response-activity-tool-diff-line is-/);
   assert.match(messageProcessorSource, /appendResponseActivityDiffStatTokens/);
   assert.match(messageProcessorSource, /response-activity-tool-diff-stat-token/);
+  assert.match(messageProcessorSource, /dataset\.applyPatchFileKey/);
+  assert.match(messageProcessorSource, /dataset\.applyPatchLineSequence/);
+  assert.match(messageProcessorSource, /reconcileResponseActivityApplyPatchBody/);
+  assert.match(messageProcessorSource, /pendingResponseActivityApplyPatchBodyUpdates = new WeakMap/);
+  assert.match(messageProcessorSource, /scheduleResponseActivityApplyPatchBody/);
+  assert.match(messageProcessorSource, /scheduleAfterLayout\(\(\) =>/);
+  assert.match(messageProcessorSource, /wasNearBottom/);
+  assert.match(messageProcessorSource, /requestAnimationFrame/);
+  assert.doesNotMatch(messageProcessorSource, /省略 \$\{file\.omittedLineCount\} 行/);
   assert.doesNotMatch(messageProcessorSource, /summaryMeta\.textContent = metaParts\.join\(' · '\)/);
 
   assert.match(sidebarCssSource, /\.message \.response-activity-tool-diff-preview/);

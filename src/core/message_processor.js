@@ -2327,11 +2327,14 @@ export function createMessageProcessor(appContext) {
   function renderResponseActivitySkillApplyPatchPreview(toolBodyInner, entry) {
     if (!toolBodyInner) return false;
     const preview = isResponseActivitySkillRegistryEntry(entry)
-      ? buildSkillApplyPatchPreview(entry.arguments)
+      ? buildSkillApplyPatchPreview(entry.arguments, { final: !isResponseActivityEntryInProgress(entry) })
       : (isResponseActivityConversationDocumentEntry(entry)
-          ? buildVirtualFileApplyPatchPreview(entry.arguments)
+          ? buildVirtualFileApplyPatchPreview(
+            String(entry?.type || '').toLowerCase() === 'custom_tool_call' ? entry.input : entry.arguments,
+            { final: !isResponseActivityEntryInProgress(entry) }
+          )
           : null);
-    if (!preview || !Array.isArray(preview.files) || preview.files.length <= 0) return false;
+    if (!preview || !Array.isArray(preview.files)) return false;
 
     const summary = document.createElement('div');
     summary.className = 'response-activity-tool-diff-summary';
@@ -2350,7 +2353,10 @@ export function createMessageProcessor(appContext) {
     const summaryNotes = [];
     if (preview.isPartial) summaryNotes.push('生成中');
     if (preview.skillName) summaryNotes.push(`skill ${preview.skillName}`);
-    if (preview.truncatedFiles > 0) summaryNotes.push(`另有 ${preview.truncatedFiles} 个文件未展开`);
+    if (preview.parseError) {
+      const lineLabel = preview.parseError.line_number ? `第 ${preview.parseError.line_number} 行：` : '';
+      summaryNotes.push(`${lineLabel}${preview.parseError.message}`);
+    }
     if (summaryNotes.length > 0) {
       if (summaryMeta.childNodes.length > 0) {
         const spacer = document.createElement('span');
@@ -2371,9 +2377,11 @@ export function createMessageProcessor(appContext) {
     const previewRoot = document.createElement('div');
     previewRoot.className = 'response-activity-tool-diff-preview';
 
-    preview.files.forEach((file) => {
+    preview.files.forEach((file, fileIndex) => {
       const fileCard = document.createElement('section');
       fileCard.className = 'response-activity-tool-diff-file';
+      fileCard.dataset.applyPatchFileKey = `${fileIndex}:${file.path || ''}`;
+      fileCard.dataset.applyPatchPath = file.path || '';
 
       const fileHeader = document.createElement('div');
       fileHeader.className = 'response-activity-tool-diff-file-header';
@@ -2421,9 +2429,13 @@ export function createMessageProcessor(appContext) {
         const fileBody = document.createElement('div');
         fileBody.className = 'response-activity-tool-diff-file-body';
 
-        lines.forEach((line) => {
+        lines.forEach((line, lineIndex) => {
           const row = document.createElement('div');
           row.className = `response-activity-tool-diff-line is-${line.kind || 'context'}`;
+          row.dataset.applyPatchLineSequence = String(
+            Number.isFinite(Number(line.sequence)) ? Number(line.sequence) : lineIndex
+          );
+          row.dataset.applyPatchLineNumber = line.lineNumber == null ? '' : String(line.lineNumber);
 
           const marker = document.createElement('span');
           marker.className = 'response-activity-tool-diff-line-marker';
@@ -2445,13 +2457,6 @@ export function createMessageProcessor(appContext) {
 
           fileBody.appendChild(row);
         });
-
-        if (file.truncated === true && file.omittedLineCount > 0) {
-          const truncated = document.createElement('div');
-          truncated.className = 'response-activity-tool-diff-truncated';
-          truncated.textContent = `… 省略 ${file.omittedLineCount} 行`;
-          fileBody.appendChild(truncated);
-        }
 
         fileCard.appendChild(fileBody);
       }
@@ -3391,6 +3396,7 @@ export function createMessageProcessor(appContext) {
     }
     if (getResponseActivityToolSecondaryLines(entry).length > 0) return true;
     if (typeof entry.arguments === 'string' && entry.arguments.trim()) return true;
+    if (typeof entry.input === 'string' && entry.input.trim()) return true;
     if (hasResponsesToolOutputBody(outputSource)) return true;
     if (Array.isArray(entry.sources) && entry.sources.length > 0) return true;
     return false;
@@ -3409,8 +3415,11 @@ export function createMessageProcessor(appContext) {
       ? null
       : buildResponseToolCallPrimaryParts(entry, { isInProgress });
     const secondaryLines = getResponseActivityToolSecondaryLines(entry);
-    const argumentsText = (typeof entry.arguments === 'string' && entry.arguments.trim())
-      ? formatResponseToolCallArguments(entry.arguments)
+    const rawToolInput = String(entry?.type || '').toLowerCase() === 'custom_tool_call'
+      ? entry.input
+      : entry.arguments;
+    const argumentsText = (typeof rawToolInput === 'string' && rawToolInput.trim())
+      ? formatResponseToolCallArguments(rawToolInput)
       : '';
     const outputText = formatResponseToolCallOutput(outputSource) || '';
     const outputImages = extractResponseToolCallOutputImages(outputSource);
@@ -3957,6 +3966,170 @@ export function createMessageProcessor(appContext) {
     renderResponseActivityGenericToolBody(toolBodyInner, snapshot.entry, snapshot, renderOptions);
   }
 
+  function isResponseActivityApplyPatchEntry(entry) {
+    return isResponseActivityConversationDocumentEntry(entry)
+      && String(entry?.name || '').trim().toLowerCase() === 'apply_patch';
+  }
+
+  function getApplyPatchPreviewRowKey(row, fallbackIndex = 0) {
+    return [
+      row?.dataset?.applyPatchLineSequence || fallbackIndex,
+      row?.dataset?.applyPatchLineNumber || ''
+    ].join(':');
+  }
+
+  function reconcileApplyPatchPreviewFileCard(currentCard, nextCard) {
+    const nextHeader = nextCard.querySelector(':scope > .response-activity-tool-diff-file-header');
+    const currentHeader = currentCard.querySelector(':scope > .response-activity-tool-diff-file-header');
+    if (nextHeader) {
+      if (currentHeader) currentHeader.replaceWith(nextHeader);
+      else currentCard.insertBefore(nextHeader, currentCard.firstChild);
+    } else if (currentHeader) {
+      currentHeader.remove();
+    }
+
+    const nextBody = nextCard.querySelector(':scope > .response-activity-tool-diff-file-body');
+    const currentBody = currentCard.querySelector(':scope > .response-activity-tool-diff-file-body');
+    if (!nextBody) {
+      currentBody?.remove();
+      return;
+    }
+    if (!currentBody) {
+      currentCard.appendChild(nextBody);
+      return;
+    }
+
+    const currentRows = Array.from(currentBody.querySelectorAll(':scope > .response-activity-tool-diff-line'));
+    const currentRowsByKey = new Map(
+      currentRows.map((row, index) => [getApplyPatchPreviewRowKey(row, index), row])
+    );
+    const retainedKeys = new Set();
+    const nextRows = Array.from(nextBody.querySelectorAll(':scope > .response-activity-tool-diff-line'));
+    nextRows.forEach((nextRow, index) => {
+      const key = getApplyPatchPreviewRowKey(nextRow, index);
+      retainedKeys.add(key);
+      const currentRow = currentRowsByKey.get(key);
+      if (currentRow) {
+        if (currentRow.className !== nextRow.className) currentRow.className = nextRow.className;
+        const currentMarker = currentRow.querySelector(':scope > .response-activity-tool-diff-line-marker');
+        const nextMarker = nextRow.querySelector(':scope > .response-activity-tool-diff-line-marker');
+        if (currentMarker && nextMarker) currentMarker.textContent = nextMarker.textContent;
+        const currentText = currentRow.querySelector(':scope > .response-activity-tool-diff-line-text');
+        const nextText = nextRow.querySelector(':scope > .response-activity-tool-diff-line-text');
+        if (currentText && nextText) currentText.textContent = nextText.textContent;
+        currentBody.appendChild(currentRow);
+      } else {
+        currentBody.appendChild(nextRow);
+      }
+    });
+    currentRowsByKey.forEach((row, key) => {
+      if (!retainedKeys.has(key)) row.remove();
+    });
+  }
+
+  /**
+   * apply_patch 的流式更新只触碰发生变化的文件头和新增行。
+   * 这样一个包含大量文件/行的 raw patch 不会在每个 SSE delta 上重建既有 DOM；
+   * tool-call 由外层 entry key 定位，内部再按文件路径与 parser 行序号定向合并。
+   */
+  function reconcileResponseActivityApplyPatchBody(toolBodyInner, snapshot) {
+    if (!toolBodyInner || !isResponseActivityApplyPatchEntry(snapshot?.entry)) return false;
+    const staging = document.createElement('div');
+    renderResponseActivityToolBodyContent(staging, snapshot);
+
+    const nextSummary = staging.querySelector(':scope > .response-activity-tool-diff-summary');
+    const nextPreviewRoot = staging.querySelector(':scope > .response-activity-tool-diff-preview');
+    if (!nextSummary || !nextPreviewRoot) return false;
+
+    const scrollHost = toolBodyInner.closest('.response-activity-tool-body');
+    const previousScrollTop = scrollHost?.scrollTop || 0;
+    const wasNearBottom = !!scrollHost
+      && (scrollHost.scrollHeight - scrollHost.clientHeight - scrollHost.scrollTop) <= 32;
+
+    const currentSummary = toolBodyInner.querySelector(':scope > .response-activity-tool-diff-summary');
+    if (currentSummary) currentSummary.replaceWith(nextSummary);
+    else toolBodyInner.insertBefore(nextSummary, toolBodyInner.firstChild);
+
+    let currentPreviewRoot = toolBodyInner.querySelector(':scope > .response-activity-tool-diff-preview');
+    if (!currentPreviewRoot) {
+      currentPreviewRoot = nextPreviewRoot;
+      toolBodyInner.insertBefore(currentPreviewRoot, nextSummary.nextSibling);
+    } else {
+      const currentCardsByKey = new Map(
+        Array.from(currentPreviewRoot.querySelectorAll(':scope > .response-activity-tool-diff-file'))
+          .map(card => [card.dataset.applyPatchFileKey || '', card])
+      );
+      const retainedFileKeys = new Set();
+      Array.from(nextPreviewRoot.querySelectorAll(':scope > .response-activity-tool-diff-file'))
+        .forEach((nextCard) => {
+          const key = nextCard.dataset.applyPatchFileKey || '';
+          retainedFileKeys.add(key);
+          const currentCard = currentCardsByKey.get(key);
+          if (currentCard) {
+            reconcileApplyPatchPreviewFileCard(currentCard, nextCard);
+            currentPreviewRoot.appendChild(currentCard);
+          } else {
+            currentPreviewRoot.appendChild(nextCard);
+          }
+        });
+      currentCardsByKey.forEach((card, key) => {
+        if (!retainedFileKeys.has(key)) card.remove();
+      });
+    }
+
+    Array.from(toolBodyInner.children).forEach((child) => {
+      if (child !== nextSummary && child !== currentPreviewRoot) child.remove();
+    });
+    Array.from(staging.children).forEach((child) => {
+      if (child !== nextSummary && child !== nextPreviewRoot) toolBodyInner.appendChild(child);
+    });
+
+    if (scrollHost) {
+      if (wasNearBottom) {
+        requestAnimationFrame(() => {
+          if (scrollHost.isConnected) scrollHost.scrollTop = scrollHost.scrollHeight;
+        });
+      } else {
+        scrollHost.scrollTop = previousScrollTop;
+      }
+    }
+    return true;
+  }
+
+  const pendingResponseActivityApplyPatchBodyUpdates = new WeakMap();
+
+  /**
+   * 同一 tool call 在一个动画帧内可能收到多个 SSE delta。只保留这一帧的最新快照，
+   * 避免密集流式输出重复解析/构造相同的历史预览行；真正落 DOM 时仍由上面的
+   * tool-call / 文件 / 行三级定向合并完成，不影响其它活动条目。
+   */
+  function scheduleResponseActivityApplyPatchBody(item, toolBodyInner, snapshot) {
+    if (!toolBodyInner || !isResponseActivityApplyPatchEntry(snapshot?.entry)) return false;
+    let state = pendingResponseActivityApplyPatchBodyUpdates.get(toolBodyInner);
+    if (!state) {
+      state = {
+        scheduled: false,
+        item: null,
+        snapshot: null
+      };
+      pendingResponseActivityApplyPatchBodyUpdates.set(toolBodyInner, state);
+    }
+    state.item = item;
+    state.snapshot = snapshot;
+    if (state.scheduled) return true;
+
+    state.scheduled = true;
+    scheduleAfterLayout(() => {
+      const latest = pendingResponseActivityApplyPatchBodyUpdates.get(toolBodyInner);
+      pendingResponseActivityApplyPatchBodyUpdates.delete(toolBodyInner);
+      if (!latest || !toolBodyInner.isConnected) return;
+      if (reconcileResponseActivityApplyPatchBody(toolBodyInner, latest.snapshot)) {
+        enhanceMarkdownContent(latest.item);
+      }
+    });
+    return true;
+  }
+
   function reconcileResponseActivityToolInlinePreview(item, snapshot, previousSnapshot, toolBody = null) {
     const shouldRenderPreview = snapshot.prefersInlineImagePreview === true
       && normalizeResponseActivityToolOutputImages(snapshot.outputImages).length > 0;
@@ -4133,8 +4306,13 @@ export function createMessageProcessor(appContext) {
 
     if (!previousSnapshot || previousSnapshot.bodySignature !== snapshot.bodySignature || previousSnapshot.hasDetails !== snapshot.hasDetails) {
       const currentToolState = captureResponseActivityToolTransientUiState(item) || preservedToolState || null;
-      toolBodyInner.replaceChildren();
-      renderResponseActivityToolBodyContent(toolBodyInner, snapshot);
+      const patchedInPlace = previousSnapshot
+        ? scheduleResponseActivityApplyPatchBody(item, toolBodyInner, snapshot)
+        : false;
+      if (!patchedInPlace) {
+        toolBodyInner.replaceChildren();
+        renderResponseActivityToolBodyContent(toolBodyInner, snapshot);
+      }
       enhanceMarkdownContent(item);
       if (currentToolState) {
         restoreResponseActivityToolTransientUiState(item, currentToolState);

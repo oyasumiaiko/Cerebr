@@ -2,7 +2,7 @@
  * Responses API 扩展提供工具注册表。
  *
  * 设计目标：
- * - 把 Cerebr 暴露给 Responses API 的“本地 function tools”统一登记到一个纯模块里；
+ * - 把 Cerebr 暴露给 Responses API 的本地 function/custom tools 统一登记到一个纯模块里；
  * - 让 API 设置 UI、请求构建和 sender 的自动注入逻辑共用同一份工具元数据，
  *   避免工具名、默认值、说明文案散落在多个文件后逐渐失配；
  * - 默认采用“全开 + 只持久化显式关闭项”的兼容策略，保证老配置升级后不会突然丢失工具。
@@ -28,8 +28,16 @@ function cloneJsonCompatible(value) {
 function createExtensionToolSpec(spec) {
   return Object.freeze({
     defaultEnabled: true,
+    toolType: 'function',
     ...spec
   });
+}
+
+function matchesExtensionToolDefinition(tool, spec) {
+  if (!tool || typeof tool !== 'object' || Array.isArray(tool) || !spec) return false;
+  return normalizeString(tool.type).toLowerCase() === normalizeString(spec.toolType).toLowerCase()
+    && !normalizeString(tool.namespace)
+    && normalizeString(tool.name) === spec.id;
 }
 
 export const RESPONSES_EXTENSION_TOOL_SPECS = Object.freeze([
@@ -63,7 +71,8 @@ export const RESPONSES_EXTENSION_TOOL_SPECS = Object.freeze([
     handlerKey: 'virtual_file',
     outputKind: 'virtual_file',
     sideEffect: 'write',
-    deferLoading: true
+    toolType: 'custom',
+    deferLoading: false
   }),
   createExtensionToolSpec({
     id: 'list_files',
@@ -263,31 +272,37 @@ export function resolveResponsesExtensionToolSpecForCall(toolName, namespace) {
  * @param {Array<any>|null|undefined} requestTools
  * @returns {Object|null}
  */
-export function resolveAuthorizedResponsesExtensionToolSpec(toolName, namespace, requestTools) {
+export function resolveAuthorizedResponsesExtensionToolSpec(toolName, namespace, requestTools, toolType = 'function') {
   const spec = resolveResponsesExtensionToolSpecForCall(toolName, namespace);
   if (!spec) return null;
+  if (normalizeString(toolType).toLowerCase() !== normalizeString(spec.toolType).toLowerCase()) {
+    return null;
+  }
   const exposed = (Array.isArray(requestTools) ? requestTools : []).some(tool => (
-    tool
-    && typeof tool === 'object'
-    && !Array.isArray(tool)
-    && normalizeString(tool.type).toLowerCase() === 'function'
-    && !normalizeString(tool.namespace)
-    && normalizeString(tool.name) === spec.id
+    matchesExtensionToolDefinition(tool, spec)
   ));
   return exposed ? spec : null;
 }
 
-function readAllowedLocalExtensionToolId(entry) {
+function inspectAllowedLocalExtensionToolEntry(entry) {
   if (typeof entry === 'string') {
     const name = normalizeString(entry);
-    return RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.has(name) ? name : '';
+    return RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.has(name)
+      ? { id: name, typeMatches: true }
+      : null;
   }
-  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return '';
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
   const namespace = normalizeString(entry.namespace);
-  if (namespace) return '';
-  const type = normalizeString(entry.type).toLowerCase();
+  if (namespace) return null;
   const name = normalizeString(entry.name);
-  return type === 'function' && RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.has(name) ? name : '';
+  const spec = RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.get(name);
+  if (!spec) return null;
+  // 名称属于本地注册表但类型已漂移时也要参与对账；否则旧 function apply_patch
+  // 会在 custom definition 切换后残留在 allowed_tools 中。
+  return {
+    id: name,
+    typeMatches: matchesExtensionToolDefinition(entry, spec)
+  };
 }
 
 /**
@@ -314,23 +329,21 @@ export function reconcileResponsesAllowedToolChoice(toolChoice, tools) {
     return cloneJsonCompatible(toolChoice);
   }
 
-  const availableLocalFunctionNames = new Set(
+  const availableLocalToolNames = new Set(
     (Array.isArray(tools) ? tools : [])
-      .filter(tool => (
-        tool
-        && typeof tool === 'object'
-        && !Array.isArray(tool)
-        && normalizeString(tool.type).toLowerCase() === 'function'
-        && !normalizeString(tool.namespace)
-      ))
-      .map(tool => normalizeString(tool.name))
-      .filter(name => RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.has(name))
+      .map((tool) => {
+        const name = normalizeString(tool?.name);
+        const spec = RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.get(name);
+        return matchesExtensionToolDefinition(tool, spec) ? name : '';
+      })
+      .filter(Boolean)
   );
   const unavailableLocalToolIds = [];
   const reconciledTools = toolChoice.tools.filter((entry) => {
-    const localToolId = readAllowedLocalExtensionToolId(entry);
-    if (!localToolId || availableLocalFunctionNames.has(localToolId)) return true;
-    unavailableLocalToolIds.push(localToolId);
+    const localEntry = inspectAllowedLocalExtensionToolEntry(entry);
+    if (!localEntry) return true;
+    if (localEntry.typeMatches && availableLocalToolNames.has(localEntry.id)) return true;
+    unavailableLocalToolIds.push(localEntry.id);
     return false;
   });
 
@@ -338,18 +351,22 @@ export function reconcileResponsesAllowedToolChoice(toolChoice, tools) {
   // 同时允许续读工具，模型拿到 next_cursor 后仍无法翻页。read_tool_output 是统一输出
   // 协议的一部分，只在至少一个其它 Cerebr 本地工具实际可用时补入，不影响 hosted/MCP。
   const hasPageableLocalTool = reconciledTools.some((entry) => {
-    const localToolId = readAllowedLocalExtensionToolId(entry);
-    return !!localToolId
-      && localToolId !== 'read_tool_output'
-      && availableLocalFunctionNames.has(localToolId);
+    const localEntry = inspectAllowedLocalExtensionToolEntry(entry);
+    return !!localEntry
+      && localEntry.typeMatches
+      && localEntry.id !== 'read_tool_output'
+      && availableLocalToolNames.has(localEntry.id);
   });
   const hasReadToolOutput = reconciledTools.some(
-    entry => readAllowedLocalExtensionToolId(entry) === 'read_tool_output'
+    (entry) => {
+      const localEntry = inspectAllowedLocalExtensionToolEntry(entry);
+      return localEntry?.typeMatches === true && localEntry.id === 'read_tool_output';
+    }
   );
   if (
     hasPageableLocalTool
     && !hasReadToolOutput
-    && availableLocalFunctionNames.has('read_tool_output')
+    && availableLocalToolNames.has('read_tool_output')
   ) {
     reconciledTools.push('read_tool_output');
   }
@@ -423,9 +440,10 @@ export function filterResponsesExtensionFunctionTools(tools, settings) {
   return source
     .filter((tool) => {
       if (!tool || typeof tool !== 'object' || Array.isArray(tool)) return true;
-      const toolType = normalizeString(tool.type).toLowerCase();
-      if (toolType !== 'function') return true;
-      return isResponsesExtensionToolEnabled(settings, normalizeString(tool.name));
+      const name = normalizeString(tool.name);
+      const spec = RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.get(name);
+      if (!matchesExtensionToolDefinition(tool, spec)) return true;
+      return isResponsesExtensionToolEnabled(settings, name);
     })
     .map(tool => cloneJsonCompatible(tool));
 }
@@ -444,22 +462,21 @@ export function filterResponsesExtensionFunctionTools(tools, settings) {
 export function filterUnavailableResponsesExtensionFunctionTools(tools, availableExtensionTools) {
   const availableNames = new Set(
     (Array.isArray(availableExtensionTools) ? availableExtensionTools : [])
-      .filter(tool => (
-        tool
-        && typeof tool === 'object'
-        && !Array.isArray(tool)
-        && normalizeString(tool.type).toLowerCase() === 'function'
-      ))
-      .map(tool => normalizeString(tool.name))
-      .filter(name => RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.has(name))
+      .map((tool) => {
+        const name = normalizeString(tool?.name);
+        const spec = RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.get(name);
+        return matchesExtensionToolDefinition(tool, spec) ? name : '';
+      })
+      .filter(Boolean)
   );
 
   return (Array.isArray(tools) ? tools : [])
     .filter((tool) => {
       if (!tool || typeof tool !== 'object' || Array.isArray(tool)) return true;
-      if (normalizeString(tool.type).toLowerCase() !== 'function') return true;
       const name = normalizeString(tool.name);
-      if (!RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.has(name)) return true;
+      const spec = RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.get(name);
+      if (!spec) return true;
+      if (!matchesExtensionToolDefinition(tool, spec)) return false;
       return availableNames.has(name);
     })
     .map(tool => cloneJsonCompatible(tool));

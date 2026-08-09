@@ -28,9 +28,9 @@ async function loadResponsesInputItemsModule() {
   return import(require('node:url').pathToFileURL(path.join(tempDir, 'src', 'utils', 'responses_input_items.js')).href);
 }
 
-test('ensureResponsesReplayOutputItemsIncludeFunctionCalls 会补齐缺失的 function_call replay item', async () => {
-  const { ensureResponsesReplayOutputItemsIncludeFunctionCalls } = await loadResponsesFollowUpModule();
-  const merged = ensureResponsesReplayOutputItemsIncludeFunctionCalls(
+test('ensureResponsesReplayOutputItemsIncludeToolCalls 会补齐缺失的 function_call replay item', async () => {
+  const { ensureResponsesReplayOutputItemsIncludeToolCalls } = await loadResponsesFollowUpModule();
+  const merged = ensureResponsesReplayOutputItemsIncludeToolCalls(
     [
       {
         type: 'message',
@@ -60,9 +60,9 @@ test('ensureResponsesReplayOutputItemsIncludeFunctionCalls 会补齐缺失的 fu
   });
 });
 
-test('ensureResponsesReplayOutputItemsIncludeFunctionCalls 不会重复追加已存在的 function_call', async () => {
-  const { ensureResponsesReplayOutputItemsIncludeFunctionCalls } = await loadResponsesFollowUpModule();
-  const merged = ensureResponsesReplayOutputItemsIncludeFunctionCalls(
+test('ensureResponsesReplayOutputItemsIncludeToolCalls 不会重复追加已存在的 function_call', async () => {
+  const { ensureResponsesReplayOutputItemsIncludeToolCalls } = await loadResponsesFollowUpModule();
+  const merged = ensureResponsesReplayOutputItemsIncludeToolCalls(
     [
       {
         type: 'function_call',
@@ -93,9 +93,9 @@ test('ensureResponsesReplayOutputItemsIncludeFunctionCalls 不会重复追加已
   });
 });
 
-test('ensureResponsesReplayOutputItemsIncludeFunctionCalls 会原样回放 function_call.namespace', async () => {
-  const { ensureResponsesReplayOutputItemsIncludeFunctionCalls } = await loadResponsesFollowUpModule();
-  const merged = ensureResponsesReplayOutputItemsIncludeFunctionCalls(
+test('ensureResponsesReplayOutputItemsIncludeToolCalls 会原样回放 function_call.namespace', async () => {
+  const { ensureResponsesReplayOutputItemsIncludeToolCalls } = await loadResponsesFollowUpModule();
+  const merged = ensureResponsesReplayOutputItemsIncludeToolCalls(
     [],
     [
       {
@@ -118,6 +118,26 @@ test('ensureResponsesReplayOutputItemsIncludeFunctionCalls 会原样回放 funct
     name: 'js_runtime_execute',
     arguments: '{"code":"1+1"}'
   });
+});
+
+test('ensureResponsesReplayOutputItemsIncludeToolCalls 会按 raw input 补齐 custom_tool_call', async () => {
+  const { ensureResponsesReplayOutputItemsIncludeToolCalls } = await loadResponsesFollowUpModule();
+  const input = '*** Begin Patch\n*** Add File: a.txt\n+x\n*** End Patch';
+  const merged = ensureResponsesReplayOutputItemsIncludeToolCalls([], [{
+    type: 'custom_tool_call',
+    call_id: 'call_patch_1',
+    item_id: 'ctc_1',
+    name: 'apply_patch',
+    input,
+    status: 'completed'
+  }]);
+
+  assert.deepEqual(merged, [{
+    type: 'custom_tool_call',
+    call_id: 'call_patch_1',
+    name: 'apply_patch',
+    input
+  }]);
 });
 
 test('sanitizeResponsesReplayItem 会移除不兼容 replay 的 item_id 运行态字段', async () => {

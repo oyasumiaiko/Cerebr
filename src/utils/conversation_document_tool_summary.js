@@ -154,7 +154,10 @@ function formatReadLineRangeSuffix(args) {
 }
 
 export function isVirtualFileToolCall(record) {
-  return String(record?.type || '').toLowerCase() === 'function_call'
+  const type = String(record?.type || '').toLowerCase();
+  const name = normalizeSummaryText(record?.name);
+  if (type === 'custom_tool_call') return name === VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME;
+  return type === 'function_call'
     && [
       VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
       VIRTUAL_FILE_LIST_FILES_TOOL_NAME,
@@ -163,7 +166,7 @@ export function isVirtualFileToolCall(record) {
       VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
       VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
       VIRTUAL_FILE_DELETE_FILE_TOOL_NAME
-    ].includes(normalizeSummaryText(record?.name));
+    ].includes(name);
 }
 
 export function getVirtualFileToolTypeLabel(record) {
@@ -174,13 +177,20 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
   if (!isVirtualFileToolCall(record)) return null;
   const toolName = normalizeSummaryText(record?.name);
   const args = parseArgumentsObject(record?.arguments);
-  const target = resolveVirtualFileTarget(args);
+  const preview = toolName === VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME
+    ? buildVirtualFileApplyPatchPreview(
+      String(record?.type || '').toLowerCase() === 'custom_tool_call' ? record?.input : args,
+      { final: options?.isInProgress !== true }
+    )
+    : null;
+  const target = preview
+    ? { kind: preview.targetKind, name: preview.skillName }
+    : resolveVirtualFileTarget(args);
   const isInProgress = options?.isInProgress === true;
   const targetMeta = target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? target.name : '';
   const lineRangeSuffix = formatReadLineRangeSuffix(args);
 
   if (toolName === VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME) {
-    const preview = buildVirtualFileApplyPatchPreview(args);
     if (preview?.files?.length) {
       const firstFile = preview.files[0];
       const metaParts = [];
@@ -304,11 +314,14 @@ export function buildConversationDocumentApplyPatchPreviewDescriptors(record, op
     return [];
   }
 
+  const isCustom = String(record?.type || '').toLowerCase() === 'custom_tool_call';
   const args = parseArgumentsObject(record?.arguments);
-  const target = resolveVirtualFileTarget(args);
+  const preview = buildVirtualFileApplyPatchPreview(isCustom ? record?.input : args, { final: true });
+  const target = preview
+    ? { kind: preview.targetKind, name: preview.skillName }
+    : resolveVirtualFileTarget(args);
   if (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL) return [];
 
-  const preview = buildVirtualFileApplyPatchPreview(args);
   const files = Array.isArray(preview?.files) ? preview.files : [];
   if (files.length <= 0) return [];
 

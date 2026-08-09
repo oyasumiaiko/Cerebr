@@ -68,7 +68,7 @@ test('seekSequence 与 Codex 一样按 exact/rstrip/trim/宽松 Unicode 逐级�
   );
 });
 
-test('parseSkillApplyPatch 会解析标准 hunk 与 lenient heredoc', async () => {
+test('parseSkillApplyPatch 只解析与 Codex Freeform grammar 对齐的标准 patch', async () => {
   const { parseSkillApplyPatch } = await loadSkillApplyPatchModule();
 
   assert.throws(
@@ -77,7 +77,7 @@ test('parseSkillApplyPatch 会解析标准 hunk 与 lenient heredoc', async () =
   );
   assert.throws(
     () => parseSkillApplyPatch('*** Begin Patch\nbad'),
-    /The last line of the patch must be '\*\*\* End Patch'/
+    /'bad' is not a valid hunk header/
   );
 
   const parsed = parseSkillApplyPatch(wrapPatch(
@@ -101,10 +101,12 @@ test('parseSkillApplyPatch 会解析标准 hunk 与 lenient heredoc', async () =
   });
   assert.equal(parsed.hunks[2].move_path, 'src/runtime/main.js');
 
-  const lenient = parseSkillApplyPatch(`<<'EOF'\n${wrapPatch('*** Add File: foo.js\n+hi')}\nEOF\n`, {
-    mode: 'lenient'
-  });
-  assert.equal(lenient.hunks.length, 1);
+  assert.throws(
+    () => parseSkillApplyPatch(`<<'EOF'\n${wrapPatch('*** Add File: foo.js\n+hi')}\nEOF\n`, {
+      mode: 'lenient'
+    }),
+    /Unsupported apply_patch parser mode: lenient/
+  );
 });
 
 test('applySkillPackagePatch 可以新增虚拟文件且用途由路径自动推断', async () => {
@@ -165,6 +167,37 @@ test('applySkillPackagePatch 可以删除、修改、移动文件并保持指针
     modified: ['src/runtime/main.js', 'src/helpers/dom.js'],
     deleted: []
   });
+});
+
+test('skill Add 与 Move 对同名目标使用和会话区一致的覆盖语义', async () => {
+  const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
+  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
+  const input = buildSkillInput();
+  input.files.push({ path: 'references/target.md', content: 'old target\n' });
+  const record = buildStoredSkillRecord(input);
+
+  const added = applySkillPackagePatch(record, wrapPatch([
+    '*** Add File: references/target.md',
+    '+new add target'
+  ].join('\n')));
+  assert.equal(
+    buildSkillFilePayload(added.record, 'references/target.md').file.content,
+    'new add target\n'
+  );
+  assert.deepEqual(added.affected_files.modified, ['references/target.md']);
+
+  const moved = applySkillPackagePatch(record, wrapPatch([
+    '*** Update File: src/helpers/dom.js',
+    '*** Move to: references/target.md',
+    '@@',
+    '-module.exports = { readTitle() { return document.title; } };',
+    '+moved content'
+  ].join('\n')));
+  assert.equal(moved.record.files.some(file => file.path === 'src/helpers/dom.js'), false);
+  assert.equal(
+    buildSkillFilePayload(moved.record, 'references/target.md').file.content,
+    'moved content\n'
+  );
 });
 
 test('applySkillPackagePatch 支持直接 patch manifest.json', async () => {
@@ -314,6 +347,22 @@ test('applySkillPackagePatch 会对虚拟文件特有的错误场景给出明确
   const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
 
   const record = buildStoredSkillRecord(buildSkillInput());
+  const originalRecordSnapshot = JSON.stringify(record);
+
+  assert.throws(
+    () => applySkillPackagePatch(record, wrapPatch([
+      '*** Update File: src/helpers/dom.js',
+      '@@',
+      '-module.exports = { readTitle() { return document.title; } };',
+      '+first hunk changed',
+      '*** Update File: src/main.js',
+      '@@',
+      '-missing context',
+      '+second hunk changed'
+    ].join('\n'))),
+    /Failed to find expected lines in src\/main\.js/
+  );
+  assert.equal(JSON.stringify(record), originalRecordSnapshot);
 
   const addedReference = applySkillPackagePatch(record, wrapPatch(
     [

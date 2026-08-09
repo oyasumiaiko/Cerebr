@@ -23,7 +23,7 @@ test('assistant metadata 同步不再整块重扫 message wrapper，而是在变
 
   assert.match(
     messageProcessorSource,
-    /renderResponseActivityToolBodyContent\(toolBodyInner, snapshot\);\s*enhanceMarkdownContent\(item\);/
+    /reconcileResponseActivityApplyPatchBody\(toolBodyInner, snapshot\)[\s\S]*?renderResponseActivityToolBodyContent\(toolBodyInner, snapshot\);[\s\S]*?enhanceMarkdownContent\(item\);/
   );
   assert.doesNotMatch(messageProcessorSource, /enhanceMarkdownContent\(messageWrapperDiv\);/);
 });

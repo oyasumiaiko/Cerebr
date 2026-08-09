@@ -261,18 +261,16 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
 
 test('apply_patch 工具定义聚焦虚拟文件补丁契约，不重复最终交付策略', async () => {
   const {
-    buildVirtualFileApplyPatchFunctionToolDefinition
+    buildVirtualFileApplyPatchCustomToolDefinition
   } = await loadConversationDocumentToolsModule();
 
-  const applyPatchDefinition = buildVirtualFileApplyPatchFunctionToolDefinition();
-  assert.equal(applyPatchDefinition.strict, true);
-  assert.match(applyPatchDefinition.description, /虚拟文本文件/);
-  assert.match(applyPatchDefinition.description, /HTML/);
-  assert.match(applyPatchDefinition.description, /A\/M\/D/);
-  assert.doesNotMatch(applyPatchDefinition.description, /preview\.html/);
-  assert.doesNotMatch(applyPatchDefinition.description, /最终回复/);
-  assert.deepEqual(applyPatchDefinition.parameters.required, ['target', 'patch', 'max_output_chars']);
-  assert.doesNotMatch(applyPatchDefinition.description, /workspace\//);
+  const applyPatchDefinition = buildVirtualFileApplyPatchCustomToolDefinition();
+  assert.equal(applyPatchDefinition.type, 'custom');
+  assert.match(applyPatchDefinition.description, /FREEFORM/);
+  assert.match(applyPatchDefinition.description, /Environment ID: skill:<stable-key>/);
+  assert.equal(applyPatchDefinition.parameters, undefined);
+  assert.equal(applyPatchDefinition.format.syntax, 'lark');
+  assert.match(applyPatchDefinition.format.definition, /^start: begin_patch environment_id\? hunk\+ end_patch/m);
 });
 
 test('read_file/search_files 与文件操作工具定义暴露严格且低歧义的参数', async () => {
@@ -325,7 +323,7 @@ test('read_file/search_files 与文件操作工具定义暴露严格且低歧义
   assert.deepEqual(deleteDefinition.parameters.required, ['target', 'path', 'max_output_chars']);
 });
 
-test('apply_patch 遇到同名 Add File 时会按 Windows 语义追加 (2)', async () => {
+test('apply_patch 遇到同名 Add File 时会覆盖原文件且不产生隐式改名', async () => {
   const {
     executeConversationDocumentAction,
     CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME
@@ -352,12 +350,82 @@ test('apply_patch 遇到同名 Add File 时会按 Windows 语义追加 (2)', asy
   );
 
   assert.equal(result.ok, true);
-  assert.deepEqual(result.affected_files.added, ['计划 (2).md']);
-  assert.deepEqual(result.renamed_targets, [{
-    requested_path: '计划.md',
-    final_path: '计划 (2).md',
-    reason: 'collision'
-  }]);
+  assert.deepEqual(result.affected_files.added, []);
+  assert.deepEqual(result.affected_files.modified, ['计划.md']);
+  assert.equal(result.renamed_targets, undefined);
+  assert.equal((await store.getDocument('conv-doc-1', '计划.md')).content, '# new\n');
+});
+
+test('apply_patch Move 会覆盖目标并移除源文件', async () => {
+  const {
+    executeConversationDocumentAction,
+    CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME
+  } = await loadConversationDocumentToolsModule();
+  const store = createInMemoryDocumentStore({
+    'source.md': 'old source\n',
+    'target.md': 'old target\n'
+  });
+  const result = await executeConversationDocumentAction(
+    CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
+    {
+      patch: [
+        '*** Begin Patch',
+        '*** Update File: source.md',
+        '*** Move to: target.md',
+        '@@',
+        '-old source',
+        '+new target',
+        '*** End Patch'
+      ].join('\n')
+    },
+    { conversationId: 'conv-move-overwrite', store }
+  );
+
+  assert.deepEqual(result.affected_files.modified, ['target.md']);
+  assert.equal(await store.getDocument('conv-move-overwrite', 'source.md'), null);
+  assert.equal((await store.getDocument('conv-move-overwrite', 'target.md')).content, 'new target\n');
+});
+
+test('多 hunk 中任一上下文失败时不会执行 replaceDocuments', async () => {
+  const {
+    executeConversationDocumentAction,
+    CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME
+  } = await loadConversationDocumentToolsModule();
+  const store = createInMemoryDocumentStore({
+    'a.md': 'old a\n',
+    'b.md': 'old b\n'
+  });
+  let replaceCount = 0;
+  const replaceDocuments = store.replaceDocuments.bind(store);
+  store.replaceDocuments = async (...args) => {
+    replaceCount += 1;
+    return replaceDocuments(...args);
+  };
+
+  await assert.rejects(
+    () => executeConversationDocumentAction(
+      CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
+      {
+        patch: [
+          '*** Begin Patch',
+          '*** Update File: a.md',
+          '@@',
+          '-old a',
+          '+new a',
+          '*** Update File: b.md',
+          '@@',
+          '-missing',
+          '+new b',
+          '*** End Patch'
+        ].join('\n')
+      },
+      { conversationId: 'conv-atomic', store }
+    ),
+    /Failed to find expected lines in b\.md/
+  );
+  assert.equal(replaceCount, 0);
+  assert.equal((await store.getDocument('conv-atomic', 'a.md')).content, 'old a\n');
+  assert.equal((await store.getDocument('conv-atomic', 'b.md')).content, 'old b\n');
 });
 
 test('read_file 支持行范围与带行号输出', async () => {

@@ -16,11 +16,12 @@ import { mergeResponsesInputItems } from './responses_input_items.js';
  * @param {Array<any>|null|undefined} toolCallRecords
  * @returns {Array<Object>}
  */
-export function buildResponsesReplayFunctionCallItems(toolCallRecords) {
+export function buildResponsesReplayToolCallItems(toolCallRecords) {
   return (Array.isArray(toolCallRecords) ? toolCallRecords : [])
     .map((record) => {
       if (!record || typeof record !== 'object') return null;
-      if (String(record.type || '').trim().toLowerCase() !== 'function_call') return null;
+      const type = String(record.type || '').trim().toLowerCase();
+      if (type !== 'function_call' && type !== 'custom_tool_call') return null;
 
       const callId = (typeof record.call_id === 'string' && record.call_id.trim())
         ? record.call_id.trim()
@@ -28,10 +29,12 @@ export function buildResponsesReplayFunctionCallItems(toolCallRecords) {
       if (!callId) return null;
 
       const item = {
-        type: 'function_call',
+        type,
         call_id: callId,
         name: (typeof record.name === 'string') ? record.name : '',
-        arguments: (typeof record.arguments === 'string') ? record.arguments : ''
+        ...(type === 'custom_tool_call'
+          ? { input: (typeof record.input === 'string') ? record.input : '' }
+          : { arguments: (typeof record.arguments === 'string') ? record.arguments : '' })
       };
       const namespace = (typeof record.namespace === 'string' && record.namespace.trim())
         ? record.namespace.trim()
@@ -62,7 +65,7 @@ export function buildResponsesReplayFunctionCallItems(toolCallRecords) {
  * @param {Array<any>|null|undefined} toolCallRecords
  * @returns {Array<Object>}
  */
-export function ensureResponsesReplayOutputItemsIncludeFunctionCalls(responseOutputItems, toolCallRecords) {
-  const functionCallItems = buildResponsesReplayFunctionCallItems(toolCallRecords);
-  return mergeResponsesInputItems(responseOutputItems, functionCallItems);
+export function ensureResponsesReplayOutputItemsIncludeToolCalls(responseOutputItems, toolCallRecords) {
+  const toolCallItems = buildResponsesReplayToolCallItems(toolCallRecords);
+  return mergeResponsesInputItems(responseOutputItems, toolCallItems);
 }

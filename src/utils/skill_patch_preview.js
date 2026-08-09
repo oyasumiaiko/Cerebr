@@ -1,500 +1,122 @@
-const BEGIN_PATCH_MARKER = '*** Begin Patch';
-const END_PATCH_MARKER = '*** End Patch';
-const ADD_FILE_MARKER = '*** Add File: ';
-const DELETE_FILE_MARKER = '*** Delete File: ';
-const UPDATE_FILE_MARKER = '*** Update File: ';
-const MOVE_TO_MARKER = '*** Move to: ';
-const HUNK_MARKER = '@@';
-const EOF_MARKER = '*** End of File';
+import { parseApplyPatchProgress } from '../agent_tools/shared/apply_patch_core.js';
 
-const DEFAULT_MAX_FILES = 12;
-const DEFAULT_MAX_LINES_PER_FILE = 160;
-const DEFAULT_MAX_TOTAL_LINES = 320;
-
-function normalizePatchPath(value) {
+function normalizeText(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function skipJsonWhitespace(text, index, endIndex = text.length) {
-  let cursor = Math.max(0, Number(index) || 0);
-  while (cursor < endIndex && /\s/.test(text[cursor])) {
-    cursor += 1;
-  }
-  return cursor;
-}
-
-function decodeJsonEscape(sequence) {
-  switch (sequence) {
-    case '"':
-    case '\\':
-    case '/':
-      return sequence;
-    case 'b':
-      return '\b';
-    case 'f':
-      return '\f';
-    case 'n':
-      return '\n';
-    case 'r':
-      return '\r';
-    case 't':
-      return '\t';
-    default:
-      return sequence;
-  }
-}
-
-function readJsonStringLiteral(text, quoteIndex, options = {}) {
-  const source = typeof text === 'string' ? text : '';
-  const start = Math.max(0, Math.trunc(Number(quoteIndex) || 0));
-  if (source[start] !== '"') return null;
-
-  const allowUnterminated = options.allowUnterminated === true;
-  let cursor = start + 1;
-  let value = '';
-  while (cursor < source.length) {
-    const char = source[cursor];
-    if (char === '"') {
-      return {
-        value,
-        endIndex: cursor + 1,
-        complete: true
-      };
-    }
-
-    if (char === '\\') {
-      const escapeType = source[cursor + 1];
-      if (escapeType == null) {
-        return allowUnterminated
-          ? { value, endIndex: source.length, complete: false }
-          : null;
-      }
-      if (escapeType === 'u') {
-        const hex = source.slice(cursor + 2, cursor + 6);
-        if (hex.length < 4 || !/^[0-9a-fA-F]{4}$/.test(hex)) {
-          return allowUnterminated
-            ? { value, endIndex: source.length, complete: false }
-            : null;
-        }
-        value += String.fromCharCode(parseInt(hex, 16));
-        cursor += 6;
-        continue;
-      }
-      value += decodeJsonEscape(escapeType);
-      cursor += 2;
-      continue;
-    }
-
-    value += char;
-    cursor += 1;
-  }
-
-  return allowUnterminated
-    ? { value, endIndex: source.length, complete: false }
-    : null;
-}
-
-function skipJsonValue(text, startIndex, endIndex = text.length) {
-  const source = typeof text === 'string' ? text : '';
-  const end = Math.min(source.length, Math.max(0, Math.trunc(Number(endIndex) || source.length)));
-  let cursor = skipJsonWhitespace(source, startIndex, end);
-  if (cursor >= end) return end;
-
-  if (source[cursor] === '"') {
-    const stringValue = readJsonStringLiteral(source, cursor, { allowUnterminated: true });
-    return stringValue?.endIndex || end;
-  }
-
-  if (source[cursor] === '{' || source[cursor] === '[') {
-    const closingStack = [source[cursor] === '{' ? '}' : ']'];
-    cursor += 1;
-    while (cursor < end && closingStack.length > 0) {
-      const char = source[cursor];
-      if (char === '"') {
-        const stringValue = readJsonStringLiteral(source, cursor, { allowUnterminated: true });
-        cursor = stringValue?.endIndex || end;
-        if (stringValue?.complete === false) return end;
-        continue;
-      }
-      if (char === '{') {
-        closingStack.push('}');
-        cursor += 1;
-        continue;
-      }
-      if (char === '[') {
-        closingStack.push(']');
-        cursor += 1;
-        continue;
-      }
-      if (char === closingStack[closingStack.length - 1]) {
-        closingStack.pop();
-        cursor += 1;
-        continue;
-      }
-      cursor += 1;
-    }
-    return cursor;
-  }
-
-  while (cursor < end && !/[,\]}]/.test(source[cursor])) {
-    cursor += 1;
-  }
-  return cursor;
-}
-
-function findJsonFieldValue(text, fieldName, options = {}) {
-  const source = typeof text === 'string' ? text : '';
-  const targetField = typeof fieldName === 'string' ? fieldName : '';
-  if (!source || !targetField) return null;
-
-  const endIndex = Number.isFinite(Number(options.endIndex))
-    ? Math.min(source.length, Math.max(0, Math.trunc(Number(options.endIndex))))
-    : source.length;
-  let cursor = Number.isFinite(Number(options.startIndex))
-    ? Math.max(0, Math.trunc(Number(options.startIndex)))
-    : 0;
-
-  while (cursor < endIndex) {
-    if (source[cursor] !== '"') {
-      cursor += 1;
-      continue;
-    }
-
-    const key = readJsonStringLiteral(source, cursor, { allowUnterminated: false });
-    if (!key?.complete) return null;
-    const colonIndex = skipJsonWhitespace(source, key.endIndex, endIndex);
-    if (source[colonIndex] !== ':') {
-      cursor = key.endIndex;
-      continue;
-    }
-
-    const valueStart = skipJsonWhitespace(source, colonIndex + 1, endIndex);
-    const valueEnd = skipJsonValue(source, valueStart, endIndex);
-    if (key.value === targetField) {
-      return {
-        valueStart,
-        valueEnd,
-        complete: valueEnd < endIndex || /[\]}]/.test(source[valueEnd - 1] || '')
-      };
-    }
-
-    cursor = Math.max(valueEnd, key.endIndex + 1);
-  }
-
-  return null;
-}
-
-function extractJsonStringField(text, fieldName) {
-  const field = findJsonFieldValue(text, fieldName);
-  if (!field || text[field.valueStart] !== '"') return undefined;
-  const stringValue = readJsonStringLiteral(text, field.valueStart, { allowUnterminated: true });
-  return stringValue ? stringValue.value : undefined;
-}
-
-function extractJsonObjectFieldText(text, fieldName) {
-  const field = findJsonFieldValue(text, fieldName);
-  if (!field || text[field.valueStart] !== '{') return '';
-  return text.slice(field.valueStart, field.valueEnd || text.length);
-}
-
-function parsePartialArgumentsObject(text) {
-  const partial = {};
-  const action = extractJsonStringField(text, 'action');
-  if (typeof action === 'string') partial.action = action;
-  const skillName = extractJsonStringField(text, 'skill_name');
-  if (typeof skillName === 'string') partial.skill_name = skillName;
-  const patch = extractJsonStringField(text, 'patch');
-  if (typeof patch === 'string') partial.patch = patch;
-
-  const targetText = extractJsonObjectFieldText(text, 'target');
-  if (targetText) {
-    const target = {};
-    const kind = extractJsonStringField(targetText, 'kind');
-    if (typeof kind === 'string') target.kind = kind;
-    const name = extractJsonStringField(targetText, 'name');
-    if (typeof name === 'string') target.name = name;
-    if (Object.keys(target).length > 0) {
-      partial.target = target;
-    }
-  }
-
-  return Object.keys(partial).length > 0 ? partial : null;
-}
-
-function parseArgumentsObject(rawArguments) {
+function parseLegacyArguments(rawArguments) {
   if (rawArguments && typeof rawArguments === 'object' && !Array.isArray(rawArguments)) {
     return rawArguments;
   }
-  const text = typeof rawArguments === 'string' ? rawArguments.trim() : '';
-  if (!text) return null;
+  if (typeof rawArguments !== 'string' || !rawArguments.trim()) return null;
   try {
-    const parsed = JSON.parse(text);
-    return (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) ? parsed : null;
+    const parsed = JSON.parse(rawArguments);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
   } catch (_) {
-    // Responses 的 function_call arguments 会逐片流式到达。这里不要等到完整 JSON
-    // 才展示 apply_patch，而是只抽取 UI 需要的稳定字段，让 diff 能按行即时展开。
-    return parsePartialArgumentsObject(text);
+    return null;
   }
 }
 
-function splitPatchLines(patch) {
-  const text = typeof patch === 'string' ? patch.trim() : '';
-  return text ? text.split(/\r?\n/) : [];
-}
-
-function truncatePreviewLines(lines, maxLines) {
-  const normalized = Array.isArray(lines) ? lines : [];
-  const limit = Number.isFinite(Number(maxLines)) ? Math.max(0, Math.trunc(Number(maxLines))) : DEFAULT_MAX_LINES_PER_FILE;
-  if (normalized.length <= limit) {
-    return {
-      lines: normalized,
-      truncated: false,
-      omittedLineCount: 0
-    };
+function resolveCustomEnvironmentTarget(environmentId) {
+  const normalized = normalizeText(environmentId);
+  if (!normalized) return { targetKind: 'workspace', skillName: '' };
+  if (!normalized.startsWith('skill:')) {
+    return { targetKind: 'unknown', skillName: '', environmentId: normalized };
   }
   return {
-    lines: normalized.slice(0, limit),
-    truncated: true,
-    omittedLineCount: normalized.length - limit
+    targetKind: 'skill',
+    skillName: normalizeText(normalized.slice('skill:'.length)),
+    environmentId: normalized
   };
 }
 
-function createLine(kind, text) {
+function resolveLegacyTarget(args) {
+  const target = args?.target && typeof args.target === 'object' && !Array.isArray(args.target)
+    ? args.target
+    : null;
+  const targetKind = normalizeText(target?.kind).toLowerCase() || 'workspace';
+  return {
+    targetKind,
+    skillName: targetKind === 'skill' ? normalizeText(target?.name) : ''
+  };
+}
+
+function normalizePreviewLine(line) {
+  const type = normalizeText(line?.type).toLowerCase();
+  const kind = type === 'move' || type === 'eof' ? 'meta' : (type || 'context');
   return {
     kind,
-    text: typeof text === 'string' ? text : ''
+    text: type === 'move' ? `Move to: ${line?.content || ''}` : (line?.content || ''),
+    lineNumber: Number.isFinite(Number(line?.line_number)) ? Number(line.line_number) : null,
+    sequence: Number.isFinite(Number(line?.sequence)) ? Number(line.sequence) : 0
   };
 }
 
-function finalizeFilePreview(file, options = {}) {
-  const normalized = file && typeof file === 'object' ? file : null;
-  if (!normalized) return null;
-
-  const perFileLimit = Number.isFinite(Number(options.maxLinesPerFile))
-    ? Math.max(0, Math.trunc(Number(options.maxLinesPerFile)))
-    : DEFAULT_MAX_LINES_PER_FILE;
-  const totalLines = Array.isArray(normalized.lines) ? normalized.lines.length : 0;
-  const lineResult = truncatePreviewLines(normalized.lines, perFileLimit);
-
+function buildPreview(rawPatch, target, options = {}) {
+  if (typeof rawPatch !== 'string' || !rawPatch.trim()) return null;
+  const progress = parseApplyPatchProgress(rawPatch, { finish: options.final === true });
+  const files = progress.files.map((file, fileIndex) => {
+    const lines = file.lines.map(normalizePreviewLine);
+    return {
+      operation: file.operation,
+      path: file.path,
+      movePath: file.moveTo || '',
+      additions: lines.filter(line => line.kind === 'add').length,
+      deletions: lines.filter(line => line.kind === 'delete').length,
+      lines,
+      fileIndex
+    };
+  });
+  const totalAdditions = files.reduce((sum, file) => sum + file.additions, 0);
+  const totalDeletions = files.reduce((sum, file) => sum + file.deletions, 0);
   return {
-    path: normalized.path,
-    movePath: normalized.movePath || '',
-    operation: normalized.operation,
-    additions: normalized.additions || 0,
-    deletions: normalized.deletions || 0,
-    totalLines,
-    lines: lineResult.lines,
-    truncated: lineResult.truncated,
-    omittedLineCount: lineResult.omittedLineCount
-  };
-}
-
-function buildApplyPatchPreview(rawArguments, options = {}) {
-  const args = parseArgumentsObject(rawArguments);
-  if (!args) {
-    return null;
-  }
-  const requireAction = options.requireAction !== false;
-  if (requireAction && String(args.action || '').trim() !== 'apply_patch') {
-    return null;
-  }
-
-  const patch = typeof args.patch === 'string' ? args.patch : '';
-  const lines = splitPatchLines(patch);
-  if (lines.length < 1 || lines[0] !== BEGIN_PATCH_MARKER) {
-    return null;
-  }
-  const hasEndPatchMarker = lines[lines.length - 1] === END_PATCH_MARKER;
-  if (options.allowPartial === false && !hasEndPatchMarker) {
-    return null;
-  }
-  const patchContentEndIndex = hasEndPatchMarker ? lines.length - 1 : lines.length;
-
-  const maxFiles = Number.isFinite(Number(options.maxFiles))
-    ? Math.max(1, Math.trunc(Number(options.maxFiles)))
-    : DEFAULT_MAX_FILES;
-  const maxTotalLines = Number.isFinite(Number(options.maxTotalLines))
-    ? Math.max(1, Math.trunc(Number(options.maxTotalLines)))
-    : DEFAULT_MAX_TOTAL_LINES;
-
-  const filePreviews = [];
-  let index = 1;
-  let visibleLineBudget = maxTotalLines;
-  let totalAdditions = 0;
-  let totalDeletions = 0;
-  let discoveredFileCount = 0;
-
-  while (index < patchContentEndIndex && filePreviews.length < maxFiles) {
-    const line = lines[index];
-
-    if (line.startsWith(ADD_FILE_MARKER)) {
-      discoveredFileCount += 1;
-      const path = normalizePatchPath(line.slice(ADD_FILE_MARKER.length));
-      const fileLines = [];
-      let additions = 0;
-      index += 1;
-      while (index < patchContentEndIndex) {
-        const current = lines[index];
-        if (current === EOF_MARKER) {
-          fileLines.push(createLine('meta', current));
-          index += 1;
-          continue;
-        }
-        if (current.startsWith('*** ')) break;
-        if (current.startsWith('+')) {
-          additions += 1;
-          fileLines.push(createLine('add', current.slice(1)));
-          index += 1;
-          continue;
-        }
-        break;
-      }
-      totalAdditions += additions;
-      const preview = finalizeFilePreview({
-        path,
-        operation: 'add',
-        additions,
-        deletions: 0,
-        lines: fileLines
-      }, { maxLinesPerFile: Math.min(visibleLineBudget, options.maxLinesPerFile ?? DEFAULT_MAX_LINES_PER_FILE) });
-      if (preview) {
-        visibleLineBudget = Math.max(0, visibleLineBudget - preview.lines.length);
-        filePreviews.push(preview);
-      }
-      continue;
-    }
-
-    if (line.startsWith(DELETE_FILE_MARKER)) {
-      discoveredFileCount += 1;
-      const path = normalizePatchPath(line.slice(DELETE_FILE_MARKER.length));
-      index += 1;
-      const preview = finalizeFilePreview({
-        path,
-        operation: 'delete',
-        additions: 0,
-        deletions: 0,
-        lines: [createLine('meta', '已删除文件')]
-      }, { maxLinesPerFile: Math.min(visibleLineBudget, options.maxLinesPerFile ?? DEFAULT_MAX_LINES_PER_FILE) });
-      if (preview) {
-        visibleLineBudget = Math.max(0, visibleLineBudget - preview.lines.length);
-        filePreviews.push(preview);
-      }
-      continue;
-    }
-
-    if (line.startsWith(UPDATE_FILE_MARKER)) {
-      discoveredFileCount += 1;
-      const path = normalizePatchPath(line.slice(UPDATE_FILE_MARKER.length));
-      let movePath = '';
-      const fileLines = [];
-      let additions = 0;
-      let deletions = 0;
-      index += 1;
-
-      if (index < patchContentEndIndex && lines[index].startsWith(MOVE_TO_MARKER)) {
-        movePath = normalizePatchPath(lines[index].slice(MOVE_TO_MARKER.length));
-        fileLines.push(createLine('meta', `移动到 ${movePath}`));
-        index += 1;
-      }
-
-      while (index < patchContentEndIndex) {
-        const current = lines[index];
-        if (current.startsWith(HUNK_MARKER)) {
-          fileLines.push(createLine('hunk', current));
-          index += 1;
-          continue;
-        }
-        if (current === EOF_MARKER) {
-          fileLines.push(createLine('meta', current));
-          index += 1;
-          continue;
-        }
-        if (current.startsWith('*** ')) break;
-        if (current.startsWith('+')) {
-          additions += 1;
-          fileLines.push(createLine('add', current.slice(1)));
-          index += 1;
-          continue;
-        }
-        if (current.startsWith('-')) {
-          deletions += 1;
-          fileLines.push(createLine('delete', current.slice(1)));
-          index += 1;
-          continue;
-        }
-        if (current.startsWith(' ')) {
-          fileLines.push(createLine('context', current.slice(1)));
-          index += 1;
-          continue;
-        }
-        fileLines.push(createLine('meta', current));
-        index += 1;
-      }
-
-      totalAdditions += additions;
-      totalDeletions += deletions;
-      const preview = finalizeFilePreview({
-        path,
-        movePath,
-        operation: movePath ? 'move' : 'update',
-        additions,
-        deletions,
-        lines: fileLines
-      }, { maxLinesPerFile: Math.min(visibleLineBudget, options.maxLinesPerFile ?? DEFAULT_MAX_LINES_PER_FILE) });
-      if (preview) {
-        visibleLineBudget = Math.max(0, visibleLineBudget - preview.lines.length);
-        filePreviews.push(preview);
-      }
-      continue;
-    }
-
-    index += 1;
-  }
-
-  const totalFiles = filePreviews.length;
-  if (totalFiles <= 0) return null;
-
-  return {
-    skillName: typeof args.skill_name === 'string' ? args.skill_name.trim() : '',
-    totalFiles,
-    discoveredFileCount,
+    files,
+    totalFiles: files.length,
     totalAdditions,
     totalDeletions,
-    files: filePreviews,
-    truncatedFiles: Math.max(0, discoveredFileCount - totalFiles),
-    patchComplete: hasEndPatchMarker,
-    isPartial: !hasEndPatchMarker
+    patchComplete: progress.complete && !progress.error,
+    isPartial: !progress.complete && !progress.error,
+    parseError: progress.error,
+    environmentId: progress.environment_id || target.environmentId || '',
+    targetKind: target.targetKind,
+    skillName: target.skillName || '',
+    pendingLine: progress.pending_line || ''
   };
 }
 
+/**
+ * 旧 `skill_registry(action=apply_patch)` 仅用于已完成历史的回放。
+ * 新请求不会再用未闭合 JSON 承载 patch，因此这里明确只接受完整 JSON/对象，
+ * 不保留第二套“猜测未闭合 JSON 字符串”的解析器。
+ */
 export function buildSkillApplyPatchPreview(rawArguments, options = {}) {
-  return buildApplyPatchPreview(rawArguments, {
-    ...options,
-    requireAction: true
-  });
+  const args = parseLegacyArguments(rawArguments);
+  if (!args || normalizeText(args.action).toLowerCase() !== 'apply_patch') return null;
+  return buildPreview(args.patch, {
+    targetKind: 'skill',
+    skillName: normalizeText(args.skill_name || args.name)
+  }, { ...options, final: options.final !== false });
 }
 
-export function buildConversationDocumentApplyPatchPreview(rawArguments, options = {}) {
-  return buildApplyPatchPreview(rawArguments, {
-    ...options,
-    requireAction: false
-  });
-}
-
-export function buildVirtualFileApplyPatchPreview(rawArguments, options = {}) {
-  const parsedArgs = parseArgumentsObject(rawArguments) || {};
-  const target = (parsedArgs.target && typeof parsedArgs.target === 'object' && !Array.isArray(parsedArgs.target))
-    ? parsedArgs.target
-    : null;
-  if (String(target?.kind || '').trim().toLowerCase() === 'skill') {
-    return buildApplyPatchPreview({
-      action: 'apply_patch',
-      skill_name: target?.name || '',
-      patch: parsedArgs.patch || ''
-    }, {
-      ...options,
-      requireAction: false
-    });
+/**
+ * 顶层 apply_patch 同时支持：
+ * - 新 `custom_tool_call.input` 的 raw patch；
+ * - 历史中已经完成的旧 function_call JSON 参数。
+ */
+export function buildVirtualFileApplyPatchPreview(rawInput, options = {}) {
+  const legacyArgs = parseLegacyArguments(rawInput);
+  if (legacyArgs) {
+    return buildPreview(
+      legacyArgs.patch,
+      resolveLegacyTarget(legacyArgs),
+      { ...options, final: options.final !== false }
+    );
   }
-  return buildConversationDocumentApplyPatchPreview(rawArguments, options);
+  if (typeof rawInput !== 'string') return null;
+  const progress = parseApplyPatchProgress(rawInput, { finish: false });
+  return buildPreview(
+    rawInput,
+    resolveCustomEnvironmentTarget(progress.environment_id),
+    options
+  );
 }

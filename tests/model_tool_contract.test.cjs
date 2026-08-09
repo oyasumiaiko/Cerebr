@@ -99,7 +99,7 @@ function buildAllModelToolDefinitions(modules, pageToolEnvironment = null) {
   return [
     jsRuntime.buildJsRuntimeExecuteFunctionToolDefinition(pageToolEnvironment),
     readToolOutput.buildReadToolOutputFunctionToolDefinition(),
-    virtualFiles.buildVirtualFileApplyPatchFunctionToolDefinition(),
+    virtualFiles.buildVirtualFileApplyPatchCustomToolDefinition(),
     virtualFiles.buildVirtualFileListFilesFunctionToolDefinition(),
     virtualFiles.buildVirtualFileReadFileFunctionToolDefinition(),
     virtualFiles.buildVirtualFileSearchFilesFunctionToolDefinition(),
@@ -214,6 +214,14 @@ test('全部 19 个模型工具具有唯一稳定名称和可独立判读的描�
   assert.equal(new Set(names).size, definitions.length, '模型工具名称不得重复');
 
   for (const definition of definitions) {
+    if (definition.name === 'apply_patch') {
+      assert.equal(definition.type, 'custom');
+      assert.deepEqual(Object.keys(definition).sort(), ['description', 'format', 'name', 'type']);
+      assert.equal(definition.format.type, 'grammar');
+      assert.equal(definition.format.syntax, 'lark');
+      assert.match(definition.format.definition, /environment_id: "\*\*\* Environment ID: " filename LF/);
+      continue;
+    }
     assert.equal(definition.type, 'function', `${definition.name} 必须是 function tool`);
     assert.equal(definition.strict, true, `${definition.name} 必须启用 strict mode`);
     assert.match(definition.description, /(?:^|\n)用途：\S/u, `${definition.name} 缺少“用途”说明`);
@@ -257,7 +265,7 @@ test('全部模型工具的每一层 object schema 都遵循 Responses strict �
   const modules = await loadModelToolModules();
   const definitions = buildAllModelToolDefinitions(modules);
 
-  for (const definition of definitions) {
+  for (const definition of definitions.filter(item => item.type === 'function')) {
     assertStrictObjectSchemaRecursively(definition.parameters, `${definition.name}.parameters`);
     assertPortableFineTunedSchemaRecursively(definition.parameters, `${definition.name}.parameters`);
   }
@@ -272,7 +280,6 @@ test('关键枚举保持闭合，范围与数量通过 description 暴露且不�
   assert.match(propertiesOf('js_runtime_execute').frame_ids.description, /非负 frame ID/);
 
   for (const name of [
-    'apply_patch',
     'list_files',
     'read_file',
     'search_files',
@@ -394,6 +401,11 @@ test('统一 registry 与 19 个 definition builder 和 manifest 保持逐项一
       pageToolEnvironment: htmlEnvironment
     });
     assert.equal(registryDefinition.name, toolName, `${toolName} definition.name 与 registry key 不一致`);
+    assert.equal(
+      registryDefinition.type,
+      RESPONSES_EXTENSION_TOOL_SPECS.find(spec => spec.id === toolName).toolType,
+      `${toolName} definition.type 与 manifest 不一致`
+    );
     assert.deepEqual(
       registryDefinition,
       directDefinitions[toolName],
@@ -405,12 +417,12 @@ test('统一 registry 与 19 个 definition builder 和 manifest 保持逐项一
 test('统一 registry 为 HTML、PDF 与隔离模式暴露精确且互斥的工具集合', async () => {
   const modules = await loadModelToolModules();
   const {
-    buildResponsesExtensionFunctionTools
+    buildResponsesExtensionTools
   } = modules.extensionToolRegistry;
   const {
     resolvePageToolEnvironment
   } = modules.pageToolEnvironment;
-  const getExposedNames = pageToolEnvironment => buildResponsesExtensionFunctionTools({
+  const getExposedNames = pageToolEnvironment => buildResponsesExtensionTools({
     pageToolEnvironment,
     hasJsRuntime: true
   }).map(definition => definition.name);
@@ -502,7 +514,7 @@ test('hosted tool_search 的 searchable names 完整派生自 deferLoading manif
     RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES
   } = modules.extensionToolRegistry;
   const deferredManifestNames = RESPONSES_EXTENSION_TOOL_SPECS
-    .filter(spec => spec.deferLoading === true)
+    .filter(spec => spec.deferLoading === true && spec.toolType === 'function')
     .map(spec => spec.id);
 
   assert.deepEqual(
@@ -511,10 +523,10 @@ test('hosted tool_search 的 searchable names 完整派生自 deferLoading manif
   );
   assert.deepEqual(
     RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES,
-    EXPECTED_MODEL_TOOL_NAMES.filter(name => name !== 'read_tool_output')
+    EXPECTED_MODEL_TOOL_NAMES.filter(name => name !== 'read_tool_output' && name !== 'apply_patch')
   );
   assert.equal(
     new Set(RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES).size,
-    EXPECTED_MODEL_TOOL_NAMES.length - 1
+    EXPECTED_MODEL_TOOL_NAMES.length - 2
   );
 });

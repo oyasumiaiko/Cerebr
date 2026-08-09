@@ -43,16 +43,17 @@ test('buildSkillApplyPatchPreview 会把 apply_patch 参数解析成可视化 di
   assert.equal(preview.isPartial, false);
 });
 
-test('buildSkillApplyPatchPreview 支持未闭合 JSON 参数中的流式 patch 预览', async () => {
-  const { buildSkillApplyPatchPreview } = await loadModule();
-  const preview = buildSkillApplyPatchPreview([
-    '{"action":"apply_patch","skill_name":"dom-probe","patch":"*** Begin Patch\\n',
-    '*** Update File: src/main.js\\n',
-    '@@\\n',
-    ' old\\n',
-    '-old\\n',
-    '+const label = \\"done\\";'
-  ].join(''));
+test('buildVirtualFileApplyPatchPreview 直接流式解析 custom_tool_call raw input', async () => {
+  const { buildVirtualFileApplyPatchPreview } = await loadModule();
+  const preview = buildVirtualFileApplyPatchPreview([
+    '*** Begin Patch\n',
+    '*** Environment ID: skill:dom-probe\n',
+    '*** Update File: src/main.js\n',
+    '@@\n',
+    ' old\n',
+    '-old\n',
+    '+const label = "done";\n'
+  ].join(''), { final: false });
 
   assert.equal(preview.skillName, 'dom-probe');
   assert.equal(preview.totalFiles, 1);
@@ -68,21 +69,56 @@ test('buildSkillApplyPatchPreview 支持未闭合 JSON 参数中的流式 patch 
   assert.equal(preview.files[0].lines[3].text, 'const label = "done";');
 });
 
-test('buildVirtualFileApplyPatchPreview 支持顶层 apply_patch 的未闭合 JSON 参数', async () => {
+test('custom preview 的 done 会完成没有换行的最后一行', async () => {
   const { buildVirtualFileApplyPatchPreview } = await loadModule();
   const preview = buildVirtualFileApplyPatchPreview([
-    '{"target":{"kind":"skill","name":"dom-probe"},"patch":"*** Begin Patch\\n',
-    '*** Add File: references/notes.md\\n',
-    '+hello'
-  ].join(''));
+    '*** Begin Patch\n',
+    '*** Environment ID: skill:dom-probe\n',
+    '*** Add File: references/notes.md\n',
+    '+hello\n',
+    '*** End Patch'
+  ].join(''), { final: true });
 
   assert.equal(preview.skillName, 'dom-probe');
   assert.equal(preview.totalFiles, 1);
   assert.equal(preview.totalAdditions, 1);
-  assert.equal(preview.patchComplete, false);
+  assert.equal(preview.patchComplete, true);
   assert.equal(preview.files[0].path, 'references/notes.md');
   assert.equal(preview.files[0].operation, 'add');
   assert.equal(preview.files[0].lines[0].kind, 'add');
+});
+
+test('preview 与执行 parser 同样拒绝非法完整行并报告精确行号', async () => {
+  const { buildVirtualFileApplyPatchPreview } = await loadModule();
+  const preview = buildVirtualFileApplyPatchPreview([
+    '*** Begin Patch',
+    '*** Update File: a.txt',
+    '@@',
+    '-old',
+    'bogus',
+    '*** End Patch'
+  ].join('\n'), { final: true });
+
+  assert.equal(preview.parseError.line_number, 5);
+  assert.match(preview.parseError.message, /Expected update hunk to start/);
+  assert.equal(preview.files[0].lines.some(line => line.text === 'bogus'), false);
+});
+
+test('preview 不再截断 12 个文件、单文件 160 行或总计 320 行', async () => {
+  const { buildVirtualFileApplyPatchPreview } = await loadModule();
+  const patchLines = ['*** Begin Patch'];
+  for (let fileIndex = 0; fileIndex < 13; fileIndex += 1) {
+    patchLines.push(`*** Add File: file-${fileIndex}.txt`);
+    for (let lineIndex = 0; lineIndex < 31; lineIndex += 1) {
+      patchLines.push(`+${fileIndex}:${lineIndex}`);
+    }
+  }
+  patchLines.push('*** End Patch');
+  const preview = buildVirtualFileApplyPatchPreview(patchLines.join('\n'), { final: true });
+
+  assert.equal(preview.totalFiles, 13);
+  assert.equal(preview.totalAdditions, 403);
+  assert.equal(preview.files[12].lines.length, 31);
 });
 
 test('buildSkillApplyPatchPreview 对非 apply_patch 参数返回 null', async () => {

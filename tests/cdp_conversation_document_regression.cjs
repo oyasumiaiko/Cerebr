@@ -60,38 +60,36 @@ const INITIAL_HTML_DOC_CONTENT = [
 const EDITED_MD_DOC_CONTENT = '# 随笔\n\n第二版内容。\n';
 const EXPECTED_DOWNLOAD_NAME = 'workspace__随笔-关于学习与判断.md';
 
-const [rawRepoRoot, outputDir, rawArg3 = '', rawArg4 = ''] = process.argv.slice(2);
+const [rawRepoRoot, outputDir, rawArg3 = '', rawArg4 = '', rawArg5 = ''] = process.argv.slice(2);
 const repoRoot = rawRepoRoot ? path.resolve(rawRepoRoot) : '';
 const launchMode = (rawArg3 === 'stable' || rawArg3 === 'worktree_unpacked')
   ? rawArg3
   : ((rawArg4 === 'stable' || rawArg4 === 'worktree_unpacked') ? rawArg4 : 'stable');
 const chromePath = (launchMode === rawArg3) ? '' : rawArg3;
+const focusedApplyPatchRegression = rawArg5 === 'apply_patch_streaming';
 
 if (!repoRoot || !outputDir || (launchMode === 'stable' && !chromePath)) {
   throw new Error(
-    'Usage: node tests/cdp_conversation_document_regression.cjs <repoRoot> <outputDir> [chromePath] [mode=stable|worktree_unpacked]'
+    'Usage: node tests/cdp_conversation_document_regression.cjs <repoRoot> <outputDir> [chromePath] [mode=stable|worktree_unpacked] [case=apply_patch_streaming]'
   );
 }
 
 const runHeadless = shouldRunHeadless();
 const { chromium } = loadPlaywright(repoRoot);
 
-function createApplyPatchPayload() {
-  return {
-    target: null,
-    patch: [
-      '*** Begin Patch',
-      `*** Add File: ${MD_DOC_PATH}`,
-      ...INITIAL_MD_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
-      `*** Add File: ${TXT_DOC_PATH}`,
-      ...INITIAL_TXT_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
-      `*** Add File: ${CODE_DOC_PATH}`,
-      ...INITIAL_CODE_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
-      `*** Add File: ${HTML_DOC_PATH}`,
-      ...INITIAL_HTML_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
-      '*** End Patch'
-    ].join('\n')
-  };
+function createApplyPatchInput() {
+  return [
+    '*** Begin Patch',
+    `*** Add File: ${MD_DOC_PATH}`,
+    ...INITIAL_MD_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
+    `*** Add File: ${TXT_DOC_PATH}`,
+    ...INITIAL_TXT_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
+    `*** Add File: ${CODE_DOC_PATH}`,
+    ...INITIAL_CODE_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
+    `*** Add File: ${HTML_DOC_PATH}`,
+    ...INITIAL_HTML_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
+    '*** End Patch'
+  ].join('\n');
 }
 
 function createPageHtml() {
@@ -214,13 +212,13 @@ function writeSseEvent(res, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
-function createFunctionCallItem() {
+function createCustomToolCallItem(input = '') {
   return {
-    id: `fc_${PATCH_CALL_ID}`,
-    type: 'function_call',
+    id: `ctc_${PATCH_CALL_ID}`,
+    type: 'custom_tool_call',
     call_id: PATCH_CALL_ID,
     name: 'apply_patch',
-    arguments: JSON.stringify(createApplyPatchPayload()),
+    input,
     status: 'completed'
   };
 }
@@ -241,7 +239,7 @@ function createMessageItem(id, text) {
   };
 }
 
-function collectFunctionOutputText(outputItem) {
+function collectToolOutputText(outputItem) {
   const output = Array.isArray(outputItem?.output) ? outputItem.output : [];
   return output
     .map((part) => {
@@ -265,12 +263,35 @@ async function writeResultSnapshot(outputDir, result) {
 
 async function runMockResponsesServer() {
   const requestLog = [];
-  let firstRequestToolNames = [];
-  let functionCallOutputText = '';
+  let firstRequestTools = [];
+  let customToolCallOutputText = '';
+  let customInputStreamStage = 0;
+  let customInputDoneSent = false;
+  const acknowledgedPreviewStages = new Set();
+  const previewStageWaiters = new Map();
   const pageHtml = createPageHtml();
+
+  function waitForPreviewStageAcknowledgement(stage) {
+    if (acknowledgedPreviewStages.has(stage)) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timeoutId = setTimeout(() => {
+        previewStageWaiters.delete(stage);
+        resolve();
+      }, 25_000);
+      previewStageWaiters.set(stage, () => {
+        clearTimeout(timeoutId);
+        resolve();
+      });
+    });
+  }
 
   const server = http.createServer(async (req, res) => {
     try {
+      if (req.method === 'GET' && req.url === '/favicon.ico') {
+        res.writeHead(204, { 'cache-control': 'no-store' });
+        res.end();
+        return;
+      }
       if (req.method === 'GET' && req.url === '/') {
         res.writeHead(200, {
           'content-type': 'text/html; charset=utf-8',
@@ -285,7 +306,7 @@ async function runMockResponsesServer() {
         req.on('data', (chunk) => {
           body += String(chunk);
         });
-        req.on('end', () => {
+        req.on('end', async () => {
           let parsed = null;
           try {
             parsed = JSON.parse(body);
@@ -297,14 +318,13 @@ async function runMockResponsesServer() {
 
           requestLog.push(parsed);
           if (requestLog.length === 1) {
-            firstRequestToolNames = (Array.isArray(parsed?.tools) ? parsed.tools : [])
-              .map((tool) => (tool?.type === 'function' ? tool?.name : tool?.type))
-              .filter(Boolean);
+            firstRequestTools = (Array.isArray(parsed?.tools) ? parsed.tools : [])
+              .map((tool) => ({ type: tool?.type || '', name: tool?.name || '' }));
           }
 
           const inputItems = Array.isArray(parsed?.input) ? parsed.input : [];
-          const functionOutput = inputItems.find((item) => (
-            item?.type === 'function_call_output' && item?.call_id === PATCH_CALL_ID
+          const customToolOutput = inputItems.find((item) => (
+            item?.type === 'custom_tool_call_output' && item?.call_id === PATCH_CALL_ID
           ));
 
           res.writeHead(200, {
@@ -313,18 +333,51 @@ async function runMockResponsesServer() {
             connection: 'close',
             'access-control-allow-origin': '*'
           });
+          res.socket?.setNoDelay(true);
+          res.flushHeaders?.();
+          // 避免真实 Chrome 对极短的首批 chunk 做网络层缓冲；这是 SSE comment，
+          // 不会进入 Cerebr 的事件 parser，也不改变被测 custom tool 协议。
+          res.write(`: ${' '.repeat(2048)}\n\n`);
 
-          if (!functionOutput) {
-            const functionCall = createFunctionCallItem();
+          if (!customToolOutput) {
+            const fullInput = createApplyPatchInput();
+            const inputLines = fullInput.split('\n');
+            const inputChunks = [
+              `${inputLines.slice(0, 5).join('\n')}\n`,
+              `${inputLines.slice(5, 10).join('\n')}\n`,
+              inputLines.slice(10).join('\n')
+            ];
+            const pendingCall = createCustomToolCallItem('');
             writeSseEvent(res, { type: 'response.created', response: { id: 'resp_1' } });
             writeSseEvent(res, { type: 'response.in_progress', response: { id: 'resp_1' } });
-            writeSseEvent(res, { type: 'response.output_item.added', item: functionCall });
-            writeSseEvent(res, { type: 'response.output_item.done', item: functionCall });
+            writeSseEvent(res, { type: 'response.output_item.added', output_index: 0, item: pendingCall });
+            for (let index = 0; index < inputChunks.length; index += 1) {
+              writeSseEvent(res, {
+                type: 'response.custom_tool_call_input.delta',
+                item_id: pendingCall.id,
+                output_index: 0,
+                delta: inputChunks[index]
+              });
+              customInputStreamStage = index + 1;
+              if (index < inputChunks.length - 1) {
+                await waitForPreviewStageAcknowledgement(index + 1);
+              }
+            }
+            await new Promise((resolve) => setTimeout(resolve, 900));
+            customInputDoneSent = true;
+            const completedCall = createCustomToolCallItem(fullInput);
+            writeSseEvent(res, {
+              type: 'response.custom_tool_call_input.done',
+              item_id: completedCall.id,
+              output_index: 0,
+              input: fullInput
+            });
+            writeSseEvent(res, { type: 'response.output_item.done', output_index: 0, item: completedCall });
             writeSseEvent(res, {
               type: 'response.completed',
               response: {
                 id: 'resp_1',
-                output: [functionCall],
+                output: [completedCall],
                 usage: {
                   input_tokens: 90,
                   output_tokens: 12,
@@ -339,7 +392,7 @@ async function runMockResponsesServer() {
             return;
           }
 
-          functionCallOutputText = collectFunctionOutputText(functionOutput);
+          customToolCallOutputText = collectToolOutputText(customToolOutput);
           const finalText = [
             EXPECTED_FINAL_MARKER,
             '',
@@ -405,11 +458,23 @@ async function runMockResponsesServer() {
   return {
     origin: `http://127.0.0.1:${port}`,
     requestLog,
-    getFirstRequestToolNames() {
-      return firstRequestToolNames.slice();
+    getFirstRequestTools() {
+      return firstRequestTools.map((tool) => ({ ...tool }));
     },
-    getFunctionCallOutputText() {
-      return functionCallOutputText;
+    getCustomToolCallOutputText() {
+      return customToolCallOutputText;
+    },
+    getCustomInputStreamStage() {
+      return customInputStreamStage;
+    },
+    getCustomInputDoneSent() {
+      return customInputDoneSent;
+    },
+    acknowledgePreviewStage(stage) {
+      acknowledgedPreviewStages.add(stage);
+      const resolve = previewStageWaiters.get(stage);
+      previewStageWaiters.delete(stage);
+      resolve?.();
     },
     async close() {
       await new Promise((resolve) => server.close(() => resolve()));
@@ -482,6 +547,7 @@ async function readIndexedDbDocument(sidebarFrame, conversationId, filePath) {
 }
 
 async function main() {
+  const regressionStartedAt = Date.now();
   await fsp.mkdir(outputDir, { recursive: true });
   const mockServer = await runMockResponsesServer();
 
@@ -498,7 +564,9 @@ async function main() {
   const profileDir = launchMode === 'worktree_unpacked'
     ? resolveWorktreeUnpackedProfileDir(repoRoot, 'conversation-document-regression')
     : resolveFixedSidebarProfileDir(repoRoot);
-  await fsp.rm(profileDir, { recursive: true, force: true });
+  if (launchMode === 'worktree_unpacked') {
+    await fsp.rm(profileDir, { recursive: true, force: true });
+  }
   await fsp.mkdir(profileDir, { recursive: true });
   result.profileDir = profileDir;
 
@@ -536,7 +604,10 @@ async function main() {
       await page.goto(`${mockServer.origin}/`, { waitUntil: 'domcontentloaded' });
       result.steps.push('page_loaded');
     } else {
-      await reloadUnpackedExtension(context, { timeoutMs: 30_000 });
+      await reloadUnpackedExtension(context, {
+        timeoutMs: 30_000,
+        unpackedPath: repoRoot
+      });
       await page.goto(`${mockServer.origin}/`, { waitUntil: 'domcontentloaded' });
       result.steps.push('page_loaded');
     }
@@ -565,6 +636,78 @@ async function main() {
     await sidebarFrame.locator('#message-input').press('Enter');
     result.steps.push('prompt_sent');
 
+    const readStreamingPatchPreview = async () => sidebarFrame.evaluate(() => {
+      const previewRoot = document.querySelector('.response-activity-tool-diff-preview');
+      if (!previewRoot) return null;
+      const fileCards = Array.from(previewRoot.querySelectorAll('.response-activity-tool-diff-file'));
+      const rows = Array.from(previewRoot.querySelectorAll('.response-activity-tool-diff-line'));
+      return {
+        fileCount: fileCards.length,
+        lineCount: rows.length,
+        paths: fileCards.map((card) => card.getAttribute('data-apply-patch-path') || ''),
+        lines: rows.map((row) => (row.textContent || '').trim())
+      };
+    });
+
+    try {
+      result.streamingPreviewBeforeDone = await waitFor(async () => {
+        if (mockServer.getCustomInputStreamStage() < 1 || mockServer.getCustomInputDoneSent()) return null;
+        const preview = await readStreamingPatchPreview();
+        return preview?.fileCount >= 1 && preview?.lineCount >= 3 ? preview : null;
+      }, {
+        timeoutMs: 30_000,
+        intervalMs: 50,
+        label: 'apply_patch preview before custom input done'
+      });
+      result.streamingPreviewBeforeDone.observedStreamStage = mockServer.getCustomInputStreamStage();
+      result.previewBeforeDoneScreenshot = 'sidebar-preview-before-done.png';
+      await sidebarFrame.locator('body').screenshot({
+        path: path.join(outputDir, result.previewBeforeDoneScreenshot),
+        timeout: 15_000
+      });
+      for (let stage = 1; stage <= result.streamingPreviewBeforeDone.observedStreamStage; stage += 1) {
+        mockServer.acknowledgePreviewStage(stage);
+      }
+      result.steps.push('streaming_preview_visible_before_done');
+
+      result.streamingPreviewGrowthBeforeDone = await waitFor(async () => {
+        if (mockServer.getCustomInputStreamStage() < 2 || mockServer.getCustomInputDoneSent()) return null;
+        const preview = await readStreamingPatchPreview();
+        return preview?.lineCount > result.streamingPreviewBeforeDone.lineCount ? preview : null;
+      }, {
+        timeoutMs: 30_000,
+        intervalMs: 50,
+        label: 'apply_patch preview growth before custom input done'
+      });
+      result.previewGrowthBeforeDoneScreenshot = 'sidebar-preview-growth-before-done.png';
+      await sidebarFrame.locator('body').screenshot({
+        path: path.join(outputDir, result.previewGrowthBeforeDoneScreenshot),
+        timeout: 15_000
+      });
+      mockServer.acknowledgePreviewStage(2);
+      result.steps.push('streaming_preview_grew_before_done');
+    } catch (error) {
+      result.streamingPreviewFailureDiagnostics = {
+        requestCount: mockServer.requestLog.length,
+        streamStage: mockServer.getCustomInputStreamStage(),
+        customInputDoneSent: mockServer.getCustomInputDoneSent(),
+        preview: await readStreamingPatchPreview().catch(() => null),
+        firstRequestTools: mockServer.getFirstRequestTools(),
+        sidebarDom: await sidebarFrame.evaluate(() => ({
+          messageCount: document.querySelectorAll('.message').length,
+          aiMessageCount: document.querySelectorAll('.message.ai-message').length,
+          loadingMessageCount: document.querySelectorAll('.loading-message').length,
+          activityTimelineCount: document.querySelectorAll('.response-activity-timeline').length,
+          activityToolCount: document.querySelectorAll('.response-activity-tool').length,
+          bodyText: (document.body.innerText || '').slice(-8_000),
+          messageHtml: Array.from(document.querySelectorAll('.message'))
+            .slice(-3)
+            .map((message) => message.outerHTML.slice(0, 20_000))
+        })).catch(() => null)
+      };
+      throw error;
+    }
+
     await waitFor(async () => mockServer.requestLog.length >= 2 ? true : null, {
       timeoutMs: 30_000,
       intervalMs: 200,
@@ -572,8 +715,17 @@ async function main() {
     });
     result.steps.push('tool_followup_observed');
 
-    result.firstRequestToolNames = mockServer.getFirstRequestToolNames();
-    result.functionCallOutputText = mockServer.getFunctionCallOutputText();
+    result.firstRequestTools = mockServer.getFirstRequestTools();
+    result.firstRequestToolNames = result.firstRequestTools.map((tool) => tool.name || tool.type).filter(Boolean);
+    result.customToolCallOutputText = mockServer.getCustomToolCallOutputText();
+
+    const applyPatchDefinitions = result.firstRequestTools.filter((tool) => tool.name === 'apply_patch');
+    if (applyPatchDefinitions.length !== 1 || applyPatchDefinitions[0].type !== 'custom') {
+      throw new Error(`apply_patch must be exposed exactly once as custom: ${JSON.stringify(applyPatchDefinitions)}`);
+    }
+    if (result.firstRequestTools.some((tool) => tool.type === 'function' && tool.name === 'apply_patch')) {
+      throw new Error(`legacy function apply_patch leaked into request: ${JSON.stringify(result.firstRequestTools)}`);
+    }
 
     const expectedTools = ['apply_patch', 'list_files', 'read_file', 'search_files', 'copy_file', 'move_file', 'delete_file'];
     for (const toolName of expectedTools) {
@@ -582,9 +734,26 @@ async function main() {
       }
     }
     for (const requiredPath of [MD_DOC_PATH, TXT_DOC_PATH, CODE_DOC_PATH, HTML_DOC_PATH]) {
-      if (!result.functionCallOutputText.includes(requiredPath)) {
-        throw new Error(`apply_patch follow-up output missing ${requiredPath}: ${result.functionCallOutputText}`);
+      if (!result.customToolCallOutputText.includes(requiredPath)) {
+        throw new Error(`apply_patch follow-up output missing ${requiredPath}: ${result.customToolCallOutputText}`);
       }
+    }
+
+    const followUpInput = Array.isArray(mockServer.requestLog[1]?.input) ? mockServer.requestLog[1].input : [];
+    const replayedCustomCall = followUpInput.find((item) => (
+      item?.type === 'custom_tool_call' && item?.call_id === PATCH_CALL_ID
+    ));
+    const replayedCustomOutput = followUpInput.find((item) => (
+      item?.type === 'custom_tool_call_output' && item?.call_id === PATCH_CALL_ID
+    ));
+    result.followUpProtocol = {
+      customCallType: replayedCustomCall?.type || '',
+      customOutputType: replayedCustomOutput?.type || '',
+      callIdMatches: !!replayedCustomCall && !!replayedCustomOutput,
+      rawInputMatches: replayedCustomCall?.input === createApplyPatchInput()
+    };
+    if (!result.followUpProtocol.callIdMatches || !result.followUpProtocol.rawInputMatches) {
+      throw new Error(`custom apply_patch follow-up protocol mismatch: ${JSON.stringify(result.followUpProtocol)}`);
     }
 
     result.finalAssistantText = await waitFor(async () => {
@@ -601,6 +770,45 @@ async function main() {
       label: 'final assistant text'
     });
     result.steps.push('assistant_completed');
+
+    if (focusedApplyPatchRegression) {
+      result.conversationId = await sidebarFrame.evaluate(() => (
+        window.cerebr?.debug?.messageSender?.getCurrentConversationId?.() || ''
+      ));
+      if (!result.conversationId) {
+        throw new Error('conversation id not available after focused apply_patch flow');
+      }
+      const expectedDocuments = new Map([
+        [MD_DOC_PATH, INITIAL_MD_DOC_CONTENT],
+        [TXT_DOC_PATH, INITIAL_TXT_DOC_CONTENT],
+        [CODE_DOC_PATH, INITIAL_CODE_DOC_CONTENT],
+        [HTML_DOC_PATH, `${INITIAL_HTML_DOC_CONTENT}\n`]
+      ]);
+      result.indexedDbDocuments = {};
+      for (const [documentPath, expectedContent] of expectedDocuments.entries()) {
+        const stored = await readIndexedDbDocument(
+          sidebarFrame,
+          result.conversationId,
+          documentPath
+        );
+        result.indexedDbDocuments[documentPath] = stored;
+        if (!stored || stored.content !== expectedContent) {
+          throw new Error(`focused apply_patch IndexedDB mismatch for ${documentPath}: ${JSON.stringify(stored)}`);
+        }
+      }
+      result.steps.push('all_patch_files_persisted');
+      result.finalScreenshot = 'sidebar-body-final.png';
+      await sidebarFrame.locator('body').screenshot({
+        path: path.join(outputDir, result.finalScreenshot),
+        timeout: 15_000
+      });
+      result.ok = true;
+      result.finishedAt = new Date().toISOString();
+      result.elapsedMs = Date.now() - regressionStartedAt;
+      await writeResultSnapshot(outputDir, result);
+      console.log(`focused apply_patch regression passed in ${result.elapsedMs}ms`);
+      return;
+    }
     result.finalAssistantDomSnapshot = await sidebarFrame.evaluate((docPath) => {
       const aiMessages = Array.from(document.querySelectorAll('.message.ai-message'));
       const lastMessage = aiMessages[aiMessages.length - 1] || null;

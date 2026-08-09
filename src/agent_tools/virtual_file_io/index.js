@@ -67,9 +67,10 @@ import {
   normalizeConversationDocumentPath
 } from './document_path.js';
 import {
-  buildConversationDocumentApplyPatchFunctionToolDefinition,
-  buildVirtualFileApplyPatchFunctionToolDefinition,
-  normalizeVirtualFileApplyPatchArguments
+  buildConversationDocumentApplyPatchCustomToolDefinition,
+  buildVirtualFileApplyPatchCustomToolDefinition,
+  normalizeVirtualFileApplyPatchArguments,
+  normalizeVirtualFileApplyPatchCustomInput
 } from './apply_patch.js';
 import {
   buildConversationDocumentListFilesFunctionToolDefinition,
@@ -136,8 +137,9 @@ export {
   normalizeConversationDocumentPath,
   normalizeConversationDocumentHrefPath,
   buildConversationDocumentCollisionPath,
-  buildVirtualFileApplyPatchFunctionToolDefinition,
-  buildConversationDocumentApplyPatchFunctionToolDefinition,
+  buildVirtualFileApplyPatchCustomToolDefinition,
+  buildConversationDocumentApplyPatchCustomToolDefinition,
+  normalizeVirtualFileApplyPatchCustomInput,
   buildVirtualFileListFilesFunctionToolDefinition,
   buildConversationDocumentListFilesFunctionToolDefinition,
   buildVirtualFileReadFileFunctionToolDefinition,
@@ -622,30 +624,25 @@ function applyConversationDocumentPatch(documents, patch) {
     modified: [],
     deleted: []
   };
-  const renamedTargets = [];
   const patchTime = new Date().toISOString();
 
   for (const hunk of hunks) {
     if (hunk.type === 'add_file') {
-      const requestedPath = normalizeConversationDocumentPath(hunk.path);
-      const finalPath = buildConversationDocumentCollisionPath(
-        requestedPath,
-        nextDocuments.map((doc) => doc.path)
-      );
-      nextDocuments.push(normalizeDocumentRecord({
-        path: finalPath,
+      const targetPath = normalizeConversationDocumentPath(hunk.path);
+      const existingIndex = findDocumentIndex(nextDocuments, targetPath);
+      const nextRecord = normalizeDocumentRecord({
+        path: targetPath,
         content: hunk.contents,
         updated_at: patchTime
-      }, patchTime));
-      nextDocuments.sort((left, right) => left.path.localeCompare(right.path));
-      affectedFiles.added.push(finalPath);
-      if (finalPath !== requestedPath) {
-        renamedTargets.push({
-          requested_path: requestedPath,
-          final_path: finalPath,
-          reason: 'collision'
-        });
+      }, patchTime);
+      if (existingIndex >= 0) {
+        nextDocuments[existingIndex] = nextRecord;
+        affectedFiles.modified.push(targetPath);
+      } else {
+        nextDocuments.push(nextRecord);
+        affectedFiles.added.push(targetPath);
       }
+      nextDocuments.sort((left, right) => left.path.localeCompare(right.path));
       continue;
     }
 
@@ -668,30 +665,28 @@ function applyConversationDocumentPatch(documents, patch) {
       }
       const sourceDocument = nextDocuments[sourceIndex];
       const nextContent = derivePatchedFileContent(sourceDocument.content, sourcePath, hunk.chunks);
-      const requestedTargetPath = hunk.move_path
+      const targetPath = hunk.move_path
         ? normalizeConversationDocumentPath(hunk.move_path)
         : sourcePath;
-      const finalTargetPath = buildConversationDocumentCollisionPath(
-        requestedTargetPath,
-        nextDocuments.map((doc) => doc.path),
-        { excludedPath: sourcePath }
-      );
       const nextRecord = normalizeDocumentRecord({
-        path: finalTargetPath,
+        path: targetPath,
         content: nextContent,
         updated_at: patchTime
       }, patchTime);
 
-      nextDocuments[sourceIndex] = nextRecord;
-      nextDocuments.sort((left, right) => left.path.localeCompare(right.path));
-      affectedFiles.modified.push(finalTargetPath);
-      if (finalTargetPath !== requestedTargetPath) {
-        renamedTargets.push({
-          requested_path: requestedTargetPath,
-          final_path: finalTargetPath,
-          reason: 'collision'
-        });
+      if (targetPath === sourcePath) {
+        nextDocuments[sourceIndex] = nextRecord;
+      } else {
+        const targetIndex = findDocumentIndex(nextDocuments, targetPath);
+        if (targetIndex >= 0) {
+          nextDocuments[targetIndex] = nextRecord;
+          nextDocuments.splice(sourceIndex, 1);
+        } else {
+          nextDocuments[sourceIndex] = nextRecord;
+        }
       }
+      nextDocuments.sort((left, right) => left.path.localeCompare(right.path));
+      affectedFiles.modified.push(targetPath);
     }
   }
 
@@ -701,8 +696,7 @@ function applyConversationDocumentPatch(documents, patch) {
       added: Array.from(new Set(affectedFiles.added)),
       modified: Array.from(new Set(affectedFiles.modified)),
       deleted: Array.from(new Set(affectedFiles.deleted))
-    },
-    renamed_targets: renamedTargets
+    }
   };
 }
 
@@ -859,8 +853,11 @@ export function normalizeVirtualFileToolArguments(action, rawArgs, options = {})
   });
 
   switch (normalizedAction) {
-    case VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME:
-      return normalizeVirtualFileApplyPatchArguments(args, target);
+    case VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME: {
+      const normalized = normalizeVirtualFileApplyPatchArguments(args, target);
+      assertPatchDoesNotTouchLocalPaths(normalized.patch);
+      return normalized;
+    }
     case VIRTUAL_FILE_LIST_FILES_TOOL_NAME:
       return normalizeVirtualFileListFilesArguments(args, target);
     case VIRTUAL_FILE_READ_FILE_TOOL_NAME:
@@ -1510,7 +1507,6 @@ export async function executeConversationDocumentAction(action, rawArgs, options
         conversation_id: conversationId,
         files: buildDocumentManifest(persistedDocuments),
         affected_files: patched.affected_files,
-        renamed_targets: patched.renamed_targets,
         change_event: buildChangeEventPayload(conversationId, normalizedAction, {
           updated_paths: [
             ...patched.affected_files.added,

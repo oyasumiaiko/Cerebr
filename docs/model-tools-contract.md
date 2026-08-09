@@ -1,6 +1,6 @@
 # Cerebr 模型工具契约
 
-本文面向维护 Cerebr 模型工具的开发者，说明当前 18 个本地 function tool 的设计本意、调用边界、参数语义、实际输出形状、副作用和信任边界，并记录本轮工具契约重整后必须继续遵守的兼容规则。
+本文面向维护 Cerebr 模型工具的开发者，说明当前 18 个本地工具（17 个 function tool 与 Freeform custom tool `apply_patch`）的设计本意、调用边界、参数语义、实际输出形状、副作用和信任边界，并记录必须继续遵守的兼容规则。
 
 本文描述的是 Cerebr 扩展自己定义、自己执行的本地工具。OpenAI Responses hosted tools、用户额外填写的 Tools JSON、namespace tool 和 MCP server 不属于这 18 个本地工具，不能混用相同的执行、安全或输出假设。
 
@@ -44,7 +44,7 @@ responses_builtin_tools.js 当前管理的 web_search、code_interpreter、image
 - 不计入本文的 18 个本地工具。
 - 不保证使用 schema_version 2 XML。
 - 不保证 error、status、trust 或截断语义与 Cerebr 本地工具一致。
-- 当前合并逻辑中，同名本地 function 定义优先于用户额外声明的同名 function。新增本地工具时必须检查命名冲突。
+- 当前合并逻辑按 `type + name` 对本地定义对账；旧的 function `apply_patch` 会被移除，只保留 Cerebr 的 custom definition。新增本地工具时必须检查命名冲突。
 - 带 namespace 的同名函数不会路由到 Cerebr 顶层本地工具，避免误触发写文件、网络或代码执行副作用。
 
 ## 2. 统一模型可见契约
@@ -55,7 +55,7 @@ responses_builtin_tools.js 当前管理的 web_search、code_interpreter、image
 
 原因包括：
 
-- 已保存对话可能含旧 function_call 和 function_call_output。
+- 已保存对话可能含旧 `function_call` / `function_call_output`；新 `apply_patch` 使用 `custom_tool_call` / `custom_tool_call_output`。
 - 中断恢复和 replay 需要继续识别原名称。
 - UI timeline、测试和 tool_search 索引都可能引用当前名称。
 - 模型已经形成对文件工具 rg 输出的稳定使用习惯。
@@ -86,7 +86,7 @@ responses_builtin_tools.js 当前管理的 web_search、code_interpreter、image
 
 ### 2.3 Strict Schema
 
-18 个本地工具统一使用 strict: true，并遵守以下规则：
+17 个 function tool 统一使用 strict: true，并遵守以下规则；`apply_patch` 是例外，它使用 Lark grammar 约束的 Freeform raw input，不带 JSON parameters：
 
 - 每个 object 都必须声明 additionalProperties: false。
 - properties 中出现的字段全部进入 required。
@@ -443,10 +443,12 @@ src/main.js
 
 本意：用 Codex apply_patch 语法原子地增加、修改或删除一个或多个可写虚拟文本文件。
 
-关键参数：
+输入协议：
 
-- target：null 操作当前对话文件；skill mutation 必须指定 name。
-- patch：完整 Begin Patch / End Patch 文本，可含 Add、Update、Delete 和 Move。
+- 模型直接输出完整 Begin Patch / End Patch 原文，不包 JSON。
+- 不带 `*** Environment ID:` 时操作当前对话文件区。
+- 修改 skill 时，在 Begin Patch 后写 `*** Environment ID: skill:<stable-key>`。
+- 支持 Add、Update、Delete、Move、多 hunk、CRLF 与 End of File。
 
 不适用：
 
@@ -462,7 +464,7 @@ M plan.md
 D old.md
 ~~~
 
-失败返回 Error。成功摘要由本地执行器生成；补丁触发持久化写入，且可能删除文件。
+结果通过 `custom_tool_call_output` 回传。执行前会预验证整份 patch、全部路径与上下文；任一错误都零写入。Add 和 Move 遇到同名目标会覆盖，不生成隐式 `(2)` 路径。失败返回 Error；成功摘要由本地执行器生成。
 
 ### 5.6 copy_file
 
@@ -527,7 +529,7 @@ delete path
 
 ### 6.1 skill_registry
 
-本意：只管理持久化 skill 生命周期。普通 skill 文件读取和编辑应使用文件工具，并传 target.kind=skill。
+本意：只管理持久化 skill 生命周期。普通 skill 文件读取和编辑应使用文件工具；Freeform `apply_patch` 用 `*** Environment ID: skill:<stable-key>` 选目标，其余 function 文件工具传 `target.kind=skill`。
 
 公开 action：
 

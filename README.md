@@ -25,7 +25,7 @@ Cerebr 不只是一个聊天侧栏。它把当前网页、PDF、图片、聊天�
 | 能力 | 说明 |
 | --- | --- |
 | 网页上下文 | 读取当前网页或 PDF、获取页面截图、围绕划词内容建立线程，并在侧栏、停靠、全屏和独立页面间切换 |
-| Agent 工具链 | 执行本地 function tool，回传结果并自动继续 Responses 请求，直到模型给出最终回答 |
+| Agent 工具链 | 执行本地 function/custom tool，回传结果并自动继续 Responses 请求，直到模型给出最终回答 |
 | 对话文件 | 创建、搜索、读取、补丁修改、复制、移动和删除当前对话中的持久化文件；支持本机文件或目录的只读映射 |
 | Skill | 创建、编辑、启用、停用、挂载、删除和 ZIP 导出 Skill；支持纯指导型 Skill 与网页运行时 Skill |
 | 多 API | 支持 OpenAI 兼容 Chat Completions、OpenAI Responses 和 Gemini，可配置多个连接源、模型与 API Key |
@@ -59,9 +59,9 @@ Cerebr 不只是一个聊天侧栏。它把当前网页、PDF、图片、聊天�
 
 ## Agent 与工具
 
-在“增强模式”中，Cerebr 会根据当前页面和配置向模型暴露可用工具。对于 Responses API，模型返回 `function_call` 后，扩展会在本地执行已授权工具，把 `function_call_output` 加入下一跳请求，并持续这一过程直到没有新的本地工具调用。
+在“增强模式”中，Cerebr 会根据当前页面和配置向模型暴露可用工具。对于 Responses API，扩展会执行已授权的 `function_call` / `custom_tool_call`，把匹配的 output item 加入下一跳请求，并持续这一过程直到没有新的本地工具调用。
 
-当前内置 18 个本地 function tool：
+当前内置 18 个本地工具：17 个 function tool，以及 Freeform custom tool `apply_patch`：
 
 | 类别 | 工具 |
 | --- | --- |

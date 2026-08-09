@@ -24,7 +24,7 @@ test('Responses 页面读取工具按普通网页与 PDF 页面互斥暴露', as
   assert.match(contentSource, /isPdf:\s*isCurrentPagePdfLike\(\)/);
   assert.match(pageContextSource, /pageInfo\.isPdf\s*===\s*true/);
   assert.match(pageContextSource, /isPdfPage/);
-  assert.match(messageSenderSource, /buildResponsesExtensionFunctionTools\(\{\s*pageToolEnvironment,/s);
+  assert.match(messageSenderSource, /buildResponsesExtensionTools\(\{\s*pageToolEnvironment,/s);
   assert.match(registrySource, /case 'html_page':/);
   assert.match(registrySource, /pageToolEnvironment\?\.exposePageContentTool\s*===\s*true/);
   assert.match(registrySource, /pageToolEnvironment\?\.exposePdfContentTool\s*!==\s*true/);

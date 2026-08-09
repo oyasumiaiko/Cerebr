@@ -169,7 +169,12 @@ export function deriveAssistantPreResponseStatusFromResponsesSse(eventType, data
     );
   }
 
-  if (type === 'response.function_call_arguments.delta' || type === 'response.function_call_arguments.done') {
+  if (
+    type === 'response.function_call_arguments.delta'
+    || type === 'response.function_call_arguments.done'
+    || type === 'response.custom_tool_call_input.delta'
+    || type === 'response.custom_tool_call_input.done'
+  ) {
     return createAssistantPreResponseStatus(
       '模型正在准备工具调用...',
       'responses_function_arguments'

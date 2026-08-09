@@ -25,7 +25,7 @@ Cerebr is more than a chat sidebar. It turns the current web page, PDFs, images,
 | Capability | Description |
 | --- | --- |
 | Web context | Read the current page or PDF, capture page screenshots, create threads from selected text, and switch among sidebar, docked, fullscreen, and standalone modes |
-| Agent tool loop | Execute local function tools, return their results, and automatically continue a Responses request until the model produces a final answer |
+| Agent tool loop | Execute local function/custom tools, return their results, and automatically continue a Responses request until the model produces a final answer |
 | Conversation files | Create, search, read, patch, copy, move, and delete persistent files attached to a conversation; mount local files or folders read-only |
 | Skills | Create, edit, enable, disable, mount, delete, and export Skills as ZIP packages; supports guidance and page-runtime Skills |
 | Multiple APIs | OpenAI-compatible Chat Completions, OpenAI Responses, and Gemini, with multiple connection sources, models, and API keys |
@@ -59,9 +59,9 @@ Cerebr is more than a chat sidebar. It turns the current web page, PDFs, images,
 
 ## Agent and tools
 
-In Enhanced mode, Cerebr exposes tools according to the current page and API configuration. With the Responses API, when a model returns a `function_call`, the extension executes the authorized local tool, adds its `function_call_output` to the next request, and continues until no new local tool call remains.
+In Enhanced mode, Cerebr exposes tools according to the current page and API configuration. With the Responses API, the extension executes authorized `function_call` and `custom_tool_call` items, adds the matching output item to the next request, and continues until no new local tool call remains.
 
-Cerebr currently registers 18 local function tools:
+Cerebr currently registers 18 local tools: 17 function tools plus the Freeform custom tool `apply_patch`:
 
 | Category | Tools |
 | --- | --- |

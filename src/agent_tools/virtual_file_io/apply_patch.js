@@ -1,12 +1,32 @@
 import {
   VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
+  VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
+  VIRTUAL_FILE_TARGET_KIND_SKILL,
   normalizeString
 } from './shared.js';
-import { buildVirtualFileTargetSchemaDescription } from './target.js';
-import {
-  buildModelToolDescription,
-  buildStrictFunctionToolDefinition
-} from '../shared/model_tool_contract.js';
+import { parseApplyPatch } from '../shared/apply_patch_core.js';
+
+export const APPLY_PATCH_LARK_GRAMMAR = `start: begin_patch environment_id? hunk+ end_patch
+environment_id: "*** Environment ID: " filename LF
+begin_patch: "*** Begin Patch" LF
+end_patch: "*** End Patch" LF?
+
+hunk: add_hunk | delete_hunk | update_hunk
+add_hunk: "*** Add File: " filename LF add_line+
+delete_hunk: "*** Delete File: " filename LF
+update_hunk: "*** Update File: " filename LF change_move? change?
+
+filename: /(.+)/
+add_line: "+" /(.*)/ LF -> line
+
+change_move: "*** Move to: " filename LF
+change: (change_context | change_line)+ eof_line?
+change_context: ("@@" | "@@ " /(.+)/) LF
+change_line: ("+" | "-" | " ") /(.*)/ LF
+eof_line: "*** End of File" LF
+
+%import common.LF
+`;
 
 export function normalizeVirtualFileApplyPatchArguments(args, target) {
   const patch = typeof args.patch === 'string' ? args.patch : '';
@@ -20,32 +40,49 @@ export function normalizeVirtualFileApplyPatchArguments(args, target) {
   };
 }
 
-export function buildVirtualFileApplyPatchFunctionToolDefinition() {
-  return buildStrictFunctionToolDefinition({
-    name: VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
-    description: buildModelToolDescription({
-      purpose: '用 Codex apply_patch 语法原子地新增、修改或删除一个或多个可写虚拟文本文件。',
-      useWhen: [
-        '需要对当前对话文件区中的 Markdown、HTML、JavaScript、CSS 等文本做精确变更',
-        '需要修改单个 skill 包中的文件，并且已经知道该 skill 的稳定 key'
-      ],
-      avoidWhen: [
-        '不要直接修改 `local/...` 本地映射；它是只读的，应先用 copy_file 复制到当前对话文件区',
-        '不要用整文件重写代替可以清晰表达的局部补丁'
-      ],
-      input: 'target=null 修改当前对话文件区；修改 skill 时传 target.kind=`skill` 与 target.name。patch 必须包含完整 Begin/End Patch 边界。',
-      output: '成功时返回紧凑变更清单，使用 A/M/D 标记新增、修改、删除文件；失败时只返回 Error，不会把失败伪装成成功。'
-    }),
-    properties: {
-      target: buildVirtualFileTargetSchemaDescription({ requireSkillName: true }),
-      patch: {
-        type: 'string',
-        description: '完整补丁文本。必须使用 `*** Begin Patch`，并包含一个或多个 `*** Update File:` / `*** Add File:` / `*** Delete File:` 段，最后以 `*** End Patch` 结束。'
-      }
-    }
-  });
+export function normalizeVirtualFileApplyPatchCustomInput(input) {
+  const patch = typeof input === 'string' ? input : '';
+  const parsed = parseApplyPatch(patch, { mode: 'strict' });
+  const environmentId = normalizeString(parsed.environment_id);
+  if (!environmentId) {
+    return {
+      action: VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
+      target: { kind: VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT, name: null },
+      patch
+    };
+  }
+  if (!environmentId.startsWith('skill:')) {
+    throw new Error(`apply_patch Environment ID 不受支持：${environmentId}。仅允许 skill:<stable-key>。`);
+  }
+  const skillName = normalizeString(environmentId.slice('skill:'.length));
+  if (!skillName) {
+    throw new Error('apply_patch Environment ID 中的 skill stable-key 不能为空。');
+  }
+  return {
+    action: VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
+    target: { kind: VIRTUAL_FILE_TARGET_KIND_SKILL, name: skillName },
+    patch
+  };
 }
 
-export function buildConversationDocumentApplyPatchFunctionToolDefinition() {
-  return buildVirtualFileApplyPatchFunctionToolDefinition();
+export function buildVirtualFileApplyPatchCustomToolDefinition() {
+  return {
+    type: 'custom',
+    name: VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
+    description: [
+      'The `apply_patch` tool edits writable virtual text files. This is a FREEFORM tool, so emit the patch directly and do not wrap it in JSON.',
+      'Omit `*** Environment ID:` to edit the current conversation file space.',
+      'To edit one skill, put `*** Environment ID: skill:<stable-key>` immediately after `*** Begin Patch`.',
+      'The read-only `local/...` mount cannot be modified.'
+    ].join(' '),
+    format: {
+      type: 'grammar',
+      syntax: 'lark',
+      definition: APPLY_PATCH_LARK_GRAMMAR
+    }
+  };
+}
+
+export function buildConversationDocumentApplyPatchCustomToolDefinition() {
+  return buildVirtualFileApplyPatchCustomToolDefinition();
 }

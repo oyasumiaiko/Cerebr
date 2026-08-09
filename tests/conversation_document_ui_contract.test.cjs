@@ -12,9 +12,9 @@ test('统一工具注册表已注册对话文档工具，message_sender 保留�
   const source = await readWorkspaceFile('src/core/message_sender.js');
   const registrySource = await readWorkspaceFile('src/agent_tools/shared/responses_extension_tool_registry.js');
 
-  assert.match(source, /buildResponsesExtensionFunctionTools/);
+  assert.match(source, /buildResponsesExtensionTools/);
   for (const builderName of [
-    'buildVirtualFileApplyPatchFunctionToolDefinition',
+    'buildVirtualFileApplyPatchCustomToolDefinition',
     'buildVirtualFileListFilesFunctionToolDefinition',
     'buildVirtualFileReadFileFunctionToolDefinition',
     'buildVirtualFileSearchFilesFunctionToolDefinition',

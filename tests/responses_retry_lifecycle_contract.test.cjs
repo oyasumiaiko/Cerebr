@@ -120,7 +120,7 @@ test('Responses stream 在 final 前断线会重试，final 已开始则保留�
   );
   assert.match(
     source,
-    /if \(lastHandleResult\?\.incomplete === true\) \{[\s\S]*?return lastHandleResult;[\s\S]*?\}[\s\S]*?if \(pendingFunctionCalls\.length <= 0\)/,
+    /if \(lastHandleResult\?\.incomplete === true\) \{[\s\S]*?return lastHandleResult;[\s\S]*?\}[\s\S]*?if \(pendingToolCalls\.length <= 0\)/,
     '部分回答保留后不能继续执行半截工具调用 follow-up'
   );
 });

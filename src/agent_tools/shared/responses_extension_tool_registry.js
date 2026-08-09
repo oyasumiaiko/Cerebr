@@ -3,7 +3,7 @@
  *
  * 这个模块只负责把三类纯信息组合起来：
  * - `responses_extension_tools.js` 中稳定、可供设置 UI 读取的声明式 manifest；
- * - 各工具目录内真正的 Responses function definition builder；
+ * - 各工具目录内真正的 Responses function/custom definition builder；
  * - 当前请求的页面工具环境与 JS Runtime 可用性。
  *
  * 执行器仍保留在 `message_sender.js` 的闭包中。本模块不依赖 sender、UI、storage
@@ -63,7 +63,7 @@ import {
   CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
-  buildVirtualFileApplyPatchFunctionToolDefinition,
+  buildVirtualFileApplyPatchCustomToolDefinition,
   buildVirtualFileCopyFileFunctionToolDefinition,
   buildVirtualFileDeleteFileFunctionToolDefinition,
   buildVirtualFileListFilesFunctionToolDefinition,
@@ -81,7 +81,7 @@ export const definitionBuildersById = Object.freeze({
     buildJsRuntimeExecuteFunctionToolDefinition(pageToolEnvironment)
   ),
   [READ_TOOL_OUTPUT_TOOL_NAME]: () => buildReadToolOutputFunctionToolDefinition(),
-  [CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME]: () => buildVirtualFileApplyPatchFunctionToolDefinition(),
+  [CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME]: () => buildVirtualFileApplyPatchCustomToolDefinition(),
   [CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME]: () => buildVirtualFileListFilesFunctionToolDefinition(),
   [CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME]: () => buildVirtualFileReadFileFunctionToolDefinition(),
   [CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME]: () => buildVirtualFileSearchFilesFunctionToolDefinition(),
@@ -111,7 +111,7 @@ export const definitionBuildersById = Object.freeze({
  */
 export const RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES = Object.freeze(
   RESPONSES_EXTENSION_TOOL_SPECS
-    .filter(spec => spec?.deferLoading === true)
+    .filter(spec => spec?.deferLoading === true && (spec?.toolType || 'function') === 'function')
     .map(spec => spec.id)
 );
 
@@ -146,7 +146,7 @@ export function isResponsesExtensionToolExposureAvailable(spec, options = {}) {
 }
 
 /**
- * 按 manifest 的稳定顺序，为当前请求构造实际可暴露的 function definitions。
+ * 按 manifest 的稳定顺序，为当前请求构造实际可暴露的 tool definitions。
  *
  * 这里只判断运行环境是否具备能力；用户在 API 设置中显式关闭工具的过滤仍由
  * `filterResponsesExtensionFunctionTools` 统一处理。
@@ -154,7 +154,7 @@ export function isResponsesExtensionToolExposureAvailable(spec, options = {}) {
  * @param {{pageToolEnvironment?:Object|null, hasJsRuntime?:boolean}} [options]
  * @returns {Array<Object>}
  */
-export function buildResponsesExtensionFunctionTools(options = {}) {
+export function buildResponsesExtensionTools(options = {}) {
   const pageToolEnvironment = options?.pageToolEnvironment || null;
   const definitions = [];
 
@@ -163,12 +163,13 @@ export function buildResponsesExtensionFunctionTools(options = {}) {
 
     const builder = definitionBuildersById[spec.id];
     if (typeof builder !== 'function') {
-      throw new Error(`Responses 扩展工具 ${spec.id} 缺少 function definition builder。`);
+      throw new Error(`Responses 扩展工具 ${spec.id} 缺少 definition builder。`);
     }
 
     const definition = builder({ pageToolEnvironment });
     const definitionName = typeof definition?.name === 'string' ? definition.name.trim() : '';
-    if (!definition || definition.type !== 'function' || definitionName !== spec.id) {
+    const expectedType = typeof spec?.toolType === 'string' ? spec.toolType : 'function';
+    if (!definition || definition.type !== expectedType || definitionName !== spec.id) {
       throw new Error(`Responses 扩展工具 ${spec.id} 的 definition 与 manifest 不一致。`);
     }
     definitions.push(definition);
