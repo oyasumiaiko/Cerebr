@@ -18,12 +18,12 @@ test('统一工具注册表已注册对话文档工具，message_sender 保留�
     'buildVirtualFileListFilesFunctionToolDefinition',
     'buildVirtualFileReadFileFunctionToolDefinition',
     'buildVirtualFileSearchFilesFunctionToolDefinition',
-    'buildVirtualFileCopyFileFunctionToolDefinition',
-    'buildVirtualFileMoveFileFunctionToolDefinition',
-    'buildVirtualFileDeleteFileFunctionToolDefinition'
+    'buildVirtualFileCopyFileFunctionToolDefinition'
   ]) {
     assert.match(registrySource, new RegExp(`\\b${builderName}\\(`));
   }
+  assert.doesNotMatch(registrySource, /buildVirtualFileMoveFileFunctionToolDefinition/);
+  assert.doesNotMatch(registrySource, /buildVirtualFileDeleteFileFunctionToolDefinition/);
   assert.match(source, /case 'virtual_file':\s*outputPayload = await executeResponsesVirtualFileFunction\(localFunctionName, toolArgs, options\)/s);
   assert.match(source, /case 'virtual_file':\s*serializedOutput = serializeResponsesConversationDocumentFunctionToolOutput\(localFunctionName, outputPayload\)/s);
   assert.match(source, /splitResponsesToolOutputControl\(parsedArgs, \{\s*toolName: localFunctionName\s*\}\)/s);

@@ -71,6 +71,7 @@ export function buildVirtualFileApplyPatchCustomToolDefinition() {
     name: VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
     description: [
       'The `apply_patch` tool edits writable virtual text files. This is a FREEFORM tool, so emit the patch directly and do not wrap it in JSON.',
+      'Use `*** Add File:` to create or overwrite, `*** Update File:` to modify, `*** Delete File:` to remove, and `*** Update File:` plus `*** Move to:` to move or rename; there are no separate move/delete file tools.',
       'Omit `*** Environment ID:` to edit the current conversation file space.',
       'To edit one skill, put `*** Environment ID: skill:<stable-key>` immediately after `*** Begin Patch`.',
       'The read-only `local/...` mount cannot be modified.'

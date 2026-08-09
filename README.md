@@ -26,7 +26,7 @@ Cerebr 不只是一个聊天侧栏。它把当前网页、PDF、图片、聊天�
 | --- | --- |
 | 网页上下文 | 读取当前网页或 PDF、获取页面截图、围绕划词内容建立线程，并在侧栏、停靠、全屏和独立页面间切换 |
 | Agent 工具链 | 执行本地 function/custom tool，回传结果并自动继续 Responses 请求，直到模型给出最终回答 |
-| 对话文件 | 创建、搜索、读取、补丁修改、复制、移动和删除当前对话中的持久化文件；支持本机文件或目录的只读映射 |
+| 对话文件 | 创建、搜索、读取、补丁修改和复制当前对话中的持久化文件；移动与删除统一由补丁工具处理；支持本机文件或目录的只读映射 |
 | Skill | 创建、编辑、启用、停用、挂载、删除和 ZIP 导出 Skill；支持纯指导型 Skill 与网页运行时 Skill |
 | 多 API | 支持 OpenAI 兼容 Chat Completions、OpenAI Responses 和 Gemini，可配置多个连接源、模型与 API Key |
 | 本地知识 | IndexedDB 聊天历史、全文搜索、分支与划词线程、图片相册、统计、备份与恢复 |
@@ -61,12 +61,13 @@ Cerebr 不只是一个聊天侧栏。它把当前网页、PDF、图片、聊天�
 
 在“增强模式”中，Cerebr 会根据当前页面和配置向模型暴露可用工具。对于 Responses API，扩展会执行已授权的 `function_call` / `custom_tool_call`，把匹配的 output item 加入下一跳请求，并持续这一过程直到没有新的本地工具调用。
 
-当前内置 18 个本地工具：17 个 function tool，以及 Freeform custom tool `apply_patch`：
+当前内置 17 个本地工具：16 个 function tool，以及 Freeform custom tool `apply_patch`：
 
 | 类别 | 工具 |
 | --- | --- |
 | 页面与运行时 | `js_runtime_execute`、`page_content_read`、`pdf_content_read`、`webpage_screenshot`、`view_image` |
-| 对话文件 | `apply_patch`、`list_files`、`read_file`、`search_files`、`copy_file`、`move_file`、`delete_file` |
+| 工具输出 | `read_tool_output`（按 cursor 继续读取被统一长度控制截断的后续页） |
+| 对话文件 | `apply_patch`、`list_files`、`read_file`、`search_files`、`copy_file`；移动/改名和删除分别使用 `apply_patch` 的 `*** Move to:` 与 `*** Delete File:` |
 | Skill | `skill_registry` |
 | 用户交互 | `request_user_input` |
 | 其他模型 | `list_askable_models`、`ask_other_ai` |

@@ -115,26 +115,6 @@ export const RESPONSES_EXTENSION_TOOL_SPECS = Object.freeze([
     deferLoading: true
   }),
   createExtensionToolSpec({
-    id: 'move_file',
-    title: '虚拟文件移动',
-    description: '允许模型移动或重命名可写虚拟文件。',
-    exposure: 'always',
-    handlerKey: 'virtual_file',
-    outputKind: 'virtual_file',
-    sideEffect: 'write',
-    deferLoading: true
-  }),
-  createExtensionToolSpec({
-    id: 'delete_file',
-    title: '虚拟文件删除',
-    description: '允许模型删除可写虚拟文件。',
-    exposure: 'always',
-    handlerKey: 'virtual_file',
-    outputKind: 'virtual_file',
-    sideEffect: 'write',
-    deferLoading: true
-  }),
-  createExtensionToolSpec({
     id: 'skill_registry',
     title: 'Skill Registry',
     description: '允许模型读取、创建和维护 Cerebr skill 目录结构。',

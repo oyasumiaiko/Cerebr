@@ -408,7 +408,7 @@ test('buildResponsesSkillRegistryToolOutputContentItems 会把文件管理操作
   });
   const text = formatResponsesToolOutputForDisplay(items);
   assert.doesNotMatch(text, /<skill_registry_result/);
-  assert.match(text, /copy references\/a\.md -> references\/b\.md/);
+  assert.equal(text, 'Success.');
   assert.doesNotMatch(text, /"source_file_path"/);
 });
 
@@ -680,8 +680,7 @@ test('buildResponsesSkillRegistryToolOutputContentItems 对 read_detail 输出�
   });
   const text = formatResponsesToolOutputForDisplay(items);
   assert.match(text, /^# dom-probe\/SKILL\.md \(chars 0-16\/16\)\nInstruction body/m);
-  assert.match(text, /Files:\nSKILL\.md  instruction  16 chars/);
-  assert.match(text, /src\/main\.js  runtime_source  18 chars/);
+  assert.match(text, /Files:\nSKILL\.md\nsrc\/main\.js/);
   assert.doesNotMatch(text, /<skill_registry_result/);
   assert.doesNotMatch(text, /<files>/);
   assert.doesNotMatch(text, /<content>/);

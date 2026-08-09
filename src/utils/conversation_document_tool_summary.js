@@ -116,6 +116,13 @@ function resolveToArg(args) {
   return normalizeSummaryText(args?.to);
 }
 
+function formatPosixShellWord(value) {
+  const text = normalizeSummaryText(value);
+  if (!text) return "''";
+  if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(text)) return text;
+  return `'${text.replace(/'/g, `'"'"'`)}'`;
+}
+
 function stripLegacyWorkspacePathPrefix(path) {
   const normalized = normalizeSummaryText(path).replace(/\\/g, '/');
   if (!normalized.startsWith('workspace/')) return normalized;
@@ -262,13 +269,30 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
     };
   }
 
-  if (toolName === VIRTUAL_FILE_COPY_FILE_TOOL_NAME || toolName === VIRTUAL_FILE_MOVE_FILE_TOOL_NAME) {
+  if (toolName === VIRTUAL_FILE_COPY_FILE_TOOL_NAME) {
+    const from = resolveFromArg(args);
+    const to = resolveToArg(args);
+    const normalizedFrom = normalizeSummaryPathForTarget(from, target);
+    const normalizedTo = normalizeSummaryPathForTarget(to, target);
+    return {
+      action: isInProgress ? '正在运行' : '运行',
+      value: normalizedFrom && normalizedTo
+        ? `cp -- ${formatPosixShellWord(normalizedFrom)} ${formatPosixShellWord(normalizedTo)}`
+        : 'cp',
+      valueUrl: '',
+      meta: targetMeta,
+      locationAction: '',
+      locationValue: '',
+      locationUrl: ''
+    };
+  }
+
+  // 旧历史里的独立 move_file 仍可回放；新请求不再注册该工具。
+  if (toolName === VIRTUAL_FILE_MOVE_FILE_TOOL_NAME) {
     const from = resolveFromArg(args);
     const to = resolveToArg(args);
     return {
-      action: toolName === VIRTUAL_FILE_COPY_FILE_TOOL_NAME
-        ? (isInProgress ? '正在复制' : '复制')
-        : (isInProgress ? '正在移动' : '移动'),
+      action: isInProgress ? '正在移动' : '移动',
       value: from && to
         ? `${normalizeSummaryPathForTarget(from, target)} -> ${normalizeSummaryPathForTarget(to, target)}`
         : (normalizeSummaryPathForTarget(from || to, target) || '文件'),

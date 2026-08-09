@@ -18,7 +18,7 @@ const USER_UPLOADED_FILE_POLICY_RULES = [
 const LOCAL_FILE_MOUNT_POLICY_RULES = [
   '这些路径是用户显式添加的本机文件或文件夹映射，位于 local/... 虚拟路径下。',
   'local/... 内容不会预先复制进对话存储，读取时由文件工具实时读取本机当前内容。',
-  'local/... 是只读映射，不允许 apply_patch、move_file 或 delete_file 直接修改。',
+  'local/... 是只读映射，不允许 apply_patch 直接修改、移动或删除。',
   '如果需要修改本地映射内容，请先用 copy_file 把 local/... 复制成普通会话文件，后续只修改该副本。',
   '读取文件夹时优先用 list_files 或 search_files 缩小范围，不要假设整个文件夹内容已经在上下文中。'
 ];

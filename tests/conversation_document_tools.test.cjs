@@ -196,8 +196,7 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
     pattern: 'token',
     glob: '**/*.md',
     context: 2,
-    ignore_case: true,
-    limit: 10
+    ignore_case: true
   });
   assert.deepEqual(bashStyleSearch, {
     action: 'search_files',
@@ -211,7 +210,7 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
     path_glob: '**/*.md',
     context_before: 2,
     context_after: 2,
-    max_results: 10
+    max_results: null
   });
 
   const copyFile = normalizeVirtualFileToolArguments(VIRTUAL_FILE_COPY_FILE_TOOL_NAME, {
@@ -228,24 +227,19 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
     destination_path: 'spec.md'
   });
 
-  const moveSkillFile = normalizeVirtualFileToolArguments(VIRTUAL_FILE_MOVE_FILE_TOOL_NAME, {
-    target: {
-      kind: 'skill',
-      name: 'dom-probe'
-    },
-    from: 'references/old.md',
-    to: 'references/new.md'
-  });
-  assert.equal(moveSkillFile.target.kind, 'skill');
-  assert.equal(moveSkillFile.target.name, 'dom-probe');
-  assert.equal(moveSkillFile.source_path, 'references/old.md');
-  assert.equal(moveSkillFile.destination_path, 'references/new.md');
-
-  const deleteFile = normalizeVirtualFileToolArguments(VIRTUAL_FILE_DELETE_FILE_TOOL_NAME, {
-    path: 'spec.md'
-  });
-  assert.equal(deleteFile.action, 'delete_file');
-  assert.equal(deleteFile.file_path, 'spec.md');
+  assert.throws(
+    () => normalizeVirtualFileToolArguments(VIRTUAL_FILE_MOVE_FILE_TOOL_NAME, {
+      from: 'references/old.md',
+      to: 'references/new.md'
+    }),
+    /不支持的 action `move_file`/
+  );
+  assert.throws(
+    () => normalizeVirtualFileToolArguments(VIRTUAL_FILE_DELETE_FILE_TOOL_NAME, {
+      path: 'spec.md'
+    }),
+    /不支持的 action `delete_file`/
+  );
 
   const legacyWorkspacePrefixRead = normalizeVirtualFileToolArguments(VIRTUAL_FILE_READ_FILE_TOOL_NAME, {
     path: 'workspace/spec.md'
@@ -276,8 +270,6 @@ test('apply_patch 工具定义聚焦虚拟文件补丁契约，不重复最终�
 test('read_file/search_files 与文件操作工具定义暴露严格且低歧义的参数', async () => {
   const {
     buildVirtualFileCopyFileFunctionToolDefinition,
-    buildVirtualFileDeleteFileFunctionToolDefinition,
-    buildVirtualFileMoveFileFunctionToolDefinition,
     buildVirtualFileReadFileFunctionToolDefinition,
     buildVirtualFileSearchFilesFunctionToolDefinition
   } = await loadConversationDocumentToolsModule();
@@ -306,21 +298,16 @@ test('read_file/search_files 与文件操作工具定义暴露严格且低歧义
   assert.equal(searchDefinition.parameters.properties.path_glob, undefined);
   assert.equal(searchDefinition.parameters.properties.case_mode, undefined);
   assert.equal(searchDefinition.parameters.properties.max_results, undefined);
-  assert.deepEqual(searchDefinition.parameters.required, ['target', 'pattern', 'regex', 'glob', 'ignore_case', 'context', 'before', 'after', 'limit', 'max_output_chars']);
+  assert.equal(searchDefinition.parameters.properties.limit, undefined);
+  assert.deepEqual(searchDefinition.parameters.required, ['target', 'pattern', 'regex', 'glob', 'ignore_case', 'context', 'before', 'after', 'max_output_chars']);
 
   const copyDefinition = buildVirtualFileCopyFileFunctionToolDefinition();
-  assert.match(copyDefinition.description, /cp from to/);
+  assert.match(copyDefinition.description, /cp -- from to/);
+  assert.match(copyDefinition.description, /Move to:/);
+  assert.match(copyDefinition.description, /Delete File:/);
   assert.ok(copyDefinition.parameters.properties.from);
   assert.ok(copyDefinition.parameters.properties.to);
   assert.deepEqual(copyDefinition.parameters.required, ['target', 'from', 'to', 'max_output_chars']);
-
-  const moveDefinition = buildVirtualFileMoveFileFunctionToolDefinition();
-  assert.match(moveDefinition.description, /mv from to/);
-  assert.deepEqual(moveDefinition.parameters.required, ['target', 'from', 'to', 'max_output_chars']);
-
-  const deleteDefinition = buildVirtualFileDeleteFileFunctionToolDefinition();
-  assert.match(deleteDefinition.description, /rm path/);
-  assert.deepEqual(deleteDefinition.parameters.required, ['target', 'path', 'max_output_chars']);
 });
 
 test('apply_patch 遇到同名 Add File 时会覆盖原文件且不产生隐式改名', async () => {
@@ -513,6 +500,18 @@ test('search_files 会在当前对话文档里返回上下文命中', async () =
   assert.equal(result.total_matches, 2);
   assert.equal(result.matches[0].file_path, 'spec.md');
   assert.equal(result.matches[0].before[0].text, 'alpha');
+
+  const manyMatchesStore = createInMemoryDocumentStore({
+    'many.txt': `${Array.from({ length: 250 }, (_, index) => `token ${index + 1}`).join('\n')}\n`
+  });
+  const allMatches = await executeConversationDocumentAction(
+    CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
+    { pattern: 'token' },
+    { conversationId: 'conv-doc-many-search-results', store: manyMatchesStore }
+  );
+  assert.equal(allMatches.total_matches, 250);
+  assert.equal(allMatches.returned_match_count, 250);
+  assert.equal(allMatches.truncated, false);
 });
 
 test('write_file 内部 action 会写回内容并产出 change_event', async () => {
@@ -540,7 +539,7 @@ test('write_file 内部 action 会写回内容并产出 change_event', async () 
   assert.deepEqual(result.change_event.updated_paths, ['new note.md']);
 });
 
-test('copy_file/move_file/delete_file 会显式管理对话虚拟文件且不覆盖目标', async () => {
+test('copy_file 按 cp 语义新增或覆盖目标，独立 move/delete action 不再执行', async () => {
   const {
     CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
     CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
@@ -590,49 +589,36 @@ test('copy_file/move_file/delete_file 会显式管理对话虚拟文件且不覆
     /不能直接修改 local 映射路径/
   );
 
-  await assert.rejects(
-    () => executeConversationDocumentAction(
-      CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
-      {
-        source_path: 'source.md',
-        destination_path: 'existing.md'
-      },
-      {
-        conversationId: 'conv-doc-5',
-        store
-      }
-    ),
-    /目标文件 existing\.md 已存在/
-  );
-
-  const moved = await executeConversationDocumentAction(
-    CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME,
+  const overwritten = await executeConversationDocumentAction(
+    CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
     {
       source_path: 'source.md',
-      destination_path: 'renamed.md'
+      destination_path: 'existing.md'
     },
     {
       conversationId: 'conv-doc-5',
       store
     }
   );
-  assert.equal(moved.ok, true);
-  assert.deepEqual(moved.affected_files.modified, ['renamed.md']);
-  assert.deepEqual(moved.affected_files.deleted, ['source.md']);
-  assert.deepEqual(moved.change_event.deleted_paths, ['source.md']);
+  assert.deepEqual(overwritten.affected_files.modified, ['existing.md']);
+  assert.equal((await store.getDocument('conv-doc-5', 'existing.md')).content, '# source\n');
 
-  const deleted = await executeConversationDocumentAction(
-    CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME,
-    {
-      file_path: 'renamed.md'
-    },
-    {
-      conversationId: 'conv-doc-5',
-      store
-    }
+  await assert.rejects(
+    () => executeConversationDocumentAction(
+      CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME,
+      { source_path: 'source.md', destination_path: 'renamed.md' },
+      { conversationId: 'conv-doc-5', store }
+    ),
+    /不支持的 action `move_file`/
   );
-  assert.equal(deleted.ok, true);
-  assert.deepEqual(deleted.affected_files.deleted, ['renamed.md']);
+  await assert.rejects(
+    () => executeConversationDocumentAction(
+      CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME,
+      { file_path: 'source.md' },
+      { conversationId: 'conv-doc-5', store }
+    ),
+    /不支持的 action `delete_file`/
+  );
 });
 
 test('local mount 路径支持只读 read/list/search，并可复制到会话文件副本', async () => {

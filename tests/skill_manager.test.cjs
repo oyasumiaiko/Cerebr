@@ -332,9 +332,13 @@ test('create/update/delete/enable/disable 只持久化并刷新当前文档，�
   assert.equal(calls.execute.length, 7);
 
   const deletedFile = await manager.executeRegistryAction({
-    action: 'delete_file',
+    action: 'apply_patch',
     skill_name: 'dom-probe',
-    file_path: 'src/helpers/url.js'
+    patch: [
+      '*** Begin Patch',
+      '*** Delete File: src/helpers/url.js',
+      '*** End Patch'
+    ].join('\n')
   }, { tabId: 11 });
   assert.equal(deletedFile.ok, true);
   assert.equal(deletedFile.files.total_count, 4);
@@ -366,7 +370,7 @@ test('create/update/delete/enable/disable 只持久化并刷新当前文档，�
   assert.equal(calls.execute.length, 11);
 });
 
-test('copy_file/move_file/delete_file 支持 skill 虚拟文件管理', async () => {
+test('copy_file 使用 cp 覆盖语义，skill 移动与删除统一由 apply_patch 执行', async () => {
   const { createSkillManager } = await loadSkillManagerModule();
   const calls = {
     update: []
@@ -391,35 +395,56 @@ test('copy_file/move_file/delete_file 支持 skill 虚拟文件管理', async ()
   assert.deepEqual(copied.affected_files.added, ['src/helpers/dom-copy.js']);
   assert.equal(copied.files.total_count, 5);
 
-  const moved = await manager.executeRegistryAction({
-    action: 'move_file',
+  const overwritten = await manager.executeRegistryAction({
+    action: 'copy_file',
     skill_name: 'dom-probe',
-    source_file_path: 'src/helpers/dom-copy.js',
-    destination_file_path: 'src/helpers/dom-renamed.js'
+    source_file_path: 'src/helpers/dom.js',
+    destination_file_path: 'src/helpers/dom-copy.js'
+  });
+  assert.equal(overwritten.ok, true);
+  assert.deepEqual(overwritten.affected_files.modified, ['src/helpers/dom-copy.js']);
+  assert.equal(overwritten.files.total_count, 5);
+
+  const moved = await manager.executeRegistryAction({
+    action: 'apply_patch',
+    skill_name: 'dom-probe',
+    patch: [
+      '*** Begin Patch',
+      '*** Update File: src/helpers/dom-copy.js',
+      '*** Move to: src/helpers/dom-renamed.js',
+      '@@',
+      '-module.exports = { readTitle() { return document.title; } };',
+      '+module.exports = { readTitle() { return document.title.trim(); } };',
+      '*** End Patch'
+    ].join('\n')
   });
   assert.equal(moved.ok, true);
   assert.deepEqual(moved.affected_files.modified, ['src/helpers/dom-renamed.js']);
-  assert.deepEqual(moved.affected_files.deleted, ['src/helpers/dom-copy.js']);
-
-  await assert.rejects(
-    () => manager.executeRegistryAction({
-      action: 'copy_file',
-      skill_name: 'dom-probe',
-      source_file_path: 'src/helpers/dom.js',
-      destination_file_path: 'src/main.js'
-    }),
-    /已存在文件 src\/main\.js/
-  );
+  assert.deepEqual(moved.affected_files.deleted, []);
 
   const deleted = await manager.executeRegistryAction({
-    action: 'delete_file',
+    action: 'apply_patch',
     skill_name: 'dom-probe',
-    file_path: 'src/helpers/dom-renamed.js'
+    patch: [
+      '*** Begin Patch',
+      '*** Delete File: src/helpers/dom-renamed.js',
+      '*** End Patch'
+    ].join('\n')
   });
   assert.equal(deleted.ok, true);
   assert.deepEqual(deleted.affected_files.deleted, ['src/helpers/dom-renamed.js']);
   assert.equal(deleted.files.total_count, 4);
   assert.equal(calls.update.length, 0);
+
+  await assert.rejects(
+    () => manager.executeRegistryAction({
+      action: 'move_file',
+      skill_name: 'dom-probe',
+      source_file_path: 'src/helpers/dom.js',
+      destination_file_path: 'src/helpers/other.js'
+    }),
+    /不支持的 action `move_file`/
+  );
 });
 
 test('模板式 create_skill 默认禁用且不会自动 refresh 当前文档', async () => {
@@ -1088,6 +1113,12 @@ test('list_files/search_files 支持单 skill 与全局搜索闭环', async () =
         created_at: '2026-01-03T00:00:00.000Z',
         updated_at: '2026-01-04T00:00:00.000Z',
         revision: 1
+      },
+      {
+        ...buildLongSkillInput('long-dom-probe'),
+        created_at: '2026-01-05T00:00:00.000Z',
+        updated_at: '2026-01-06T00:00:00.000Z',
+        revision: 1
       }
     ]),
     userScriptsApi: {
@@ -1129,6 +1160,16 @@ test('list_files/search_files 支持单 skill 与全局搜索闭环', async () =
   assert.equal(globalSearch.total_matches >= 4, true);
   assert.equal(globalSearch.matches.every((item) => item.file_path.startsWith('src/')), true);
   assert.equal(globalSearch.matches.every((item) => item.before.length <= 1 && item.after.length <= 1), true);
+
+  const uncappedSearch = await manager.executeRegistryAction({
+    action: 'search_files',
+    skill_name: 'long-dom-probe',
+    pattern: 'const title',
+    max_results: 10
+  });
+  assert.equal(uncappedSearch.total_matches, 900);
+  assert.equal(uncappedSearch.returned_match_count, 900);
+  assert.equal(uncappedSearch.truncated, false);
 
   const targetedRead = await manager.executeRegistryAction({
     action: 'read_file',

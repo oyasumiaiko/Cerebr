@@ -1,8 +1,6 @@
 import { normalizeSkillFilePath } from '../skill/registry_tool.js';
 import {
   VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
-  VIRTUAL_FILE_DELETE_FILE_TOOL_NAME,
-  VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
   VIRTUAL_FILE_TARGET_KIND_SKILL,
   normalizeString
 } from './shared.js';
@@ -36,32 +34,15 @@ export function normalizeVirtualFileCopyFileArguments(args, target) {
   };
 }
 
-export function normalizeVirtualFileMoveFileArguments(args, target) {
-  return {
-    action: VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
-    target,
-    source_path: normalizeOperationPath(args.from, target, 'move_file.from'),
-    destination_path: normalizeOperationPath(args.to, target, 'move_file.to')
-  };
-}
-
-export function normalizeVirtualFileDeleteFileArguments(args, target) {
-  return {
-    action: VIRTUAL_FILE_DELETE_FILE_TOOL_NAME,
-    target,
-    file_path: normalizeOperationPath(args.path, target, 'delete_file.path')
-  };
-}
-
 export function buildVirtualFileCopyFileFunctionToolDefinition() {
   return buildStrictFunctionToolDefinition({
     name: VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
     description: buildModelToolDescription({
-      purpose: '复制一个虚拟文件到同一目标作用域中的新路径，等价于不覆盖的 `cp from to`。',
+      purpose: '复制一个虚拟文件到同一目标作用域中的新路径，语义对齐 `cp -- from to`。',
       useWhen: '需要保留源文件，或把 `local/...` 只读映射复制成当前对话文件区中的可写副本。',
-      avoidWhen: '需要重命名且不保留源文件时使用 move_file；目标路径已存在时不要调用，因为不会覆盖。',
+      avoidWhen: '需要移动/重命名时使用 apply_patch 的 `*** Move to:`；需要删除时使用 `*** Delete File:`。',
       input: 'target=null 时，to 是当前对话文件路径，from 既可指向当前对话文件，也可指向 `local/...` 只读映射；target=skill 时 from/to 都相对同一个 skill。',
-      output: '成功返回 `copy <from> -> <to>`；失败只返回 Error。'
+      output: '与 cp 一样，目标存在时覆盖；成功返回最小 Success 状态，失败返回 Error。'
     }),
     properties: {
       target: buildMutationTargetDescription(),
@@ -71,51 +52,7 @@ export function buildVirtualFileCopyFileFunctionToolDefinition() {
       },
       to: {
         type: 'string',
-        description: '新目标路径。必须不存在；`local/...` 不能作为可写目标。'
-      }
-    }
-  });
-}
-
-export function buildVirtualFileMoveFileFunctionToolDefinition() {
-  return buildStrictFunctionToolDefinition({
-    name: VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
-    description: buildModelToolDescription({
-      purpose: '移动或重命名一个可写虚拟文件，等价于不覆盖的 `mv from to`。',
-      useWhen: '需要改变当前对话文件或 skill 文件的路径，并且不需要保留源路径。',
-      avoidWhen: '不要移动 `local/...` 真实本机映射；需要保留源文件时使用 copy_file；目标已存在时不会覆盖。',
-      input: 'target=null 操作当前对话文件区；操作 skill 时指定 target.name。from 与 to 必须属于同一可写目标作用域。',
-      output: '成功返回 `move <from> -> <to>`；失败只返回 Error。'
-    }),
-    properties: {
-      target: buildMutationTargetDescription(),
-      from: {
-        type: 'string',
-        description: '现有可写虚拟文件路径。不能是 `local/...`。'
-      },
-      to: {
-        type: 'string',
-        description: '新路径。必须不存在，且不能是 `local/...`。'
-      }
-    }
-  });
-}
-
-export function buildVirtualFileDeleteFileFunctionToolDefinition() {
-  return buildStrictFunctionToolDefinition({
-    name: VIRTUAL_FILE_DELETE_FILE_TOOL_NAME,
-    description: buildModelToolDescription({
-      purpose: '删除一个可写虚拟文件，等价于单文件 `rm path`。',
-      useWhen: '用户目标明确要求移除当前对话文件或 skill 文件，且该路径已确认。',
-      avoidWhen: '不要删除 `local/...` 真实本机映射；路径不确定时先 list_files/read_file；这不是递归目录删除。',
-      input: 'target=null 操作当前对话文件区；删除 skill 文件时指定 target.name。path 必须是单个现有文件。',
-      output: '成功返回 `delete <path>`；失败只返回 Error。'
-    }),
-    properties: {
-      target: buildMutationTargetDescription(),
-      path: {
-        type: 'string',
-        description: '要删除的单个可写虚拟文件路径。不能是 `local/...`。'
+        description: '目标路径。已存在时覆盖；`local/...` 不能作为可写目标。'
       }
     }
   });
@@ -123,12 +60,4 @@ export function buildVirtualFileDeleteFileFunctionToolDefinition() {
 
 export function buildConversationDocumentCopyFileFunctionToolDefinition() {
   return buildVirtualFileCopyFileFunctionToolDefinition();
-}
-
-export function buildConversationDocumentMoveFileFunctionToolDefinition() {
-  return buildVirtualFileMoveFileFunctionToolDefinition();
-}
-
-export function buildConversationDocumentDeleteFileFunctionToolDefinition() {
-  return buildVirtualFileDeleteFileFunctionToolDefinition();
 }

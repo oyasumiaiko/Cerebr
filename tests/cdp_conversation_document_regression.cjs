@@ -727,10 +727,15 @@ async function main() {
       throw new Error(`legacy function apply_patch leaked into request: ${JSON.stringify(result.firstRequestTools)}`);
     }
 
-    const expectedTools = ['apply_patch', 'list_files', 'read_file', 'search_files', 'copy_file', 'move_file', 'delete_file'];
+    const expectedTools = ['apply_patch', 'list_files', 'read_file', 'search_files', 'copy_file'];
     for (const toolName of expectedTools) {
       if (!result.firstRequestToolNames.includes(toolName)) {
         throw new Error(`first request missing tool ${toolName}: ${JSON.stringify(result.firstRequestToolNames)}`);
+      }
+    }
+    for (const removedToolName of ['move_file', 'delete_file']) {
+      if (result.firstRequestToolNames.includes(removedToolName)) {
+        throw new Error(`removed tool leaked into first request: ${removedToolName}`);
       }
     }
     for (const requiredPath of [MD_DOC_PATH, TXT_DOC_PATH, CODE_DOC_PATH, HTML_DOC_PATH]) {

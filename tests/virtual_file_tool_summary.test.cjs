@@ -132,7 +132,7 @@ test('顶层 read_file/search_files 摘要支持 bash 风格参数', async () =>
   });
 });
 
-test('顶层 copy_file/move_file/delete_file 摘要使用 shell 风格动词', async () => {
+test('顶层 copy_file 使用通用 Run UI，旧 move/delete 摘要仍可回放', async () => {
   const {
     buildVirtualFileSummaryParts,
     buildVirtualFilePrimaryText
@@ -147,8 +147,8 @@ test('顶层 copy_file/move_file/delete_file 摘要使用 shell 风格动词', a
     })
   };
   assert.deepEqual(buildVirtualFileSummaryParts(copyRecord), {
-    action: '复制',
-    value: 'local/project/src/a.js -> project/src/a.js',
+    action: '运行',
+    value: 'cp -- local/project/src/a.js project/src/a.js',
     valueUrl: '',
     meta: '',
     locationAction: '',
@@ -157,7 +157,7 @@ test('顶层 copy_file/move_file/delete_file 摘要使用 shell 风格动词', a
   });
   assert.equal(
     buildVirtualFilePrimaryText(copyRecord),
-    '复制 local/project/src/a.js -> project/src/a.js'
+    '运行 cp -- local/project/src/a.js project/src/a.js'
   );
 
   const moveRecord = {

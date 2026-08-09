@@ -61,12 +61,13 @@ Cerebr is more than a chat sidebar. It turns the current web page, PDFs, images,
 
 In Enhanced mode, Cerebr exposes tools according to the current page and API configuration. With the Responses API, the extension executes authorized `function_call` and `custom_tool_call` items, adds the matching output item to the next request, and continues until no new local tool call remains.
 
-Cerebr currently registers 18 local tools: 17 function tools plus the Freeform custom tool `apply_patch`:
+Cerebr currently registers 17 local tools: 16 function tools plus the Freeform custom tool `apply_patch`:
 
 | Category | Tools |
 | --- | --- |
 | Page and runtime | `js_runtime_execute`, `page_content_read`, `pdf_content_read`, `webpage_screenshot`, `view_image` |
-| Conversation files | `apply_patch`, `list_files`, `read_file`, `search_files`, `copy_file`, `move_file`, `delete_file` |
+| Tool output | `read_tool_output` (continue a uniformly length-limited result from its cursor) |
+| Conversation files | `apply_patch`, `list_files`, `read_file`, `search_files`, `copy_file`; use `apply_patch` with `*** Move to:` or `*** Delete File:` to move/rename or delete files |
 | Skills | `skill_registry` |
 | User interaction | `request_user_input` |
 | Other models | `list_askable_models`, `ask_other_ai` |

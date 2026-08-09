@@ -11,8 +11,6 @@ const EXPECTED_MODEL_TOOL_NAMES = Object.freeze([
   'read_file',
   'search_files',
   'copy_file',
-  'move_file',
-  'delete_file',
   'skill_registry',
   'request_user_input',
   'view_image',
@@ -104,8 +102,6 @@ function buildAllModelToolDefinitions(modules, pageToolEnvironment = null) {
     virtualFiles.buildVirtualFileReadFileFunctionToolDefinition(),
     virtualFiles.buildVirtualFileSearchFilesFunctionToolDefinition(),
     virtualFiles.buildVirtualFileCopyFileFunctionToolDefinition(),
-    virtualFiles.buildVirtualFileMoveFileFunctionToolDefinition(),
-    virtualFiles.buildVirtualFileDeleteFileFunctionToolDefinition(),
     skillRegistry.buildSkillRegistryFunctionToolDefinition(pageToolEnvironment),
     requestUserInput.buildRequestUserInputFunctionToolDefinition(),
     viewImage.buildViewImageFunctionToolDefinition(),
@@ -204,12 +200,12 @@ function assertPortableFineTunedSchemaRecursively(schema, schemaPath, options = 
   }
 }
 
-test('全部 19 个模型工具具有唯一稳定名称和可独立判读的描述', async () => {
+test('全部 17 个模型工具具有唯一稳定名称和可独立判读的描述', async () => {
   const modules = await loadModelToolModules();
   const definitions = buildAllModelToolDefinitions(modules);
   const names = definitions.map(definition => definition.name);
 
-  assert.equal(definitions.length, 19);
+  assert.equal(definitions.length, 17);
   assert.deepEqual(names, EXPECTED_MODEL_TOOL_NAMES);
   assert.equal(new Set(names).size, definitions.length, '模型工具名称不得重复');
 
@@ -283,9 +279,7 @@ test('关键枚举保持闭合，范围与数量通过 description 暴露且不�
     'list_files',
     'read_file',
     'search_files',
-    'copy_file',
-    'move_file',
-    'delete_file'
+    'copy_file'
   ]) {
     assert.deepEqual(
       propertiesOf(name).target.properties.kind.enum,
@@ -296,7 +290,7 @@ test('关键枚举保持闭合，范围与数量通过 description 暴露且不�
 
   assert.equal(propertiesOf('read_file').max_chars, undefined);
   assert.match(propertiesOf('search_files').context.description, /0-10/);
-  assert.match(propertiesOf('search_files').limit.description, /1-200/);
+  assert.equal(propertiesOf('search_files').limit, undefined);
 
   const requestQuestions = propertiesOf('request_user_input').questions;
   assert.match(requestQuestions.description, /1-3/);
@@ -375,7 +369,7 @@ test('js_runtime_execute 与 skill_registry 明确区分宿主页和隔离沙箱
   );
 });
 
-test('统一 registry 与 19 个 definition builder 和 manifest 保持逐项一致', async () => {
+test('统一 registry 与 17 个 definition builder 和 manifest 保持逐项一致', async () => {
   const modules = await loadModelToolModules();
   const {
     RESPONSES_EXTENSION_TOOL_SPECS
@@ -394,7 +388,7 @@ test('统一 registry 与 19 个 definition builder 和 manifest 保持逐项一
 
   assert.deepEqual(manifestNames, EXPECTED_MODEL_TOOL_NAMES);
   assert.deepEqual(registryNames, EXPECTED_MODEL_TOOL_NAMES);
-  assert.equal(new Set(registryNames).size, 19);
+  assert.equal(new Set(registryNames).size, 17);
 
   for (const toolName of EXPECTED_MODEL_TOOL_NAMES) {
     const registryDefinition = definitionBuildersById[toolName]({
@@ -438,8 +432,6 @@ test('统一 registry 为 HTML、PDF 与隔离模式暴露精确且互斥的工�
     'read_file',
     'search_files',
     'copy_file',
-    'move_file',
-    'delete_file',
     'skill_registry',
     'request_user_input',
     'view_image',
@@ -462,8 +454,6 @@ test('统一 registry 为 HTML、PDF 与隔离模式暴露精确且互斥的工�
     'read_file',
     'search_files',
     'copy_file',
-    'move_file',
-    'delete_file',
     'skill_registry',
     'request_user_input',
     'view_image',
@@ -487,8 +477,6 @@ test('统一 registry 为 HTML、PDF 与隔离模式暴露精确且互斥的工�
     'read_file',
     'search_files',
     'copy_file',
-    'move_file',
-    'delete_file',
     'skill_registry',
     'request_user_input',
     'view_image',

@@ -23,8 +23,6 @@ test('RESPONSES_EXTENSION_TOOL_SPECS 以稳定顺序登记扩展提供工具', a
       'read_file',
       'search_files',
       'copy_file',
-      'move_file',
-      'delete_file',
       'skill_registry',
       'request_user_input',
       'view_image',
@@ -78,15 +76,17 @@ test('resolveResponsesExtensionToolSpecForCall 不会把 namespace 内同名函�
     resolveResponsesExtensionToolSpecForCall
   } = await loadResponsesExtensionToolsModule();
 
-  assert.equal(resolveResponsesExtensionToolSpecForCall('delete_file', '').handlerKey, 'virtual_file');
-  assert.equal(resolveResponsesExtensionToolSpecForCall('delete_file', 'external'), null);
+  assert.equal(resolveResponsesExtensionToolSpecForCall('copy_file', '').handlerKey, 'virtual_file');
+  assert.equal(resolveResponsesExtensionToolSpecForCall('copy_file', 'external'), null);
+  assert.equal(resolveResponsesExtensionToolSpecForCall('move_file', ''), null);
+  assert.equal(resolveResponsesExtensionToolSpecForCall('delete_file', ''), null);
   assert.equal(resolveResponsesExtensionToolSpecForCall('unknown_tool', ''), null);
   assert.equal(resolveAuthorizedResponsesExtensionToolSpec('delete_file', '', []), null);
   assert.equal(
     resolveAuthorizedResponsesExtensionToolSpec('delete_file', '', [
       { type: 'function', name: 'delete_file' }
-    ]).handlerKey,
-    'virtual_file'
+    ]),
+    null
   );
   assert.equal(resolveAuthorizedResponsesExtensionToolSpec('apply_patch', '', [
     { type: 'function', name: 'apply_patch' }

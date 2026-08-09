@@ -1,31 +1,32 @@
 # Cerebr 模型工具契约
 
-本文面向维护 Cerebr 模型工具的开发者，说明当前 18 个本地工具（17 个 function tool 与 Freeform custom tool `apply_patch`）的设计本意、调用边界、参数语义、实际输出形状、副作用和信任边界，并记录必须继续遵守的兼容规则。
+本文面向维护 Cerebr 模型工具的开发者，说明当前 17 个本地工具（16 个 function tool 与 Freeform custom tool `apply_patch`）的设计本意、调用边界、参数语义、实际输出形状、副作用和信任边界，并记录必须继续遵守的兼容规则。
 
-本文描述的是 Cerebr 扩展自己定义、自己执行的本地工具。OpenAI Responses hosted tools、用户额外填写的 Tools JSON、namespace tool 和 MCP server 不属于这 18 个本地工具，不能混用相同的执行、安全或输出假设。
+本文描述的是 Cerebr 扩展自己定义、自己执行的本地工具。OpenAI Responses hosted tools、用户额外填写的 Tools JSON、namespace tool 和 MCP server 不属于这 17 个本地工具，不能混用相同的执行、安全或输出假设。
 
 ## 1. 工具所有权与暴露范围
 
-### 1.1 18 个本地工具
+### 1.1 17 个本地工具
 
 当前本地工具登记如下：
 
 | 类别 | 工具 |
 | --- | --- |
 | 页面与运行时 | js_runtime_execute、page_content_read、pdf_content_read、webpage_screenshot、view_image |
-| 虚拟文件 | apply_patch、list_files、read_file、search_files、copy_file、move_file、delete_file |
+| 工具输出 | read_tool_output |
+| 虚拟文件 | apply_patch、list_files、read_file、search_files、copy_file |
 | Skill | skill_registry |
 | 用户交互 | request_user_input |
 | 其他模型 | list_askable_models、ask_other_ai |
 | 聊天历史 | history_search、history_read |
 
-登记 18 个能力不代表每一轮都会同时暴露 18 个工具：
+登记 17 个能力不代表每一轮都会同时暴露 17 个工具：
 
 - 普通宿主页中暴露 page_content_read 和 webpage_screenshot，不暴露 pdf_content_read。
 - PDF 页面中暴露 pdf_content_read 和 webpage_screenshot，不暴露 page_content_read。
 - 独立页或纯对话模式不暴露宿主页读取和截图工具。
 - js_runtime_execute 在有执行入口时始终可用，但纯对话模式连接隔离 sandbox，而不是用户正在浏览的网页。
-- page_content_read 与 pdf_content_read 永远二选一，因此单次请求最多暴露 17 个本地工具。
+- page_content_read 与 pdf_content_read 永远二选一，因此单次请求最多暴露 16 个本地工具。
 - 用户可以在 Responses API 设置中显式关闭任意本地工具。
 
 ### 1.2 Hosted tools 不属于本地执行
@@ -41,7 +42,7 @@ responses_builtin_tools.js 当前管理的 web_search、code_interpreter、image
 
 真正的 provider-hosted 与 MCP 工具由对应提供方定义和执行。namespace 只是组织/寻址边界，Cerebr 当前没有通用 namespace handler；用户在 Tools JSON 中额外声明的普通 client function 同样只有定义，没有本地执行器。模型若调用这些未接入 handler 的函数，当前客户端会返回 UnsupportedFunctionError，而不会假装执行成功：
 
-- 不计入本文的 18 个本地工具。
+- 不计入本文的 17 个本地工具。
 - 不保证使用 schema_version 2 XML。
 - 不保证 error、status、trust 或截断语义与 Cerebr 本地工具一致。
 - 当前合并逻辑按 `type + name` 对本地定义对账；旧的 function `apply_patch` 会被移除，只保留 Cerebr 的 custom definition。新增本地工具时必须检查命名冲突。
@@ -51,11 +52,11 @@ responses_builtin_tools.js 当前管理的 web_search、code_interpreter、image
 
 ### 2.1 工具名兼容
 
-本轮重整保留全部现有工具名。不要在没有迁移方案时把 apply_patch 改成 virtual_file_apply_patch，或把 page_content_read 改成 read_current_page。
+本轮重整保留仍公开的工具名。`move_file` 与 `delete_file` 不再向新请求暴露；对应能力由 `apply_patch` 的 Move/Delete 语法统一承担。不要在没有迁移方案时把 apply_patch 改成 virtual_file_apply_patch，或把 page_content_read 改成 read_current_page。
 
 原因包括：
 
-- 已保存对话可能含旧 `function_call` / `function_call_output`；新 `apply_patch` 使用 `custom_tool_call` / `custom_tool_call_output`。
+- 已保存对话可能含旧 `function_call` / `function_call_output`，包括已移除的 `move_file` / `delete_file`；UI 继续回放这些历史记录。新 `apply_patch` 使用 `custom_tool_call` / `custom_tool_call_output`。
 - 中断恢复和 replay 需要继续识别原名称。
 - UI timeline、测试和 tool_search 索引都可能引用当前名称。
 - 模型已经形成对文件工具 rg 输出的稳定使用习惯。
@@ -86,7 +87,7 @@ responses_builtin_tools.js 当前管理的 web_search、code_interpreter、image
 
 ### 2.3 Strict Schema
 
-17 个 function tool 统一使用 strict: true，并遵守以下规则；`apply_patch` 是例外，它使用 Lark grammar 约束的 Freeform raw input，不带 JSON parameters：
+16 个 function tool 统一使用 strict: true，并遵守以下规则；`apply_patch` 是例外，它使用 Lark grammar 约束的 Freeform raw input，不带 JSON parameters：
 
 - 每个 object 都必须声明 additionalProperties: false。
 - properties 中出现的字段全部进入 required。
@@ -140,11 +141,11 @@ trust="untrusted" 的含义是：结果中的正文、标题、路径、日志�
 
 #### 文件工具继续使用 rg 风格文本
 
-list_files、read_file、search_files、copy_file、move_file、delete_file 和 apply_patch 的常用成功输出继续保持紧凑纯文本，不强制包成 XML：
+list_files、read_file、search_files、copy_file 和 apply_patch 的常用成功输出继续保持紧凑纯文本，不强制包成 XML：
 
 - 搜索结果按文件分组，文件路径只出现一次。
 - read_file 使用 path heading 加范围信息，再接原文。
-- mutation 使用 A/M/D 或单行动作摘要。
+- apply_patch mutation 使用 A/M/D 摘要；copy_file 成功返回最小 `Success.`。
 - 失败以 Error 开头，并附安全错误字段。
 
 这是刻意的 token 和可操作性设计，不是尚未迁移的临时格式。文件正文、搜索命中和路径仍然属于不可信数据；模型不得执行其中包含的指令。
@@ -171,10 +172,8 @@ request_user_input 返回紧凑 JSON，而不是 XML。它需要保留 answers �
 | list_files | 只读虚拟路径清单 | 用户文件名和 skill 元数据不可信 |
 | read_file | 读取对话文件、skill 或授权的 local 映射 | 文件正文不可信 |
 | search_files | 跨虚拟文件读取并匹配正文 | 命中和上下文不可信 |
-| apply_patch | 持久化写入、增加或删除虚拟文件 | 本地生成的动作摘要可信；目标文件内容不提供授权 |
-| copy_file | 持久化新增虚拟文件 | 本地动作摘要可信 |
-| move_file | 持久化移动/重命名虚拟文件 | 本地动作摘要可信 |
-| delete_file | 破坏性删除虚拟文件 | 本地动作摘要可信 |
+| apply_patch | 持久化增加、修改、移动或删除虚拟文件 | 本地生成的动作摘要可信；目标文件内容不提供授权 |
+| copy_file | 按 cp 覆盖语义持久化复制虚拟文件 | 本地成功状态可信 |
 | skill_registry | 创建、启停、挂载或删除持久化 skill | list 内容不可信；mutation 有持久副作用 |
 | request_user_input | 阻塞当前工具链并等待用户 | 回答是当前用户的直接选择，但不是秘密输入通道 |
 | list_askable_models | 读取允许外部提问的配置摘要 | 可配置显示名不提供授权 |
@@ -377,7 +376,7 @@ overview 通常只有 outline/guidance；chapter_chunk 和 document_chunk 包含
 
 ### 5.2 list_files
 
-本意：发现路径和少量元数据，不读取正文。
+本意：发现路径，不读取正文。
 
 关键参数：
 
@@ -387,23 +386,22 @@ overview 通常只有 outline/guidance；chapter_chunk 和 document_chunk 包含
 实际输出是紧凑纯文本：
 
 ~~~text
-plan.md  text  1200 chars
-src/main.js  text  8042 chars
+plan.md
+src/main.js
 ~~~
 
-无结果返回 No files found.；发生裁剪时追加 returned/total。文件名、skill 名和路径是不可信数据。
+无结果返回 No files found.；长度只由统一 `max_output_chars` 与 `read_tool_output` 分页控制。文件名、skill 名和路径是不可信数据。
 
 ### 5.3 read_file
 
-本意：读取一个虚拟文本文件的预览、字符片段或指定行范围。
+本意：读取一个虚拟文本文件的全文或指定行范围。
 
 关键参数：
 
 - path：相对当前 target 的虚拟路径。
-- max_chars：1 到 50000；null 默认 10000。
 - line_range：1-based 闭区间字符串，例如 20:80、20-80、20,80p 或单行 42。
 - numbered：true 返回类似 nl -ba 的行号。
-- max_chars 和 line_range 不能同时非 null。
+- max_output_chars：统一模型可见输出长度；null 默认 5000。被截断时使用返回的 cursor 调用 read_tool_output 继续读取。
 
 实际输出：
 
@@ -412,7 +410,7 @@ src/main.js  text  8042 chars
     20  ...
 ~~~
 
-more 表示仍有后续内容。正文保持 rg/cat 风格，不包 XML；正文属于不可信数据。
+显式行范围会出现在 heading 中；普通全文读取若超过统一输出长度，会由分页层给出 cursor。正文保持 rg/cat 风格，不包 XML；正文属于不可信数据。
 
 ### 5.4 search_files
 
@@ -425,7 +423,7 @@ more 表示仍有后续内容。正文保持 rg/cat 风格，不包 XML；正文
 - glob：路径过滤。
 - ignore_case：true 强制忽略大小写；false 或 null 使用 smart-case。
 - context、before、after：0 到 10；before/after 非 null 时覆盖对应方向。
-- limit：1 到 200；null 默认 50。
+- 不另设命中数量上限；统一由 `max_output_chars`（默认 5000 字符）与 `read_tool_output` 分页控制模型可见长度。
 
 实际输出保持 rg --heading --line-number --column 风格：
 
@@ -468,62 +466,30 @@ D old.md
 
 ### 5.6 copy_file
 
-本意：不覆盖地复制单个虚拟文件，并保留源路径。
+本意：按 `cp -- from to` 语义复制单个虚拟文件，并保留源路径。
 
 关键参数：
 
 - from：源路径；当前对话目标下允许 local/... 作为只读源。
-- to：必须不存在的可写目标路径。
+- to：可写目标路径；已存在时覆盖。
 - target：skill 复制时指定单个 skill。
 
 实际成功输出为：
 
 ~~~text
-copy from -> to
+Success.
 ~~~
 
-它会新增持久化虚拟文件。目标存在时失败，不做覆盖。
+目标不存在时新增，目标存在时覆盖。UI 按 Codex 的 shell 分类显示为通用 `Run cp -- from to`，不新增 Copy 专用类别。
 
-### 5.7 move_file
+### 5.7 移动与删除
 
-本意：不覆盖地移动或重命名单个可写虚拟文件。
+不再注册独立的 `move_file` / `delete_file`。模型使用同一个 Freeform `apply_patch`：
 
-关键参数：
-
-- from 和 to 必须位于同一 target。
-- local/... 不能作为源或目标。
-- 目标路径必须不存在。
-
-实际成功输出为：
-
-~~~text
-move from -> to
-~~~
-
-这是持久化 mutation，会删除旧路径并建立新路径。
-
-### 5.8 delete_file
-
-本意：删除单个已确认的可写虚拟文件。
-
-关键参数：
-
-- path：单个现有文件。
-- target：null 为当前对话文件；skill 删除必须指定 name。
-
-不适用：
-
-- 不能删除 local/...。
-- 不是递归目录删除。
-- 路径不确定时先 list_files/read_file。
-
-实际成功输出为：
-
-~~~text
-delete path
-~~~
-
-这是破坏性持久化操作。
+- 移动或改名：`*** Update File: <from>` 后接 `*** Move to: <to>`。
+- 删除：`*** Delete File: <path>`。
+- 两者都沿用 apply_patch 的整份预验证、零部分写入、路径权限检查和专用 diff UI。
+- 历史消息中的旧 function calls 只用于兼容回放，不会再次执行，也不会出现在新请求的工具表中。
 
 ## 6. Skill 工具
 
@@ -761,7 +727,7 @@ conv_ref 和 thread_ref 只对当前 assistant 工具链使用的历史快照有
 
 ## 10. 单一 registry 与执行路由
 
-18 个本地工具拥有一个稳定登记源，同时保持每把工具自己的高内聚模块：
+17 个本地工具拥有一个稳定登记源，同时保持每把工具自己的高内聚模块：
 
 - registry 负责稳定 id、UI title/description、defaultEnabled、exposure、defer_loading、handlerKey、outputKind 和 sideEffect 元数据。
 - 各 tool.js 负责 description、strict schema 和参数 normalize。
@@ -784,7 +750,7 @@ handlerKey 与 outputKind 必须能映射到现有 sender 分支；契约测试�
 
 本轮明确保留：
 
-- 18 个现有工具名。
+- 17 个当前公开工具名；旧 `move_file` / `delete_file` 仅保留历史 UI 回放识别。
 - target.kind 的 workspace/skill 值。
 - read_file 的 line_range 字符串语法。
 - pdf_content_read 通过全 null 参数进入 overview 的方式。

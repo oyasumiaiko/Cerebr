@@ -58,16 +58,12 @@ import {
 import {
   CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
   CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
-  CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
-  CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
   buildVirtualFileApplyPatchCustomToolDefinition,
   buildVirtualFileCopyFileFunctionToolDefinition,
-  buildVirtualFileDeleteFileFunctionToolDefinition,
   buildVirtualFileListFilesFunctionToolDefinition,
-  buildVirtualFileMoveFileFunctionToolDefinition,
   buildVirtualFileReadFileFunctionToolDefinition,
   buildVirtualFileSearchFilesFunctionToolDefinition
 } from '../virtual_file_io/index.js';
@@ -86,8 +82,6 @@ export const definitionBuildersById = Object.freeze({
   [CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME]: () => buildVirtualFileReadFileFunctionToolDefinition(),
   [CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME]: () => buildVirtualFileSearchFilesFunctionToolDefinition(),
   [CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME]: () => buildVirtualFileCopyFileFunctionToolDefinition(),
-  [CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME]: () => buildVirtualFileMoveFileFunctionToolDefinition(),
-  [CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME]: () => buildVirtualFileDeleteFileFunctionToolDefinition(),
   [SKILL_REGISTRY_TOOL_NAME]: ({ pageToolEnvironment }) => (
     buildSkillRegistryFunctionToolDefinition(pageToolEnvironment)
   ),

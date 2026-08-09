@@ -115,8 +115,7 @@ test('list_files 的对话文档工具输出会把文件列表压成低噪声纯
   const text = items.map(item => item.text).join('\n');
   assert.doesNotMatch(text, /<list_files_result/);
   assert.doesNotMatch(text, /<files>/);
-  assert.match(text, /a\.md  10 chars/);
-  assert.match(text, /b\.md  20 chars/);
+  assert.equal(text, 'a.md\nb.md');
   assert.doesNotMatch(text, /updated_at=/);
   assert.doesNotMatch(text, /"files": \[/);
 });
@@ -154,7 +153,7 @@ test('search_files 的对话文档工具输出会把命中上下文渲染成 rg 
   assert.doesNotMatch(text, /"before": \[/);
 });
 
-test('copy_file/move_file/delete_file 的对话文档工具输出会压成单行操作摘要', async () => {
+test('copy_file 返回 cp 风格最小成功状态，旧 move/delete 输出仍可回放', async () => {
   const { buildResponsesConversationDocumentToolOutputContentItems } = await loadToolOutputModule();
 
   const copyItems = buildResponsesConversationDocumentToolOutputContentItems('copy_file', {
@@ -166,7 +165,7 @@ test('copy_file/move_file/delete_file 的对话文档工具输出会压成单行
   });
   const copyText = copyItems.map(item => item.text).join('\n');
   assert.doesNotMatch(copyText, /<copy_file_result/);
-  assert.match(copyText, /copy local\/project\/src\/a\.js -> project\/src\/a\.js/);
+  assert.equal(copyText, 'Success.');
   assert.doesNotMatch(copyText, /Reminder:/);
   assert.doesNotMatch(copyText, /"source_path"/);
 

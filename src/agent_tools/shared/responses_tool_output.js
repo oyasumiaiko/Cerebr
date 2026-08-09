@@ -638,26 +638,9 @@ function buildResponsesFileReadPlainContent(file) {
 function buildResponsesFileListLine(file) {
   const normalized = isResponsesToolOutputPlainObject(file) ? file : {};
   const path = typeof normalized.path === 'string' ? normalized.path.trim() : '';
-  const metaParts = [];
-  const pushMetaPart = (value) => {
-    const text = typeof value === 'string' ? value.trim() : '';
-    if (text && !metaParts.includes(text)) metaParts.push(text);
-  };
-  if (typeof normalized.skill_name === 'string' && normalized.skill_name.trim()) {
-    pushMetaPart(`skill=${normalized.skill_name.trim()}`);
-  }
-  if (typeof normalized.kind === 'string' && normalized.kind.trim()) {
-    pushMetaPart(normalized.kind.trim());
-  }
-  if (normalized.is_manifest === true) pushMetaPart('manifest');
-  if (normalized.is_instruction === true) pushMetaPart('instruction');
-  if (normalized.is_runtime_entry === true) pushMetaPart('runtime_entry');
-  if (Number.isFinite(Number(normalized.size_chars))) {
-    pushMetaPart(`${Math.max(0, Math.trunc(Number(normalized.size_chars)))} chars`);
-  }
-  return path
-    ? `${path}${metaParts.length > 0 ? `  ${metaParts.join('  ')}` : ''}`
-    : '';
+  const skillName = typeof normalized.skill_name === 'string' ? normalized.skill_name.trim() : '';
+  if (!path) return skillName;
+  return skillName ? `${skillName}/${path}` : path;
 }
 
 function buildResponsesSearchLinePath(match) {
@@ -841,7 +824,7 @@ function buildResponsesFileOperationToolOutputText(rootTag, result, options = {}
   const errorText = normalized.error ? formatResponsesJsRuntimeErrorText(normalized.error) : '';
   if (errorText) return `Error: ${errorText}`;
   const resultLine = (() => {
-    if (action === 'copy_file') return sourcePath && destinationPath ? `copy ${sourcePath} -> ${destinationPath}` : 'copy complete';
+    if (action === 'copy_file') return 'Success.';
     if (action === 'move_file') return sourcePath && destinationPath ? `move ${sourcePath} -> ${destinationPath}` : 'move complete';
     if (action === 'delete_file') return deletedPath ? `delete ${deletedPath}` : 'delete complete';
     return 'file operation complete';

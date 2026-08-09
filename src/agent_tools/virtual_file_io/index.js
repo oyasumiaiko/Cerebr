@@ -2,7 +2,7 @@
  * 统一虚拟文件工具。
  *
  * 说明：
- * - 顶层公开给模型的文件工具统一为 `apply_patch` / `list_files` / `read_file` / `search_files`；
+ * - 顶层公开给模型的文件工具统一为 `apply_patch` / `list_files` / `read_file` / `search_files` / `copy_file`；
  * - 文件工具通过结构化 `target` 选择 skill，默认当前对话文件区；本地映射通过 `local/...` 路径进入；
  * - 会话文件仍在侧栏本地 IndexedDB 执行；local 文件实时读取用户授权 handle；skill 文件复用现有 skill package / background 执行链路；
  * - UI 为了编辑对话文档与完整查看，会额外复用 `write_file` / `read_file_full` 两个内部 action。
@@ -31,9 +31,7 @@ import {
   CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
   CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
-  CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS,
   CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
-  CONVERSATION_DOCUMENT_SEARCH_MAX_RESULTS,
   VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
   VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
   VIRTUAL_FILE_DELETE_FILE_TOOL_NAME,
@@ -89,14 +87,8 @@ import {
 } from './search_files.js';
 import {
   buildConversationDocumentCopyFileFunctionToolDefinition,
-  buildConversationDocumentDeleteFileFunctionToolDefinition,
-  buildConversationDocumentMoveFileFunctionToolDefinition,
   buildVirtualFileCopyFileFunctionToolDefinition,
-  buildVirtualFileDeleteFileFunctionToolDefinition,
-  buildVirtualFileMoveFileFunctionToolDefinition,
-  normalizeVirtualFileCopyFileArguments,
-  normalizeVirtualFileDeleteFileArguments,
-  normalizeVirtualFileMoveFileArguments
+  normalizeVirtualFileCopyFileArguments
 } from './file_ops.js';
 import {
   assertPatchDoesNotTouchLocalPaths,
@@ -116,9 +108,7 @@ export {
   CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
   CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
-  CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS,
   CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
-  CONVERSATION_DOCUMENT_SEARCH_MAX_RESULTS,
   VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
   VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
   VIRTUAL_FILE_DELETE_FILE_TOOL_NAME,
@@ -147,11 +137,7 @@ export {
   buildVirtualFileSearchFilesFunctionToolDefinition,
   buildConversationDocumentSearchFilesFunctionToolDefinition,
   buildVirtualFileCopyFileFunctionToolDefinition,
-  buildConversationDocumentCopyFileFunctionToolDefinition,
-  buildVirtualFileMoveFileFunctionToolDefinition,
-  buildConversationDocumentMoveFileFunctionToolDefinition,
-  buildVirtualFileDeleteFileFunctionToolDefinition,
-  buildConversationDocumentDeleteFileFunctionToolDefinition
+  buildConversationDocumentCopyFileFunctionToolDefinition
 };
 
 function normalizeConversationId(value) {
@@ -339,11 +325,6 @@ function normalizeSearchCaseMode(value) {
   throw new Error(`virtual_file 参数错误：不支持的 case_mode \`${value}\`。`);
 }
 
-function normalizeSearchMaxResults(value) {
-  if (value == null) return CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS;
-  return Math.max(1, Math.min(CONVERSATION_DOCUMENT_SEARCH_MAX_RESULTS, clampPositiveInt(value, CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS)));
-}
-
 function normalizeContextLineCount(value) {
   if (value == null) return 0;
   return Math.max(0, Math.min(10, clampNonNegativeInt(value, 0)));
@@ -516,7 +497,6 @@ function searchConversationDocuments(documents, rawOptions = {}) {
       throw new Error(`virtual_file 参数错误：无效的正则 pattern：${error?.message || error}`);
     }
   }
-  const maxResults = normalizeSearchMaxResults(rawOptions.max_results);
   const contextBefore = normalizeContextLineCount(rawOptions.context_before);
   const contextAfter = normalizeContextLineCount(rawOptions.context_after);
   const pathGlob = normalizeSearchPathGlob(rawOptions.path_glob);
@@ -535,9 +515,6 @@ function searchConversationDocuments(documents, rawOptions = {}) {
       const lineMatches = collectMatchesForLine(lineText, pattern, searchFlags);
       for (const lineMatch of lineMatches) {
         totalMatches += 1;
-        if (matches.length >= maxResults) {
-          continue;
-        }
         matches.push({
           match_id: `m${matches.length + 1}`,
           file_path: documentRecord.path,
@@ -561,7 +538,7 @@ function searchConversationDocuments(documents, rawOptions = {}) {
     path_glob: pathGlob,
     context_before: contextBefore,
     context_after: contextAfter,
-    max_results: maxResults,
+    max_results: null,
     total_matches: totalMatches,
     returned_match_count: matches.length,
     truncated: totalMatches > matches.length,
@@ -795,12 +772,6 @@ function findRequiredConversationDocument(documents, filePath, action) {
   };
 }
 
-function assertConversationDocumentDestinationAvailable(documents, filePath, action) {
-  if (findDocumentIndex(documents, filePath) >= 0) {
-    throw new Error(`virtual_file 参数错误：${action} 目标文件 ${filePath} 已存在。`);
-  }
-}
-
 async function getRequiredConversationDocumentByPath(store, conversationId, filePath) {
   const directRecord = await store.getDocument(conversationId, filePath);
   if (directRecord) {
@@ -830,9 +801,24 @@ export function isConversationDocumentMutationAction(action) {
   const normalized = normalizeString(action).toLowerCase();
   return normalized === VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME
     || normalized === VIRTUAL_FILE_COPY_FILE_TOOL_NAME
-    || normalized === VIRTUAL_FILE_MOVE_FILE_TOOL_NAME
-    || normalized === VIRTUAL_FILE_DELETE_FILE_TOOL_NAME
     || normalized === CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION;
+}
+
+/**
+ * 生成 cp 语义下的新文档集合：目标不存在时新增，目标存在时原位覆盖。
+ * 这里保持纯函数，调用方只在完整源文件读取成功后执行一次 replaceDocuments。
+ */
+function buildCopiedConversationDocumentSet(documents, copiedDocument) {
+  const normalizedDocuments = normalizeDocumentRecords(documents);
+  const destinationExisted = findDocumentIndex(normalizedDocuments, copiedDocument.path) >= 0;
+  const nextDocuments = normalizedDocuments
+    .filter((documentRecord) => documentRecord.path !== copiedDocument.path)
+    .concat(copiedDocument)
+    .sort((left, right) => left.path.localeCompare(right.path));
+  return {
+    destinationExisted,
+    nextDocuments
+  };
 }
 
 export function normalizeVirtualFileToolArguments(action, rawArgs, options = {}) {
@@ -844,8 +830,6 @@ export function normalizeVirtualFileToolArguments(action, rawArgs, options = {})
 
   const requireSkillName = normalizedAction === VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME
     || normalizedAction === VIRTUAL_FILE_COPY_FILE_TOOL_NAME
-    || normalizedAction === VIRTUAL_FILE_MOVE_FILE_TOOL_NAME
-    || normalizedAction === VIRTUAL_FILE_DELETE_FILE_TOOL_NAME
     || normalizedAction === VIRTUAL_FILE_READ_FILE_TOOL_NAME;
   const target = normalizeVirtualFileTarget(args.target, {
     defaultKind: options?.defaultTargetKind || VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
@@ -866,10 +850,6 @@ export function normalizeVirtualFileToolArguments(action, rawArgs, options = {})
       return normalizeVirtualFileSearchFilesArguments(args, target);
     case VIRTUAL_FILE_COPY_FILE_TOOL_NAME:
       return normalizeVirtualFileCopyFileArguments(args, target);
-    case VIRTUAL_FILE_MOVE_FILE_TOOL_NAME:
-      return normalizeVirtualFileMoveFileArguments(args, target);
-    case VIRTUAL_FILE_DELETE_FILE_TOOL_NAME:
-      return normalizeVirtualFileDeleteFileArguments(args, target);
     default:
       throw new Error(`virtual_file 参数错误：未处理的 action \`${action}\`。`);
   }
@@ -902,15 +882,6 @@ export function buildConversationDocumentActionPayloadFromVirtualFileAction(acti
       return {
         source_path: input.source_path,
         destination_path: input.destination_path
-      };
-    case VIRTUAL_FILE_MOVE_FILE_TOOL_NAME:
-      return {
-        source_path: input.source_path,
-        destination_path: input.destination_path
-      };
-    case VIRTUAL_FILE_DELETE_FILE_TOOL_NAME:
-      return {
-        file_path: input.file_path
       };
     default:
       throw new Error(`virtual_file 参数错误：未处理的会话文件 action \`${action}\`。`);
@@ -963,19 +934,6 @@ export function buildSkillRegistryFileActionPayloadFromVirtualFileAction(action,
         source_file_path: input.source_path,
         destination_file_path: input.destination_path
       };
-    case VIRTUAL_FILE_MOVE_FILE_TOOL_NAME:
-      return {
-        action: 'move_file',
-        ...payload,
-        source_file_path: input.source_path,
-        destination_file_path: input.destination_path
-      };
-    case VIRTUAL_FILE_DELETE_FILE_TOOL_NAME:
-      return {
-        action: 'delete_file',
-        ...payload,
-        file_path: input.file_path
-      };
     default:
       throw new Error(`virtual_file 参数错误：未处理的 skill action \`${action}\`。`);
   }
@@ -1014,7 +972,7 @@ function normalizeActionArgs(action, rawArgs, options = {}) {
         case_mode: 'smart',
         context_before: 0,
         context_after: 0,
-        max_results: CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS,
+        max_results: null,
         content: null
       };
     case CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME:
@@ -1030,7 +988,7 @@ function normalizeActionArgs(action, rawArgs, options = {}) {
         case_mode: 'smart',
         context_before: 0,
         context_after: 0,
-        max_results: CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS,
+        max_results: null,
         content: null
       };
     case CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME:
@@ -1046,7 +1004,7 @@ function normalizeActionArgs(action, rawArgs, options = {}) {
         case_mode: 'smart',
         context_before: 0,
         context_after: 0,
-        max_results: CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS,
+        max_results: null,
         content: null
       };
     case CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME:
@@ -1065,7 +1023,7 @@ function normalizeActionArgs(action, rawArgs, options = {}) {
         case_mode: normalizeSearchCaseMode(args.case_mode),
         context_before: normalizeContextLineCount(args.context_before),
         context_after: normalizeContextLineCount(args.context_after),
-        max_results: normalizeSearchMaxResults(args.max_results),
+        max_results: null,
         content: null
       };
     case CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME:
@@ -1083,43 +1041,7 @@ function normalizeActionArgs(action, rawArgs, options = {}) {
         case_mode: 'smart',
         context_before: 0,
         context_after: 0,
-        max_results: CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS,
-        content: null
-      };
-    case CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME:
-      return {
-        action: normalizedAction,
-        patch: null,
-        file_path: null,
-        source_path: normalizeConversationDocumentPath(args.source_path),
-        destination_path: normalizeConversationDocumentPath(args.destination_path),
-        pattern: null,
-        read_options: null,
-        include_line_numbers: false,
-        path_glob: null,
-        regex: false,
-        case_mode: 'smart',
-        context_before: 0,
-        context_after: 0,
-        max_results: CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS,
-        content: null
-      };
-    case CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME:
-      return {
-        action: normalizedAction,
-        patch: null,
-        file_path: normalizeConversationDocumentPath(args.file_path),
-        source_path: null,
-        destination_path: null,
-        pattern: null,
-        read_options: null,
-        include_line_numbers: false,
-        path_glob: null,
-        regex: false,
-        case_mode: 'smart',
-        context_before: 0,
-        context_after: 0,
-        max_results: CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS,
+        max_results: null,
         content: null
       };
     case CONVERSATION_DOCUMENT_INTERNAL_READ_FILE_FULL_ACTION:
@@ -1135,7 +1057,7 @@ function normalizeActionArgs(action, rawArgs, options = {}) {
         case_mode: 'smart',
         context_before: 0,
         context_after: 0,
-        max_results: CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS,
+        max_results: null,
         content: null
       };
     case CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION:
@@ -1151,7 +1073,7 @@ function normalizeActionArgs(action, rawArgs, options = {}) {
         case_mode: 'smart',
         context_before: 0,
         context_after: 0,
-        max_results: CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS,
+        max_results: null,
         content: typeof args.content === 'string' ? args.content : ''
       };
     default:
@@ -1320,67 +1242,29 @@ export async function executeConversationDocumentAction(action, rawArgs, options
     case CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME: {
       assertDifferentFileOperationPaths(normalizedArgs.source_path, normalizedArgs.destination_path, 'copy_file');
       assertWritableWorkspacePath(normalizedArgs.destination_path, 'copy_file');
-      if (isLocalVirtualPath(normalizedArgs.source_path)) {
-        const existingDocuments = normalizeDocumentRecords(await store.listDocuments(conversationId));
-        assertConversationDocumentDestinationAvailable(
-          existingDocuments,
-          normalizedArgs.destination_path,
-          'copy_file'
-        );
-        const sourceDocument = await readLocalVirtualFileDocument(
+      const existingDocuments = normalizeDocumentRecords(await store.listDocuments(conversationId));
+      const sourceDocument = isLocalVirtualPath(normalizedArgs.source_path)
+        ? await readLocalVirtualFileDocument(
           conversationId,
           normalizedArgs.source_path,
           localMountStore
-        );
-        const now = new Date().toISOString();
-        const copiedDocument = normalizeDocumentRecord({
-          path: normalizedArgs.destination_path,
-          content: sourceDocument.content,
-          updated_at: now
-        }, now);
-        const persistedDocuments = await store.replaceDocuments(conversationId, [
-          ...existingDocuments,
-          copiedDocument
-        ].sort((left, right) => left.path.localeCompare(right.path)));
-        return {
-          ok: true,
-          action: normalizedAction,
-          conversation_id: conversationId,
-          source_path: normalizedArgs.source_path,
-          destination_path: copiedDocument.path,
-          file: buildFileOperationFilePayload(copiedDocument),
-          files: buildDocumentManifest(persistedDocuments),
-          affected_files: {
-            added: [copiedDocument.path],
-            modified: [],
-            deleted: []
-          },
-          change_event: buildChangeEventPayload(conversationId, normalizedAction, {
-            updated_paths: [copiedDocument.path]
-          })
-        };
-      }
-      const existingDocuments = normalizeDocumentRecords(await store.listDocuments(conversationId));
-      const { document: sourceDocument } = findRequiredConversationDocument(
-        existingDocuments,
-        normalizedArgs.source_path,
-        'copy_file'
-      );
-      assertConversationDocumentDestinationAvailable(
-        existingDocuments,
-        normalizedArgs.destination_path,
-        'copy_file'
-      );
+        )
+        : findRequiredConversationDocument(
+          existingDocuments,
+          normalizedArgs.source_path,
+          'copy_file'
+        ).document;
       const now = new Date().toISOString();
       const copiedDocument = normalizeDocumentRecord({
         path: normalizedArgs.destination_path,
         content: sourceDocument.content,
         updated_at: now
       }, now);
-      const persistedDocuments = await store.replaceDocuments(conversationId, [
-        ...existingDocuments,
+      const { destinationExisted, nextDocuments } = buildCopiedConversationDocumentSet(
+        existingDocuments,
         copiedDocument
-      ].sort((left, right) => left.path.localeCompare(right.path)));
+      );
+      const persistedDocuments = await store.replaceDocuments(conversationId, nextDocuments);
       return {
         ok: true,
         action: normalizedAction,
@@ -1390,86 +1274,12 @@ export async function executeConversationDocumentAction(action, rawArgs, options
         file: buildFileOperationFilePayload(copiedDocument),
         files: buildDocumentManifest(persistedDocuments),
         affected_files: {
-          added: [copiedDocument.path],
-          modified: [],
+          added: destinationExisted ? [] : [copiedDocument.path],
+          modified: destinationExisted ? [copiedDocument.path] : [],
           deleted: []
         },
         change_event: buildChangeEventPayload(conversationId, normalizedAction, {
           updated_paths: [copiedDocument.path]
-        })
-      };
-    }
-    case CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME: {
-      assertDifferentFileOperationPaths(normalizedArgs.source_path, normalizedArgs.destination_path, 'move_file');
-      assertWritableWorkspacePath(normalizedArgs.source_path, 'move_file');
-      assertWritableWorkspacePath(normalizedArgs.destination_path, 'move_file');
-      const existingDocuments = normalizeDocumentRecords(await store.listDocuments(conversationId));
-      const { index: sourceIndex, document: sourceDocument } = findRequiredConversationDocument(
-        existingDocuments,
-        normalizedArgs.source_path,
-        'move_file'
-      );
-      assertConversationDocumentDestinationAvailable(
-        existingDocuments,
-        normalizedArgs.destination_path,
-        'move_file'
-      );
-      const now = new Date().toISOString();
-      const movedDocument = normalizeDocumentRecord({
-        path: normalizedArgs.destination_path,
-        content: sourceDocument.content,
-        updated_at: now
-      }, now);
-      const nextDocuments = [...existingDocuments];
-      nextDocuments[sourceIndex] = movedDocument;
-      const persistedDocuments = await store.replaceDocuments(
-        conversationId,
-        nextDocuments.sort((left, right) => left.path.localeCompare(right.path))
-      );
-      return {
-        ok: true,
-        action: normalizedAction,
-        conversation_id: conversationId,
-        source_path: normalizedArgs.source_path,
-        destination_path: movedDocument.path,
-        file: buildFileOperationFilePayload(movedDocument),
-        files: buildDocumentManifest(persistedDocuments),
-        affected_files: {
-          added: [],
-          modified: [movedDocument.path],
-          deleted: [normalizedArgs.source_path]
-        },
-        change_event: buildChangeEventPayload(conversationId, normalizedAction, {
-          updated_paths: [movedDocument.path],
-          deleted_paths: [normalizedArgs.source_path]
-        })
-      };
-    }
-    case CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME: {
-      assertWritableWorkspacePath(normalizedArgs.file_path, 'delete_file');
-      const existingDocuments = normalizeDocumentRecords(await store.listDocuments(conversationId));
-      findRequiredConversationDocument(
-        existingDocuments,
-        normalizedArgs.file_path,
-        'delete_file'
-      );
-      const persistedDocuments = await store.replaceDocuments(
-        conversationId,
-        existingDocuments.filter((doc) => doc.path !== normalizedArgs.file_path)
-      );
-      return {
-        ok: true,
-        action: normalizedAction,
-        conversation_id: conversationId,
-        deleted_path: normalizedArgs.file_path,
-        files: buildDocumentManifest(persistedDocuments),
-        affected_files: {
-          added: [],
-          modified: [],
-          deleted: [normalizedArgs.file_path]
-        },
-        change_event: buildChangeEventPayload(conversationId, normalizedAction, {
-          deleted_paths: [normalizedArgs.file_path]
         })
       };
     }
@@ -1576,7 +1386,7 @@ export function normalizeVirtualFileResultFromSkillRegistryAction(action, rawRes
       path_glob: normalizeOptionalString(result.path_glob),
       context_before: Number.isFinite(Number(result.context_before)) ? Math.max(0, Math.trunc(Number(result.context_before))) : 0,
       context_after: Number.isFinite(Number(result.context_after)) ? Math.max(0, Math.trunc(Number(result.context_after))) : 0,
-      max_results: Number.isFinite(Number(result.max_results)) ? Math.max(1, Math.trunc(Number(result.max_results))) : CONVERSATION_DOCUMENT_SEARCH_DEFAULT_MAX_RESULTS,
+      max_results: Number.isFinite(Number(result.max_results)) ? Math.max(1, Math.trunc(Number(result.max_results))) : null,
       total_matches: Number.isFinite(Number(result.total_matches)) ? Math.max(0, Math.trunc(Number(result.total_matches))) : 0,
       returned_match_count: Number.isFinite(Number(result.returned_match_count))
         ? Math.max(0, Math.trunc(Number(result.returned_match_count)))
@@ -1610,30 +1420,13 @@ export function normalizeVirtualFileResultFromSkillRegistryAction(action, rawRes
     };
   }
 
-  if (
-    normalizedAction === VIRTUAL_FILE_COPY_FILE_TOOL_NAME
-    || normalizedAction === VIRTUAL_FILE_MOVE_FILE_TOOL_NAME
-  ) {
+  if (normalizedAction === VIRTUAL_FILE_COPY_FILE_TOOL_NAME) {
     return {
       ok: true,
       action: normalizedAction,
       target,
       source_path: normalizeOptionalString(result.source_file_path || normalizedArgs?.source_path) || '',
       destination_path: normalizeOptionalString(result.destination_file_path || normalizedArgs?.destination_path) || '',
-      affected_files: ensurePlainObject(result.affected_files),
-      files: ensurePlainObject(result.files),
-      skill: ensurePlainObject(result.skill),
-      refreshed_current_document: result.refreshed_current_document === true,
-      refresh_result: result.refresh_result || null
-    };
-  }
-
-  if (normalizedAction === VIRTUAL_FILE_DELETE_FILE_TOOL_NAME) {
-    return {
-      ok: true,
-      action: normalizedAction,
-      target,
-      deleted_path: normalizeOptionalString(result.deleted_file_path || normalizedArgs?.file_path) || '',
       affected_files: ensurePlainObject(result.affected_files),
       files: ensurePlainObject(result.files),
       skill: ensurePlainObject(result.skill),
