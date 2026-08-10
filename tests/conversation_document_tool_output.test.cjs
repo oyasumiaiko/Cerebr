@@ -159,7 +159,7 @@ test('copy_file 返回 cp 风格最小成功状态，旧 move/delete 输出仍�
   const copyItems = buildResponsesConversationDocumentToolOutputContentItems('copy_file', {
     ok: true,
     action: 'copy_file',
-    target: { kind: 'workspace' },
+    target: { kind: 'root' },
     source_path: 'local/project/src/a.js',
     destination_path: 'project/src/a.js'
   });

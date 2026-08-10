@@ -57,5 +57,8 @@ test('纯对话模式的 skill 请求显式关闭 background sender.tab.id 回�
   assert.match(sidebarSource, /type: 'GET_MATCHING_SKILL_SUMMARIES'[\s\S]*isolateFromHostPage/);
   assert.match(sidebarSource, /type: 'SKILL_REGISTRY_ACTION'[\s\S]*isolateFromHostPage/);
   assert.match(backgroundSource, /allowSenderTabFallback: !isolateFromHostPage/);
-  assert.match(backgroundSource, /const targetTabId = isolateFromHostPage\s*\?\s*null/);
+  assert.match(
+    backgroundSource,
+    /const targetTabId = isolateFromHostPage \|\| !refreshCurrentDocument\s*\?\s*null/
+  );
 });

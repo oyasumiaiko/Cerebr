@@ -11,6 +11,7 @@ async function readWorkspaceFile(relativePath) {
 test('统一工具注册表已注册对话文档工具，message_sender 保留专用执行分支', async () => {
   const source = await readWorkspaceFile('src/core/message_sender.js');
   const registrySource = await readWorkspaceFile('src/agent_tools/shared/responses_extension_tool_registry.js');
+  const sidebarAppContextSource = await readWorkspaceFile('src/ui/sidebar/sidebar_app_context.js');
 
   assert.match(source, /buildResponsesExtensionTools/);
   for (const builderName of [
@@ -31,6 +32,7 @@ test('统一工具注册表已注册对话文档工具，message_sender 保留�
   assert.match(source, /case 'read_tool_output':\s*outputPayload = executeResponsesReadToolOutputFunction/s);
   assert.match(source, /consumePendingUploadedFileEnvironmentEntries/);
   assert.match(source, /uploadedFiles: uploadedFileEnvironmentEntries/);
+  assert.match(sidebarAppContextSource, /executeSkillRegistryAction = async \(payload = \{}\)/);
 });
 
 test('message_processor 已把裸相对路径链接替换为文档卡片，并监听文档变更事件', async () => {

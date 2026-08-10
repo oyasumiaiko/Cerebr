@@ -1,37 +1,8 @@
 import { normalizeString } from './shared.js';
-
-function stripLegacyWorkspacePathPrefix(path) {
-  const normalized = String(path || '');
-  return normalized.startsWith('workspace/')
-    ? normalized.slice('workspace/'.length)
-    : normalized;
-}
+import { normalizeVirtualFilePath } from '../shared/virtual_file_path.js';
 
 export function normalizeConversationDocumentPath(value) {
-  const rawPath = normalizeString(value).replace(/\\/g, '/');
-  const withoutLeadingDot = rawPath.replace(/^(?:\.\/)+/, '');
-  const normalizedPathWithLegacyPrefix = withoutLeadingDot.startsWith('/')
-    ? withoutLeadingDot.slice(1)
-    : withoutLeadingDot;
-  const normalizedPath = stripLegacyWorkspacePathPrefix(normalizedPathWithLegacyPrefix);
-
-  if (!normalizedPath) {
-    throw new Error('virtual_file 参数错误：file_path 不能为空。');
-  }
-  if (normalizedPath.length > 512) {
-    throw new Error('virtual_file 参数错误：file_path 长度不能超过 512。');
-  }
-
-  const segments = normalizedPath.split('/');
-  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
-    throw new Error(`virtual_file 参数错误：文件路径 \`${normalizedPath}\` 不能包含空段、"." 或 ".."。`);
-  }
-  for (const segment of segments) {
-    if (/[\u0000-\u001F<>:"|?*]/.test(segment)) {
-      throw new Error(`virtual_file 参数错误：文件路径 \`${normalizedPath}\` 包含 Windows 不允许的字符。`);
-    }
-  }
-  return normalizedPath;
+  return normalizeVirtualFilePath(value, { label: 'file_path' });
 }
 
 /**

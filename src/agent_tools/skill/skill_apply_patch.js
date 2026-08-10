@@ -142,6 +142,9 @@ export function applySkillPackagePatch(record, patch) {
       const sourceFile = nextFiles[sourceIndex];
       const nextContent = derivePatchedFileContent(sourceFile.content, sourcePath, hunk.chunks);
       const targetPath = hunk.move_path ? normalizeSkillFilePath(hunk.move_path) : sourcePath;
+      if (hunk.move_path && targetPath === SKILL_VIRTUAL_MANIFEST_PATH) {
+        throw new Error('manifest.json 是保留虚拟文件，不支持 Move to。');
+      }
 
       if (targetPath === sourcePath) {
         nextFiles[sourceIndex] = {

@@ -3,7 +3,8 @@
  *
  * 说明：
  * - 顶层公开给模型的文件工具统一为 `apply_patch` / `list_files` / `read_file` / `search_files` / `copy_file`；
- * - 文件工具通过结构化 `target` 选择 skill，默认当前对话文件区；本地映射通过 `local/...` 路径进入；
+ * - 默认根就是当前对话文件根；只有访问 skill 时才通过结构化 `target` 选择其他根；
+ * - 默认根中的本机只读映射通过显式 `local/...` 路径进入；
  * - 会话文件仍在侧栏本地 IndexedDB 执行；local 文件实时读取用户授权 handle；skill 文件复用现有 skill package / background 执行链路；
  * - UI 为了编辑对话文档与完整查看，会额外复用 `write_file` / `read_file_full` 两个内部 action。
  *
@@ -14,6 +15,11 @@
  */
 
 import { derivePatchedFileContent, parseApplyPatch } from '../shared/apply_patch_core.js';
+import {
+  hasVirtualPathGlobSyntax,
+  matchesVirtualPathFilter,
+  normalizeVirtualPathFilter
+} from '../shared/virtual_file_path.js';
 import {
   getConversationDocument,
   listConversationDocuments,
@@ -41,15 +47,13 @@ import {
   VIRTUAL_FILE_PUBLIC_ACTIONS,
   VIRTUAL_FILE_READ_FILE_TOOL_NAME,
   VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME,
-  VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
+  VIRTUAL_FILE_TARGET_KIND_ROOT,
   VIRTUAL_FILE_TARGET_KIND_LOCAL,
   VIRTUAL_FILE_TARGET_KIND_SKILL,
-  VIRTUAL_FILE_TARGET_KIND_WORKSPACE,
   buildDocumentSizeChars,
   clampNonNegativeInt,
   clampPositiveInt,
   ensurePlainObject,
-  escapeRegExp,
   formatPercent,
   normalizeOptionalString,
   normalizeString,
@@ -92,7 +96,7 @@ import {
 } from './file_ops.js';
 import {
   assertPatchDoesNotTouchLocalPaths,
-  assertWritableWorkspacePath,
+  assertWritableRootPath,
   isLocalVirtualPath,
   listLocalVirtualFileDocuments,
   readLocalVirtualFileDocument
@@ -116,10 +120,9 @@ export {
   VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
   VIRTUAL_FILE_READ_FILE_TOOL_NAME,
   VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME,
-  VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
+  VIRTUAL_FILE_TARGET_KIND_ROOT,
   VIRTUAL_FILE_TARGET_KIND_LOCAL,
-  VIRTUAL_FILE_TARGET_KIND_SKILL,
-  VIRTUAL_FILE_TARGET_KIND_WORKSPACE
+  VIRTUAL_FILE_TARGET_KIND_SKILL
 };
 
 export {
@@ -331,59 +334,7 @@ function normalizeContextLineCount(value) {
 }
 
 function normalizeSearchPathGlob(value) {
-  const rawGlob = normalizeString(value).replace(/\\/g, '/');
-  const withoutLeadingDot = rawGlob.replace(/^(?:\.\/)+/, '');
-  const normalizedGlobWithLegacyPrefix = withoutLeadingDot.startsWith('/')
-    ? withoutLeadingDot.slice(1)
-    : withoutLeadingDot;
-  const normalizedGlob = normalizedGlobWithLegacyPrefix === 'workspace'
-    ? ''
-    : normalizedGlobWithLegacyPrefix.replace(/^workspace\//, '');
-  if (!normalizedGlob) return null;
-  if (normalizedGlob.length > 512) {
-    throw new Error('virtual_file 参数错误：path_glob 长度不能超过 512。');
-  }
-  const segments = normalizedGlob.split('/');
-  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
-    throw new Error(`virtual_file 参数错误：path_glob \`${normalizedGlob}\` 不能包含空段、"." 或 ".."。`);
-  }
-  return normalizedGlob;
-}
-
-function hasVirtualPathGlobSyntax(value) {
-  return /[*?]/.test(String(value || ''));
-}
-
-function buildPathGlobRegExp(pathGlob) {
-  if (!pathGlob) return null;
-  const normalized = normalizeSearchPathGlob(pathGlob);
-  let pattern = '^';
-  for (let index = 0; index < normalized.length; index += 1) {
-    const char = normalized[index];
-    const next = normalized[index + 1];
-    const afterNext = normalized[index + 2];
-    if (char === '*' && next === '*' && afterNext === '/') {
-      pattern += '(?:[^/]+/)*';
-      index += 2;
-      continue;
-    }
-    if (char === '*' && next === '*') {
-      pattern += '.*';
-      index += 1;
-      continue;
-    }
-    if (char === '*') {
-      pattern += '[^/]*';
-      continue;
-    }
-    if (char === '?') {
-      pattern += '[^/]';
-      continue;
-    }
-    pattern += escapeRegExp(char);
-  }
-  pattern += '$';
-  return new RegExp(pattern);
+  return normalizeVirtualPathFilter(value, { label: 'path_glob' });
 }
 
 function resolveSearchFlags(pattern, options = {}) {
@@ -461,9 +412,8 @@ function collectMatchesForLine(lineText, pattern, options = {}) {
 
 function buildDocumentManifest(documents, options = {}) {
   const pathGlob = normalizeSearchPathGlob(options?.path_glob);
-  const pathGlobRegExp = buildPathGlobRegExp(pathGlob);
   const files = normalizeDocumentRecords(documents)
-    .filter((doc) => !pathGlobRegExp || pathGlobRegExp.test(doc.path))
+    .filter((doc) => matchesVirtualPathFilter(doc.path, pathGlob))
     .sort((left, right) => left.path.localeCompare(right.path))
     .map((doc) => {
       const sizeChars = doc.size_chars != null && Number.isFinite(Number(doc.size_chars))
@@ -500,13 +450,12 @@ function searchConversationDocuments(documents, rawOptions = {}) {
   const contextBefore = normalizeContextLineCount(rawOptions.context_before);
   const contextAfter = normalizeContextLineCount(rawOptions.context_after);
   const pathGlob = normalizeSearchPathGlob(rawOptions.path_glob);
-  const pathGlobRegExp = buildPathGlobRegExp(pathGlob);
 
   const matches = [];
   let totalMatches = 0;
 
   for (const documentRecord of normalizeDocumentRecords(documents)) {
-    if (pathGlobRegExp && !pathGlobRegExp.test(documentRecord.path)) {
+    if (!matchesVirtualPathFilter(documentRecord.path, pathGlob)) {
       continue;
     }
     const { lines } = splitLogicalLines(documentRecord.content || '');
@@ -832,14 +781,16 @@ export function normalizeVirtualFileToolArguments(action, rawArgs, options = {})
     || normalizedAction === VIRTUAL_FILE_COPY_FILE_TOOL_NAME
     || normalizedAction === VIRTUAL_FILE_READ_FILE_TOOL_NAME;
   const target = normalizeVirtualFileTarget(args.target, {
-    defaultKind: options?.defaultTargetKind || VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
+    defaultKind: options?.defaultTargetKind || VIRTUAL_FILE_TARGET_KIND_ROOT,
     requireSkillName
   });
 
   switch (normalizedAction) {
     case VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME: {
       const normalized = normalizeVirtualFileApplyPatchArguments(args, target);
-      assertPatchDoesNotTouchLocalPaths(normalized.patch);
+      if (target.kind === VIRTUAL_FILE_TARGET_KIND_ROOT) {
+        assertPatchDoesNotTouchLocalPaths(normalized.patch);
+      }
       return normalized;
     }
     case VIRTUAL_FILE_LIST_FILES_TOOL_NAME:
@@ -892,7 +843,10 @@ export function buildSkillRegistryFileActionPayloadFromVirtualFileAction(action,
   const input = ensurePlainObject(normalizedArgs);
   const target = ensurePlainObject(input.target);
   const payload = {
-    skill_name: normalizeOptionalString(target.name)
+    skill_name: normalizeOptionalString(target.name),
+    // 这是 sidebar -> background 的内部控制位，不属于模型工具协议。
+    // 文件系统事务只修改 Skill 存储；页面 runtime 刷新必须由显式生命周期动作触发。
+    refresh_current_document: false
   };
   switch (normalizeString(action).toLowerCase()) {
     case VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME:
@@ -1241,7 +1195,7 @@ export async function executeConversationDocumentAction(action, rawArgs, options
     }
     case CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME: {
       assertDifferentFileOperationPaths(normalizedArgs.source_path, normalizedArgs.destination_path, 'copy_file');
-      assertWritableWorkspacePath(normalizedArgs.destination_path, 'copy_file');
+      assertWritableRootPath(normalizedArgs.destination_path, 'copy_file');
       const existingDocuments = normalizeDocumentRecords(await store.listDocuments(conversationId));
       const sourceDocument = isLocalVirtualPath(normalizedArgs.source_path)
         ? await readLocalVirtualFileDocument(
@@ -1284,7 +1238,7 @@ export async function executeConversationDocumentAction(action, rawArgs, options
       };
     }
     case CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION: {
-      assertWritableWorkspacePath(normalizedArgs.file_path, 'write_file');
+      assertWritableRootPath(normalizedArgs.file_path, 'write_file');
       const nextRecord = await store.putDocument(conversationId, {
         path: normalizedArgs.file_path,
         content: normalizedArgs.content,

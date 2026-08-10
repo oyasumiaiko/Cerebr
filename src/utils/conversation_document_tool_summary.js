@@ -6,7 +6,7 @@ import {
   VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
   VIRTUAL_FILE_READ_FILE_TOOL_NAME,
   VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME,
-  VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
+  VIRTUAL_FILE_TARGET_KIND_ROOT,
   VIRTUAL_FILE_TARGET_KIND_SKILL
 } from '../agent_tools/virtual_file_io/index.js';
 import { buildVirtualFileApplyPatchPreview } from './skill_patch_preview.js';
@@ -123,25 +123,17 @@ function formatPosixShellWord(value) {
   return `'${text.replace(/'/g, `'"'"'`)}'`;
 }
 
-function stripLegacyWorkspacePathPrefix(path) {
-  const normalized = normalizeSummaryText(path).replace(/\\/g, '/');
-  if (!normalized.startsWith('workspace/')) return normalized;
-  return normalized.slice('workspace/'.length);
-}
-
 function normalizeSummaryPathForTarget(path, target) {
-  const normalized = normalizeSummaryText(path);
-  if (!normalized || target?.kind === VIRTUAL_FILE_TARGET_KIND_SKILL) return normalized;
-  return stripLegacyWorkspacePathPrefix(normalized);
+  return normalizeSummaryText(path).replace(/\\/g, '/');
 }
 
 function resolveVirtualFileTarget(args) {
   const target = (args?.target && typeof args.target === 'object' && !Array.isArray(args.target))
     ? args.target
     : null;
-  const kind = normalizeSummaryText(target?.kind).toLowerCase() || VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT;
+  const kind = normalizeSummaryText(target?.kind).toLowerCase() || VIRTUAL_FILE_TARGET_KIND_ROOT;
   return {
-    kind: kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? VIRTUAL_FILE_TARGET_KIND_SKILL : VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
+    kind: kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? VIRTUAL_FILE_TARGET_KIND_SKILL : VIRTUAL_FILE_TARGET_KIND_ROOT,
     name: normalizeSummaryText(target?.name)
   };
 }
@@ -207,7 +199,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
       if (preview.totalFiles > 1) metaParts.push(`另 ${preview.totalFiles - 1} 个文件`);
       return {
         action: isInProgress ? '正在修改' : '修改',
-        value: normalizeSummaryPathForTarget(firstFile?.path, target) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '会话文件'),
+        value: normalizeSummaryPathForTarget(firstFile?.path, target) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '根目录'),
         valueUrl: '',
         meta: joinSummaryMeta(metaParts),
         locationAction: '',
@@ -217,7 +209,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
     }
     return {
       action: isInProgress ? '正在修改' : '修改',
-      value: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? (targetMeta || '技能文件') : '会话文件',
+      value: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? (targetMeta || '技能文件') : '根目录',
       valueUrl: '',
       meta: '',
       locationAction: '',
@@ -230,7 +222,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
     const glob = resolveGlobArg(args);
     return {
       action: isInProgress ? '正在查看列表' : '查看列表',
-      value: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? (targetMeta || '全部技能') : (normalizeSummaryPathForTarget(glob, target) || '会话文件'),
+      value: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? (targetMeta || '全部技能') : (normalizeSummaryPathForTarget(glob, target) || '根目录'),
       valueUrl: '',
       meta: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? glob : '',
       locationAction: '',
@@ -243,7 +235,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
     return {
       action: isInProgress ? '正在读取' : '读取',
       value: [
-        normalizeSummaryPathForTarget(resolvePathArg(args), target) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '会话文件'),
+        normalizeSummaryPathForTarget(resolvePathArg(args), target) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '根目录'),
         lineRangeSuffix
       ]
         .filter(Boolean)
@@ -260,7 +252,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
     const pattern = resolveSearchPatternArg(args);
     return {
       action: isInProgress ? '正在搜索' : '搜索',
-      value: pattern || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : 'workspace'),
+      value: pattern || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '根目录'),
       valueUrl: '',
       meta: joinSummaryMeta([targetMeta, normalizeSummaryPathForTarget(resolveGlobArg(args), target)]),
       locationAction: '',
@@ -307,7 +299,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
   if (toolName === VIRTUAL_FILE_DELETE_FILE_TOOL_NAME) {
     return {
       action: isInProgress ? '正在删除' : '删除',
-      value: normalizeSummaryPathForTarget(resolvePathArg(args), target) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '会话文件'),
+      value: normalizeSummaryPathForTarget(resolvePathArg(args), target) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '根目录'),
       valueUrl: '',
       meta: targetMeta,
       locationAction: '',

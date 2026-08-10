@@ -169,6 +169,22 @@ test('applySkillPackagePatch 可以删除、修改、移动文件并保持指针
   });
 });
 
+test('skill 根中的 local 目录和 Unicode 路径使用普通可写文件语义', async () => {
+  const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
+  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
+  const record = buildStoredSkillRecord(buildSkillInput());
+  const result = applySkillPackagePatch(record, wrapPatch([
+    '*** Add File: local/说明 文档.md',
+    '+# Skill local directory'
+  ].join('\n')));
+
+  assert.equal(
+    buildSkillFilePayload(result.record, 'local/说明 文档.md').file.content,
+    '# Skill local directory\n'
+  );
+  assert.deepEqual(result.affected_files.added, ['local/说明 文档.md']);
+});
+
 test('skill Add 与 Move 对同名目标使用和会话区一致的覆盖语义', async () => {
   const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
   const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
@@ -402,6 +418,19 @@ test('applySkillPackagePatch 会对虚拟文件特有的错误场景给出明确
         '@@',
         '-  "enabled": true,',
         '+  "enabled": false,'
+      ].join('\n')
+    )),
+    /manifest\.json 是保留虚拟文件，不支持 Move to/
+  );
+
+  assert.throws(
+    () => applySkillPackagePatch(record, wrapPatch(
+      [
+        '*** Update File: src/helpers/dom.js',
+        '*** Move to: manifest.json',
+        '@@',
+        '-module.exports = { readTitle() { return document.title; } };',
+        '+moved into manifest'
       ].join('\n')
     )),
     /manifest\.json 是保留虚拟文件，不支持 Move to/

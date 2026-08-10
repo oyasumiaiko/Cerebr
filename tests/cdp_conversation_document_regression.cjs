@@ -24,7 +24,16 @@ const MD_DOC_PATH = '随笔-关于学习与判断.md';
 const TXT_DOC_PATH = '文本文档.txt';
 const CODE_DOC_PATH = 'snippets/example.js';
 const HTML_DOC_PATH = 'preview.html';
+const COPIED_MD_DOC_PATH = 'copies/随笔.md';
 const PATCH_CALL_ID = 'call_conversation_document_apply_patch_1';
+const SKILL_PATCH_CALL_ID = 'call_skill_environment_apply_patch_1';
+const SKILL_KEY = 'virtual-root-regression';
+const SKILL_PATCH_FILE_PATH = 'local/说明 文档.md';
+const SKILL_PATCH_FILE_CONTENT = '# Skill local 目录\n\n该路径在 Skill 根中是普通可写目录。\n';
+const LIST_CALL_ID = 'call_conversation_document_list_files_1';
+const READ_CALL_ID = 'call_conversation_document_read_file_1';
+const SEARCH_CALL_ID = 'call_conversation_document_search_files_1';
+const COPY_CALL_ID = 'call_conversation_document_copy_file_1';
 const EXPECTED_FINAL_MARKER = 'CONVERSATION_DOCUMENT_TOOL_OK_20260413';
 const INITIAL_MD_DOC_CONTENT = '# 随笔\n\n第一版内容。\n';
 const INITIAL_TXT_DOC_CONTENT = '# 文本标题\n\n这是一段可以切换为 Markdown 渲染的 txt 内容。\n';
@@ -58,7 +67,7 @@ const INITIAL_HTML_DOC_CONTENT = [
   '</html>'
 ].join('\n');
 const EDITED_MD_DOC_CONTENT = '# 随笔\n\n第二版内容。\n';
-const EXPECTED_DOWNLOAD_NAME = 'workspace__随笔-关于学习与判断.md';
+const EXPECTED_DOWNLOAD_NAME = '随笔-关于学习与判断.md';
 
 const [rawRepoRoot, outputDir, rawArg3 = '', rawArg4 = '', rawArg5 = ''] = process.argv.slice(2);
 const repoRoot = rawRepoRoot ? path.resolve(rawRepoRoot) : '';
@@ -66,7 +75,7 @@ const launchMode = (rawArg3 === 'stable' || rawArg3 === 'worktree_unpacked')
   ? rawArg3
   : ((rawArg4 === 'stable' || rawArg4 === 'worktree_unpacked') ? rawArg4 : 'stable');
 const chromePath = (launchMode === rawArg3) ? '' : rawArg3;
-const focusedApplyPatchRegression = rawArg5 === 'apply_patch_streaming';
+const focusedApplyPatchRegression = rawArg4 === 'apply_patch_streaming' || rawArg5 === 'apply_patch_streaming';
 
 if (!repoRoot || !outputDir || (launchMode === 'stable' && !chromePath)) {
   throw new Error(
@@ -88,6 +97,16 @@ function createApplyPatchInput() {
     ...INITIAL_CODE_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
     `*** Add File: ${HTML_DOC_PATH}`,
     ...INITIAL_HTML_DOC_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
+    '*** End Patch'
+  ].join('\n');
+}
+
+function createSkillApplyPatchInput() {
+  return [
+    '*** Begin Patch',
+    `*** Environment ID: skill:${SKILL_KEY}`,
+    `*** Add File: ${SKILL_PATCH_FILE_PATH}`,
+    ...SKILL_PATCH_FILE_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
     '*** End Patch'
   ].join('\n');
 }
@@ -212,13 +231,24 @@ function writeSseEvent(res, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
-function createCustomToolCallItem(input = '') {
+function createCustomToolCallItem(input = '', callId = PATCH_CALL_ID) {
   return {
-    id: `ctc_${PATCH_CALL_ID}`,
+    id: `ctc_${callId}`,
     type: 'custom_tool_call',
-    call_id: PATCH_CALL_ID,
+    call_id: callId,
     name: 'apply_patch',
     input,
+    status: 'completed'
+  };
+}
+
+function createFunctionCallItem(callId, name, argumentsObject) {
+  return {
+    id: `fc_${callId}`,
+    type: 'function_call',
+    call_id: callId,
+    name,
+    arguments: JSON.stringify(argumentsObject),
     status: 'completed'
   };
 }
@@ -240,6 +270,7 @@ function createMessageItem(id, text) {
 }
 
 function collectToolOutputText(outputItem) {
+  if (typeof outputItem?.output === 'string') return outputItem.output;
   const output = Array.isArray(outputItem?.output) ? outputItem.output : [];
   return output
     .map((part) => {
@@ -265,6 +296,8 @@ async function runMockResponsesServer() {
   const requestLog = [];
   let firstRequestTools = [];
   let customToolCallOutputText = '';
+  let skillCustomToolCallOutputText = '';
+  const functionToolOutputTexts = new Map();
   let customInputStreamStage = 0;
   let customInputDoneSent = false;
   const acknowledgedPreviewStages = new Set();
@@ -319,13 +352,26 @@ async function runMockResponsesServer() {
           requestLog.push(parsed);
           if (requestLog.length === 1) {
             firstRequestTools = (Array.isArray(parsed?.tools) ? parsed.tools : [])
-              .map((tool) => ({ type: tool?.type || '', name: tool?.name || '' }));
+              .map((tool) => ({
+                type: tool?.type || '',
+                name: tool?.name || '',
+                targetKindEnum: tool?.parameters?.properties?.target?.properties?.kind?.enum || null,
+                containsWorkspace: /workspace/i.test(JSON.stringify(tool))
+              }));
           }
 
           const inputItems = Array.isArray(parsed?.input) ? parsed.input : [];
           const customToolOutput = inputItems.find((item) => (
             item?.type === 'custom_tool_call_output' && item?.call_id === PATCH_CALL_ID
           ));
+          const skillCustomToolOutput = inputItems.find((item) => (
+            item?.type === 'custom_tool_call_output' && item?.call_id === SKILL_PATCH_CALL_ID
+          ));
+          const functionToolOutputs = new Map(
+            inputItems
+              .filter((item) => item?.type === 'function_call_output' && item?.call_id)
+              .map((item) => [item.call_id, item])
+          );
 
           res.writeHead(200, {
             'content-type': 'text/event-stream; charset=utf-8',
@@ -393,6 +439,104 @@ async function runMockResponsesServer() {
           }
 
           customToolCallOutputText = collectToolOutputText(customToolOutput);
+          skillCustomToolCallOutputText = collectToolOutputText(skillCustomToolOutput);
+          for (const [callId, outputItem] of functionToolOutputs.entries()) {
+            functionToolOutputTexts.set(callId, collectToolOutputText(outputItem));
+          }
+
+          const pendingFunctionCall = !functionToolOutputs.has(LIST_CALL_ID)
+            ? createFunctionCallItem(LIST_CALL_ID, 'list_files', {
+                target: null,
+                path_glob: null,
+                max_output_chars: null
+              })
+            : (!functionToolOutputs.has(READ_CALL_ID)
+                ? createFunctionCallItem(READ_CALL_ID, 'read_file', {
+                    target: null,
+                    path: MD_DOC_PATH,
+                    line_range: null,
+                    numbered: null,
+                    max_output_chars: null
+                  })
+                : (!functionToolOutputs.has(SEARCH_CALL_ID)
+                    ? createFunctionCallItem(SEARCH_CALL_ID, 'search_files', {
+                        target: null,
+                        pattern: '第一版内容',
+                        regex: null,
+                        glob: null,
+                        ignore_case: null,
+                        context: null,
+                        before: null,
+                        after: null,
+                        max_output_chars: null
+                      })
+                    : (!functionToolOutputs.has(COPY_CALL_ID)
+                        ? createFunctionCallItem(COPY_CALL_ID, 'copy_file', {
+                            target: null,
+                            from: MD_DOC_PATH,
+                            to: COPIED_MD_DOC_PATH,
+                            max_output_chars: null
+                          })
+                        : null)));
+          if (pendingFunctionCall) {
+            const responseId = `resp_${requestLog.length}`;
+            writeSseEvent(res, { type: 'response.created', response: { id: responseId } });
+            writeSseEvent(res, { type: 'response.in_progress', response: { id: responseId } });
+            writeSseEvent(res, { type: 'response.output_item.added', output_index: 0, item: pendingFunctionCall });
+            writeSseEvent(res, { type: 'response.output_item.done', output_index: 0, item: pendingFunctionCall });
+            writeSseEvent(res, {
+              type: 'response.completed',
+              response: {
+                id: responseId,
+                output: [pendingFunctionCall],
+                usage: {
+                  input_tokens: 100,
+                  output_tokens: 10,
+                  total_tokens: 110,
+                  input_tokens_details: { cached_tokens: 0 },
+                  output_tokens_details: { reasoning_tokens: 0 }
+                }
+              }
+            });
+            res.write('data: [DONE]\n\n');
+            res.end();
+            return;
+          }
+
+          if (!skillCustomToolOutput) {
+            const skillInput = createSkillApplyPatchInput();
+            const pendingCall = createCustomToolCallItem('', SKILL_PATCH_CALL_ID);
+            const completedCall = createCustomToolCallItem(skillInput, SKILL_PATCH_CALL_ID);
+            const responseId = `resp_${requestLog.length}`;
+            writeSseEvent(res, { type: 'response.created', response: { id: responseId } });
+            writeSseEvent(res, { type: 'response.in_progress', response: { id: responseId } });
+            writeSseEvent(res, { type: 'response.output_item.added', output_index: 0, item: pendingCall });
+            writeSseEvent(res, {
+              type: 'response.custom_tool_call_input.done',
+              item_id: completedCall.id,
+              output_index: 0,
+              input: skillInput
+            });
+            writeSseEvent(res, { type: 'response.output_item.done', output_index: 0, item: completedCall });
+            writeSseEvent(res, {
+              type: 'response.completed',
+              response: {
+                id: responseId,
+                output: [completedCall],
+                usage: {
+                  input_tokens: 100,
+                  output_tokens: 10,
+                  total_tokens: 110,
+                  input_tokens_details: { cached_tokens: 0 },
+                  output_tokens_details: { reasoning_tokens: 0 }
+                }
+              }
+            });
+            res.write('data: [DONE]\n\n');
+            res.end();
+            return;
+          }
+
           const finalText = [
             EXPECTED_FINAL_MARKER,
             '',
@@ -463,6 +607,12 @@ async function runMockResponsesServer() {
     },
     getCustomToolCallOutputText() {
       return customToolCallOutputText;
+    },
+    getSkillCustomToolCallOutputText() {
+      return skillCustomToolCallOutputText;
+    },
+    getFunctionToolOutputText(callId) {
+      return functionToolOutputTexts.get(callId) || '';
     },
     getCustomInputStreamStage() {
       return customInputStreamStage;
@@ -632,6 +782,38 @@ async function main() {
     let sidebarFrame = await waitForSidebarReady(page, extensionId);
     result.steps.push('sidebar_ready');
 
+    result.skillSeed = await sidebarFrame.evaluate(async ({ skillKey }) => {
+      const registry = await import(chrome.runtime.getURL('src/agent_tools/skill/registry_tool.js'));
+      const record = registry.buildStoredSkillRecord({
+        name: skillKey,
+        description: '验证 Environment ID 和 Skill 根路径语义。',
+        interface: {
+          display_name: 'Virtual Root Regression',
+          short_description: '验证 Skill 虚拟文件根',
+          default_prompt: 'Validate the skill virtual file root.'
+        },
+        match: ['<all_urls>'],
+        instruction: { path: 'SKILL.md' },
+        runtime: { entry_path: 'src/main.js' },
+        files: [
+          {
+            path: 'SKILL.md',
+            content: '# Virtual Root Regression\n\n用于浏览器回归。\n'
+          },
+          {
+            path: 'src/main.js',
+            content: 'return { ready: true };\n'
+          }
+        ]
+      });
+      const saved = await registry.saveStoredSkillPackage(record);
+      return {
+        name: saved.name,
+        files: saved.files.map((file) => file.path)
+      };
+    }, { skillKey: SKILL_KEY });
+    result.steps.push('skill_seeded');
+
     await sidebarFrame.locator('#message-input').fill('Create a plan document, then link it in markdown.');
     await sidebarFrame.locator('#message-input').press('Enter');
     result.steps.push('prompt_sent');
@@ -708,16 +890,17 @@ async function main() {
       throw error;
     }
 
-    await waitFor(async () => mockServer.requestLog.length >= 2 ? true : null, {
+    await waitFor(async () => mockServer.requestLog.length >= 7 ? true : null, {
       timeoutMs: 30_000,
       intervalMs: 200,
-      label: 'two mock responses requests'
+      label: 'complete virtual file tool loop'
     });
     result.steps.push('tool_followup_observed');
 
     result.firstRequestTools = mockServer.getFirstRequestTools();
     result.firstRequestToolNames = result.firstRequestTools.map((tool) => tool.name || tool.type).filter(Boolean);
     result.customToolCallOutputText = mockServer.getCustomToolCallOutputText();
+    result.skillCustomToolCallOutputText = mockServer.getSkillCustomToolCallOutputText();
 
     const applyPatchDefinitions = result.firstRequestTools.filter((tool) => tool.name === 'apply_patch');
     if (applyPatchDefinitions.length !== 1 || applyPatchDefinitions[0].type !== 'custom') {
@@ -725,6 +908,9 @@ async function main() {
     }
     if (result.firstRequestTools.some((tool) => tool.type === 'function' && tool.name === 'apply_patch')) {
       throw new Error(`legacy function apply_patch leaked into request: ${JSON.stringify(result.firstRequestTools)}`);
+    }
+    if (result.firstRequestTools.some((tool) => tool.containsWorkspace)) {
+      throw new Error(`workspace leaked into virtual file tool definitions: ${JSON.stringify(result.firstRequestTools)}`);
     }
 
     const expectedTools = ['apply_patch', 'list_files', 'read_file', 'search_files', 'copy_file'];
@@ -738,10 +924,19 @@ async function main() {
         throw new Error(`removed tool leaked into first request: ${removedToolName}`);
       }
     }
+    for (const toolName of ['list_files', 'read_file', 'search_files', 'copy_file']) {
+      const definition = result.firstRequestTools.find((tool) => tool.name === toolName);
+      if (JSON.stringify(definition?.targetKindEnum) !== JSON.stringify(['skill'])) {
+        throw new Error(`${toolName} target.kind enum mismatch: ${JSON.stringify(definition)}`);
+      }
+    }
     for (const requiredPath of [MD_DOC_PATH, TXT_DOC_PATH, CODE_DOC_PATH, HTML_DOC_PATH]) {
       if (!result.customToolCallOutputText.includes(requiredPath)) {
         throw new Error(`apply_patch follow-up output missing ${requiredPath}: ${result.customToolCallOutputText}`);
       }
+    }
+    if (!result.skillCustomToolCallOutputText.includes(SKILL_PATCH_FILE_PATH)) {
+      throw new Error(`skill apply_patch output missing ${SKILL_PATCH_FILE_PATH}: ${result.skillCustomToolCallOutputText}`);
     }
 
     const followUpInput = Array.isArray(mockServer.requestLog[1]?.input) ? mockServer.requestLog[1].input : [];
@@ -759,6 +954,30 @@ async function main() {
     };
     if (!result.followUpProtocol.callIdMatches || !result.followUpProtocol.rawInputMatches) {
       throw new Error(`custom apply_patch follow-up protocol mismatch: ${JSON.stringify(result.followUpProtocol)}`);
+    }
+
+    result.functionToolOutputs = {
+      list_files: mockServer.getFunctionToolOutputText(LIST_CALL_ID),
+      read_file: mockServer.getFunctionToolOutputText(READ_CALL_ID),
+      search_files: mockServer.getFunctionToolOutputText(SEARCH_CALL_ID),
+      copy_file: mockServer.getFunctionToolOutputText(COPY_CALL_ID)
+    };
+    for (const requiredPath of [MD_DOC_PATH, TXT_DOC_PATH, CODE_DOC_PATH, HTML_DOC_PATH]) {
+      if (!result.functionToolOutputs.list_files.includes(requiredPath)) {
+        throw new Error(`list_files output missing ${requiredPath}: ${result.functionToolOutputs.list_files}`);
+      }
+    }
+    if (!result.functionToolOutputs.read_file.includes('第一版内容')) {
+      throw new Error(`read_file output mismatch: ${result.functionToolOutputs.read_file}`);
+    }
+    if (
+      !result.functionToolOutputs.search_files.includes(MD_DOC_PATH)
+      || !result.functionToolOutputs.search_files.includes('第一版内容')
+    ) {
+      throw new Error(`search_files output mismatch: ${result.functionToolOutputs.search_files}`);
+    }
+    if (result.functionToolOutputs.copy_file.trim() !== 'Success.') {
+      throw new Error(`copy_file output mismatch: ${result.functionToolOutputs.copy_file}`);
     }
 
     result.finalAssistantText = await waitFor(async () => {
@@ -785,6 +1004,7 @@ async function main() {
       }
       const expectedDocuments = new Map([
         [MD_DOC_PATH, INITIAL_MD_DOC_CONTENT],
+        [COPIED_MD_DOC_PATH, INITIAL_MD_DOC_CONTENT],
         [TXT_DOC_PATH, INITIAL_TXT_DOC_CONTENT],
         [CODE_DOC_PATH, INITIAL_CODE_DOC_CONTENT],
         [HTML_DOC_PATH, `${INITIAL_HTML_DOC_CONTENT}\n`]
@@ -802,6 +1022,17 @@ async function main() {
         }
       }
       result.steps.push('all_patch_files_persisted');
+      result.skillPatchedPackage = await sidebarFrame.evaluate(async ({ skillKey }) => {
+        const registry = await import(chrome.runtime.getURL('src/agent_tools/skill/registry_tool.js'));
+        return await registry.getStoredSkillPackage(skillKey);
+      }, { skillKey: SKILL_KEY });
+      const skillPatchedFile = result.skillPatchedPackage?.files?.find(
+        (file) => file?.path === SKILL_PATCH_FILE_PATH
+      );
+      if (skillPatchedFile?.content !== SKILL_PATCH_FILE_CONTENT) {
+        throw new Error(`Skill Environment ID patch mismatch: ${JSON.stringify(result.skillPatchedPackage)}`);
+      }
+      result.steps.push('skill_environment_patch_persisted');
       result.finalScreenshot = 'sidebar-body-final.png';
       await sidebarFrame.locator('body').screenshot({
         path: path.join(outputDir, result.finalScreenshot),

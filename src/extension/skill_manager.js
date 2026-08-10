@@ -18,6 +18,7 @@ import {
   normalizeSkillFilePath,
   normalizeSkillRegistryToolArguments,
   searchSkillFiles,
+  serializeSkillVirtualManifest,
   normalizeStoredSkillRecord,
   saveStoredSkillPackage
 } from '../agent_tools/skill/registry_tool.js';
@@ -32,6 +33,8 @@ import { createIndexedDbSkillStore } from '../storage/skill_store.js';
 import { buildSkillScaffoldInput, buildSkillScaffoldNextSteps } from '../agent_tools/skill/skill_scaffold.js';
 
 function normalizeTabId(value) {
+  if (value == null) return null;
+  if (typeof value === 'string' && !value.trim()) return null;
   const numeric = Number(value);
   return Number.isFinite(numeric) ? Math.trunc(numeric) : null;
 }
@@ -570,9 +573,9 @@ export function createSkillManager(options = {}) {
     return skill.files.findIndex((file) => file.path === filePath);
   }
 
-  function assertSkillFileOperationPathIsMutable(filePath, action) {
+  function assertSkillFileOperationDestinationIsMutable(filePath, action) {
     if (normalizeSkillFilePath(filePath) === SKILL_VIRTUAL_MANIFEST_PATH) {
-      throw new Error(`manifest.json 是保留虚拟文件，不能用于 ${action}。`);
+      throw new Error(`manifest.json 是保留虚拟文件，不能作为 ${action} 的目标路径。`);
     }
   }
 
@@ -592,15 +595,22 @@ export function createSkillManager(options = {}) {
     const sourcePath = normalizeSkillFilePath(sourceFilePath);
     const destinationPath = normalizeSkillFilePath(destinationFilePath);
     assertDifferentSkillFileOperationPaths(sourcePath, destinationPath, 'copy_file');
-    assertSkillFileOperationPathIsMutable(sourcePath, 'copy_file');
-    assertSkillFileOperationPathIsMutable(destinationPath, 'copy_file');
+    assertSkillFileOperationDestinationIsMutable(destinationPath, 'copy_file');
 
-    const sourceIndex = findSkillPackageFileIndex(normalizedExisting, sourcePath);
-    if (sourceIndex < 0) {
+    const sourceIndex = sourcePath === SKILL_VIRTUAL_MANIFEST_PATH
+      ? -1
+      : findSkillPackageFileIndex(normalizedExisting, sourcePath);
+    if (sourcePath !== SKILL_VIRTUAL_MANIFEST_PATH && sourceIndex < 0) {
       throw new Error(`技能 ${skillName} 中不存在文件 ${sourcePath}。`);
     }
 
-    const sourceFile = normalizedExisting.files[sourceIndex];
+    const sourceFile = sourcePath === SKILL_VIRTUAL_MANIFEST_PATH
+      ? {
+          path: SKILL_VIRTUAL_MANIFEST_PATH,
+          kind: null,
+          content: serializeSkillVirtualManifest(normalizedExisting)
+        }
+      : normalizedExisting.files[sourceIndex];
     const destinationIndex = findSkillPackageFileIndex(normalizedExisting, destinationPath);
     const copiedFile = {
       path: destinationPath,
@@ -728,7 +738,8 @@ export function createSkillManager(options = {}) {
           ok: true,
           action: 'list_files',
           ...buildSkillFileIndexPayload(records, {
-            requestedSkillName: normalizedArgs.skill_name
+            requestedSkillName: normalizedArgs.skill_name,
+            path_glob: normalizedArgs.path_glob
           })
         };
       }

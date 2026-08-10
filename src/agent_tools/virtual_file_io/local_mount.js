@@ -1,16 +1,20 @@
 import { normalizeConversationDocumentPath } from './document_path.js';
 import {
+  matchesVirtualPathFilter,
+  normalizeVirtualPathFilter
+} from '../shared/virtual_file_path.js';
+import {
   buildDocumentSizeChars,
-  escapeRegExp,
   normalizeString,
   toIsoTimestamp
 } from './shared.js';
 
 export const LOCAL_MOUNT_ROOT = 'local';
-export const LOCAL_MOUNT_DEFAULT_MAX_FILES = 1000;
 
 function normalizeLocalMountString(value) {
-  return normalizeString(value).replace(/\\/g, '/');
+  return normalizeString(value)
+    .replace(/\\/g, '/')
+    .replace(/^(?:\.\/)+/, '');
 }
 
 export function isLocalVirtualPath(value) {
@@ -18,7 +22,7 @@ export function isLocalVirtualPath(value) {
   return normalized === LOCAL_MOUNT_ROOT || normalized.startsWith(`${LOCAL_MOUNT_ROOT}/`);
 }
 
-export function assertWritableWorkspacePath(path, action) {
+export function assertWritableRootPath(path, action) {
   if (!isLocalVirtualPath(path)) return;
   throw new Error(`${action || '文件操作'} 不能直接修改 local 映射路径 ${path}。本地映射是只读的；请先用 copy_file 从 local/... 复制成普通会话文件后再修改副本。`);
 }
@@ -63,67 +67,8 @@ export function buildLocalMountCollisionPath(requestedPath, occupiedPaths = []) 
   throw new Error(`local mount 参数错误：无法为 ${normalizedPath} 生成可用挂载路径。`);
 }
 
-function buildPathGlobRegExp(pathGlob) {
-  if (!pathGlob) return null;
-  const normalized = normalizeLocalPathGlob(pathGlob);
-  let pattern = '^';
-  for (let index = 0; index < normalized.length; index += 1) {
-    const char = normalized[index];
-    const next = normalized[index + 1];
-    const afterNext = normalized[index + 2];
-    if (char === '*' && next === '*' && afterNext === '/') {
-      pattern += '(?:[^/]+/)*';
-      index += 2;
-      continue;
-    }
-    if (char === '*' && next === '*') {
-      pattern += '.*';
-      index += 1;
-      continue;
-    }
-    if (char === '*') {
-      pattern += '[^/]*';
-      continue;
-    }
-    if (char === '?') {
-      pattern += '[^/]';
-      continue;
-    }
-    pattern += escapeRegExp(char);
-  }
-  pattern += '$';
-  return new RegExp(pattern);
-}
-
 function normalizeLocalPathGlob(value) {
-  const rawGlob = normalizeLocalMountString(value);
-  const withoutLeadingDot = rawGlob.replace(/^(?:\.\/)+/, '');
-  const normalizedGlob = withoutLeadingDot.startsWith('/')
-    ? withoutLeadingDot.slice(1)
-    : withoutLeadingDot;
-  if (!normalizedGlob) return '';
-  if (normalizedGlob.length > 512) {
-    throw new Error('local mount 参数错误：path_glob 长度不能超过 512。');
-  }
-  const segments = normalizedGlob.split('/');
-  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
-    throw new Error(`local mount 参数错误：path_glob \`${normalizedGlob}\` 不能包含空段、"." 或 ".."。`);
-  }
-  return normalizedGlob;
-}
-
-function matchesPathGlob(filePath, globRegExp) {
-  return !globRegExp || globRegExp.test(filePath);
-}
-
-function hasGlobSyntax(value) {
-  return /[*?]/.test(String(value || ''));
-}
-
-function matchesLocalPathFilter(filePath, pathFilter, globRegExp) {
-  if (!pathFilter) return true;
-  if (hasGlobSyntax(pathFilter)) return matchesPathGlob(filePath, globRegExp);
-  return filePath === pathFilter || filePath.startsWith(`${pathFilter}/`);
+  return normalizeVirtualPathFilter(value, { label: 'path_glob' });
 }
 
 async function assertReadPermission(handle, mountPath) {
@@ -191,12 +136,11 @@ async function collectDirectoryEntries(directoryHandle) {
 async function collectDirectoryFiles(directoryHandle, virtualRootPath, options = {}) {
   await assertReadPermission(directoryHandle, virtualRootPath);
   const includeContent = options?.includeContent === true;
-  const globRegExp = options?.globRegExp || null;
-  const maxFiles = Math.max(1, Math.trunc(Number(options?.maxFiles) || LOCAL_MOUNT_DEFAULT_MAX_FILES));
+  const pathFilter = normalizeLocalPathGlob(options?.pathFilter);
   const files = [];
   const stack = [{ handle: directoryHandle, path: virtualRootPath }];
 
-  while (stack.length > 0 && files.length < maxFiles) {
+  while (stack.length > 0) {
     const current = stack.pop();
     const entries = await collectDirectoryEntries(current.handle);
     for (let index = entries.length - 1; index >= 0; index -= 1) {
@@ -207,7 +151,7 @@ async function collectDirectoryFiles(directoryHandle, virtualRootPath, options =
         continue;
       }
       if (handle.kind !== 'file') continue;
-      if (!matchesLocalPathFilter(childPath, options?.pathFilter || '', globRegExp)) continue;
+      if (!matchesVirtualPathFilter(childPath, pathFilter)) continue;
       const fileRecord = includeContent
         ? await readTextFileFromHandle(handle, childPath)
         : {
@@ -216,7 +160,6 @@ async function collectDirectoryFiles(directoryHandle, virtualRootPath, options =
             size_chars: null
           };
       files.push(fileRecord);
-      if (files.length >= maxFiles) break;
     }
   }
 
@@ -278,10 +221,8 @@ export async function readLocalVirtualFileDocument(conversationId, filePath, sto
 }
 
 export async function listLocalVirtualFileDocuments(conversationId, options = {}) {
-  const pathGlob = normalizeLocalMountString(options?.path_glob);
-  const globRegExp = pathGlob ? buildPathGlobRegExp(pathGlob) : null;
+  const pathGlob = normalizeLocalPathGlob(options?.path_glob);
   const includeContent = options?.includeContent === true;
-  const maxFiles = Math.max(1, Math.trunc(Number(options?.maxFiles) || LOCAL_MOUNT_DEFAULT_MAX_FILES));
   const mounts = await options.store.listMounts(conversationId);
   const normalizedMounts = (Array.isArray(mounts) ? mounts : [])
     .map(normalizeMountRecord)
@@ -289,9 +230,8 @@ export async function listLocalVirtualFileDocuments(conversationId, options = {}
   const files = [];
 
   for (const mount of normalizedMounts) {
-    if (files.length >= maxFiles) break;
     if (mount.kind === 'file') {
-      if (!matchesLocalPathFilter(mount.mount_path, pathGlob, globRegExp)) continue;
+      if (!matchesVirtualPathFilter(mount.mount_path, pathGlob)) continue;
       const fileRecord = includeContent
         ? await readTextFileFromHandle(mount.handle, mount.mount_path)
         : {
@@ -302,12 +242,9 @@ export async function listLocalVirtualFileDocuments(conversationId, options = {}
       files.push(fileRecord);
       continue;
     }
-    const remaining = maxFiles - files.length;
     const directoryFiles = await collectDirectoryFiles(mount.handle, mount.mount_path, {
       includeContent,
-      globRegExp,
-      pathFilter: pathGlob,
-      maxFiles: remaining
+      pathFilter: pathGlob
     });
     files.push(...directoryFiles);
   }

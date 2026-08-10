@@ -109,7 +109,7 @@ function createInMemoryLocalMountStore(mounts = []) {
   };
 }
 
-test('normalizeConversationDocumentPath 支持空格与 Unicode，并拒绝越界路径', async () => {
+test('统一根相对路径支持 Unicode 和普通目录，并拒绝绝对路径与越界路径', async () => {
   const {
     normalizeConversationDocumentHrefPath,
     normalizeConversationDocumentPath
@@ -117,23 +117,27 @@ test('normalizeConversationDocumentPath 支持空格与 Unicode，并拒绝越�
 
   assert.equal(
     normalizeConversationDocumentPath('workspace\\研究 计划(终版).md'),
-    '研究 计划(终版).md'
+    'workspace/研究 计划(终版).md'
   );
   assert.equal(
     normalizeConversationDocumentHrefPath('workspace/%E9%9A%8F%E7%AC%94%20%E7%BB%88%E7%89%88.md'),
-    '随笔 终版.md'
+    'workspace/随笔 终版.md'
   );
   assert.equal(
     normalizeConversationDocumentHrefPath('workspace/a%2Fb.md'),
-    'a%2Fb.md'
+    'workspace/a%2Fb.md'
   );
   assert.throws(
     () => normalizeConversationDocumentPath('../secret.txt'),
     /不能包含空段、"\." 或 "\.\."/
   );
+  assert.throws(
+    () => normalizeConversationDocumentPath('/absolute.txt'),
+    /相对路径/
+  );
 });
 
-test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验并默认会话文件目标', async () => {
+test('normalizeVirtualFileToolArguments 默认使用根目录且 target object 只接受 skill', async () => {
   const {
     VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
     VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
@@ -149,7 +153,7 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
   assert.deepEqual(defaultDocumentTarget, {
     action: 'list_files',
     target: {
-      kind: 'workspace',
+      kind: 'root',
       name: null
     },
     path_glob: null
@@ -181,7 +185,7 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
   assert.deepEqual(bashStyleRead, {
     action: 'read_file',
     target: {
-      kind: 'workspace',
+      kind: 'root',
       name: null
     },
     file_path: 'spec.md',
@@ -201,7 +205,7 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
   assert.deepEqual(bashStyleSearch, {
     action: 'search_files',
     target: {
-      kind: 'workspace',
+      kind: 'root',
       name: null
     },
     pattern: 'token',
@@ -220,7 +224,7 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
   assert.deepEqual(copyFile, {
     action: 'copy_file',
     target: {
-      kind: 'workspace',
+      kind: 'root',
       name: null
     },
     source_path: 'spec.md',
@@ -241,16 +245,22 @@ test('normalizeVirtualFileToolArguments 会对 skill target 做结构化校验�
     /不支持的 action `delete_file`/
   );
 
-  const legacyWorkspacePrefixRead = normalizeVirtualFileToolArguments(VIRTUAL_FILE_READ_FILE_TOOL_NAME, {
+  const ordinaryWorkspaceDirectoryRead = normalizeVirtualFileToolArguments(VIRTUAL_FILE_READ_FILE_TOOL_NAME, {
     path: 'workspace/spec.md'
   });
-  assert.equal(legacyWorkspacePrefixRead.file_path, 'spec.md');
+  assert.equal(ordinaryWorkspaceDirectoryRead.file_path, 'workspace/spec.md');
 
-  const legacyWorkspacePrefixSearch = normalizeVirtualFileToolArguments(VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME, {
+  const ordinaryWorkspaceDirectorySearch = normalizeVirtualFileToolArguments(VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME, {
     pattern: 'token',
     glob: 'workspace/**/*.md'
   });
-  assert.equal(legacyWorkspacePrefixSearch.path_glob, '**/*.md');
+  assert.equal(ordinaryWorkspaceDirectorySearch.path_glob, 'workspace/**/*.md');
+  assert.throws(
+    () => normalizeVirtualFileToolArguments(VIRTUAL_FILE_LIST_FILES_TOOL_NAME, {
+      target: { kind: 'workspace', name: null }
+    }),
+    /不支持的 target.kind `workspace`/
+  );
 });
 
 test('apply_patch 工具定义聚焦虚拟文件补丁契约，不重复最终交付策略', async () => {
@@ -276,7 +286,8 @@ test('read_file/search_files 与文件操作工具定义暴露严格且低歧义
 
   const readDefinition = buildVirtualFileReadFileFunctionToolDefinition();
   assert.equal(readDefinition.strict, true);
-  assert.match(readDefinition.description, /全文预览、字符片段或指定行范围/);
+  assert.match(readDefinition.description, /全文或指定行范围/);
+  assert.doesNotMatch(readDefinition.description, /字符片段/);
   assert.match(readDefinition.description, /# path/);
   assert.ok(readDefinition.parameters.properties.path);
   assert.ok(readDefinition.parameters.properties.line_range);
@@ -325,7 +336,7 @@ test('apply_patch 遇到同名 Add File 时会覆盖原文件且不产生隐式�
     {
       patch: [
         '*** Begin Patch',
-        '*** Add File: workspace/计划.md',
+        '*** Add File: 计划.md',
         '+# new',
         '*** End Patch'
       ].join('\n')
@@ -440,7 +451,7 @@ test('read_file 支持行范围与带行号输出', async () => {
   );
 
   assert.equal(result.ok, true);
-  assert.equal(result.file.path, 'spec.md');
+  assert.equal(result.file.path, 'workspace/spec.md');
   assert.equal(result.file.content, 'line2\nline3\n');
   assert.match(result.file.numbered_content, /2 \| line2/);
   assert.match(result.file.numbered_content, /3 \| line3/);
@@ -724,4 +735,88 @@ test('local mount 路径支持只读 read/list/search，并可复制到会话文
     ),
     /本地映射是只读/
   );
+});
+
+test('local 目录超过 1000 个文件时完整枚举并由统一 cursor 无重复分页', async () => {
+  const {
+    CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
+    executeConversationDocumentAction
+  } = await loadConversationDocumentToolsModule();
+  const outputModule = await import(pathToFileURL(
+    path.resolve(__dirname, '../src/agent_tools/shared/responses_tool_output.js')
+  ).href);
+  const pageCacheModule = await import(pathToFileURL(
+    path.resolve(__dirname, '../src/agent_tools/shared/responses_tool_output_page_cache.js')
+  ).href);
+  const tree = Object.fromEntries(
+    Array.from({ length: 1005 }, (_, index) => [
+      `file-${String(index).padStart(4, '0')}.txt`,
+      `content-${index}\n`
+    ])
+  );
+  const localMountStore = createInMemoryLocalMountStore([{
+    mount_path: 'local/many',
+    kind: 'directory',
+    source_name: 'many',
+    updated_at: '2026-04-13T00:00:00.000Z',
+    handle: createLocalDirectoryHandle('many', tree)
+  }]);
+
+  const unfiltered = await executeConversationDocumentAction(
+    CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
+    { path_glob: null },
+    {
+      conversationId: 'conv-local-many',
+      store: createInMemoryDocumentStore({}),
+      localMountStore: {
+        async listMounts() {
+          throw new Error('无过滤 list_files 不应扫描 local 挂载');
+        }
+      }
+    }
+  );
+  assert.equal(unfiltered.total_files, 0);
+
+  const result = await executeConversationDocumentAction(
+    CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
+    { path_glob: 'local/many' },
+    {
+      conversationId: 'conv-local-many',
+      store: createInMemoryDocumentStore({}),
+      localMountStore
+    }
+  );
+  assert.equal(result.total_files, 1005);
+  assert.equal(result.files.at(-1).path, 'local/many/file-1004.txt');
+
+  const contentItems = outputModule.buildResponsesConversationDocumentToolOutputContentItems(
+    'list_files',
+    result
+  );
+  const sourceText = contentItems
+    .filter((item) => item?.type === 'input_text')
+    .map((item) => item.text || '')
+    .join('');
+  const cache = pageCacheModule.createResponsesToolOutputPageCache({
+    createCursor: (() => {
+      let index = 0;
+      return () => `local-page-${index += 1}`;
+    })()
+  });
+  let page = cache.paginate(contentItems, 5000);
+  let reconstructed = '';
+  while (page) {
+    const pageText = page.contentItems
+      .filter((item) => item?.type === 'input_text')
+      .map((item) => item.text || '')
+      .join('');
+    const contentMatch = pageText.match(/<content>\n([\s\S]*?)\n<\/content>/);
+    reconstructed += contentMatch ? contentMatch[1] : pageText;
+    if (!page.nextCursor) break;
+    page = cache.read(page.nextCursor, null);
+  }
+
+  assert.equal(reconstructed, sourceText);
+  assert.equal((reconstructed.match(/local\/many\/file-0000\.txt/g) || []).length, 1);
+  assert.equal((reconstructed.match(/local\/many\/file-1004\.txt/g) || []).length, 1);
 });

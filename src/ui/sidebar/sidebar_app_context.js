@@ -15,7 +15,7 @@ import {
   shouldAutoCompleteRequestUserInput
 } from '../../utils/request_user_input_interaction.js';
 import {
-  VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
+  VIRTUAL_FILE_TARGET_KIND_ROOT,
   buildConversationDocumentActionPayloadFromVirtualFileAction,
   buildSkillRegistryFileActionPayloadFromVirtualFileAction,
   executeConversationDocumentAction,
@@ -1548,10 +1548,10 @@ export function registerSidebarUtilities(appContext) {
   appContext.utils.executeVirtualFileAction = async (action, payload = {}) => {
     try {
       const normalizedArgs = normalizeVirtualFileToolArguments(action, payload, {
-        defaultTargetKind: VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT
+        defaultTargetKind: VIRTUAL_FILE_TARGET_KIND_ROOT
       });
 
-      if (normalizedArgs.target.kind === VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT) {
+      if (normalizedArgs.target.kind === VIRTUAL_FILE_TARGET_KIND_ROOT) {
         const conversationId = appContext.services.chatHistoryUI?.getCurrentConversationId?.();
         if (!conversationId) {
           return {

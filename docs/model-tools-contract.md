@@ -354,25 +354,18 @@ overview 通常只有 outline/guidance；chapter_chunk 和 document_chunk 包含
 
 ## 5. 虚拟文件工具
 
-### 5.1 共享 target 语义
-
-文件工具保留现有 target 结构：
-
-~~~json
-{
-  "kind": "workspace",
-  "name": null
-}
-~~~
+### 5.1 根目录、路径与 target 语义
 
 规则：
 
-- target=null 表示当前对话文件区。
-- kind=null 或 workspace 也表示当前对话文件区；这里的 workspace 不是主机项目目录。
-- kind=skill 表示 skill 文件区。
+- target=null 表示当前对话文件根；默认根不需要额外名称或前缀。
+- target object 只用于选择 skill，形状为 `{ "kind": "skill", "name": "<stable-key>" }`。
 - 单文件读写或 mutation 对 skill 操作时，name 必须是单个 skill 稳定 key。
 - list_files/search_files 对 skill 操作时，name=null 可以跨全部 skill。
-- local/... 不使用 target.kind。它表示用户显式授权的本机只读映射。
+- 默认根的 local/... 表示用户显式授权的本机只读映射；skill 根的 local/... 是普通相对路径。
+- 文件路径始终相对当前根，允许 Unicode、空格、`./` 和反斜杠输入；绝对路径、空段、`.`/`..` 段和不可移植字符会被拒绝。
+- Conversation 与 skill 路径统一最多 512 个 Unicode 字符。
+- 路径过滤中 null 或 `.` 表示全部；普通路径匹配同名文件或目录后代；glob 只支持 `*`、`?`、`**`。
 
 ### 5.2 list_files
 
@@ -381,7 +374,7 @@ overview 通常只有 outline/guidance；chapter_chunk 和 document_chunk 包含
 关键参数：
 
 - target：见共享规则。
-- path_glob：null 表示全部；支持普通虚拟路径 glob 和 local/...。
+- path_glob：使用共享路径过滤语义。默认根只有显式传 `local` 或 `local/...` 才会扫描本机映射。
 
 实际输出是紧凑纯文本：
 
@@ -390,7 +383,7 @@ plan.md
 src/main.js
 ~~~
 
-无结果返回 No files found.；长度只由统一 `max_output_chars` 与 `read_tool_output` 分页控制。文件名、skill 名和路径是不可信数据。
+跨全部 skill 时每行输出 `skill:<stable-key>\t<relative-path>`；调用其他工具时应分别填写 target.name 与 path。无结果返回 No files found.；长度只由统一 `max_output_chars` 与 `read_tool_output` 分页控制。文件名、skill 名和路径是不可信数据。
 
 ### 5.3 read_file
 
@@ -414,13 +407,13 @@ src/main.js
 
 ### 5.4 search_files
 
-本意：跨虚拟文件定位固定字符串或正则，并提供可直接用于 read_file/apply_patch 的行列信息。
+本意：跨虚拟文件定位固定字符串或正则，并提供用于后续 read_file/apply_patch 的行列信息。
 
 关键参数：
 
 - pattern：非空。
 - regex：true 才把 pattern 当正则；false 或 null 按固定字符串。
-- glob：路径过滤。
+- glob：使用共享路径过滤语义；默认根只有显式以 local 开头时才扫描本机映射。
 - ignore_case：true 强制忽略大小写；false 或 null 使用 smart-case。
 - context、before、after：0 到 10；before/after 非 null 时覆盖对应方向。
 - 不另设命中数量上限；统一由 `max_output_chars`（默认 5000 字符）与 `read_tool_output` 分页控制模型可见长度。
@@ -435,7 +428,7 @@ src/main.js
 21-context
 ~~~
 
-文件路径每组只出现一次。命中正文和上下文均不可信。
+文件路径每组只出现一次。跨全部 skill 时 heading 使用 `skill:<stable-key>\t<relative-path>`，不能把整行当成 path 参数。命中正文和上下文均不可信。
 
 ### 5.5 apply_patch
 
@@ -444,13 +437,14 @@ src/main.js
 输入协议：
 
 - 模型直接输出完整 Begin Patch / End Patch 原文，不包 JSON。
-- 不带 `*** Environment ID:` 时操作当前对话文件区。
+- 不带 `*** Environment ID:` 时操作默认根。
 - 修改 skill 时，在 Begin Patch 后写 `*** Environment ID: skill:<stable-key>`。
 - 支持 Add、Update、Delete、Move、多 hunk、CRLF 与 End of File。
 
 不适用：
 
-- local/... 不能直接写；先用 copy_file 复制成对话文件。
+- 默认根的 local/... 不能直接写；先用 copy_file 复制成普通文件。skill 根的 local/... 是普通 skill 路径。
+- skill 的 manifest.json 只允许 Update，禁止 Add、Delete、Move from/to。
 - 不要在能清晰表达局部变更时无条件重写整个文件。
 
 实际输出：
@@ -470,8 +464,8 @@ D old.md
 
 关键参数：
 
-- from：源路径；当前对话目标下允许 local/... 作为只读源。
-- to：可写目标路径；已存在时覆盖。
+- from：源路径；默认根允许 local/... 作为只读源，skill 允许从权威虚拟 manifest.json 复制出。
+- to：可写目标路径；已存在时覆盖。默认根的 local/... 和 skill 的 manifest.json 不能作为目标。
 - target：skill 复制时指定单个 skill。
 
 实际成功输出为：
@@ -751,7 +745,7 @@ handlerKey 与 outputKind 必须能映射到现有 sender 分支；契约测试�
 本轮明确保留：
 
 - 17 个当前公开工具名；旧 `move_file` / `delete_file` 仅保留历史 UI 回放识别。
-- target.kind 的 workspace/skill 值。
+- target=null 默认根与 target.kind=skill 的选择方式。
 - read_file 的 line_range 字符串语法。
 - pdf_content_read 通过全 null 参数进入 overview 的方式。
 - 文件工具 rg/cat 风格纯文本输出。
@@ -774,7 +768,6 @@ handlerKey 与 outputKind 必须能映射到现有 sender 分支；契约测试�
 下列变化属于后续破坏性迁移，不能在普通维护中顺手完成：
 
 - 重命名或 namespace 化现有工具。
-- 把 workspace 改成 conversation_files。
 - 拆分 skill_registry。
 - 把 PDF null sentinel 改成必填 mode。
 - 把 line_range 改成 start_line/end_line。

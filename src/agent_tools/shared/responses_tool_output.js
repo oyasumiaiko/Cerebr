@@ -635,22 +635,26 @@ function buildResponsesFileReadPlainContent(file) {
   return preferredText;
 }
 
-function buildResponsesFileListLine(file) {
+function buildResponsesFileListLine(file, options = {}) {
   const normalized = isResponsesToolOutputPlainObject(file) ? file : {};
   const path = typeof normalized.path === 'string' ? normalized.path.trim() : '';
   const skillName = typeof normalized.skill_name === 'string' ? normalized.skill_name.trim() : '';
-  if (!path) return skillName;
-  return skillName ? `${skillName}/${path}` : path;
+  if (!path) return skillName ? `skill:${skillName}` : '';
+  return options?.includeSkillScope === true && skillName
+    ? `skill:${skillName}\t${path}`
+    : path;
 }
 
-function buildResponsesSearchLinePath(match) {
+function buildResponsesSearchLinePath(match, options = {}) {
   const normalized = isResponsesToolOutputPlainObject(match) ? match : {};
   const filePath = typeof normalized.file_path === 'string'
     ? normalized.file_path.trim()
     : (typeof normalized.path === 'string' ? normalized.path.trim() : '');
   const skillName = typeof normalized.skill_name === 'string' ? normalized.skill_name.trim() : '';
-  if (!filePath) return skillName || '';
-  return skillName ? `${skillName}/${filePath}` : filePath;
+  if (!filePath) return skillName ? `skill:${skillName}` : '';
+  return options?.includeSkillScope === true && skillName
+    ? `skill:${skillName}\t${filePath}`
+    : filePath;
 }
 
 function buildResponsesFileSearchContextLine(line, separator = '-') {
@@ -690,11 +694,11 @@ function buildResponsesFileSearchContext(match) {
   return lines.join('\n');
 }
 
-function groupResponsesFileSearchMatchesByPath(matches) {
+function groupResponsesFileSearchMatchesByPath(matches, options = {}) {
   const groups = [];
   const groupsByPath = new Map();
   for (const match of Array.isArray(matches) ? matches : []) {
-    const displayPath = buildResponsesSearchLinePath(match);
+    const displayPath = buildResponsesSearchLinePath(match, options);
     const groupKey = displayPath || '(unknown)';
     let group = groupsByPath.get(groupKey);
     if (!group) {
@@ -710,8 +714,8 @@ function groupResponsesFileSearchMatchesByPath(matches) {
   return groups;
 }
 
-function buildResponsesFileSearchGroupedText(matches) {
-  const groups = groupResponsesFileSearchMatchesByPath(matches);
+function buildResponsesFileSearchGroupedText(matches, options = {}) {
+  const groups = groupResponsesFileSearchMatchesByPath(matches, options);
   return groups
     .map((group) => {
       const contextText = group.matches
@@ -753,7 +757,7 @@ function buildResponsesFileListToolOutputText(rootTag, result, options = {}) {
   const lines = [];
   if (files.length > 0) {
     const listText = files
-      .map((file) => buildResponsesFileListLine(file))
+      .map((file) => buildResponsesFileListLine(file, options))
       .filter(Boolean)
       .join('\n');
     if (listText) {
@@ -783,7 +787,7 @@ function buildResponsesFileSearchToolOutputText(rootTag, result, options = {}) {
     // 这里刻意采用接近 `rg --heading --line-number --column` 的纯文本形状：
     // `path` heading 加 `line:column:text` 是模型后续 read_file / apply_patch 最常用的定位信息，
     // 省掉每条命中的 JSON metadata，避免搜索工具输出比真正的匹配内容更吵。
-    const matchesText = buildResponsesFileSearchGroupedText(matches);
+    const matchesText = buildResponsesFileSearchGroupedText(matches, options);
     if (matchesText) {
       lines.push(matchesText);
     }
@@ -1521,7 +1525,8 @@ export function buildResponsesSkillRegistryToolOutputContentItems(result, option
     return buildResponsesXmlToolOutputContentItems(
       buildResponsesFileListToolOutputText('skill_registry_result', normalized, {
         files: normalized.files,
-        defaultTargetKind: 'skill'
+        defaultTargetKind: 'skill',
+        includeSkillScope: !normalized.requested_skill_name
       }),
       options
     );
@@ -1530,7 +1535,8 @@ export function buildResponsesSkillRegistryToolOutputContentItems(result, option
     return buildResponsesXmlToolOutputContentItems(
       buildResponsesFileSearchToolOutputText('skill_registry_result', normalized, {
         matches: normalized.matches,
-        defaultTargetKind: 'skill'
+        defaultTargetKind: 'skill',
+        includeSkillScope: !normalized.requested_skill_name
       }),
       options
     );
@@ -1574,7 +1580,8 @@ export function buildResponsesConversationDocumentToolOutputContentItems(toolNam
   if (normalizedToolName === 'list_files') {
     return buildResponsesXmlToolOutputContentItems(
       buildResponsesFileListToolOutputText(rootTag, normalized, {
-        files: normalized.files
+        files: normalized.files,
+        includeSkillScope: normalized?.target?.kind === 'skill' && !normalized?.target?.name
       }),
       options
     );
@@ -1582,7 +1589,8 @@ export function buildResponsesConversationDocumentToolOutputContentItems(toolNam
   if (normalizedToolName === 'search_files') {
     return buildResponsesXmlToolOutputContentItems(
       buildResponsesFileSearchToolOutputText(rootTag, normalized, {
-        matches: normalized.matches
+        matches: normalized.matches,
+        includeSkillScope: normalized?.target?.kind === 'skill' && !normalized?.target?.name
       }),
       options
     );

@@ -138,7 +138,7 @@ import {
 } from '../agent_tools/request_user_input/tool.js';
 import {
   CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME,
-  VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
+  VIRTUAL_FILE_TARGET_KIND_ROOT,
   VIRTUAL_FILE_TARGET_KIND_SKILL,
   buildConversationDocumentActionPayloadFromVirtualFileAction,
   buildSkillRegistryFileActionPayloadFromVirtualFileAction,
@@ -9591,10 +9591,12 @@ export function createMessageSender(appContext) {
 
   async function executeResponsesVirtualFileFunction(toolName, rawArgs, options = {}) {
     try {
-      const normalizedArgs = normalizeVirtualFileToolArguments(toolName, rawArgs, {
-        defaultTargetKind: VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT
-      });
-      if (normalizedArgs.target.kind === VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT) {
+      const normalizedArgs = options?.argumentsAreNormalized === true
+        ? rawArgs
+        : normalizeVirtualFileToolArguments(toolName, rawArgs, {
+            defaultTargetKind: VIRTUAL_FILE_TARGET_KIND_ROOT
+          });
+      if (normalizedArgs.target.kind === VIRTUAL_FILE_TARGET_KIND_ROOT) {
         const conversationId = await resolveConversationIdForConversationDocumentTool(options);
         const result = await executeConversationDocumentAction(
           toolName,
@@ -9697,7 +9699,7 @@ export function createMessageSender(appContext) {
         outputPayload = await executeResponsesVirtualFileFunction(
           localToolSpec.id,
           normalizedArgs,
-          options
+          { ...options, argumentsAreNormalized: true }
         );
       } catch (error) {
         outputPayload = {

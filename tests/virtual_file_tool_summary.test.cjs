@@ -181,7 +181,7 @@ test('顶层 copy_file 使用通用 Run UI，旧 move/delete 摘要仍可回放'
       path: 'workspace/project/src/a.js'
     })
   };
-  assert.equal(buildVirtualFilePrimaryText(deleteRecord), '删除 project/src/a.js');
+  assert.equal(buildVirtualFilePrimaryText(deleteRecord), '删除 workspace/project/src/a.js');
 });
 
 test('顶层 apply_patch 在 skill target 下会显示首个文件与 diff 汇总', async () => {
@@ -258,7 +258,7 @@ test('会话文档 apply_patch 成功后可提取自动预览卡片描述', asyn
   assert.deepEqual(
     buildConversationDocumentApplyPatchPreviewDescriptors(record, { requireSuccessfulOutput: true }),
     [
-      { path: 'src/a.md', title: 'src/a.md', operation: 'update' },
+      { path: 'workspace/src/a.md', title: 'workspace/src/a.md', operation: 'update' },
       { path: 'src/b.md', title: 'src/b.md', operation: 'add' }
     ]
   );

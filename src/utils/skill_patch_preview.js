@@ -19,7 +19,7 @@ function parseLegacyArguments(rawArguments) {
 
 function resolveCustomEnvironmentTarget(environmentId) {
   const normalized = normalizeText(environmentId);
-  if (!normalized) return { targetKind: 'workspace', skillName: '' };
+  if (!normalized) return { targetKind: 'root', skillName: '' };
   if (!normalized.startsWith('skill:')) {
     return { targetKind: 'unknown', skillName: '', environmentId: normalized };
   }
@@ -34,7 +34,8 @@ function resolveLegacyTarget(args) {
   const target = args?.target && typeof args.target === 'object' && !Array.isArray(args.target)
     ? args.target
     : null;
-  const targetKind = normalizeText(target?.kind).toLowerCase() || 'workspace';
+  const requestedKind = normalizeText(target?.kind).toLowerCase();
+  const targetKind = requestedKind === 'skill' ? 'skill' : 'root';
   return {
     targetKind,
     skillName: targetKind === 'skill' ? normalizeText(target?.name) : ''

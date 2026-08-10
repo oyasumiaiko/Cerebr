@@ -1,6 +1,6 @@
 import {
   VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
-  VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
+  VIRTUAL_FILE_TARGET_KIND_ROOT,
   VIRTUAL_FILE_TARGET_KIND_SKILL,
   normalizeString
 } from './shared.js';
@@ -47,7 +47,7 @@ export function normalizeVirtualFileApplyPatchCustomInput(input) {
   if (!environmentId) {
     return {
       action: VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
-      target: { kind: VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT, name: null },
+      target: { kind: VIRTUAL_FILE_TARGET_KIND_ROOT, name: null },
       patch
     };
   }
@@ -72,9 +72,11 @@ export function buildVirtualFileApplyPatchCustomToolDefinition() {
     description: [
       'The `apply_patch` tool edits writable virtual text files. This is a FREEFORM tool, so emit the patch directly and do not wrap it in JSON.',
       'Use `*** Add File:` to create or overwrite, `*** Update File:` to modify, `*** Delete File:` to remove, and `*** Update File:` plus `*** Move to:` to move or rename; there are no separate move/delete file tools.',
-      'Omit `*** Environment ID:` to edit the current conversation file space.',
+      'Omit `*** Environment ID:` to edit the current conversation file root.',
       'To edit one skill, put `*** Environment ID: skill:<stable-key>` immediately after `*** Begin Patch`.',
-      'The read-only `local/...` mount cannot be modified.'
+      'Every file name is relative to the selected root. Unicode and spaces are allowed; absolute paths, empty segments, and `..` are rejected.',
+      'In the default root, the read-only `local/...` mount cannot be modified. Inside a skill environment, `local/...` is an ordinary skill-relative path.',
+      'Skill `manifest.json` may be updated, but it cannot be added, deleted, moved from, or moved to.'
     ].join(' '),
     format: {
       type: 'grammar',

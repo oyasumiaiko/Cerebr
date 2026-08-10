@@ -283,10 +283,12 @@ test('关键枚举保持闭合，范围与数量通过 description 暴露且不�
   ]) {
     assert.deepEqual(
       propertiesOf(name).target.properties.kind.enum,
-      ['workspace', 'skill', null],
+      ['skill'],
       `${name}.target.kind 的作用域枚举发生漂移`
     );
+    assert.doesNotMatch(JSON.stringify(definitions[name]), /workspace/i);
   }
+  assert.doesNotMatch(JSON.stringify(definitions.apply_patch), /workspace/i);
 
   assert.equal(propertiesOf('read_file').max_chars, undefined);
   assert.match(propertiesOf('search_files').context.description, /0-10/);

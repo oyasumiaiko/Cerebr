@@ -25,6 +25,11 @@ import {
   buildStrictFunctionToolDefinition,
   buildStrictObjectSchema
 } from '../shared/model_tool_contract.js';
+import {
+  matchesVirtualPathFilter,
+  normalizeVirtualFilePath,
+  normalizeVirtualPathFilter
+} from '../shared/virtual_file_path.js';
 
 export const SKILL_REGISTRY_TOOL_NAME = 'skill_registry';
 export const SKILL_REGISTRY_STORAGE_KEY = 'skill_registry_v1';
@@ -286,27 +291,7 @@ function normalizeSkillCreateTemplateInput(rawSkill) {
 }
 
 export function normalizeSkillFilePath(value) {
-  const rawPath = normalizeString(value).replace(/\\/g, '/');
-  const withoutLeadingDot = rawPath.replace(/^(?:\.\/)+/, '');
-  const normalizedPath = withoutLeadingDot.startsWith('/')
-    ? withoutLeadingDot.slice(1)
-    : withoutLeadingDot;
-
-  if (!normalizedPath) {
-    throw new Error('skill_registry 参数错误：files[].path 不能为空。');
-  }
-  if (normalizedPath.length > 256) {
-    throw new Error('skill_registry 参数错误：files[].path 长度不能超过 256。');
-  }
-  if (!/^[a-zA-Z0-9._/-]+$/.test(normalizedPath)) {
-    throw new Error(`skill_registry 参数错误：不支持的文件路径 \`${normalizedPath}\`。`);
-  }
-
-  const segments = normalizedPath.split('/');
-  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
-    throw new Error(`skill_registry 参数错误：文件路径 \`${normalizedPath}\` 不能包含空段、"." 或 ".."。`);
-  }
-  return normalizedPath;
+  return normalizeVirtualFilePath(value, { label: 'files[].path' });
 }
 
 function buildEditableSkillManifestObject(skill) {
@@ -599,55 +584,7 @@ function normalizeSkillContextLineCount(value) {
 }
 
 function normalizeSkillSearchPathGlob(value) {
-  const rawGlob = normalizeString(value).replace(/\\/g, '/');
-  const withoutLeadingDot = rawGlob.replace(/^(?:\.\/)+/, '');
-  const normalizedGlob = withoutLeadingDot.startsWith('/')
-    ? withoutLeadingDot.slice(1)
-    : withoutLeadingDot;
-  if (!normalizedGlob) return null;
-  if (normalizedGlob.length > 256) {
-    throw new Error('skill_registry 参数错误：path_glob 长度不能超过 256。');
-  }
-  if (!/^[a-zA-Z0-9._/*?-]+$/.test(normalizedGlob)) {
-    throw new Error(`skill_registry 参数错误：不支持的 path_glob \`${normalizedGlob}\`。`);
-  }
-  const segments = normalizedGlob.split('/');
-  if (segments.some((segment) => !segment || segment === '.' || segment === '..')) {
-    throw new Error(`skill_registry 参数错误：path_glob \`${normalizedGlob}\` 不能包含空段、"." 或 ".."。`);
-  }
-  return normalizedGlob;
-}
-
-function buildPathGlobRegExp(pathGlob) {
-  if (!pathGlob) return null;
-  const normalized = normalizeSkillSearchPathGlob(pathGlob);
-  let pattern = '^';
-  for (let index = 0; index < normalized.length; index += 1) {
-    const char = normalized[index];
-    const next = normalized[index + 1];
-    const afterNext = normalized[index + 2];
-    if (char === '*' && next === '*' && afterNext === '/') {
-      pattern += '(?:[^/]+/)*';
-      index += 2;
-      continue;
-    }
-    if (char === '*' && next === '*') {
-      pattern += '.*';
-      index += 1;
-      continue;
-    }
-    if (char === '*') {
-      pattern += '[^/]*';
-      continue;
-    }
-    if (char === '?') {
-      pattern += '[^/]';
-      continue;
-    }
-    pattern += escapeRegExp(char);
-  }
-  pattern += '$';
-  return new RegExp(pattern);
+  return normalizeVirtualPathFilter(value, { label: 'path_glob' });
 }
 
 function resolveSkillSearchFlags(pattern, options = {}) {
@@ -1271,8 +1208,10 @@ export function buildSkillFileIndexPayload(records, options = {}) {
   const normalizedRecords = (Array.isArray(records) ? records : [records])
     .map((record) => normalizeStoredSkillRecord(record))
     .filter(Boolean);
+  const pathGlob = normalizeSkillSearchPathGlob(options?.path_glob);
   const files = normalizedRecords.flatMap((record) => (
     buildSkillResolvedFiles(record, { includeContent: false })
+      .filter((file) => matchesVirtualPathFilter(file.path, pathGlob))
       .map((file) => ({
         skill_name: record.name,
         path: file.path,
@@ -1286,6 +1225,7 @@ export function buildSkillFileIndexPayload(records, options = {}) {
   ));
   return {
     requested_skill_name: options?.requestedSkillName || null,
+    path_glob: pathGlob,
     total_files: files.length,
     returned_file_count: files.length,
     files
@@ -1312,7 +1252,6 @@ export function searchSkillFiles(records, rawOptions = {}) {
   const contextBefore = normalizeSkillContextLineCount(rawOptions.context_before);
   const contextAfter = normalizeSkillContextLineCount(rawOptions.context_after);
   const pathGlob = normalizeSkillSearchPathGlob(rawOptions.path_glob);
-  const pathGlobRegExp = buildPathGlobRegExp(pathGlob);
 
   const matches = [];
   let totalMatches = 0;
@@ -1320,7 +1259,7 @@ export function searchSkillFiles(records, rawOptions = {}) {
   for (const record of normalizedRecords) {
     const files = buildSkillResolvedFiles(record, { includeContent: true });
     for (const file of files) {
-      if (pathGlobRegExp && !pathGlobRegExp.test(file.path)) {
+      if (!matchesVirtualPathFilter(file.path, pathGlob)) {
         continue;
       }
       const { lines } = splitLogicalLines(file.content || '');
@@ -1697,7 +1636,7 @@ export function normalizeSkillRegistryToolArguments(rawArgs) {
       pattern: null,
       regex: false,
       case_mode: 'smart',
-      path_glob: null,
+      path_glob: normalizeSkillSearchPathGlob(args.path_glob),
       context_before: 0,
       context_after: 0,
       max_results: null,

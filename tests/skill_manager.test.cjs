@@ -235,8 +235,13 @@ test('create/update/delete/enable/disable 只持久化并刷新当前文档，�
       '*** End Patch'
     ].join('\n')
   });
+  const modelPatchPayload = buildSkillRegistryFileActionPayloadFromVirtualFileAction(
+    'apply_patch',
+    modelPatchArgs
+  );
+  assert.equal(modelPatchPayload.refresh_current_document, false);
   const addedFileRaw = await manager.executeRegistryAction(
-    buildSkillRegistryFileActionPayloadFromVirtualFileAction('apply_patch', modelPatchArgs),
+    modelPatchPayload,
     { tabId: 11 }
   );
   const addedFile = normalizeVirtualFileResultFromSkillRegistryAction(
@@ -405,6 +410,31 @@ test('copy_file 使用 cp 覆盖语义，skill 移动与删除统一由 apply_pa
   assert.deepEqual(overwritten.affected_files.modified, ['src/helpers/dom-copy.js']);
   assert.equal(overwritten.files.total_count, 5);
 
+  const copiedManifest = await manager.executeRegistryAction({
+    action: 'copy_file',
+    skill_name: 'dom-probe',
+    source_file_path: 'manifest.json',
+    destination_file_path: 'references/manifest-snapshot.json'
+  });
+  assert.equal(copiedManifest.ok, true);
+  assert.deepEqual(copiedManifest.affected_files.added, ['references/manifest-snapshot.json']);
+  const manifestSnapshot = await manager.executeRegistryAction({
+    action: 'read_file',
+    skill_name: 'dom-probe',
+    file_path: 'references/manifest-snapshot.json'
+  });
+  assert.match(manifestSnapshot.skill.file.content, /"description": "读取页面标题和链接"/);
+
+  await assert.rejects(
+    () => manager.executeRegistryAction({
+      action: 'copy_file',
+      skill_name: 'dom-probe',
+      source_file_path: 'src/helpers/dom.js',
+      destination_file_path: 'manifest.json'
+    }),
+    /manifest\.json 是保留虚拟文件，不能作为 copy_file 的目标路径/
+  );
+
   const moved = await manager.executeRegistryAction({
     action: 'apply_patch',
     skill_name: 'dom-probe',
@@ -433,7 +463,7 @@ test('copy_file 使用 cp 覆盖语义，skill 移动与删除统一由 apply_pa
   });
   assert.equal(deleted.ok, true);
   assert.deepEqual(deleted.affected_files.deleted, ['src/helpers/dom-renamed.js']);
-  assert.equal(deleted.files.total_count, 4);
+  assert.equal(deleted.files.total_count, 5);
   assert.equal(calls.update.length, 0);
 
   await assert.rejects(
@@ -1148,6 +1178,14 @@ test('list_files/search_files 支持单 skill 与全局搜索闭环', async () =
   assert.equal(listFiles.files[0].path, 'manifest.json');
   assert.equal(listFiles.files[0].skill_name, 'dom-probe');
 
+  const filteredFiles = await manager.executeRegistryAction({
+    action: 'list_files',
+    skill_name: 'dom-probe',
+    path_glob: 'src'
+  });
+  assert.equal(filteredFiles.files.length > 0, true);
+  assert.equal(filteredFiles.files.every((file) => file.path.startsWith('src/')), true);
+
   const globalSearch = await manager.executeRegistryAction({
     action: 'search_files',
     pattern: 'readTitle',
@@ -1346,4 +1384,38 @@ test('skill_registry list 默认只返回当前页面可见的技能，include_a
   assert.equal(allSkills.include_all_sites, true);
   assert.equal(allSkills.skills.some((skill) => skill.name === 'dom-probe'), true);
   assert.equal(allSkills.skills.some((skill) => skill.name === 'file-only'), true);
+});
+
+test('Skill 文件动作收到 tabId=null 时只持久化，不把 null 误转成 tab 0', async () => {
+  const { createSkillManager } = await loadSkillManagerModule();
+  const store = createMockStore();
+  let runtimeExecuteCount = 0;
+  const manager = createSkillManager({
+    store,
+    jsRuntimeManager: {
+      async execute() {
+        runtimeExecuteCount += 1;
+        throw new Error('Skill 文件动作不应执行页面 runtime。');
+      }
+    }
+  });
+  await manager.createSkill(buildSkillInput('null-tab-file-action'));
+
+  const result = await manager.executeRegistryAction({
+    action: 'apply_patch',
+    skill_name: 'null-tab-file-action',
+    patch: [
+      '*** Begin Patch',
+      '*** Add File: local/说明.md',
+      '+普通 Skill 文件。',
+      '*** End Patch'
+    ].join('\n')
+  }, { tabId: null });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.refreshed_current_document, false);
+  assert.equal(result.refresh_result, null);
+  assert.equal(runtimeExecuteCount, 0);
+  const stored = await store.getPackage('null-tab-file-action');
+  assert.equal(stored.files.find((file) => file.path === 'local/说明.md')?.content, '普通 Skill 文件。\n');
 });

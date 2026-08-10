@@ -6,8 +6,7 @@ export const VIRTUAL_FILE_COPY_FILE_TOOL_NAME = 'copy_file';
 // 仅用于回放旧历史记录；新请求不再暴露独立 move/delete 工具，统一走 apply_patch。
 export const VIRTUAL_FILE_MOVE_FILE_TOOL_NAME = 'move_file';
 export const VIRTUAL_FILE_DELETE_FILE_TOOL_NAME = 'delete_file';
-export const VIRTUAL_FILE_TARGET_KIND_WORKSPACE = 'workspace';
-export const VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT = VIRTUAL_FILE_TARGET_KIND_WORKSPACE;
+export const VIRTUAL_FILE_TARGET_KIND_ROOT = 'root';
 export const VIRTUAL_FILE_TARGET_KIND_LOCAL = 'local';
 export const VIRTUAL_FILE_TARGET_KIND_SKILL = 'skill';
 

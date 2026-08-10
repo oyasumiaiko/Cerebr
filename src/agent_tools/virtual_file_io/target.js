@@ -4,15 +4,15 @@ import {
   ensurePlainObject,
   normalizeOptionalString,
   normalizeString,
-  VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT,
+  VIRTUAL_FILE_TARGET_KIND_ROOT,
   VIRTUAL_FILE_TARGET_KIND_SKILL
 } from './shared.js';
 
-export function normalizeVirtualFileTargetKind(value, fallback = VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT) {
+export function normalizeVirtualFileTargetKind(value, fallback = VIRTUAL_FILE_TARGET_KIND_ROOT) {
   const normalized = normalizeString(value).toLowerCase();
   if (!normalized) return fallback;
   if (
-    normalized === VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT
+    normalized === VIRTUAL_FILE_TARGET_KIND_ROOT
     || normalized === VIRTUAL_FILE_TARGET_KIND_SKILL
   ) {
     return normalized;
@@ -21,10 +21,13 @@ export function normalizeVirtualFileTargetKind(value, fallback = VIRTUAL_FILE_TA
 }
 
 export function normalizeVirtualFileTarget(rawTarget, options = {}) {
+  if (rawTarget == null) {
+    return { kind: VIRTUAL_FILE_TARGET_KIND_ROOT, name: null };
+  }
   const input = ensurePlainObject(rawTarget);
   const kind = normalizeVirtualFileTargetKind(
     input.kind,
-    options?.defaultKind || VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT
+    options?.defaultKind || VIRTUAL_FILE_TARGET_KIND_ROOT
   );
   const name = normalizeOptionalString(input.name);
   if (kind === VIRTUAL_FILE_TARGET_KIND_SKILL) {
@@ -36,34 +39,28 @@ export function normalizeVirtualFileTarget(rawTarget, options = {}) {
       name: name ? normalizeSkillName(name) : null
     };
   }
-  if (name) {
-    throw new Error('virtual_file 参数错误：默认会话文件目标不能提供 target.name。');
-  }
-  return {
-    kind,
-    name: null
-  };
+  throw new Error('virtual_file 参数错误：默认根必须使用 target=null；target object 只用于选择 skill。');
 }
 
 export function buildVirtualFileTargetSchemaDescription(options = {}) {
   const requireSkillName = options?.requireSkillName === true;
   return buildStrictObjectSchema({
     kind: {
-      type: ['string', 'null'],
-      enum: [VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT, VIRTUAL_FILE_TARGET_KIND_SKILL, null],
-      description: '目标类型。传 null 或 `workspace` 表示当前对话文件区；传 `skill` 表示 skill 文件区。'
+      type: 'string',
+      enum: [VIRTUAL_FILE_TARGET_KIND_SKILL],
+      description: '目标类型；target object 只用于选择 skill，因此固定传 `skill`。'
     },
     name: {
       type: ['string', 'null'],
       description: requireSkillName
-        ? '当 kind=`skill` 时必须填写单个 skill 的稳定 key；kind 为 null/`workspace` 时必须传 null。'
-        : 'kind=`skill` 时可填写单个 skill 的稳定 key；传 null 表示跨全部 skill。kind 为 null/`workspace` 时必须传 null。'
+        ? '必须填写单个 skill 的稳定 key。'
+        : '填写单个 skill 的稳定 key；传 null 表示跨全部 skill。'
     }
   }, {
     nullable: true,
     description: requireSkillName
-      ? '目标作用域。传 null 表示当前对话文件区；操作 skill 时传 {"kind":"skill","name":"<skill-key>"}。本地只读映射不用 target，而是直接使用 `local/...` 路径。'
-      : '目标作用域。传 null 表示当前对话文件区；搜索/列出 skill 时传 kind=`skill`，name=null 可跨全部 skill。本地只读映射不用 target，而是直接使用 `local/...` 路径。'
+      ? '目标根。传 null 表示当前对话文件根；访问 skill 时传 {"kind":"skill","name":"<skill-key>"}。默认根的本机只读映射直接使用 `local/...` 路径。'
+      : '目标根。传 null 表示当前对话文件根；列出或搜索 skill 时传 kind=`skill`，name=null 可跨全部 skill。默认根的本机只读映射直接使用 `local/...` 路径。'
   });
 }
 
@@ -72,7 +69,7 @@ export function buildVirtualFileTargetSummary(target) {
   return {
     kind: normalizeVirtualFileTargetKind(
       normalizedTarget.kind,
-      VIRTUAL_FILE_TARGET_KIND_CONVERSATION_DOCUMENT
+      VIRTUAL_FILE_TARGET_KIND_ROOT
     ),
     name: normalizeOptionalString(normalizedTarget.name)
   };

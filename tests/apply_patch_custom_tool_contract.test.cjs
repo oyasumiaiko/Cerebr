@@ -57,10 +57,10 @@ test('Freeform Environment ID 只允许缺省会话区或 skill:<stable-key>', a
   } = await importSource(
     'src/agent_tools/virtual_file_io/index.js'
   );
-  const workspace = normalizeVirtualFileApplyPatchCustomInput(
+  const root = normalizeVirtualFileApplyPatchCustomInput(
     '*** Begin Patch\n*** Add File: a.txt\n+x\n*** End Patch'
   );
-  assert.deepEqual(workspace.target, { kind: 'workspace', name: null });
+  assert.deepEqual(root.target, { kind: 'root', name: null });
 
   const skill = normalizeVirtualFileApplyPatchCustomInput(
     '*** Begin Patch\n*** Environment ID: skill:stable-key\n*** Add File: a.txt\n+x\n*** End Patch'
@@ -76,8 +76,18 @@ test('Freeform Environment ID 只允许缺省会话区或 skill:<stable-key>', a
   const localPatch = normalizeVirtualFileApplyPatchCustomInput(
     '*** Begin Patch\n*** Environment ID: skill:stable-key\n*** Add File: local/a.txt\n+x\n*** End Patch'
   );
+  assert.equal(localPatch.target.kind, 'skill');
+  assert.equal(localPatch.patch.includes('*** Add File: local/a.txt'), true);
   assert.throws(
-    () => normalizeVirtualFileToolArguments('apply_patch', localPatch),
+    () => normalizeVirtualFileToolArguments('apply_patch', {
+      patch: '*** Begin Patch\n*** Add File: local/a.txt\n+x\n*** End Patch'
+    }),
+    /不能直接修改 local 映射路径/
+  );
+  assert.throws(
+    () => normalizeVirtualFileToolArguments('apply_patch', {
+      patch: '*** Begin Patch\n*** Add File: ./local/a.txt\n+x\n*** End Patch'
+    }),
     /不能直接修改 local 映射路径/
   );
 });

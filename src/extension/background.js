@@ -617,16 +617,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'SKILL_REGISTRY_ACTION') {
     (async () => {
       try {
-        await ensureSkillManagerReady();
         const isolateFromHostPage = message?.isolateFromHostPage === true;
-        const targetTabId = isolateFromHostPage
+        const rawPayload = (message?.payload && typeof message.payload === 'object')
+          ? message.payload
+          : {};
+        const refreshCurrentDocument = rawPayload.refresh_current_document !== false;
+        if (refreshCurrentDocument) {
+          await ensureSkillManagerReady();
+        }
+        const { refresh_current_document: _refreshCurrentDocument, ...registryPayload } = rawPayload;
+        const targetTabId = isolateFromHostPage || !refreshCurrentDocument
           ? null
           : resolveSidebarRequestTargetTabId({
               explicitTabId: message?.tabId,
               senderTabId: sender?.tab?.id,
               allowSenderTabFallback: false
             });
-        const result = await skillManager.executeRegistryAction(message?.payload || {}, {
+        const result = await skillManager.executeRegistryAction(registryPayload, {
           tabId: targetTabId
         });
         sendResponse({ success: true, ...result });
