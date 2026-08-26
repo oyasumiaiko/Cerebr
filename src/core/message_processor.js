@@ -4930,11 +4930,11 @@ export function createMessageProcessor(appContext) {
       const tokenBeforeLabel = formatCompactStatusTokens(promptTokensBefore);
       const tokenAfterLabel = formatCompactStatusTokens(compactedOutputTokens);
       if (tokenBeforeLabel && tokenAfterLabel) {
-        metaParts.push(`上下文 ${tokenBeforeLabel} ${flowArrow} ${tokenAfterLabel} tokens`);
+        metaParts.push(`压缩用量 输入 ${tokenBeforeLabel} / 输出 ${tokenAfterLabel} tokens`);
       } else if (tokenBeforeLabel) {
-        metaParts.push(`上下文 ${tokenBeforeLabel} tokens`);
+        metaParts.push(`压缩输入 ${tokenBeforeLabel} tokens`);
       } else if (tokenAfterLabel) {
-        metaParts.push(`压缩响应 ${tokenAfterLabel} tokens`);
+        metaParts.push(`压缩输出 ${tokenAfterLabel} tokens`);
       }
 
       const requestBytesLabel = formatCompactStatusBytes(status?.requestBytes);

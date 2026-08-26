@@ -31,9 +31,8 @@ import {
   isResponsesExtensionToolEnabled
 } from './responses_extension_tools.js';
 import {
-  buildResponsesCompactRequestBody,
-  resolveResponsesCompactEndpointUrl,
-  normalizeResponsesLocalCompactionSettings
+  buildResponsesCompactV2RequestBody,
+  buildResponsesCompactV2RequestHeaders
 } from '../utils/responses_local_compaction.js';
 import {
   API_REQUEST_MODE_ENHANCED,
@@ -352,16 +351,6 @@ const RESPONSES_ADVANCED_FIELD_BASE_SPECS = Object.freeze([
     rows: 6,
     placeholder: '[\n  { \"type\": \"web_search\" }\n]',
     help: '填写要由 Responses provider 执行的 hosted / MCP / namespace 工具 JSON。不要在这里手写新的 client function：Cerebr 只会执行扩展工具列表中已注册的 function，未知 function 即使被模型调用也会返回 UnsupportedFunctionError。启用 hosted tool_search 后，Cerebr 已注册的本地工具会自动补 defer_loading；额外 hosted/MCP 配置仍需自行声明。'
-  }
-]);
-const RESPONSES_LOCAL_COMPACTION_FIELD_SPECS = Object.freeze([
-  {
-    path: ['endpointUrl'],
-    key: 'endpointUrl',
-    label: 'Compact 端点 URL',
-    kind: 'text',
-    placeholder: '留空则沿用当前 Responses 端点并自动补 /compact',
-    help: '可为 compact 单独指定端点；若填写的是 /responses，也会在发送时自动补成 /compact。'
   }
 ]);
 const GEMINI_THINKING_LEVEL_OPTIONS = Object.freeze(['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']);
@@ -744,22 +733,6 @@ export function createApiManager(appContext) {
       return undefined;
     }
     return compacted;
-  }
-
-  /**
-   * 规范化本地 Responses compact 设置。
-   *
-   * 说明：
-   * - 这不是 `/responses` 官方 request body 字段，因此单独挂在配置顶层；
-   * - 当前仅承载“手动 /compact”所需的独立端点覆盖；
-   * - 手动 `/compact` 命令始终可用；未单独配置端点时回退到当前 Responses endpoint + `/compact`。
-   *
-   * @param {any} settings
-   * @returns {Object|undefined}
-   */
-  function normalizeResponsesLocalCompactionConfig(settings) {
-    const normalized = normalizeResponsesLocalCompactionSettings(settings);
-    return normalized || undefined;
   }
 
   /**
@@ -1548,10 +1521,6 @@ export function createApiManager(appContext) {
       if (compactedResponsesSettings) {
         compacted.responsesApiSettings = compactedResponsesSettings;
       }
-      const compactedResponsesLocalCompaction = normalizeResponsesLocalCompactionConfig(c.responsesLocalCompaction);
-      if (compactedResponsesLocalCompaction) {
-        compacted.responsesLocalCompaction = compactedResponsesLocalCompaction;
-      }
       const compactedGeminiSettings = normalizeGeminiApiSettings(c.geminiApiSettings);
       if (compactedGeminiSettings) {
         compacted.geminiApiSettings = compactedGeminiSettings;
@@ -2283,12 +2252,9 @@ export function createApiManager(appContext) {
       } else {
         delete config.responsesApiSettings;
       }
-      const normalizedResponsesLocalCompaction = normalizeResponsesLocalCompactionConfig(config.responsesLocalCompaction);
-      if (normalizedResponsesLocalCompaction) {
-        config.responsesLocalCompaction = normalizedResponsesLocalCompaction;
-      } else {
-        delete config.responsesLocalCompaction;
-      }
+      // compact v2 始终复用当前 Responses endpoint；清理旧版独立 `/responses/compact` 配置，
+      // 避免迁移后 UI 与真实 wire 行为继续分叉。
+      delete config.responsesLocalCompaction;
       const normalizedGeminiApiSettings = normalizeGeminiApiSettings(config.geminiApiSettings);
       if (normalizedGeminiApiSettings) {
         config.geminiApiSettings = normalizedGeminiApiSettings;
@@ -3590,27 +3556,6 @@ export function createApiManager(appContext) {
       }
       setResponsesSettingsSnapshot(draft, { persist });
     };
-    const getResponsesLocalCompactionSnapshot = () =>
-      normalizeResponsesLocalCompactionConfig(apiConfigs[index]?.responsesLocalCompaction)
-      || {};
-    const setResponsesLocalCompactionSnapshot = (nextSettings, { persist = true } = {}) => {
-      const normalized = normalizeResponsesLocalCompactionConfig(nextSettings);
-      if (normalized) {
-        apiConfigs[index].responsesLocalCompaction = normalized;
-      } else {
-        delete apiConfigs[index].responsesLocalCompaction;
-      }
-      if (persist) saveAPIConfigs();
-    };
-    const updateResponsesLocalCompactionAtPath = (path, value, { persist = true } = {}) => {
-      const draft = cloneJsonCompatible(apiConfigs[index]?.responsesLocalCompaction || {}) || {};
-      if (typeof value === 'undefined') {
-        deleteNestedValue(draft, path);
-      } else {
-        setNestedValue(draft, path, value);
-      }
-      setResponsesLocalCompactionSnapshot(draft, { persist });
-    };
     const getGeminiSettingsSnapshot = () => normalizeGeminiApiSettings(apiConfigs[index]?.geminiApiSettings) || {};
     const setGeminiSettingsSnapshot = (nextSettings, { persist = true } = {}) => {
       const normalized = normalizeGeminiApiSettings(nextSettings);
@@ -4357,15 +4302,6 @@ export function createApiManager(appContext) {
 
       return section;
     };
-    const createResponsesLocalCompactionSection = () => createApiFieldSettingsSection({
-      title: '本地上下文压缩',
-      description: '仅保留手动 `/compact`；可为 compact 单独指定端点，不再自动触发。',
-      mainSpecs: RESPONSES_LOCAL_COMPACTION_FIELD_SPECS,
-      advancedSpecs: [],
-      getSettingsSnapshot: getResponsesLocalCompactionSnapshot,
-      setSettingsSnapshot: setResponsesLocalCompactionSnapshot,
-      updateSettingAtPath: updateResponsesLocalCompactionAtPath
-    });
     const createGeminiSettingsSection = () => createApiFieldSettingsSection({
       title: 'Gemini API 字段',
       description: 'Gemini generateContent 的附加字段会以稀疏结构存储；未启用字段不会附加到请求体。',
@@ -4503,7 +4439,6 @@ export function createApiManager(appContext) {
     }
 
     const responsesSettingsSection = createResponsesSettingsSection();
-    const responsesLocalCompactionSection = createResponsesLocalCompactionSection();
     const responsesBuiltinToolSections = RESPONSES_BUILTIN_TOOL_SPECS
       .map(spec => createResponsesBuiltinToolSection(spec))
       .filter(Boolean);
@@ -4522,10 +4457,6 @@ export function createApiManager(appContext) {
       if (isResponsesConnectionSelected() && responsesSettingsSection) {
         responsesSettingsSection.hidden = false;
         nextSections.push(responsesSettingsSection);
-        if (responsesLocalCompactionSection) {
-          responsesLocalCompactionSection.hidden = false;
-          nextSections.push(responsesLocalCompactionSection);
-        }
         responsesBuiltinToolSections.forEach((section) => {
           if (!section) return;
           section.hidden = false;
@@ -4537,9 +4468,6 @@ export function createApiManager(appContext) {
         }
       } else if (responsesSettingsSection) {
         responsesSettingsSection.hidden = true;
-        if (responsesLocalCompactionSection) {
-          responsesLocalCompactionSection.hidden = true;
-        }
         responsesBuiltinToolSections.forEach((section) => {
           if (!section) return;
           section.hidden = true;
@@ -6042,7 +5970,8 @@ export function createApiManager(appContext) {
     config,
     signal,
     onStatus,
-    endpointUrlOverride = ''
+    endpointUrlOverride = '',
+    requestHeaders = null
   }) {
     config = resolveEffectiveConfig(config) || config;
     // 说明：Fetch API 无法精确提供“上传进度/已上传完毕”的事件。
@@ -6186,6 +6115,13 @@ export function createApiManager(appContext) {
         'Content-Type': 'application/json',
         'Accept': 'application/json'
       };
+      if (requestHeaders && typeof requestHeaders === 'object' && !Array.isArray(requestHeaders)) {
+        Object.entries(requestHeaders).forEach(([name, value]) => {
+          const normalizedName = (typeof name === 'string') ? name.trim() : '';
+          if (!normalizedName || value == null) return;
+          headers[normalizedName] = String(value);
+        });
+      }
       if (isGeminiConnection && !normalizedEndpointOverride) {
         endpointUrl = buildGeminiEndpointUrl({
           baseUrl: effectiveBaseUrl,
@@ -6383,13 +6319,14 @@ export function createApiManager(appContext) {
   }
 
   /**
-   * 发送 Responses compact 请求。
+   * 发送 Responses compact v2 请求。
    *
    * 说明：
-   * - 若本地 compact 设置填写了独立端点，则优先使用该端点；
-   * - 否则基于当前 Responses endpoint 推导同路径 `/compact`；
+   * - 与 Codex 一致，继续请求当前 `/responses` endpoint；
+   * - 在 input 末尾追加唯一 `compaction_trigger`，并强制使用 SSE；
+   * - 发送 `remote_compaction_v2` beta 与 `request_kind=compaction` 元数据头；
    * - 复用现有鉴权、key 轮换与免 key 请求逻辑；
-   * - 请求体会先投影为 compact 端点允许的字段子集。
+   * - 不提供 `/responses/compact` 的隐式回退，协议不支持时由上游显式报错。
    *
    * @param {Object} options
    * @param {Object} options.requestBody
@@ -6404,18 +6341,14 @@ export function createApiManager(appContext) {
       throw new Error('当前配置不是 Responses API，无法发送 compact 请求。');
     }
 
-    const compactEndpointUrl = resolveResponsesCompactEndpointUrl(
-      config?.baseUrl,
-      normalizeResponsesLocalCompactionConfig(config?.responsesLocalCompaction)?.endpointUrl
-    );
-    const compactRequestBody = buildResponsesCompactRequestBody(requestBody);
+    const compactRequestBody = buildResponsesCompactV2RequestBody(requestBody);
 
     return sendRequestWithResolvedEndpoint({
       requestBody: compactRequestBody,
       config,
       signal,
       onStatus,
-      endpointUrlOverride: compactEndpointUrl
+      requestHeaders: buildResponsesCompactV2RequestHeaders()
     });
   }
 
@@ -6683,10 +6616,6 @@ export function createApiManager(appContext) {
     if (transientResponsesApiSettings) {
       transientConfig.responsesApiSettings = transientResponsesApiSettings;
     }
-    const transientResponsesLocalCompaction = normalizeResponsesLocalCompactionConfig(partialConfig.responsesLocalCompaction);
-    if (transientResponsesLocalCompaction) {
-      transientConfig.responsesLocalCompaction = transientResponsesLocalCompaction;
-    }
     const transientGeminiApiSettings = normalizeGeminiApiSettings(partialConfig.geminiApiSettings);
     if (transientGeminiApiSettings) {
       transientConfig.geminiApiSettings = transientGeminiApiSettings;
@@ -6832,10 +6761,6 @@ export function createApiManager(appContext) {
     const mergedResponsesApiSettings = normalizeResponsesApiSettings(config.responsesApiSettings);
     if (mergedResponsesApiSettings) {
       mergedConfig.responsesApiSettings = mergedResponsesApiSettings;
-    }
-    const mergedResponsesLocalCompaction = normalizeResponsesLocalCompactionConfig(config.responsesLocalCompaction);
-    if (mergedResponsesLocalCompaction) {
-      mergedConfig.responsesLocalCompaction = mergedResponsesLocalCompaction;
     }
     const mergedGeminiApiSettings = normalizeGeminiApiSettings(config.geminiApiSettings);
     if (mergedGeminiApiSettings) {

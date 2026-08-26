@@ -99,7 +99,7 @@ export function composeMessages(args) {
   const nodeToMessage = (node) => {
     const compactStatus = node?.responsesLocalCompactionStatus;
     if (compactStatus && !isUsableResponsesLocalCompactionMarker(node)) {
-      // `/compact` 的 pending / error 提示仅用于本地消息流反馈，不应重新进入模型上下文。
+      // compact v2 的 pending / error 提示仅用于本地消息流反馈，不应重新进入模型上下文。
       return null;
     }
 

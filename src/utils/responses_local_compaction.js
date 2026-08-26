@@ -2,13 +2,22 @@
  * Responses 本地上下文压缩相关纯函数。
  *
  * 设计目标：
- * - 将“本地 compact”涉及的 wire 规则、历史 marker 规则集中管理；
+ * - 将 Responses compact v2 的 wire 规则、历史替换规则与本地 marker 规则集中管理；
  * - 让 `api_settings.js`、`message_sender.js`、`message_composer.js` 共享同一套实现，
- *   避免各处再各写一份 endpoint 推导 / body 投影 / marker 判断逻辑；
+ *   避免各处再各写一份 request body / SSE 校验 / marker 判断逻辑；
  * - 全部保持为 JSON 友好的纯函数，方便单元测试与后续扩展。
  */
 
 export const RESPONSES_LOCAL_COMPACTION_SOURCE = 'responses_local';
+export const RESPONSES_COMPACT_V2_BETA_FEATURE = 'remote_compaction_v2';
+export const RESPONSES_COMPACT_V2_RETAINED_MESSAGE_TOKEN_BUDGET = 64_000;
+export const RESPONSES_COMPACT_V2_MAX_RETAINED_AGENT_MESSAGE_TOKENS = 10_000;
+
+const RESPONSES_COMPACT_V2_HIDDEN_USER_PREFIXES = Object.freeze([
+  '<environment_context>',
+  '<page_runtime_context',
+  '<skill_context>'
+]);
 
 function cloneJsonValue(value) {
   if (value == null) return value ?? null;
@@ -62,8 +71,25 @@ function truncateCompactText(text, maxChars) {
   ].join('');
 }
 
-function sanitizeCompactFunctionOutputPayload(output) {
-  return cloneJsonValue(output);
+function estimateUtf8Bytes(value) {
+  const text = (typeof value === 'string') ? value : String(value ?? '');
+  if (typeof TextEncoder === 'function') {
+    return new TextEncoder().encode(text).length;
+  }
+  return text.length;
+}
+
+function createResponsesCompactV2Error(message, options = {}) {
+  const error = new Error(message);
+  error.name = 'ResponsesCompactV2Error';
+  error.code = (typeof options.code === 'string' && options.code.trim())
+    ? options.code.trim()
+    : 'responses_compact_v2_error';
+  error.retryable = options.retryable === true;
+  if (Number.isFinite(Number(options.status))) {
+    error.status = Number(options.status);
+  }
+  return error;
 }
 
 function sanitizeCompactReplayInputItem(item) {
@@ -72,9 +98,7 @@ function sanitizeCompactReplayInputItem(item) {
   if (!cloned || typeof cloned !== 'object' || Array.isArray(cloned)) return null;
 
   const type = String(cloned.type || '').trim().toLowerCase();
-  if (type === 'function_call_output' || type === 'custom_tool_call_output') {
-    cloned.output = sanitizeCompactFunctionOutputPayload(cloned.output);
-  }
+  if (type === 'compaction_trigger') return null;
   return cloned;
 }
 
@@ -108,6 +132,7 @@ function buildCompactRequestSummaryObject(requestBody) {
   return {
     serializedBytes: estimateJsonSerializedBytes(source),
     inputCount: input.length,
+    compactionTriggerCount: input.filter(item => String(item?.type || '').trim().toLowerCase() === 'compaction_trigger').length,
     functionCallOutputCount,
     functionCallOutputBytes,
     maxFunctionCallOutputBytes,
@@ -120,6 +145,7 @@ function formatCompactRequestSummary(summary) {
   return [
     `serialized_bytes=${Number.isFinite(Number(normalized.serializedBytes)) ? Number(normalized.serializedBytes) : '?'}`,
     `input_count=${Number.isFinite(Number(normalized.inputCount)) ? Number(normalized.inputCount) : '?'}`,
+    `compaction_trigger_count=${Number.isFinite(Number(normalized.compactionTriggerCount)) ? Number(normalized.compactionTriggerCount) : '?'}`,
     `function_call_output_count=${Number.isFinite(Number(normalized.functionCallOutputCount)) ? Number(normalized.functionCallOutputCount) : '?'}`,
     `function_call_output_bytes=${Number.isFinite(Number(normalized.functionCallOutputBytes)) ? Number(normalized.functionCallOutputBytes) : '?'}`,
     `max_function_call_output_bytes=${Number.isFinite(Number(normalized.maxFunctionCallOutputBytes)) ? Number(normalized.maxFunctionCallOutputBytes) : '?'}`,
@@ -143,6 +169,14 @@ function sanitizeCompactReasoningConfig(value) {
   return Object.keys(sanitized).length > 0 ? sanitized : null;
 }
 
+function sanitizeCompactTextConfig(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const verbosity = (typeof value.verbosity === 'string' && value.verbosity.trim())
+    ? value.verbosity.trim()
+    : '';
+  return verbosity ? { verbosity } : null;
+}
+
 function normalizePositiveInteger(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return null;
@@ -151,81 +185,19 @@ function normalizePositiveInteger(value) {
 }
 
 /**
- * 规范化 Responses 本地 compact 设置。
+ * 从普通 `/responses` 请求构造 Codex 同款 compact v2 请求体。
  *
- * 说明：
- * - 当前只保留“手动 `/compact`”相关设置；
- * - 独立 compact 端点可显式覆盖；为空时回退到当前 Responses endpoint + `/compact`；
- * - 旧版自动 compact 配置（例如 enabled / thresholdPromptTokens）在这里直接丢弃，
- *   避免继续污染新的手动模式语义。
- *
- * @param {any} raw
- * @returns {{endpointUrl:string}|null}
- */
-export function normalizeResponsesLocalCompactionSettings(raw) {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
-
-  const endpointUrl = (typeof (raw.endpointUrl ?? raw.compactEndpointUrl ?? raw.endpoint_url ?? raw.compact_endpoint_url) === 'string')
-    ? String(raw.endpointUrl ?? raw.compactEndpointUrl ?? raw.endpoint_url ?? raw.compact_endpoint_url).trim()
-    : '';
-  if (!endpointUrl) {
-    return null;
-  }
-
-  return {
-    endpointUrl
-  };
-}
-
-/**
- * 基于当前 `/responses` endpoint 推导 `/responses/compact`。
- *
- * 约束：
- * - 不引入 provider fallback；
- * - 直接在当前 baseUrl 末尾拼接 `/compact`；
- * - 对已经以 `/compact` 结尾的路径保持幂等。
- *
- * @param {any} baseUrl
- * @returns {string}
- */
-export function buildResponsesCompactEndpointUrl(baseUrl) {
-  const raw = (typeof baseUrl === 'string') ? baseUrl.trim() : '';
-  if (!raw) {
-    throw new Error('Responses compact 端点推导失败：baseUrl 为空。');
-  }
-
-  const trimmed = raw.replace(/\/+$/, '');
-  if (/\/compact$/i.test(trimmed)) {
-    return trimmed;
-  }
-  return `${trimmed}/compact`;
-}
-
-/**
- * 解析 compact 实际请求端点。
- *
- * 优先级：
- * - 若 API 页面为 compact 单独配置了端点，则优先使用它；
- * - 否则回退到当前 Responses endpoint 并在末尾追加 `/compact`。
- *
- * @param {any} baseUrl
- * @param {any} explicitCompactEndpointUrl
- * @returns {string}
- */
-export function resolveResponsesCompactEndpointUrl(baseUrl, explicitCompactEndpointUrl) {
-  const explicit = (typeof explicitCompactEndpointUrl === 'string') ? explicitCompactEndpointUrl.trim() : '';
-  return buildResponsesCompactEndpointUrl(explicit || baseUrl);
-}
-
-/**
- * 从普通 `/responses` request body 投影出 compact 专用请求体。
- *
- * 只保留 compact 专用端点需要的字段；其它 create-only 字段一律不透传。
+ * 关键协议：
+ * - 仍然发送到原 `/responses` endpoint；
+ * - 使用与正常 turn 相同的 instructions、工具和推理设置；
+ * - 清除旧 `compaction_trigger` 后，在 input 末尾追加且只追加一个 trigger；
+ * - 强制 SSE，因为 v2 的成功边界是 `response.output_item.done(type=compaction)`
+ *   与随后的 `response.completed`，不能把 `[DONE]` 或连接关闭当成成功。
  *
  * @param {any} requestBody
  * @returns {Object}
  */
-export function buildResponsesCompactRequestBody(requestBody) {
+export function buildResponsesCompactV2RequestBody(requestBody) {
   const source = (requestBody && typeof requestBody === 'object' && !Array.isArray(requestBody))
     ? requestBody
     : {};
@@ -233,95 +205,396 @@ export function buildResponsesCompactRequestBody(requestBody) {
 
   [
     'model',
-    'input',
     'instructions',
     'tools',
-    'parallel_tool_calls',
-    'reasoning',
-    'text'
+    'stream_options',
+    'service_tier',
+    'prompt_cache_key',
+    'prompt_cache_options',
+    'client_metadata'
   ].forEach((key) => {
     if (!Object.prototype.hasOwnProperty.call(source, key)) return;
-    const cloned = key === 'reasoning'
-      ? sanitizeCompactReasoningConfig(source[key])
-      : key === 'input'
-        ? null
-        : cloneJsonValue(source[key]);
-    if (typeof cloned === 'undefined') return;
-    if (cloned === null && key === 'reasoning') return;
-    if (key !== 'input') {
-      projected[key] = cloned;
-    }
+    const cloned = cloneJsonValue(source[key]);
+    if (typeof cloned === 'undefined' || (cloned === null && source[key] == null)) return;
+    projected[key] = cloned;
   });
 
-  if (Object.prototype.hasOwnProperty.call(source, 'input')) {
-    const inputItems = Array.isArray(source.input) ? source.input : [];
-    projected.input = sanitizeCompactReplayInputItems(inputItems);
+  const reasoning = sanitizeCompactReasoningConfig(source.reasoning);
+  if (reasoning) {
+    projected.reasoning = reasoning;
   }
 
+  const text = sanitizeCompactTextConfig(source.text);
+  if (text) {
+    projected.text = text;
+  }
+
+  const include = (Array.isArray(source.include) ? source.include : [])
+    .filter(value => typeof value === 'string' && value.trim())
+    .map(value => value.trim());
+  if (!include.includes('reasoning.encrypted_content')) {
+    include.push('reasoning.encrypted_content');
+  }
+  projected.include = [...new Set(include)];
+  projected.parallel_tool_calls = source.parallel_tool_calls === true;
+  projected.store = source.store === true;
+  projected.tool_choice = 'auto';
+  projected.stream = true;
+  projected.input = sanitizeCompactReplayInputItems(source.input);
+  projected.input.push({ type: 'compaction_trigger' });
   return projected;
-}
-
-/**
- * 对 compact 请求应用显式 instructions 覆盖策略。
- *
- * 设计目标：
- * - compact 不应继续沿用“聊天发送链路里抽离出来的 system 指令”，否则会把用户自定义角色、
- *   全局模板、甚至别的模型人格一股脑带进 `/responses/compact`；
- * - 这里允许调用方在 compact 专用路径上覆盖成一份稳定的 instructions，或者显式删除。
- *
- * @param {any} requestBody
- * @param {string|null|undefined} instructionsText
- * @returns {Object}
- */
-export function applyResponsesCompactInstructionsOverride(requestBody, instructionsText) {
-  const source = (requestBody && typeof requestBody === 'object' && !Array.isArray(requestBody))
-    ? requestBody
-    : {};
-  const nextBody = cloneJsonValue(source) || {};
-  const normalizedInstructions = (typeof instructionsText === 'string')
-    ? instructionsText.trim()
-    : '';
-  if (normalizedInstructions) {
-    nextBody.instructions = normalizedInstructions;
-  } else {
-    delete nextBody.instructions;
-  }
-  return nextBody;
 }
 
 export function summarizeResponsesCompactRequestBody(requestBody) {
   return buildCompactRequestSummaryObject(requestBody);
 }
 
-export function parseResponsesCompactResponseText(rawText, options = {}) {
+/**
+ * 构造 compact v2 所需的 Codex 协议头。
+ *
+ * Cerebr 没有 Codex 的 installation/window 状态机，因此这里只发送服务端识别 v2 所需、
+ * 且能被当前会话真实表达的请求种类和 compaction 语义；不会伪造线程或窗口标识。
+ *
+ * @returns {Object<string,string>}
+ */
+export function buildResponsesCompactV2RequestHeaders() {
+  return {
+    Accept: 'text/event-stream',
+    'x-codex-beta-features': RESPONSES_COMPACT_V2_BETA_FEATURE,
+    'x-codex-turn-metadata': JSON.stringify({
+      request_kind: 'compaction',
+      compaction: {
+        trigger: 'manual',
+        reason: 'user_requested',
+        implementation: 'responses_compaction_v2',
+        phase: 'standalone_turn',
+        strategy: 'memento'
+      }
+    })
+  };
+}
+
+function parseResponsesSseEventBlocks(rawText) {
+  const text = (typeof rawText === 'string') ? rawText : '';
+  const events = [];
+  let eventName = '';
+  let dataLines = [];
+
+  const flush = () => {
+    if (!eventName && dataLines.length === 0) return;
+    events.push({ event: eventName, data: dataLines.join('\n').trim() });
+    eventName = '';
+    dataLines = [];
+  };
+
+  text.replace(/^\uFEFF/, '').split(/\r?\n/).forEach((line) => {
+    if (line === '') {
+      flush();
+      return;
+    }
+    if (line.startsWith(':')) return;
+    if (line.startsWith('event:')) {
+      eventName = line.slice(6).trim();
+      return;
+    }
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).replace(/^ /, ''));
+    }
+  });
+  flush();
+  return events;
+}
+
+function readResponsesErrorMessage(payload, fallback) {
+  const candidates = [
+    payload?.error?.message,
+    payload?.response?.error?.message,
+    payload?.message,
+    fallback
+  ];
+  return candidates.find(value => typeof value === 'string' && value.trim())?.trim()
+    || 'Responses compact v2 请求失败';
+}
+
+function readResponsesErrorCode(payload) {
+  const value = payload?.error?.code ?? payload?.response?.error?.code ?? payload?.code;
+  return (typeof value === 'string' && value.trim()) ? value.trim().toLowerCase() : '';
+}
+
+function isRetryableResponsesErrorCode(code) {
+  return [
+    'server_error',
+    'rate_limit_exceeded',
+    'service_unavailable',
+    'timeout',
+    'temporarily_unavailable'
+  ].includes(String(code || '').trim().toLowerCase());
+}
+
+/**
+ * 解析并严格校验 compact v2 SSE。
+ *
+ * 与 Codex 一致：允许同时出现其它 output item，但必须在 `response.completed` 前恰好收到
+ * 一个 `response.output_item.done` 的 compaction item。连接关闭、`[DONE]`、零个或多个
+ * compaction item 都不是成功。
+ *
+ * @param {string} rawText
+ * @param {{status?:number, requestSummary?:Object}} [options]
+ * @returns {{compactionOutput:Object,responseId:string|null,usage:Object|null,outputItemCount:number,compactionCount:number,responseBytes:number,eventCount:number}}
+ */
+export function parseResponsesCompactV2SseText(rawText, options = {}) {
   const normalizedOptions = (options && typeof options === 'object') ? options : {};
   const responseText = (typeof rawText === 'string') ? rawText : '';
   const trimmedResponseText = responseText.trim();
   const status = Number.isFinite(Number(normalizedOptions.status)) ? Number(normalizedOptions.status) : null;
-  const contentLength = (() => {
-    const raw = normalizedOptions.contentLength;
-    if (typeof raw === 'string' && raw.trim()) return raw.trim();
-    if (Number.isFinite(Number(raw))) return String(Number(raw));
-    return '';
-  })();
   const summaryText = formatCompactRequestSummary(normalizedOptions.requestSummary);
 
   if (!trimmedResponseText) {
-    throw new Error(
-      `Compact 接口返回空响应体（HTTP ${status ?? '?'}${contentLength ? `, content-length=${contentLength}` : ''}）。`
-      + ` 请求摘要：${summaryText}`
+    throw createResponsesCompactV2Error(
+      `Responses compact v2 返回空 SSE（HTTP ${status ?? '?'}）。请求摘要：${summaryText}`,
+      { code: 'responses_compact_v2_empty_stream', retryable: true, status }
     );
   }
 
-  try {
-    return JSON.parse(trimmedResponseText);
-  } catch (error) {
-    const preview = truncateCompactText(trimmedResponseText, 240);
-    throw new Error(
-      `Compact 响应解析失败：${error?.message || 'invalid json'}。`
-      + ` HTTP ${status ?? '?'}，请求摘要：${summaryText}，响应片段：${preview}`
+  const events = parseResponsesSseEventBlocks(responseText);
+  let outputItemCount = 0;
+  let compactionCount = 0;
+  let compactionOutput = null;
+  let sawCompleted = false;
+  let responseId = null;
+  let usage = null;
+
+  for (const event of events) {
+    if (!event.data || event.data === '[DONE]') continue;
+    let payload = null;
+    try {
+      payload = JSON.parse(event.data);
+    } catch (error) {
+      throw createResponsesCompactV2Error(
+        `Responses compact v2 SSE JSON 解析失败：${error?.message || 'invalid json'}。`
+        + ` HTTP ${status ?? '?'}，请求摘要：${summaryText}，事件片段：${truncateCompactText(event.data, 240)}`,
+        { code: 'responses_compact_v2_invalid_sse_json', retryable: false, status }
+      );
+    }
+
+    const eventType = String(payload?.type || event.event || '').trim().toLowerCase();
+    if (eventType === 'error' || eventType === 'response.failed' || eventType === 'response.incomplete') {
+      const errorCode = readResponsesErrorCode(payload);
+      throw createResponsesCompactV2Error(
+        readResponsesErrorMessage(payload, `Responses compact v2 收到 ${eventType}`),
+        {
+          code: errorCode || eventType.replace(/\./g, '_'),
+          retryable: isRetryableResponsesErrorCode(errorCode),
+          status
+        }
+      );
+    }
+
+    if (eventType === 'response.output_item.done') {
+      outputItemCount += 1;
+      const item = payload?.item;
+      const itemType = String(item?.type || '').trim().toLowerCase();
+      if (itemType === 'compaction' || itemType === 'compaction_summary') {
+        compactionCount += 1;
+        if (!compactionOutput) {
+          compactionOutput = cloneJsonValue(item);
+          compactionOutput.type = 'compaction';
+        }
+      }
+      continue;
+    }
+
+    if (eventType === 'response.completed') {
+      sawCompleted = true;
+      responseId = (typeof payload?.response?.id === 'string' && payload.response.id)
+        ? payload.response.id
+        : ((typeof payload?.response_id === 'string' && payload.response_id) ? payload.response_id : null);
+      usage = cloneJsonValue(payload?.response?.usage || payload?.usage || null);
+      break;
+    }
+  }
+
+  if (!sawCompleted) {
+    throw createResponsesCompactV2Error(
+      'Responses compact v2 stream closed before response.completed',
+      { code: 'responses_compact_v2_stream_incomplete', retryable: true, status }
     );
   }
+
+  if (compactionCount !== 1) {
+    throw createResponsesCompactV2Error(
+      `Responses compact v2 预期恰好一个 compaction output item，实际 ${compactionCount} 个（全部 output item ${outputItemCount} 个）`,
+      { code: 'responses_compact_v2_invalid_output_count', retryable: false, status }
+    );
+  }
+
+  return {
+    compactionOutput,
+    responseId,
+    usage,
+    outputItemCount,
+    compactionCount,
+    responseBytes: estimateUtf8Bytes(responseText),
+    eventCount: events.length
+  };
+}
+
+function readMessageContentTextParts(item) {
+  const content = item?.content;
+  if (typeof content === 'string') return [content];
+  if (!Array.isArray(content)) return [];
+  return content
+    .map(part => {
+      if (!part || typeof part !== 'object') return '';
+      return (typeof part.text === 'string') ? part.text : '';
+    })
+    .filter(Boolean);
+}
+
+function approximateTokenCount(text) {
+  const content = (typeof text === 'string') ? text : String(text ?? '');
+  if (!content) return 0;
+  const bytes = (typeof TextEncoder === 'function')
+    ? (new TextEncoder()).encode(content).length
+    : content.length;
+  return Math.ceil(bytes / 4);
+}
+
+function approximateMessageTokenCount(item) {
+  const textTokens = readMessageContentTextParts(item)
+    .reduce((total, text) => total + approximateTokenCount(text), 0);
+  return Math.max(1, textTokens);
+}
+
+function isHiddenResponsesContextUserMessage(item) {
+  const text = readMessageContentTextParts(item).join('\n').trimStart().toLowerCase();
+  return RESPONSES_COMPACT_V2_HIDDEN_USER_PREFIXES.some(prefix => text.startsWith(prefix));
+}
+
+function truncateTextToApproximateTokenBudget(text, maxTokens) {
+  const content = (typeof text === 'string') ? text : String(text ?? '');
+  const normalizedMaxTokens = Math.max(0, Math.floor(Number(maxTokens) || 0));
+  if (!content || normalizedMaxTokens <= 0) return '';
+  const byteBudget = normalizedMaxTokens * 4;
+  const encoder = (typeof TextEncoder === 'function') ? new TextEncoder() : null;
+  const byteLength = value => encoder ? encoder.encode(value).length : value.length;
+  if (byteLength(content) <= byteBudget) return content;
+
+  const chars = Array.from(content);
+  const notice = '\u2026';
+  let prefix = '';
+  let suffix = '';
+  let left = 0;
+  let right = chars.length - 1;
+  let takeFromLeft = true;
+  while (left <= right) {
+    const candidate = takeFromLeft
+      ? `${prefix}${chars[left]}${notice}${suffix}`
+      : `${prefix}${notice}${chars[right]}${suffix}`;
+    if (byteLength(candidate) > byteBudget) break;
+    if (takeFromLeft) {
+      prefix += chars[left];
+      left += 1;
+    } else {
+      suffix = chars[right] + suffix;
+      right -= 1;
+    }
+    takeFromLeft = !takeFromLeft;
+  }
+  return `${prefix}${notice}${suffix}`;
+}
+
+function truncateMessageToApproximateTokenBudget(item, maxTokens) {
+  const cloned = cloneJsonValue(item);
+  if (!cloned || maxTokens <= 0) return null;
+  let remaining = Math.max(0, Math.floor(maxTokens));
+
+  if (typeof cloned.content === 'string') {
+    cloned.content = truncateTextToApproximateTokenBudget(cloned.content, remaining);
+    return cloned.content ? cloned : null;
+  }
+  if (!Array.isArray(cloned.content)) return cloned;
+
+  const content = [];
+  for (const part of cloned.content) {
+    if (!part || typeof part !== 'object') continue;
+    if (typeof part.text !== 'string') {
+      content.push(part);
+      continue;
+    }
+    if (remaining <= 0) continue;
+    const nextPart = cloneJsonValue(part);
+    nextPart.text = truncateTextToApproximateTokenBudget(part.text, remaining);
+    if (!nextPart.text) continue;
+    content.push(nextPart);
+    remaining = Math.max(0, remaining - approximateTokenCount(nextPart.text));
+  }
+  cloned.content = content;
+  return content.length > 0 ? cloned : null;
+}
+
+function isRetainedResponsesCompactV2InputItem(item, maxRetainedAgentMessageTokens) {
+  const type = String(item?.type || '').trim().toLowerCase();
+  if (type === 'agent_message') {
+    const text = readMessageContentTextParts(item).join('\n');
+    return !text.startsWith('Message Type: FINAL_ANSWER\n')
+      && approximateMessageTokenCount(item) <= maxRetainedAgentMessageTokens;
+  }
+  if (type !== 'message') return false;
+  if (String(item?.role || '').trim().toLowerCase() !== 'user') return false;
+  return !isHiddenResponsesContextUserMessage(item);
+}
+
+/**
+ * 按 Codex compact v2 的 replacement-history 规则重建后续 Responses input。
+ *
+ * 只保留真实 user 消息（以及未来可能出现的非 final agent_message），丢弃旧 assistant、工具、
+ * reasoning、隐藏环境消息和旧 compaction，最后追加本次服务端返回的新 compaction item。
+ * 保留消息从最新向前占用 64K 近似 token 预算，避免长期多次 compact 后 user 历史无限增长。
+ *
+ * @param {Array<any>} promptInput
+ * @param {Object} compactionOutput
+ * @param {{retainedMessageTokenBudget?:number,maxRetainedAgentMessageTokens?:number}} [options]
+ * @returns {Array<Object>}
+ */
+export function buildResponsesCompactV2ReplacementHistory(promptInput, compactionOutput, options = {}) {
+  if (String(compactionOutput?.type || '').trim().toLowerCase() !== 'compaction') {
+    throw createResponsesCompactV2Error(
+      'Responses compact v2 replacement history 缺少合法的 compaction item',
+      { code: 'responses_compact_v2_missing_compaction_item', retryable: false }
+    );
+  }
+
+  const retainedMessageTokenBudget = normalizePositiveInteger(options.retainedMessageTokenBudget)
+    || RESPONSES_COMPACT_V2_RETAINED_MESSAGE_TOKEN_BUDGET;
+  const maxRetainedAgentMessageTokens = normalizePositiveInteger(options.maxRetainedAgentMessageTokens)
+    || RESPONSES_COMPACT_V2_MAX_RETAINED_AGENT_MESSAGE_TOKENS;
+  const retainedCandidates = sanitizeCompactReplayInputItems(promptInput)
+    .filter(item => isRetainedResponsesCompactV2InputItem(item, maxRetainedAgentMessageTokens));
+
+  let remaining = retainedMessageTokenBudget;
+  const retainedReversed = [];
+  for (let index = retainedCandidates.length - 1; index >= 0; index -= 1) {
+    if (remaining <= 0) break;
+    const item = retainedCandidates[index];
+    const tokenCount = approximateMessageTokenCount(item);
+    if (tokenCount <= remaining) {
+      retainedReversed.push(cloneJsonValue(item));
+      remaining -= tokenCount;
+      continue;
+    }
+    const truncated = truncateMessageToApproximateTokenBudget(item, remaining);
+    if (truncated) retainedReversed.push(truncated);
+    remaining = 0;
+  }
+
+  retainedReversed.reverse();
+  retainedReversed.push(cloneJsonValue(compactionOutput));
+  return retainedReversed;
+}
+
+export function isResponsesCompactV2RetryableError(error) {
+  return error?.retryable === true;
 }
 
 /**

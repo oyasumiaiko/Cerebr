@@ -10,15 +10,14 @@ import { extractThinkingFromText, mergeStreamingThoughts, mergeThoughts } from '
 import { mergeResponsesReasoningText, normalizeResponsesReasoningText } from '../utils/responses_activity_reasoning.js';
 import { cloneResponsesInputItems, mergeResponsesInputItems } from '../utils/responses_input_items.js';
 import {
-  applyResponsesCompactInstructionsOverride,
+  buildResponsesCompactV2ReplacementHistory,
+  buildResponsesCompactV2RequestBody,
   buildResponsesLocalCompactionMarker,
   findLatestAssistantPromptTokenEntry,
-  parseResponsesCompactResponseText,
+  isResponsesCompactV2RetryableError,
+  parseResponsesCompactV2SseText,
   summarizeResponsesCompactRequestBody
 } from '../utils/responses_local_compaction.js';
-import {
-  RESPONSES_COMPACT_CODEX_GPT_5_4_BASE_INSTRUCTIONS
-} from '../utils/responses_compact_codex_instructions.js';
 import { createAdaptiveUpdateThrottler } from '../utils/adaptive_update_throttler.js';
 import { extractPlainTextFromContent } from '../utils/conversation_title.js';
 import { deleteMessageFromChatHistory } from './chat_history_manager.js';
@@ -5661,9 +5660,9 @@ export function createMessageSender(appContext) {
         responseStatus: normalizedOptions.responseStatus,
         responseBytes: normalizedOptions.responseBytes,
         compactedOutputTokens: normalizedOptions.compactedOutputTokens,
-        outputCount: Array.isArray(normalizedOptions.compactOutput)
-          ? normalizedOptions.compactOutput.length
-          : normalizedOptions.outputCount
+        outputCount: Number.isFinite(Number(normalizedOptions.outputCount))
+          ? Number(normalizedOptions.outputCount)
+          : (Array.isArray(normalizedOptions.compactOutput) ? normalizedOptions.compactOutput.length : null)
       })
     };
   }
@@ -5963,7 +5962,8 @@ export function createMessageSender(appContext) {
 
   async function buildResponsesLocalCompactionRequestBody({
     usedApiConfig,
-    conversationChain
+    conversationChain,
+    activeThreadContext = null
   }) {
     const compactMessages = composeMessages({
       prompts: promptSettingsManager.getPrompts(),
@@ -5975,25 +5975,34 @@ export function createMessageSender(appContext) {
       regenerateMode: false,
       messageId: null,
       conversationChain: Array.isArray(conversationChain) ? conversationChain : [],
-      maxHistory: usedApiConfig?.maxChatHistory ?? 500,
-      maxUserHistory: usedApiConfig?.maxChatHistoryUser,
-      maxAssistantHistory: usedApiConfig?.maxChatHistoryAssistant
+      // Codex compact v2 压缩的是完整当前历史，而不是再套普通 turn 的显示窗口。
+      // marker slicing 仍会先裁到最近一次 compact，因而这里不会把已经被替换的旧窗口重新带回。
+      maxHistory: null,
+      maxUserHistory: null,
+      maxAssistantHistory: null
     });
 
     const baseRequestBody = await apiManager.buildRequest({
       messages: compactMessages,
       config: usedApiConfig
     });
-    const compactRequestBody = applyResponsesCompactInstructionsOverride(
+    if (!normalizeResponsesPromptCacheKey(baseRequestBody?.prompt_cache_key)) {
+      const autoPromptCacheKey = resolveAutoResponsesPromptCacheKey({
+        requestBody: baseRequestBody,
+        usedApiConfig,
+        conversationIdHint: currentConversationId || chatHistoryUI?.getCurrentConversationId?.(),
+        runtimeConversationKeyHint: getCurrentActiveConversationQueueKey({ activeThreadContext })
+      });
+      if (autoPromptCacheKey) {
+        baseRequestBody.prompt_cache_key = autoPromptCacheKey;
+      }
+    }
+    const preparedRequestBody = await prepareResponsesRequestBodyForCustomTools(
       baseRequestBody,
-      RESPONSES_COMPACT_CODEX_GPT_5_4_BASE_INSTRUCTIONS
-    );
-
-    return prepareResponsesRequestBodyForCustomTools(
-      compactRequestBody,
       usedApiConfig,
       resolveResponsesPageToolEnvironment()
     );
+    return buildResponsesCompactV2RequestBody(preparedRequestBody);
   }
 
   async function executeResponsesLocalCompaction(payload = {}) {
@@ -6011,7 +6020,8 @@ export function createMessageSender(appContext) {
       : [];
     const compactRequestBody = await buildResponsesLocalCompactionRequestBody({
       usedApiConfig,
-      conversationChain
+      conversationChain,
+      activeThreadContext: normalizedPayload.activeThreadContext || null
     });
     const compactRequestSummary = summarizeResponsesCompactRequestBody(compactRequestBody);
     if (typeof normalizedPayload.onStatusUpdate === 'function') {
@@ -6023,33 +6033,85 @@ export function createMessageSender(appContext) {
         toolCount: compactRequestSummary?.toolCount
       });
     }
-    const compactResponse = await apiManager.sendResponsesCompactRequest({
-      requestBody: compactRequestBody,
-      config: usedApiConfig,
-      signal: normalizedPayload.signal
-    });
+    const compactStartedAt = (typeof performance !== 'undefined' && typeof performance.now === 'function')
+      ? performance.now()
+      : Date.now();
+    console.info(
+      `[responses compact v2] request_start input_count=${compactRequestSummary?.inputCount ?? '?'} `
+      + `request_bytes=${compactRequestSummary?.serializedBytes ?? '?'}`
+    );
+
+    let compactResponse = null;
+    try {
+      compactResponse = await apiManager.sendResponsesCompactRequest({
+        requestBody: compactRequestBody,
+        config: usedApiConfig,
+        signal: normalizedPayload.signal,
+        onStatus: (event) => {
+          if (typeof normalizedPayload.onStatusUpdate !== 'function') return;
+          const stage = String(event?.stage || '').trim();
+          if (stage === 'http_response_headers_received') {
+            normalizedPayload.onStatusUpdate({
+              state: 'pending',
+              phase: 'receiving',
+              responseStatus: event?.status
+            });
+          }
+        }
+      });
+    } catch (error) {
+      const elapsedMs = Math.max(0, Math.round(((typeof performance !== 'undefined' && typeof performance.now === 'function')
+        ? performance.now()
+        : Date.now()) - compactStartedAt));
+      console.error(`[responses compact v2] request_failed elapsed_ms=${elapsedMs}`, error);
+      throw error;
+    }
     if (!compactResponse.ok) {
       const errorText = await compactResponse.text().catch(() => '');
-      throw new Error(errorText || `Compact 请求失败 (${compactResponse.status})`);
+      const error = new Error(errorText || `Responses compact v2 请求失败 (${compactResponse.status})`);
+      error.status = compactResponse.status;
+      error.retryable = compactResponse.status === 408
+        || compactResponse.status === 409
+        || compactResponse.status === 429
+        || compactResponse.status >= 500;
+      const elapsedMs = Math.max(0, Math.round(((typeof performance !== 'undefined' && typeof performance.now === 'function')
+        ? performance.now()
+        : Date.now()) - compactStartedAt));
+      console.error(
+        `[responses compact v2] http_failed elapsed_ms=${elapsedMs} status=${compactResponse.status}`,
+        error
+      );
+      throw error;
     }
 
     const compactResponseText = await compactResponse.text().catch(() => '');
-    const compactPayload = parseResponsesCompactResponseText(compactResponseText, {
-      status: compactResponse.status,
-      contentLength: compactResponse.headers?.get?.('content-length') || '',
-      requestSummary: compactRequestSummary
-    });
-    if (compactPayload?.error) {
-      throw new Error(compactPayload.error?.message || 'Compact 接口返回错误');
+    let compactResult = null;
+    try {
+      compactResult = parseResponsesCompactV2SseText(compactResponseText, {
+        status: compactResponse.status,
+        requestSummary: compactRequestSummary
+      });
+    } catch (error) {
+      const elapsedMs = Math.max(0, Math.round(((typeof performance !== 'undefined' && typeof performance.now === 'function')
+        ? performance.now()
+        : Date.now()) - compactStartedAt));
+      console.error(`[responses compact v2] protocol_failed elapsed_ms=${elapsedMs}`, error);
+      throw error;
     }
-    const compactUsage = normalizeApiUsageMeta(compactPayload?.usage || compactPayload?.response?.usage);
-
+    const compactUsage = normalizeApiUsageMeta(compactResult?.usage);
     const compactOutput = cloneResponsesInputItems(
-      Array.isArray(compactPayload?.output) ? compactPayload.output : []
+      buildResponsesCompactV2ReplacementHistory(
+        compactRequestBody.input,
+        compactResult.compactionOutput
+      )
     );
-    if (compactOutput.length <= 0) {
-      throw new Error('Compact 响应未返回可重放的 output。');
-    }
+    const elapsedMs = Math.max(0, Math.round(((typeof performance !== 'undefined' && typeof performance.now === 'function')
+      ? performance.now()
+      : Date.now()) - compactStartedAt));
+    console.info(
+      `[responses compact v2] request_completed elapsed_ms=${elapsedMs} `
+      + `response_bytes=${compactResult.responseBytes} output_items=${compactResult.outputItemCount}`
+    );
 
     const historyPatch = buildResponsesLocalCompactionHistoryPatch({
       compactOutput,
@@ -6062,17 +6124,25 @@ export function createMessageSender(appContext) {
       inputCount: compactRequestSummary?.inputCount,
       toolCount: compactRequestSummary?.toolCount,
       responseStatus: compactResponse.status,
-      responseBytes: (new TextEncoder()).encode(compactResponseText).length,
+      responseBytes: compactResult.responseBytes,
       compactedOutputTokens: compactUsage?.completionTokens ?? null,
-      outputCount: compactOutput.length
+      outputCount: compactResult.outputItemCount
     });
-    const markerResult = updateResponsesLocalCompactionMessage({
-      targetMessageId: normalizedPayload.targetMessageId || '',
-      text: RESPONSES_LOCAL_COMPACTION_MARKER_TEXT,
-      historyPatch,
-      activeThreadContext: normalizedPayload.activeThreadContext || null,
-      historyMessagesRef: normalizedPayload.historyMessagesRef || null
-    });
+    let markerResult = null;
+    try {
+      markerResult = updateResponsesLocalCompactionMessage({
+        targetMessageId: normalizedPayload.targetMessageId || '',
+        text: RESPONSES_LOCAL_COMPACTION_MARKER_TEXT,
+        historyPatch,
+        activeThreadContext: normalizedPayload.activeThreadContext || null,
+        historyMessagesRef: normalizedPayload.historyMessagesRef || null
+      });
+    } catch (error) {
+      // 服务端已经完成 compaction；本地安装失败只能显式报错，不能再次发送不可幂等的压缩请求。
+      error.retryable = false;
+      error.remoteCompactionCompleted = true;
+      throw error;
+    }
 
     return {
       compactOutput,
@@ -6244,15 +6314,40 @@ export function createMessageSender(appContext) {
               });
             }
           });
-          await persistResponsesLocalCompactionConversation();
-          return { ok: true, result };
+          try {
+            await persistResponsesLocalCompactionConversation();
+          } catch (persistenceError) {
+            const persistenceMessage = persistenceError?.message || String(persistenceError || 'unknown persistence error');
+            console.error(
+              '[responses compact v2] remote compaction succeeded but conversation persistence failed; request will not be repeated.',
+              persistenceError
+            );
+            if (typeof showNotification === 'function') {
+              showNotification({
+                message: `上下文已压缩，但会话保存失败：${persistenceMessage}`,
+                type: 'warning'
+              });
+            }
+            return {
+              ok: true,
+              result,
+              persistenceError: persistenceMessage
+            };
+          }
+          return { ok: true, result, persistenceError: null };
         } catch (error) {
           if (controller.signal.aborted || isResponsesLocalCompactionAbortError(error)) {
             return { ok: false, cancelled: true };
           }
           lastError = error instanceof Error ? error : new Error(String(error || '上下文压缩失败'));
 
-          if (attempt < RESPONSES_LOCAL_COMPACTION_TOTAL_ATTEMPTS) {
+          const shouldRetry = attempt < RESPONSES_LOCAL_COMPACTION_TOTAL_ATTEMPTS
+            && (
+              isResponsesCompactV2RetryableError(lastError)
+              || lastError?.retryable === true
+              || typeof lastError?.retryable === 'undefined'
+            );
+          if (shouldRetry) {
             updateResponsesLocalCompactionStatusNode({
               targetMessageId: normalizedTargetMessageId,
               activeThreadContext: invocationContext.activeThreadContext,

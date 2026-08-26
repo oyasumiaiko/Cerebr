@@ -8,13 +8,37 @@ async function readWorkspaceFile(relativePath) {
   return fs.readFile(filePath, 'utf8');
 }
 
-test('compact 成功态使用响应 usage 里的精确前后 token，非成功态保留尝试次数', async () => {
+test('compact v2 复用 Responses endpoint 并移除旧独立端点配置面板', async () => {
+  const apiSettingsSource = await readWorkspaceFile('src/api/api_settings.js');
+
+  assert.doesNotMatch(apiSettingsSource, /RESPONSES_LOCAL_COMPACTION_FIELD_SPECS/);
+  assert.doesNotMatch(apiSettingsSource, /resolveResponsesCompactEndpointUrl/);
+  assert.match(
+    apiSettingsSource,
+    /const compactRequestBody = buildResponsesCompactV2RequestBody\(requestBody\);[\s\S]*requestHeaders: buildResponsesCompactV2RequestHeaders\(\)/
+  );
+  assert.match(
+    apiSettingsSource,
+    /delete config\.responsesLocalCompaction;/
+  );
+});
+
+test('compact v2 使用完整有效历史，不重复套普通 turn 的历史条数限制', async () => {
+  const messageSenderSource = await readWorkspaceFile('src/core/message_sender.js');
+
+  assert.match(
+    messageSenderSource,
+    /conversationChain: Array\.isArray\(conversationChain\)[\s\S]*maxHistory: null,[\s\S]*maxUserHistory: null,[\s\S]*maxAssistantHistory: null/
+  );
+});
+
+test('compact 成功态展示 v2 usage 的输入输出 token，非成功态保留尝试次数', async () => {
   const messageSenderSource = await readWorkspaceFile('src/core/message_sender.js');
   const messageProcessorSource = await readWorkspaceFile('src/core/message_processor.js');
 
   assert.match(
     messageSenderSource,
-    /const compactUsage = normalizeApiUsageMeta\(compactPayload\?\.usage \|\| compactPayload\?\.response\?\.usage\);/
+    /const compactUsage = normalizeApiUsageMeta\(compactResult\?\.usage\);/
   );
   assert.match(
     messageSenderSource,
@@ -24,6 +48,10 @@ test('compact 成功态使用响应 usage 里的精确前后 token，非成功�
     messageSenderSource,
     /compactedOutputTokens:\s*compactUsage\?\.completionTokens \?\? null/
   );
+  assert.match(
+    messageSenderSource,
+    /outputCount: Number\.isFinite\(Number\(normalizedOptions\.outputCount\)\)[\s\S]*Number\(normalizedOptions\.outputCount\)[\s\S]*normalizedOptions\.compactOutput\.length/
+  );
 
   assert.match(
     messageProcessorSource,
@@ -31,7 +59,7 @@ test('compact 成功态使用响应 usage 里的精确前后 token，非成功�
   );
   assert.match(
     messageProcessorSource,
-    /metaParts\.push\(`上下文 \$\{tokenBeforeLabel\} \$\{flowArrow\} \$\{tokenAfterLabel\} tokens`\);/
+    /metaParts\.push\(`压缩用量 输入 \$\{tokenBeforeLabel\} \/ 输出 \$\{tokenAfterLabel\} tokens`\);/
   );
   assert.match(
     messageProcessorSource,
@@ -128,5 +156,18 @@ test('/compact 运行期间同线程发送进入队列，完成时不清空新�
   assert.match(
     messageSenderSource,
     /return \{[\s\S]*\.\.\.compactionResult,[\s\S]*keepInput: true[\s\S]*\};/
+  );
+});
+
+test('compact v2 语义成功后即使本地保存失败也不会重复 POST', async () => {
+  const messageSenderSource = await readWorkspaceFile('src/core/message_sender.js');
+
+  assert.match(
+    messageSenderSource,
+    /const result = await executeResponsesLocalCompaction\([\s\S]*try \{[\s\S]*await persistResponsesLocalCompactionConversation\(\);[\s\S]*catch \(persistenceError\)/
+  );
+  assert.match(
+    messageSenderSource,
+    /request will not be repeated\.[\s\S]*return \{[\s\S]*ok: true,[\s\S]*persistenceError: persistenceMessage/
   );
 });
