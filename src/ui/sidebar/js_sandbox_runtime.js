@@ -1,4 +1,5 @@
 import { buildJsSandboxFrameSnapshot } from '../../utils/js_sandbox_transport.js';
+import { JS_RUNTIME_SAVED_OUTPUT_MAX_ENTRIES } from '../../agent_tools/js_runtime_execute/tool.js';
 
 const SANDBOX_MESSAGE_FLAG = '__cerebrJsSandbox';
 const SANDBOX_READY_TIMEOUT_MS = 10000;
@@ -20,7 +21,7 @@ const SANDBOX_READY_TIMEOUT_MS = 10000;
  * @returns {{
  *   getAvailability: () => Promise<Object>,
  *   listFrames: () => Promise<{ok:boolean, frames:Array<Object>}>,
- *   execute: (request?: {code?:string}) => Promise<Object>
+ *   execute: (request?: {code?:string, outputRef?:string}) => Promise<Object>
  * }}
  */
 export function createSidebarJsSandboxRuntime(options = {}) {
@@ -241,7 +242,9 @@ export function createSidebarJsSandboxRuntime(options = {}) {
           [SANDBOX_MESSAGE_FLAG]: true,
           type: 'execute',
           requestId,
-          code
+          code,
+          outputRef: (typeof request?.outputRef === 'string') ? request.outputRef.trim() : '',
+          outputStoreMaxEntries: JS_RUNTIME_SAVED_OUTPUT_MAX_ENTRIES
         }, '*');
       } catch (error) {
         cleanup();

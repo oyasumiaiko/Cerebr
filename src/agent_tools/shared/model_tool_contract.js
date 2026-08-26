@@ -145,7 +145,7 @@ export function buildStrictObjectSchema(properties = {}, options = {}) {
 /**
  * 构造统一的 Responses API function tool 定义。
  *
- * @param {{name:string, description:string, properties?:Record<string, Object>}} options
+ * @param {{name:string, description:string, properties?:Record<string, Object>, includeOutputControl?:boolean}} options
  * @returns {Object}
  */
 export function buildStrictFunctionToolDefinition(options = {}) {
@@ -158,9 +158,11 @@ export function buildStrictFunctionToolDefinition(options = {}) {
     throw new Error(`模型工具契约错误：${name} description 不能为空。`);
   }
   const properties = {
-    ...(options?.properties || {}),
-    [RESPONSES_TOOL_OUTPUT_MAX_CHARS_PARAMETER]: RESPONSES_TOOL_OUTPUT_MAX_CHARS_PROPERTY
+    ...(options?.properties || {})
   };
+  if (options?.includeOutputControl !== false) {
+    properties[RESPONSES_TOOL_OUTPUT_MAX_CHARS_PARAMETER] = RESPONSES_TOOL_OUTPUT_MAX_CHARS_PROPERTY;
+  }
   return {
     type: 'function',
     name,

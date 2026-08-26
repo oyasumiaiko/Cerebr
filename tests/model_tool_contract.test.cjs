@@ -222,6 +222,13 @@ test('全部 17 个模型工具具有唯一稳定名称和可独立判读的描�
     assert.equal(definition.strict, true, `${definition.name} 必须启用 strict mode`);
     assert.match(definition.description, /(?:^|\n)用途：\S/u, `${definition.name} 缺少“用途”说明`);
     assert.match(definition.description, /(?:^|\n)返回：\S/u, `${definition.name} 缺少“返回”说明`);
+    if (definition.name === 'js_runtime_execute') {
+      assert.equal(definition.parameters.properties.max_output_chars, undefined);
+      assert.match(definition.description, /最多 5000 个字符/);
+      assert.match(definition.description, /\$toolOutput/);
+      assert.match(definition.description, /不要对 JS 输出调用 read_tool_output/);
+      continue;
+    }
     assert.deepEqual(
       definition.parameters.properties.max_output_chars.type,
       ['integer', 'null'],

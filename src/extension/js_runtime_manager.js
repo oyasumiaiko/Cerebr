@@ -12,7 +12,10 @@ import {
   CEREBR_SKILL_WORLD_ID,
   buildRuntimeBootstrapSource
 } from './skill_runtime.js';
-import { JS_RUNTIME_MAX_TIMEOUT_MS } from '../agent_tools/js_runtime_execute/tool.js';
+import {
+  JS_RUNTIME_MAX_TIMEOUT_MS,
+  JS_RUNTIME_SAVED_OUTPUT_MAX_ENTRIES
+} from '../agent_tools/js_runtime_execute/tool.js';
 
 /**
  * 将错误对象压缩成适合 UI 展示的轻量结构。
@@ -51,7 +54,7 @@ function isJsRuntimeEnvelope(value) {
 /**
  * 用于把 execute() 返回值压成稳定结构，便于后续 UI / 工具层复用。
  * @param {any} item
- * @returns {{frameId:number|null, documentId:string|null, result:any, logs:Array<any>, error:any}}
+ * @returns {{frameId:number|null, documentId:string|null, result:any, logs:Array<any>, error:any, savedOutputRef:string}}
  */
 function normalizeExecuteResultItem(item) {
   const frameId = Number.isFinite(Number(item?.frameId)) ? Number(item.frameId) : null;
@@ -65,7 +68,10 @@ function normalizeExecuteResultItem(item) {
     logs: Array.isArray(rawEnvelope?.logs)
       ? rawEnvelope.logs.map((entry) => normalizeJsRuntimeLogEntry(entry, frameId))
       : [],
-    error: item?.error ? normalizeJsRuntimeError(item.error) : envelopeError
+    error: item?.error ? normalizeJsRuntimeError(item.error) : envelopeError,
+    savedOutputRef: (typeof rawEnvelope?.savedOutputRef === 'string')
+      ? rawEnvelope.savedOutputRef.trim()
+      : ''
   };
 }
 
@@ -155,9 +161,12 @@ function shouldExposeNavigationFrameSnapshot(frame) {
  * - 不向执行环境额外注入任何扩展对象，保持纯页面 JS 语义。
  *
  * @param {string} userCode
+ * @param {number} [timeoutMs]
+ * @param {string} [executionId]
+ * @param {string} [savedOutputRef]
  * @returns {string}
  */
-function buildUserScriptSource(userCode, timeoutMs = 0, executionId = '') {
+function buildUserScriptSource(userCode, timeoutMs = 0, executionId = '', savedOutputRef = '') {
   const body = (typeof userCode === 'string') ? userCode : '';
   const normalizedTimeoutMs = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0
     ? Math.trunc(Number(timeoutMs))
@@ -165,13 +174,49 @@ function buildUserScriptSource(userCode, timeoutMs = 0, executionId = '') {
   const normalizedExecutionId = (typeof executionId === 'string' && executionId.trim())
     ? executionId.trim()
     : '';
+  const normalizedSavedOutputRef = (typeof savedOutputRef === 'string' && savedOutputRef.trim())
+    ? savedOutputRef.trim()
+    : '';
   return `
   (async () => {
     ${buildRuntimeBootstrapSource()}
     const __cerebrTimeoutMs = ${normalizedTimeoutMs};
     const __cerebrExecutionId = ${JSON.stringify(normalizedExecutionId)};
+    const __cerebrSavedOutputRef = ${JSON.stringify(normalizedSavedOutputRef)};
+    const __cerebrSavedOutputMaxEntries = ${JS_RUNTIME_SAVED_OUTPUT_MAX_ENTRIES};
     const __cerebrAbortEventName = '__cerebrJsRuntimeAbort';
     const __cerebrAbortRegistry = globalThis.__cerebrJsRuntimeAbortRegistry ??= new Set();
+    const __cerebrSavedOutputStore = globalThis.__cerebrJsToolOutputStore instanceof Map
+      ? globalThis.__cerebrJsToolOutputStore
+      : new Map();
+    globalThis.__cerebrJsToolOutputStore = __cerebrSavedOutputStore;
+    globalThis.$toolOutput = (ref) => {
+      const normalizedRef = String(ref || '').trim();
+      if (!normalizedRef || !__cerebrSavedOutputStore.has(normalizedRef)) {
+        const error = new Error(\`Saved JS tool output not found or expired: \${normalizedRef || '(empty)'}\`);
+        error.name = 'SavedJsToolOutputNotFoundError';
+        throw error;
+      }
+      return __cerebrSavedOutputStore.get(normalizedRef);
+    };
+    globalThis.$toolOutputRefs = () => Array.from(__cerebrSavedOutputStore.entries()).map(([ref, record]) => ({
+      ref,
+      ok: record?.ok === true,
+      createdAt: Number.isFinite(Number(record?.createdAt)) ? Number(record.createdAt) : null,
+      logCount: Array.isArray(record?.logs) ? record.logs.length : 0
+    }));
+    const __cerebrSaveToolOutput = (record) => {
+      if (!__cerebrSavedOutputRef) return;
+      if (__cerebrSavedOutputStore.has(__cerebrSavedOutputRef)) {
+        __cerebrSavedOutputStore.delete(__cerebrSavedOutputRef);
+      }
+      __cerebrSavedOutputStore.set(__cerebrSavedOutputRef, record);
+      while (__cerebrSavedOutputStore.size > __cerebrSavedOutputMaxEntries) {
+        const oldestRef = __cerebrSavedOutputStore.keys().next().value;
+        if (!oldestRef) break;
+        __cerebrSavedOutputStore.delete(oldestRef);
+      }
+    };
     const __cerebrAbortController = new AbortController();
     const signal = __cerebrAbortController.signal;
     const __cerebrBuildReplacer = () => {
@@ -296,20 +341,37 @@ ${body}
             })
           ])
         : __cerebrRunUserCode());
+      __cerebrSaveToolOutput({
+        ok: true,
+        value: __cerebrValue,
+        logs: __cerebrLogs,
+        error: null,
+        createdAt: Date.now()
+      });
       return {
         __cerebrJsRuntimeEnvelope: true,
         ok: true,
         value: __cerebrValue,
         logs: __cerebrLogs,
-        error: null
+        error: null,
+        savedOutputRef: __cerebrSavedOutputRef
       };
     } catch (error) {
+      const __cerebrNormalizedError = __cerebrNormalizeError(error);
+      __cerebrSaveToolOutput({
+        ok: false,
+        value: null,
+        logs: __cerebrLogs,
+        error: __cerebrNormalizedError,
+        createdAt: Date.now()
+      });
       return {
         __cerebrJsRuntimeEnvelope: true,
         ok: false,
         value: null,
         logs: __cerebrLogs,
-        error: __cerebrNormalizeError(error)
+        error: __cerebrNormalizedError,
+        savedOutputRef: __cerebrSavedOutputRef
       };
     } finally {
       if (__cerebrAbortListener) {
@@ -441,6 +503,7 @@ export function createJsRuntimeManager() {
    * @param {boolean} [request.allFrames]
    * @param {boolean} [request.injectImmediately]
    * @param {number|null} [request.timeoutMs]
+   * @param {string} [request.savedOutputRef]
    * @returns {Promise<{ok:boolean, items:Array<Object>, value:any, logs:Array<Object>}>}
    */
   async function execute(request = {}) {
@@ -451,6 +514,9 @@ export function createJsRuntimeManager() {
       : 30000;
     const executionId = (typeof request?.executionId === 'string' && request.executionId.trim())
       ? request.executionId.trim()
+      : '';
+    const savedOutputRef = (typeof request?.savedOutputRef === 'string' && request.savedOutputRef.trim())
+      ? request.savedOutputRef.trim()
       : '';
     if (!Number.isFinite(tabId)) {
       throw new Error('执行 JS Runtime 失败：缺少有效 tabId。');
@@ -489,7 +555,7 @@ export function createJsRuntimeManager() {
       worldId: CEREBR_SKILL_WORLD_ID,
       js: [
         {
-          code: buildUserScriptSource(code, timeoutMs, executionId)
+          code: buildUserScriptSource(code, timeoutMs, executionId, savedOutputRef)
         }
       ]
     });
@@ -512,6 +578,13 @@ export function createJsRuntimeManager() {
       ok: items.every(item => !item.error),
       items,
       logs,
+      savedOutputRefs: items
+        .filter(item => item.savedOutputRef)
+        .map(item => ({
+          ref: item.savedOutputRef,
+          frameId: item.frameId,
+          documentId: item.documentId
+        })),
       value: successfulItems.length === 1
         ? successfulItems[0].result
         : successfulItems.map(item => item.result)

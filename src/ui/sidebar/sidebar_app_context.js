@@ -1637,7 +1637,8 @@ export function registerSidebarUtilities(appContext) {
         const result = await jsSandboxRuntime.execute({
           code: (typeof code === 'string') ? code : '',
           timeoutMs,
-          signal
+          signal,
+          outputRef: (typeof options?.outputRef === 'string') ? options.outputRef.trim() : ''
         });
         return {
           success: true,
@@ -1677,6 +1678,7 @@ export function registerSidebarUtilities(appContext) {
           tabId: targetTabId,
           code: (typeof code === 'string') ? code : '',
           executionId,
+          savedOutputRef: (typeof options?.outputRef === 'string') ? options.outputRef.trim() : '',
           timeoutMs,
           frameIds: Array.isArray(options?.frameIds) ? options.frameIds : null,
           injectImmediately: options?.injectImmediately === true

@@ -18,6 +18,8 @@ test('js_runtime_execute 暴露 timeout_ms 并把它接到 sidebar 与 backgroun
   const jsRuntimeToolModule = await importWorkspaceModule('src/agent_tools/js_runtime_execute/tool.js');
   const messageSenderSource = await readWorkspaceFile('src/core/message_sender.js');
   const sidebarAppContextSource = await readWorkspaceFile('src/ui/sidebar/sidebar_app_context.js');
+  const sandboxRuntimeSource = await readWorkspaceFile('src/ui/sidebar/js_sandbox_runtime.js');
+  const sandboxFrameSource = await readWorkspaceFile('src/ui/sidebar/js_sandbox_frame.js');
   const backgroundSource = await readWorkspaceFile('src/extension/background.js');
   const toolDefinition = jsRuntimeToolModule.buildJsRuntimeExecuteFunctionToolDefinition();
 
@@ -28,7 +30,12 @@ test('js_runtime_execute 暴露 timeout_ms 并把它接到 sidebar 与 backgroun
   assert.match(toolDefinition.description, /AbortSignal 变量 `signal`/);
   assert.match(toolDefinition.description, /协作式取消/);
   assert.equal(Object.hasOwn(toolDefinition.parameters.properties.timeout_ms, 'minimum'), false);
-  assert.deepEqual(toolDefinition.parameters.required, ['code', 'timeout_ms', 'frame_ids', 'max_output_chars']);
+  assert.deepEqual(toolDefinition.parameters.required, ['code', 'timeout_ms', 'frame_ids']);
+  assert.equal(toolDefinition.parameters.properties.max_output_chars, undefined);
+  assert.match(toolDefinition.description, /saved_output_ref/);
+  assert.match(toolDefinition.description, /\$toolOutput/);
+  assert.equal(jsRuntimeToolModule.JS_RUNTIME_TOOL_OUTPUT_MAX_CHARS, 5000);
+  assert.equal(jsRuntimeToolModule.JS_RUNTIME_SAVED_OUTPUT_MAX_ENTRIES, 8);
   assert.deepEqual(
     jsRuntimeToolModule.normalizeJsRuntimeExecuteToolArguments({
       code: 'return 1;',
@@ -71,7 +78,7 @@ test('js_runtime_execute 暴露 timeout_ms 并把它接到 sidebar 与 backgroun
 
   assert.match(
     messageSenderSource,
-    /timeoutMs: normalizedArgs\.timeoutMs,\s*frameIds: normalizedArgs\.frameIds/s
+    /timeoutMs: normalizedArgs\.timeoutMs,\s*frameIds: normalizedArgs\.frameIds,\s*runtimeEnvironment,\s*outputRef: savedOutputRef/s
   );
 
   assert.match(
@@ -80,7 +87,7 @@ test('js_runtime_execute 暴露 timeout_ms 并把它接到 sidebar 与 backgroun
   );
   assert.match(
     sidebarAppContextSource,
-    /timeoutMs,\s*frameIds: Array\.isArray\(options\?\.frameIds\) \? options\.frameIds : null/s
+    /savedOutputRef: \(typeof options\?\.outputRef === 'string'\) \? options\.outputRef\.trim\(\) : '',\s*timeoutMs,\s*frameIds: Array\.isArray\(options\?\.frameIds\) \? options\.frameIds : null/s
   );
   assert.match(
     sidebarAppContextSource,
@@ -92,8 +99,14 @@ test('js_runtime_execute 暴露 timeout_ms 并把它接到 sidebar 与 backgroun
 
   assert.match(
     backgroundSource,
-    /timeoutMs: message\?\.timeoutMs,/
+    /savedOutputRef: message\?\.savedOutputRef \|\| '',\s*timeoutMs: message\?\.timeoutMs,/s
   );
+  assert.match(sandboxRuntimeSource, /outputRef: \(typeof request\?\.outputRef === 'string'\)/);
+  assert.match(sandboxRuntimeSource, /outputStoreMaxEntries: JS_RUNTIME_SAVED_OUTPUT_MAX_ENTRIES/);
+  assert.match(sandboxFrameSource, /globalThis\.\$toolOutput = \(ref\) =>/);
+  assert.match(sandboxFrameSource, /saveJsToolOutput\(savedOutputRef/);
+  assert.match(messageSenderSource, /case 'js_runtime':\s*serializedOutput = serializeResponsesJsRuntimeFunctionToolOutput\(outputPayload\);\s*return \{/s);
+  assert.match(messageSenderSource, /不再接受 max_output_chars，也不提供 read_tool_output 续读/);
 });
 
 test('js_runtime_execute 在纯对话模式下的工具说明不再指向宿主页', async () => {

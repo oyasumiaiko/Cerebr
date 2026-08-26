@@ -111,6 +111,9 @@ import {
   mergeResponsesImageGenerationAnswerImages
 } from '../utils/responses_image_generation_answer.js';
 import {
+  createJsRuntimeSavedOutputRef,
+  JS_RUNTIME_EXECUTE_TOOL_NAME,
+  JS_RUNTIME_TOOL_OUTPUT_MAX_CHARS,
   normalizeJsRuntimeExecuteToolArguments
 } from '../agent_tools/js_runtime_execute/tool.js';
 import {
@@ -8700,11 +8703,18 @@ export function createMessageSender(appContext) {
 
   function serializeResponsesJsRuntimeFunctionToolOutput(value) {
     try {
-      return buildResponsesJsRuntimeToolOutputContentItems(value);
+      return buildResponsesJsRuntimeToolOutputContentItems(value, {
+        maxOutputChars: JS_RUNTIME_TOOL_OUTPUT_MAX_CHARS
+      });
     } catch (error) {
-      return buildResponsesGenericXmlToolOutputContentItems('js_runtime_result', {
+      return buildResponsesJsRuntimeToolOutputContentItems({
         ok: false,
+        value: null,
+        logs: [],
+        items: [],
         error: normalizeResponsesCustomToolError(error)
+      }, {
+        maxOutputChars: JS_RUNTIME_TOOL_OUTPUT_MAX_CHARS
       });
     }
   }
@@ -8844,6 +8854,9 @@ export function createMessageSender(appContext) {
       items: Array.isArray(normalized?.items)
         ? normalized.items
         : [],
+      savedOutputRefs: Array.isArray(normalized?.savedOutputRefs)
+        ? normalized.savedOutputRefs
+        : [],
       error: normalized?.error || null
     };
   }
@@ -8875,10 +8888,12 @@ export function createMessageSender(appContext) {
         allowLegacy: false,
         allowFrameIds: runtimeEnvironment !== JS_RUNTIME_ENV_ISOLATED_SANDBOX
       });
+      const savedOutputRef = createJsRuntimeSavedOutputRef();
       const result = await utils.executeJsRuntime(normalizedArgs.code, {
         timeoutMs: normalizedArgs.timeoutMs,
         frameIds: normalizedArgs.frameIds,
         runtimeEnvironment,
+        outputRef: savedOutputRef,
         signal: options?.attemptState?.controller?.signal || null
       });
 
@@ -8889,6 +8904,7 @@ export function createMessageSender(appContext) {
           value: null,
           logs: Array.isArray(result?.logs) ? result.logs : [],
           items: Array.isArray(result?.items) ? result.items : [],
+          savedOutputRefs: Array.isArray(result?.savedOutputRefs) ? result.savedOutputRefs : [],
           error: {
             message: (typeof result?.error === 'string' && result.error.trim())
               ? result.error.trim()
@@ -8904,6 +8920,7 @@ export function createMessageSender(appContext) {
         value: result?.value ?? null,
         logs: Array.isArray(result?.logs) ? result.logs : [],
         items: Array.isArray(result?.items) ? result.items : [],
+        savedOutputRefs: Array.isArray(result?.savedOutputRefs) ? result.savedOutputRefs : [],
         error: null
       });
     } catch (error) {
@@ -9768,6 +9785,22 @@ export function createMessageSender(appContext) {
 
     let toolArgs = parsedArgs;
     let maxOutputChars = null;
+    if (
+      localFunctionName === JS_RUNTIME_EXECUTE_TOOL_NAME
+      && Object.prototype.hasOwnProperty.call(parsedArgs, 'max_output_chars')
+    ) {
+      return {
+        type: 'function_call_output',
+        call_id: callId,
+        output: serializeResponsesFunctionToolOutput({
+          ok: false,
+          error: {
+            name: 'InvalidToolArgumentsError',
+            message: `js_runtime_execute 输出固定限制为 ${JS_RUNTIME_TOOL_OUTPUT_MAX_CHARS} 字符，不再接受 max_output_chars，也不提供 read_tool_output 续读。`
+          }
+        })
+      };
+    }
     try {
       ({ toolArgs, maxOutputChars } = splitResponsesToolOutputControl(parsedArgs, {
         toolName: localFunctionName
@@ -9854,7 +9887,11 @@ export function createMessageSender(appContext) {
         break;
       case 'js_runtime':
         serializedOutput = serializeResponsesJsRuntimeFunctionToolOutput(outputPayload);
-        break;
+        return {
+          type: 'function_call_output',
+          call_id: callId,
+          output: serializedOutput
+        };
       case 'virtual_file':
         serializedOutput = serializeResponsesConversationDocumentFunctionToolOutput(localFunctionName, outputPayload);
         break;

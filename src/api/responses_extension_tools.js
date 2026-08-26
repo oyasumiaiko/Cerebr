@@ -54,7 +54,7 @@ export const RESPONSES_EXTENSION_TOOL_SPECS = Object.freeze([
   createExtensionToolSpec({
     id: 'read_tool_output',
     title: '续读工具输出',
-    description: '允许模型通过游标继续读取已缓存的超长工具结果，而不重新执行原工具。',
+    description: '允许模型通过游标继续读取支持分页的超长工具结果；不适用于 js_runtime_execute，JS 超限结果必须在运行时内搜索筛选。',
     exposure: 'always',
     handlerKey: 'read_tool_output',
     outputKind: 'tool_output_page',
@@ -329,12 +329,16 @@ export function reconcileResponsesAllowedToolChoice(toolChoice, tools) {
 
   // allowed_tools 会延续到 function output 的后续请求。如果这里只允许原工具、却没有
   // 同时允许续读工具，模型拿到 next_cursor 后仍无法翻页。read_tool_output 是统一输出
-  // 协议的一部分，只在至少一个其它 Cerebr 本地工具实际可用时补入，不影响 hosted/MCP。
+  // 协议的一部分，只在至少一个真正支持分页的其它 Cerebr 本地工具实际可用时补入，
+  // 不影响 hosted/MCP。js_runtime_execute 固定返回 5000 字符并把超限结果留在 JS runtime，
+  // 因此不能让它单独触发 read_tool_output 暴露。
   const hasPageableLocalTool = reconciledTools.some((entry) => {
     const localEntry = inspectAllowedLocalExtensionToolEntry(entry);
+    const localSpec = localEntry ? RESPONSES_EXTENSION_TOOL_SPEC_BY_ID.get(localEntry.id) : null;
     return !!localEntry
       && localEntry.typeMatches
       && localEntry.id !== 'read_tool_output'
+      && localSpec?.outputKind !== 'js_runtime'
       && availableLocalToolNames.has(localEntry.id);
   });
   const hasReadToolOutput = reconciledTools.some(

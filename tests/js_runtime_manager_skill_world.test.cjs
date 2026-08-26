@@ -80,6 +80,9 @@ test('createJsRuntimeManager.execute 会在用户代码前升级已打开页面�
   const previousInvoke = globalThis.$invoke;
   const previousSkill = globalThis.$skill;
   const previousMethods = globalThis.$methods;
+  const previousOutputStore = globalThis.__cerebrJsToolOutputStore;
+  const previousToolOutput = globalThis.$toolOutput;
+  const previousToolOutputRefs = globalThis.$toolOutputRefs;
 
   try {
     global.chrome = {
@@ -131,6 +134,83 @@ test('createJsRuntimeManager.execute 会在用户代码前升级已打开页面�
     else globalThis.$skill = previousSkill;
     if (previousMethods === undefined) delete globalThis.$methods;
     else globalThis.$methods = previousMethods;
+    if (previousOutputStore === undefined) delete globalThis.__cerebrJsToolOutputStore;
+    else globalThis.__cerebrJsToolOutputStore = previousOutputStore;
+    if (previousToolOutput === undefined) delete globalThis.$toolOutput;
+    else globalThis.$toolOutput = previousToolOutput;
+    if (previousToolOutputRefs === undefined) delete globalThis.$toolOutputRefs;
+    else globalThis.$toolOutputRefs = previousToolOutputRefs;
+  }
+});
+
+test('createJsRuntimeManager.execute 会把完整结果保存在有界 runtime store 并允许后续 JS 筛选', async () => {
+  const { createJsRuntimeManager } = await loadJsRuntimeManagerModule();
+  const previousChrome = global.chrome;
+  const previousStore = globalThis.__cerebrJsToolOutputStore;
+  const previousToolOutput = globalThis.$toolOutput;
+  const previousToolOutputRefs = globalThis.$toolOutputRefs;
+
+  try {
+    delete globalThis.__cerebrJsToolOutputStore;
+    delete globalThis.$toolOutput;
+    delete globalThis.$toolOutputRefs;
+    global.chrome = {
+      userScripts: {
+        async getScripts() { return []; },
+        async configureWorld() {},
+        async execute(options) {
+          const envelope = await eval(options.js[0].code);
+          return [{ frameId: 0, documentId: 'doc-saved-output', result: envelope }];
+        }
+      }
+    };
+
+    const manager = createJsRuntimeManager();
+    const first = await manager.execute({
+      tabId: 9,
+      savedOutputRef: 'jsout_first',
+      code: 'return Array.from({ length: 1000 }, (_, index) => ({ index, even: index % 2 === 0 }));'
+    });
+    assert.equal(first.items[0].savedOutputRef, 'jsout_first');
+    assert.deepEqual(first.savedOutputRefs, [{
+      ref: 'jsout_first',
+      frameId: 0,
+      documentId: 'doc-saved-output'
+    }]);
+    assert.equal(globalThis.$toolOutput('jsout_first').value.length, 1000);
+
+    const second = await manager.execute({
+      tabId: 9,
+      savedOutputRef: 'jsout_second',
+      code: `
+const source = $toolOutput('jsout_first').value;
+return source.filter((item) => item.even && item.index > 990).map((item) => item.index);
+`
+    });
+    assert.deepEqual(second.value, [992, 994, 996, 998]);
+    assert.deepEqual(globalThis.$toolOutputRefs().map((item) => item.ref), ['jsout_first', 'jsout_second']);
+
+    for (let index = 3; index <= 10; index += 1) {
+      await manager.execute({
+        tabId: 9,
+        savedOutputRef: `jsout_${index}`,
+        code: `return ${index};`
+      });
+    }
+    assert.deepEqual(
+      globalThis.$toolOutputRefs().map((item) => item.ref),
+      ['jsout_3', 'jsout_4', 'jsout_5', 'jsout_6', 'jsout_7', 'jsout_8', 'jsout_9', 'jsout_10']
+    );
+    assert.throws(() => globalThis.$toolOutput('jsout_first'), /not found or expired/);
+  } finally {
+    if (previousChrome === undefined) delete global.chrome;
+    else global.chrome = previousChrome;
+    if (previousStore === undefined) delete globalThis.__cerebrJsToolOutputStore;
+    else globalThis.__cerebrJsToolOutputStore = previousStore;
+    if (previousToolOutput === undefined) delete globalThis.$toolOutput;
+    else globalThis.$toolOutput = previousToolOutput;
+    if (previousToolOutputRefs === undefined) delete globalThis.$toolOutputRefs;
+    else globalThis.$toolOutputRefs = previousToolOutputRefs;
   }
 });
 

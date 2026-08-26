@@ -278,6 +278,37 @@ test('buildResponsesJsRuntimeToolOutputText 默认完整返回大量 frame', asy
   assert.doesNotMatch(text, /<truncation_notice>/);
 });
 
+test('JS Runtime 超限输出固定截到 5000 字符并改为运行时内筛选提示', async () => {
+  const {
+    buildResponsesJsRuntimeToolOutputContentItems,
+    formatResponsesToolOutputForDisplay
+  } = await loadResponsesToolOutputModule();
+  const savedOutputRef = 'jsout_large_result';
+  const items = buildResponsesJsRuntimeToolOutputContentItems({
+    ok: true,
+    value: 'X'.repeat(12000),
+    logs: [],
+    items: [{
+      frameId: 0,
+      documentId: 'doc-1',
+      result: 'X'.repeat(12000),
+      logs: [],
+      error: null,
+      savedOutputRef
+    }]
+  });
+  const text = formatResponsesToolOutputForDisplay(items);
+
+  assert.ok(Array.from(text).length <= 5000);
+  assert.match(text, /schema_version="3"/);
+  assert.match(text, /output_truncated="true"/);
+  assert.match(text, /saved_output ref="jsout_large_result"/);
+  assert.match(text, /\$toolOutput\("jsout_large_result"\)/);
+  assert.match(text, /搜索、筛选、map\/reduce/);
+  assert.doesNotMatch(text, /next_cursor=/);
+  assert.doesNotMatch(text, /<tool_output_page /);
+});
+
 test('buildResponsesPageContentToolOutputContentItems 使用 metadata + content XML 分块', async () => {
   const { buildResponsesPageContentToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesPageContentToolOutputContentItems({

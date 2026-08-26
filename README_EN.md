@@ -66,7 +66,7 @@ Cerebr currently registers 17 local tools: 16 function tools plus the Freeform c
 | Category | Tools |
 | --- | --- |
 | Page and runtime | `js_runtime_execute`, `page_content_read`, `pdf_content_read`, `webpage_screenshot`, `view_image` |
-| Tool output | `read_tool_output` (continue a uniformly length-limited result from its cursor) |
+| Tool output | `read_tool_output` (continue pageable tool results from a cursor; not used for JS Runtime output) |
 | Conversation files | `apply_patch`, `list_files`, `read_file`, `search_files`, `copy_file`; use `apply_patch` with `*** Move to:` or `*** Delete File:` to move/rename or delete files |
 | Skills | `skill_registry` |
 | User interaction | `request_user_input` |
@@ -76,7 +76,7 @@ Cerebr currently registers 17 local tools: 16 function tools plus the Freeform c
 The agent workflow also provides:
 
 - Streaming reasoning, tool-call, tool-output, error, and retry status; users can steer a running tool loop or queue normal messages.
-- Cursor-based paging for oversized tool results through the internal `read_tool_output` tool, without rerunning the original operation.
+- Cursor-based paging for tools that support it. `js_runtime_execute` is instead capped at 5,000 characters; oversized full results stay in a bounded cache inside the current JS Runtime so a follow-up JavaScript call can search, filter, or aggregate them and return only the relevant compact result.
 - Structured `request_user_input` prompts that pause the current tool chain and resume the original call after an answer.
 - Per-tool switches in Responses settings, plus automatic environment filtering for normal pages, PDFs, and standalone contexts.
 - A Pure Chat API mode that sends only user, system, and assistant messages, with no hidden page context, tool declarations, or tool execution.

@@ -8,6 +8,9 @@
  */
 export const RESPONSES_TOOL_OUTPUT_CHUNK_CHARS = 3_000;
 export const RESPONSES_TOOL_OUTPUT_PRETTY_JSON_MAX_CHARS = 1_000;
+// message_sender 会显式传入 js_runtime_execute 的公开固定预算；这里保留同值默认值，
+// 使序列化器被 UI、测试或其它纯调用方直接使用时仍不会意外返回无界 JS 文本。
+const RESPONSES_JS_RUNTIME_DEFAULT_MAX_CHARS = 5_000;
 
 function trimTrailingWhitespace(text) {
   return String(text ?? '').replace(/[ \t]+\n/g, '\n').trim();
@@ -474,8 +477,113 @@ export function buildResponsesJsRuntimeToolOutputText(result, options = {}) {
   return `<js_runtime_result schema_version="2" trust="untrusted">\n${body}\n</js_runtime_result>`;
 }
 
+function collectResponsesJsRuntimeSavedOutputRefs(result) {
+  const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
+  const refs = [];
+  const seen = new Set();
+  const addRef = (rawRef, frameId = null, documentId = '') => {
+    const ref = (typeof rawRef === 'string') ? rawRef.trim() : '';
+    if (!ref) return;
+    const normalizedFrameId = Number.isFinite(Number(frameId)) ? Number(frameId) : null;
+    const normalizedDocumentId = (typeof documentId === 'string') ? documentId.trim() : '';
+    const key = `${ref}\u0000${normalizedFrameId ?? ''}\u0000${normalizedDocumentId}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    refs.push({ ref, frameId: normalizedFrameId, documentId: normalizedDocumentId });
+  };
+
+  addRef(normalized.savedOutputRef, null, '');
+  (Array.isArray(normalized.savedOutputRefs) ? normalized.savedOutputRefs : []).forEach((item) => {
+    addRef(item?.ref, item?.frameId, item?.documentId);
+  });
+  (Array.isArray(normalized.items) ? normalized.items : []).forEach((item) => {
+    addRef(item?.savedOutputRef, item?.frameId, item?.documentId);
+  });
+  return refs;
+}
+
+function buildResponsesJsRuntimeSavedOutputsBlock(savedOutputs) {
+  const blocks = (Array.isArray(savedOutputs) ? savedOutputs : []).map((item) => {
+    const attrs = [
+      `ref="${xmlAttributeEscape(item.ref)}"`,
+      item.frameId === null ? '' : `frame_id="${xmlAttributeEscape(item.frameId)}"`,
+      item.documentId ? `document_id="${xmlAttributeEscape(item.documentId)}"` : ''
+    ].filter(Boolean).join(' ');
+    return `<saved_output ${attrs} />`;
+  });
+  if (blocks.length <= 0) return '';
+  return `<saved_outputs>\n${blocks.join('\n')}\n</saved_outputs>`;
+}
+
+function buildResponsesJsRuntimeOverflowText(result, fullText, maxOutputChars) {
+  const normalized = (result && typeof result === 'object' && !Array.isArray(result)) ? result : {};
+  const fullChars = Array.from(fullText);
+  const savedOutputs = collectResponsesJsRuntimeSavedOutputRefs(normalized);
+  const savedOutputsBlock = buildResponsesJsRuntimeSavedOutputsBlock(savedOutputs);
+  const primaryRef = savedOutputs[0]?.ref || '';
+  const runtimeItems = Array.isArray(normalized.items) ? normalized.items : [];
+  const successFrameCount = runtimeItems.filter(item => !item?.error).length;
+  const errorFrameCount = runtimeItems.filter(item => item?.error).length;
+  const guidance = primaryRef
+    ? [
+        '完整 JS 工具结果已保存在当前 JS Runtime，不提供 next_cursor，也不能用 read_tool_output 续读。',
+        `再次调用 js_runtime_execute，在 code 中使用 const output = $toolOutput(${JSON.stringify(primaryRef)}); 取得 { ok, value, logs, error }。`,
+        '请在 JavaScript 内搜索、筛选、map/reduce、排序或聚合，只返回与当前问题相关的紧凑结果；不要按字符顺序搬运全部原文。',
+        savedOutputs.length > 1 || savedOutputs.some(item => item.frameId !== null && item.frameId !== 0)
+          ? '保存结果属于 saved_outputs 标出的对应 frame；后续调用应传入相应 frame_ids，多 frame 调用会在各自 frame 中保存同一引用。'
+          : '',
+        '保存结果只存在于当前页面或当前隔离沙箱生命周期，且缓存有界；页面刷新、导航、沙箱重建或较新的调用可能使旧引用失效。'
+      ].filter(Boolean).join('\n')
+    : 'JS 工具结果超过固定字符上限，但本次执行没有返回可用 saved_output_ref；不能续读。请重新执行更聚焦的 JavaScript，并直接在代码中完成搜索、筛选或聚合。';
+  const metadata = {
+    ok: normalized.ok === true,
+    status: successFrameCount > 0 && errorFrameCount > 0
+      ? 'partial'
+      : ((normalized.ok === true && errorFrameCount <= 0) ? 'succeeded' : 'failed'),
+    output_truncated: true,
+    total_serialized_chars: fullChars.length,
+    max_output_chars: maxOutputChars,
+    saved_output_count: savedOutputs.length
+  };
+  const buildEnvelope = (previewChars) => {
+    const preview = fullChars.slice(0, previewChars).join('');
+    const sections = [
+      buildXmlTextBlock('metadata', trimJsonMetadataValue(metadata)),
+      savedOutputsBlock,
+      buildXmlTextBlock('guidance', guidance),
+      preview
+        ? `<preview format="escaped_js_runtime_result">\n${xmlTextEscape(preview)}\n</preview>`
+        : ''
+    ].filter(Boolean).join('\n\n');
+    return `<js_runtime_result schema_version="3" trust="untrusted" output_truncated="true">\n${sections}\n</js_runtime_result>`;
+  };
+
+  const emptyEnvelope = buildEnvelope(0);
+  if (Array.from(emptyEnvelope).length > maxOutputChars) {
+    throw new Error(`JS Runtime 固定输出预算 ${maxOutputChars} 无法容纳截断诊断信封。`);
+  }
+
+  let low = 0;
+  let high = Math.min(fullChars.length, maxOutputChars);
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (Array.from(buildEnvelope(middle)).length <= maxOutputChars) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return buildEnvelope(low);
+}
+
 export function buildResponsesJsRuntimeToolOutputContentItems(result, options = {}) {
-  const text = buildResponsesJsRuntimeToolOutputText(result, options);
+  const maxOutputChars = Number.isSafeInteger(options?.maxOutputChars) && options.maxOutputChars > 0
+    ? options.maxOutputChars
+    : RESPONSES_JS_RUNTIME_DEFAULT_MAX_CHARS;
+  const fullText = buildResponsesJsRuntimeToolOutputText(result, options);
+  const text = Array.from(fullText).length <= maxOutputChars
+    ? fullText
+    : buildResponsesJsRuntimeOverflowText(result, fullText, maxOutputChars);
   const chunks = chunkTextByChars(
     text,
     Number.isFinite(Number(options?.chunkChars))

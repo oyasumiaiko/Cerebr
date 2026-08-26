@@ -66,6 +66,7 @@ async function executeRuntimeMessage(runtimeMessage) {
           tabId,
           code: runtimeMessage?.code || '',
           executionId: runtimeMessage?.executionId || '',
+          savedOutputRef: runtimeMessage?.savedOutputRef || '',
           timeoutMs: runtimeMessage?.timeoutMs,
           frameIds: Array.isArray(runtimeMessage?.frameIds) ? runtimeMessage.frameIds : null,
           allFrames: runtimeMessage?.allFrames === true,

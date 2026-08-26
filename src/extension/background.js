@@ -534,6 +534,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           tabId: targetTabId,
           code: message?.code || '',
           executionId: message?.executionId || '',
+          savedOutputRef: message?.savedOutputRef || '',
           timeoutMs: message?.timeoutMs,
           frameIds: Array.isArray(message?.frameIds) ? message.frameIds : null,
           allFrames: message?.allFrames === true,

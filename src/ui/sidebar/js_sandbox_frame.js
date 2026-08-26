@@ -2,6 +2,48 @@ const SANDBOX_MESSAGE_FLAG = '__cerebrJsSandbox';
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
 const activeExecutionAborters = new Map();
 const JS_SANDBOX_DOCUMENT_ID = 'cerebr-js-sandbox';
+const savedJsToolOutputs = new Map();
+
+function normalizeSavedJsToolOutputRef(value) {
+  return (typeof value === 'string') ? value.trim() : '';
+}
+
+function installSavedJsToolOutputAccessors() {
+  globalThis.$toolOutput = (ref) => {
+    const normalizedRef = normalizeSavedJsToolOutputRef(ref);
+    if (!normalizedRef || !savedJsToolOutputs.has(normalizedRef)) {
+      const error = new Error(`Saved JS tool output not found or expired: ${normalizedRef || '(empty)'}`);
+      error.name = 'SavedJsToolOutputNotFoundError';
+      throw error;
+    }
+    return savedJsToolOutputs.get(normalizedRef);
+  };
+  globalThis.$toolOutputRefs = () => Array.from(savedJsToolOutputs.entries()).map(([ref, record]) => ({
+    ref,
+    ok: record?.ok === true,
+    createdAt: Number.isFinite(Number(record?.createdAt)) ? Number(record.createdAt) : null,
+    logCount: Array.isArray(record?.logs) ? record.logs.length : 0
+  }));
+}
+
+function saveJsToolOutput(ref, record, maxEntries) {
+  const normalizedRef = normalizeSavedJsToolOutputRef(ref);
+  if (!normalizedRef) return;
+  const normalizedMaxEntries = Number.isSafeInteger(maxEntries) && maxEntries > 0
+    ? maxEntries
+    : 1;
+  if (savedJsToolOutputs.has(normalizedRef)) {
+    savedJsToolOutputs.delete(normalizedRef);
+  }
+  savedJsToolOutputs.set(normalizedRef, record);
+  while (savedJsToolOutputs.size > normalizedMaxEntries) {
+    const oldestRef = savedJsToolOutputs.keys().next().value;
+    if (!oldestRef) break;
+    savedJsToolOutputs.delete(oldestRef);
+  }
+}
+
+installSavedJsToolOutputAccessors();
 
 function isDomLikeValue(value) {
   return !!(
@@ -123,7 +165,7 @@ function normalizeJsSandboxConsoleLogs(logs, fallbackFrameId = 0) {
     });
 }
 
-function buildJsSandboxSuccessEnvelope(value, logs = []) {
+function buildJsSandboxSuccessEnvelope(value, logs = [], savedOutputRef = '') {
   const normalizedValue = normalizeJsSandboxTransferValue(value);
   const normalizedLogs = normalizeJsSandboxConsoleLogs(logs, 0);
   return {
@@ -135,13 +177,17 @@ function buildJsSandboxSuccessEnvelope(value, logs = []) {
       documentId: JS_SANDBOX_DOCUMENT_ID,
       result: normalizedValue,
       logs: normalizedLogs,
-      error: null
+      error: null,
+      savedOutputRef
     }],
-    error: null
+    error: null,
+    savedOutputRefs: savedOutputRef
+      ? [{ ref: savedOutputRef, frameId: 0, documentId: JS_SANDBOX_DOCUMENT_ID }]
+      : []
   };
 }
 
-function buildJsSandboxErrorEnvelope(error, logs = []) {
+function buildJsSandboxErrorEnvelope(error, logs = [], savedOutputRef = '') {
   const normalizedError = normalizeErrorLikeValue(error);
   const normalizedLogs = normalizeJsSandboxConsoleLogs(logs, 0);
   return {
@@ -153,9 +199,13 @@ function buildJsSandboxErrorEnvelope(error, logs = []) {
       documentId: JS_SANDBOX_DOCUMENT_ID,
       result: null,
       logs: normalizedLogs,
-      error: normalizedError
+      error: normalizedError,
+      savedOutputRef
     }],
-    error: normalizedError
+    error: normalizedError,
+    savedOutputRefs: savedOutputRef
+      ? [{ ref: savedOutputRef, frameId: 0, documentId: JS_SANDBOX_DOCUMENT_ID }]
+      : []
   };
 }
 
@@ -277,6 +327,10 @@ window.addEventListener('message', async (event) => {
   }
   if (data.type !== 'execute') return;
 
+  const savedOutputRef = normalizeSavedJsToolOutputRef(data.outputRef);
+  const savedOutputMaxEntries = Number.isSafeInteger(data.outputStoreMaxEntries)
+    ? data.outputStoreMaxEntries
+    : 1;
   try {
     let abort = null;
     const abortPromise = new Promise((_, reject) => {
@@ -290,20 +344,43 @@ window.addEventListener('message', async (event) => {
       abortPromise
     ]);
     if (execution.ok !== true) {
+      const normalizedError = normalizeErrorLikeValue(execution.error);
+      saveJsToolOutput(savedOutputRef, {
+        ok: false,
+        value: null,
+        logs: execution.logs,
+        error: normalizedError,
+        createdAt: Date.now()
+      }, savedOutputMaxEntries);
       postSandboxMessage('execute_result', {
         requestId,
-        payload: buildJsSandboxErrorEnvelope(execution.error, execution.logs)
+        payload: buildJsSandboxErrorEnvelope(normalizedError, execution.logs, savedOutputRef)
       });
       return;
     }
+    saveJsToolOutput(savedOutputRef, {
+      ok: true,
+      value: execution.value,
+      logs: execution.logs,
+      error: null,
+      createdAt: Date.now()
+    }, savedOutputMaxEntries);
     postSandboxMessage('execute_result', {
       requestId,
-      payload: buildJsSandboxSuccessEnvelope(execution.value, execution.logs)
+      payload: buildJsSandboxSuccessEnvelope(execution.value, execution.logs, savedOutputRef)
     });
   } catch (error) {
+    const normalizedError = normalizeErrorLikeValue(error);
+    saveJsToolOutput(savedOutputRef, {
+      ok: false,
+      value: null,
+      logs: [],
+      error: normalizedError,
+      createdAt: Date.now()
+    }, savedOutputMaxEntries);
     postSandboxMessage('execute_result', {
       requestId,
-      payload: buildJsSandboxErrorEnvelope(error)
+      payload: buildJsSandboxErrorEnvelope(normalizedError, [], savedOutputRef)
     });
   } finally {
     activeExecutionAborters.delete(requestId);

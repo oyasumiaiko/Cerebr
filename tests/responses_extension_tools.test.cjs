@@ -149,6 +149,22 @@ test('reconcileResponsesAllowedToolChoice 会同步当前不可用的本地工�
     }
   );
 
+  assert.deepEqual(
+    reconcileResponsesAllowedToolChoice({
+      type: 'allowed_tools',
+      mode: 'required',
+      tools: ['js_runtime_execute']
+    }, [
+      { type: 'function', name: 'js_runtime_execute' },
+      { type: 'function', name: 'read_tool_output' }
+    ]),
+    {
+      type: 'allowed_tools',
+      mode: 'required',
+      tools: ['js_runtime_execute']
+    }
+  );
+
   const finalToolsWithCustomPatch = [
     ...finalTools,
     { type: 'custom', name: 'apply_patch' }
