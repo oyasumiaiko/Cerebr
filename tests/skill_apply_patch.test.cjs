@@ -77,6 +77,10 @@ test('parseSkillApplyPatch 只解析与 Codex Freeform grammar 对齐的标准 p
   );
   assert.throws(
     () => parseSkillApplyPatch('*** Begin Patch\nbad'),
+    /The last line of the patch must be '\*\*\* End Patch'/
+  );
+  assert.throws(
+    () => parseSkillApplyPatch('*** Begin Patch\nbad\n*** End Patch'),
     /'bad' is not a valid hunk header/
   );
 
@@ -101,12 +105,11 @@ test('parseSkillApplyPatch 只解析与 Codex Freeform grammar 对齐的标准 p
   });
   assert.equal(parsed.hunks[2].move_path, 'src/runtime/main.js');
 
-  assert.throws(
-    () => parseSkillApplyPatch(`<<'EOF'\n${wrapPatch('*** Add File: foo.js\n+hi')}\nEOF\n`, {
-      mode: 'lenient'
-    }),
-    /Unsupported apply_patch parser mode: lenient/
+  const lenient = parseSkillApplyPatch(
+    `<<'EOF'\n${wrapPatch('*** Add File: foo.js\n+hi')}\nEOF\n`
   );
+  assert.equal(lenient.patch, wrapPatch('*** Add File: foo.js\n+hi'));
+  assert.equal(lenient.hunks[0].contents, 'hi\n');
 });
 
 test('applySkillPackagePatch 可以新增虚拟文件且用途由路径自动推断', async () => {
@@ -494,4 +497,34 @@ test('Skill patch 必须由 Environment ID 唯一选目标并拒绝同一源路�
   );
 
   assert.equal(JSON.stringify(record), snapshot);
+});
+
+test('Skill verifier 只读取 patch 开始时的文件快照，不接受 Move 后再依赖目标内容', async () => {
+  const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
+  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
+  const record = buildStoredSkillRecord({
+    ...buildSkillInput('snapshot-probe'),
+    files: [
+      { path: 'SKILL.md', kind: 'instruction', content: '# Snapshot Probe\n' },
+      { path: 'a.txt', kind: null, content: 'needle\n' },
+      { path: 'b.txt', kind: null, content: 'other\n' }
+    ]
+  });
+  const before = JSON.stringify(record);
+
+  assert.throws(
+    () => applySkillPackagePatch(record, wrapPatch([
+      '*** Update File: a.txt',
+      '*** Move to: b.txt',
+      '@@',
+      '-needle',
+      '+moved',
+      '*** Update File: b.txt',
+      '@@',
+      '-moved',
+      '+dependent'
+    ].join('\n'), 'snapshot-probe')),
+    /Failed to find expected lines in b\.txt/
+  );
+  assert.equal(JSON.stringify(record), before);
 });

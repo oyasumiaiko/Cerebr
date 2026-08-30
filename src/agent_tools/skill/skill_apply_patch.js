@@ -65,7 +65,7 @@ function upsertFilePreservingOrder(files, file, existingIndex = null) {
 export function resolveSkillApplyPatchTarget(patchOrParsed) {
   try {
     const parsed = typeof patchOrParsed === 'string'
-      ? parseSkillApplyPatch(patchOrParsed, { mode: 'strict' })
+      ? parseSkillApplyPatch(patchOrParsed)
       : patchOrParsed;
     const environmentId = typeof parsed?.environment_id === 'string'
       ? parsed.environment_id.trim()
@@ -119,17 +119,11 @@ export function prepareSkillPackagePatch(record, patch) {
     }
     assertUniqueApplyPatchSourcePaths(hunks, normalizeSkillFilePath);
 
-    const nextFiles = cloneFiles(skill.files);
-    let instructionPath = skill.instruction.path;
-    let runtimeEntryPath = skill.runtime.entry_path;
-    let manifestInput = null;
-    let manifestContent = serializeSkillVirtualManifest(skill);
-    const affectedFiles = {
-      added: [],
-      modified: [],
-      deleted: []
-    };
-
+    const currentFiles = cloneFiles(skill.files);
+    const currentManifestContent = serializeSkillVirtualManifest(skill);
+    const preparedOperations = [];
+    // Codex 的 verifier 会让每个 hunk 都读取工具调用开始时的文件系统状态，而不是
+    // 前一个 hunk 尚未提交的内存结果。这里先只生成已验证操作，全部成功后再构造新 record。
     for (let hunkIndex = 0; hunkIndex < hunks.length; hunkIndex += 1) {
       const hunk = hunks[hunkIndex];
       const normalizedHunkPath = normalizeSkillFilePath(hunk.path);
@@ -144,32 +138,29 @@ export function prepareSkillPackagePatch(record, patch) {
         }
 
         if (hunk.type === 'add_file') {
-          const normalizedPath = normalizedHunkPath;
-          const existingIndex = findFileIndex(nextFiles, normalizedPath);
-          const existingFile = existingIndex >= 0 ? nextFiles[existingIndex] : null;
-          upsertFilePreservingOrder(nextFiles, {
-            path: normalizedPath,
+          const existingIndex = findFileIndex(currentFiles, normalizedHunkPath);
+          const existingFile = existingIndex >= 0 ? currentFiles[existingIndex] : null;
+          preparedOperations.push({
+            type: 'add_file',
+            source_path: normalizedHunkPath,
+            target_path: normalizedHunkPath,
+            content: hunk.contents,
             kind: existingFile?.kind || null,
-            content: hunk.contents
-          }, existingIndex);
-          if (existingFile) {
-            affectedFiles.modified.push(normalizedPath);
-          } else {
-            affectedFiles.added.push(normalizedPath);
-          }
+            destination_existed: !!existingFile
+          });
           continue;
         }
 
         if (hunk.type === 'delete_file') {
-          const normalizedPath = normalizedHunkPath;
-          const existingIndex = findFileIndex(nextFiles, normalizedPath);
+          const existingIndex = findFileIndex(currentFiles, normalizedHunkPath);
           if (existingIndex < 0) {
-            throw new Error(`Failed to delete file ${normalizedPath}`);
+            throw new Error(`Failed to delete file ${normalizedHunkPath}`);
           }
-          nextFiles.splice(existingIndex, 1);
-          if (instructionPath === normalizedPath) instructionPath = null;
-          if (runtimeEntryPath === normalizedPath) runtimeEntryPath = null;
-          affectedFiles.deleted.push(normalizedPath);
+          preparedOperations.push({
+            type: 'delete_file',
+            source_path: normalizedHunkPath,
+            target_path: normalizedHunkPath
+          });
           continue;
         }
 
@@ -179,55 +170,38 @@ export function prepareSkillPackagePatch(record, patch) {
             if (hunk.move_path) {
               throw new Error('manifest.json 是保留虚拟文件，不支持 Move to。');
             }
-            manifestContent = derivePatchedFileContent(manifestContent, sourcePath, hunk.chunks);
-            manifestInput = parseSkillVirtualManifestContent(manifestContent, skill);
-            if (manifestInput?.instruction?.path) {
-              instructionPath = manifestInput.instruction.path;
-            }
-            if (Object.prototype.hasOwnProperty.call(manifestInput?.runtime || {}, 'entry_path')) {
-              runtimeEntryPath = manifestInput.runtime.entry_path;
-            }
-            affectedFiles.modified.push(sourcePath);
+            const content = derivePatchedFileContent(
+              currentManifestContent,
+              sourcePath,
+              hunk.chunks
+            );
+            preparedOperations.push({
+              type: 'update_manifest',
+              source_path: sourcePath,
+              target_path: sourcePath,
+              content,
+              manifest_input: parseSkillVirtualManifestContent(content, skill)
+            });
             continue;
           }
-          const sourceIndex = findFileIndex(nextFiles, sourcePath);
+          const sourceIndex = findFileIndex(currentFiles, sourcePath);
           if (sourceIndex < 0) {
             throw new Error(`Failed to read file to update ${sourcePath}`);
           }
 
-          const sourceFile = nextFiles[sourceIndex];
+          const sourceFile = currentFiles[sourceIndex];
           const nextContent = derivePatchedFileContent(sourceFile.content, sourcePath, hunk.chunks);
           const targetPath = hunk.move_path ? normalizeSkillFilePath(hunk.move_path) : sourcePath;
           if (hunk.move_path && targetPath === SKILL_VIRTUAL_MANIFEST_PATH) {
             throw new Error('manifest.json 是保留虚拟文件，不支持 Move to。');
           }
-
-          if (targetPath === sourcePath) {
-            nextFiles[sourceIndex] = {
-              path: sourcePath,
-              kind: sourceFile.kind,
-              content: nextContent
-            };
-          } else {
-            const targetIndex = findFileIndex(nextFiles, targetPath);
-            if (targetIndex >= 0 && targetIndex !== sourceIndex) {
-              nextFiles[targetIndex] = {
-                path: targetPath,
-                kind: sourceFile.kind,
-                content: nextContent
-              };
-              nextFiles.splice(sourceIndex, 1);
-            } else {
-              nextFiles[sourceIndex] = {
-                path: targetPath,
-                kind: sourceFile.kind,
-                content: nextContent
-              };
-            }
-            if (instructionPath === sourcePath) instructionPath = targetPath;
-            if (runtimeEntryPath === sourcePath) runtimeEntryPath = targetPath;
-          }
-          affectedFiles.modified.push(targetPath);
+          preparedOperations.push({
+            type: 'update_file',
+            source_path: sourcePath,
+            target_path: targetPath,
+            content: nextContent,
+            kind: sourceFile.kind
+          });
         }
       } catch (error) {
         throw normalizeApplyPatchVerificationError(error, {
@@ -239,6 +213,82 @@ export function prepareSkillPackagePatch(record, patch) {
           hunk_index: hunkIndex + 1
         });
       }
+    }
+
+    const nextFiles = cloneFiles(skill.files);
+    let instructionPath = skill.instruction.path;
+    let runtimeEntryPath = skill.runtime.entry_path;
+    let manifestInput = null;
+    const affectedFiles = {
+      added: [],
+      modified: [],
+      deleted: []
+    };
+
+    // 所有源文件与 context 均已验证完成；以下阶段只把准备好的结果组装成一次提交对象。
+    for (const operation of preparedOperations) {
+      if (operation.type === 'add_file') {
+        const existingIndex = findFileIndex(nextFiles, operation.target_path);
+        upsertFilePreservingOrder(nextFiles, {
+          path: operation.target_path,
+          kind: operation.kind,
+          content: operation.content
+        }, existingIndex);
+        if (operation.destination_existed) {
+          affectedFiles.modified.push(operation.target_path);
+        } else {
+          affectedFiles.added.push(operation.target_path);
+        }
+        continue;
+      }
+
+      if (operation.type === 'delete_file') {
+        const sourceIndex = findFileIndex(nextFiles, operation.source_path);
+        if (sourceIndex < 0) {
+          throw new Error(`Prepared apply_patch source disappeared before commit: ${operation.source_path}`);
+        }
+        nextFiles.splice(sourceIndex, 1);
+        if (instructionPath === operation.source_path) instructionPath = null;
+        if (runtimeEntryPath === operation.source_path) runtimeEntryPath = null;
+        affectedFiles.deleted.push(operation.source_path);
+        continue;
+      }
+
+      if (operation.type === 'update_manifest') {
+        manifestInput = operation.manifest_input;
+        if (manifestInput?.instruction?.path) {
+          instructionPath = manifestInput.instruction.path;
+        }
+        if (Object.prototype.hasOwnProperty.call(manifestInput?.runtime || {}, 'entry_path')) {
+          runtimeEntryPath = manifestInput.runtime.entry_path;
+        }
+        affectedFiles.modified.push(operation.source_path);
+        continue;
+      }
+
+      const sourceIndex = findFileIndex(nextFiles, operation.source_path);
+      if (sourceIndex < 0) {
+        throw new Error(`Prepared apply_patch source disappeared before commit: ${operation.source_path}`);
+      }
+      const nextFile = {
+        path: operation.target_path,
+        kind: operation.kind,
+        content: operation.content
+      };
+      if (operation.target_path === operation.source_path) {
+        nextFiles[sourceIndex] = nextFile;
+      } else {
+        const targetIndex = findFileIndex(nextFiles, operation.target_path);
+        if (targetIndex >= 0 && targetIndex !== sourceIndex) {
+          nextFiles[targetIndex] = nextFile;
+          nextFiles.splice(sourceIndex, 1);
+        } else {
+          nextFiles[sourceIndex] = nextFile;
+        }
+        if (instructionPath === operation.source_path) instructionPath = operation.target_path;
+        if (runtimeEntryPath === operation.source_path) runtimeEntryPath = operation.target_path;
+      }
+      affectedFiles.modified.push(operation.target_path);
     }
 
     if (instructionPath && findFileIndex(nextFiles, instructionPath) < 0) {
@@ -263,7 +313,7 @@ export function prepareSkillPackagePatch(record, patch) {
     }, skill);
 
     return {
-      patch: String(patch || ''),
+      patch: target.parsed.patch,
       environment_id: target.environment_id,
       skill_name: target.skill_name,
       hunks,

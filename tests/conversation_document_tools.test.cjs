@@ -467,6 +467,42 @@ test('会话文件 apply_patch 在提交前拒绝同一源路径的多个操作'
   assert.equal((await store.getDocument('conv-duplicate-source', 'same.md')).content, 'before\n');
 });
 
+test('会话文件 verifier 不允许 Move 后的目标内容成为同一 patch 后续 Update 的输入', async () => {
+  const {
+    executeConversationDocumentAction,
+    CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME
+  } = await loadConversationDocumentToolsModule();
+  const store = createInMemoryDocumentStore({
+    'a.txt': 'needle\n',
+    'b.txt': 'other\n'
+  });
+
+  await assert.rejects(
+    executeConversationDocumentAction(
+      CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
+      {
+        patch: [
+          '*** Begin Patch',
+          '*** Update File: a.txt',
+          '*** Move to: b.txt',
+          '@@',
+          '-needle',
+          '+moved',
+          '*** Update File: b.txt',
+          '@@',
+          '-moved',
+          '+dependent',
+          '*** End Patch'
+        ].join('\n')
+      },
+      { conversationId: 'conv-snapshot', store }
+    ),
+    /Failed to find expected lines in b\.txt/
+  );
+  assert.equal((await store.getDocument('conv-snapshot', 'a.txt')).content, 'needle\n');
+  assert.equal((await store.getDocument('conv-snapshot', 'b.txt')).content, 'other\n');
+});
+
 test('read_file 支持行范围与带行号输出', async () => {
   const {
     executeConversationDocumentAction,

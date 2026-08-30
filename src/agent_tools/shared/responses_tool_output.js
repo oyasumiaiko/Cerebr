@@ -6,6 +6,8 @@
  * 2. 各工具只负责生成完整输出，最终字符预算由统一出口应用一次；
  * 3. 需要时把长文本切成多个 input_text content item，避免“大块 JSON 字符串二次转义”。
  */
+import { formatApplyPatchVerificationError } from './apply_patch_core.js';
+
 export const RESPONSES_TOOL_OUTPUT_CHUNK_CHARS = 3_000;
 export const RESPONSES_TOOL_OUTPUT_PRETTY_JSON_MAX_CHARS = 1_000;
 // message_sender 会显式传入 js_runtime_execute 的公开固定预算；这里保留同值默认值，
@@ -1491,23 +1493,10 @@ export function buildResponsesApplyPatchToolOutputText(result) {
     : { ok: false, error: result };
   if (normalized.ok !== true) {
     const error = normalized.error || normalized;
-    if (typeof error?.tool_output === 'string' && error.tool_output.trim()) {
-      return error.tool_output.trim();
+    if (typeof error?.tool_output === 'string' && error.tool_output.length > 0) {
+      return error.tool_output;
     }
-    const message = typeof error?.message === 'string' && error.message.trim()
-      ? error.message.trim()
-      : String(error || 'unknown apply_patch error');
-    if (message.startsWith('apply_patch verification failed:')) return message;
-    if (error?.name === 'InvalidHunkError') {
-      const lineNumber = Number.isFinite(Number(error?.line_number))
-        ? Math.max(1, Math.trunc(Number(error.line_number)))
-        : 1;
-      return `apply_patch verification failed: invalid hunk at line ${lineNumber}, ${message}`;
-    }
-    if (error?.name === 'InvalidPatchError') {
-      return `apply_patch verification failed: invalid patch: ${message}`;
-    }
-    return `apply_patch verification failed: ${message}`;
+    return formatApplyPatchVerificationError(error);
   }
 
   const affected = (result?.affected_files && typeof result.affected_files === 'object') ? result.affected_files : {};

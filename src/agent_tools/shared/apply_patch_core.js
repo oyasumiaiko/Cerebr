@@ -18,6 +18,24 @@ const EMPTY_CHANGE_CONTEXT_MARKER = '@@';
 const EOF_MARKER = '*** End of File';
 const ENVIRONMENT_ID_MARKER = '*** Environment ID:';
 
+export const APPLY_PATCH_PARSE_MODE_STRICT = 'strict';
+export const APPLY_PATCH_PARSE_MODE_LENIENT = 'lenient';
+export const APPLY_PATCH_FILE_UPDATE_MODE_NORMALIZE_TO_LF = 'normalize_to_lf';
+export const APPLY_PATCH_FILE_UPDATE_MODE_PRESERVE_LINE_ENDINGS = 'preserve_line_endings';
+
+const RUST_WHITESPACE_START = /^\p{White_Space}+/u;
+const RUST_WHITESPACE_END = /\p{White_Space}+$/u;
+
+function trimRustWhitespace(value) {
+  return String(value ?? '')
+    .replace(RUST_WHITESPACE_START, '')
+    .replace(RUST_WHITESPACE_END, '');
+}
+
+function trimEndRustWhitespace(value) {
+  return String(value ?? '').replace(RUST_WHITESPACE_END, '');
+}
+
 function createInvalidPatchError(message) {
   const error = new Error(message);
   error.name = 'InvalidPatchError';
@@ -42,8 +60,8 @@ function createInvalidHunkError(message, lineNumber) {
  * 错误对象本身保留结构化诊断字段，wire output 则只使用这段直接文本。
  */
 export function formatApplyPatchVerificationError(error) {
-  const message = typeof error?.message === 'string' && error.message.trim()
-    ? error.message.trim()
+  const message = typeof error?.message === 'string' && error.message.length > 0
+    ? error.message
     : String(error || 'unknown apply_patch error');
   if (message.startsWith('apply_patch verification failed:')) {
     return message;
@@ -133,7 +151,10 @@ function cloneHunks(hunks) {
         chunks: hunk.chunks.map((chunk) => ({
           ...chunk,
           old_lines: [...chunk.old_lines],
-          new_lines: [...chunk.new_lines]
+          new_lines: [...chunk.new_lines],
+          context_line_indices: Array.isArray(chunk.context_line_indices)
+            ? chunk.context_line_indices.map(([oldIndex, newIndex]) => [oldIndex, newIndex])
+            : []
         }))
       }
       : {})
@@ -163,7 +184,6 @@ export class StreamingApplyPatchParser {
     this.previewFiles = [];
     this.environmentId = null;
     this.lineNumber = 0;
-    this.finished = false;
   }
 
   get environment_id() {
@@ -182,7 +202,7 @@ export class StreamingApplyPatchParser {
       line_number: this.lineNumber,
       pending_line: this.lineBuffer,
       complete: this.mode === 'ended_patch',
-      finished: options.finished === true || this.finished === true
+      finished: options.finished === true
     };
   }
 
@@ -228,7 +248,7 @@ export class StreamingApplyPatchParser {
       if (this.environmentId !== null) {
         throw createInvalidPatchError('apply_patch environment_id cannot be specified more than once');
       }
-      const environmentId = trimmed.slice(ENVIRONMENT_ID_MARKER.length).trim();
+      const environmentId = trimRustWhitespace(trimmed.slice(ENVIRONMENT_ID_MARKER.length));
       if (!environmentId) {
         throw createInvalidPatchError('apply_patch environment_id cannot be empty');
       }
@@ -269,9 +289,6 @@ export class StreamingApplyPatchParser {
   }
 
   pushDelta(delta) {
-    if (this.finished) {
-      throw createInvalidPatchError('StreamingApplyPatchParser.finish() has already been called');
-    }
     for (const character of String(delta || '')) {
       if (character !== '\n') {
         this.lineBuffer += character;
@@ -287,13 +304,12 @@ export class StreamingApplyPatchParser {
   }
 
   finish() {
-    if (this.finished) return this.getHunks();
     if (this.lineBuffer !== '') {
       const line = this.lineBuffer;
       this.lineBuffer = '';
       this.lineNumber += 1;
-      if (line.trim() === END_PATCH_MARKER) {
-        this.ensureUpdateHunkIsNotEmpty(line.trim());
+      if (trimRustWhitespace(line) === END_PATCH_MARKER) {
+        this.ensureUpdateHunkIsNotEmpty(trimRustWhitespace(line));
         this.mode = 'ended_patch';
       } else {
         this.processLine(line);
@@ -302,12 +318,11 @@ export class StreamingApplyPatchParser {
     if (this.mode !== 'ended_patch') {
       throw createInvalidPatchError("The last line of the patch must be '*** End Patch'");
     }
-    this.finished = true;
     return this.getHunks();
   }
 
   processLine(line) {
-    const trimmed = line.trim();
+    const trimmed = trimRustWhitespace(line);
     if (this.mode === 'not_started') {
       if (trimmed === BEGIN_PATCH_MARKER) {
         this.mode = 'started_patch';
@@ -351,7 +366,7 @@ export class StreamingApplyPatchParser {
       throw createInvalidPatchError("The last line of the patch must be '*** End Patch'");
     }
 
-    const updateLine = line.trimEnd();
+    const updateLine = trimEndRustWhitespace(line);
     if (this.handleHunkHeadersAndEndPatch(updateLine)) return;
     const hunk = this.hunks[this.hunks.length - 1];
     const chunks = hunk.chunks;
@@ -395,6 +410,7 @@ export class StreamingApplyPatchParser {
         change_context: changeContext,
         old_lines: [],
         new_lines: [],
+        context_line_indices: [],
         is_end_of_file: false
       });
       this.appendPreviewLine('hunk', changeContext || '', line);
@@ -412,8 +428,18 @@ export class StreamingApplyPatchParser {
 
     if (line === '') {
       if (chunks.length === 0) {
-        chunks.push({ change_context: null, old_lines: [], new_lines: [], is_end_of_file: false });
+        chunks.push({
+          change_context: null,
+          old_lines: [],
+          new_lines: [],
+          context_line_indices: [],
+          is_end_of_file: false
+        });
       }
+      lastChunk().context_line_indices.push([
+        lastChunk().old_lines.length,
+        lastChunk().new_lines.length
+      ]);
       lastChunk().old_lines.push('');
       lastChunk().new_lines.push('');
       this.appendPreviewLine('context', '', line);
@@ -423,10 +449,20 @@ export class StreamingApplyPatchParser {
     const prefix = line.charAt(0);
     if (prefix === ' ' || prefix === '+' || prefix === '-') {
       if (chunks.length === 0) {
-        chunks.push({ change_context: null, old_lines: [], new_lines: [], is_end_of_file: false });
+        chunks.push({
+          change_context: null,
+          old_lines: [],
+          new_lines: [],
+          context_line_indices: [],
+          is_end_of_file: false
+        });
       }
       const content = line.slice(1);
       if (prefix === ' ') {
+        lastChunk().context_line_indices.push([
+          lastChunk().old_lines.length,
+          lastChunk().new_lines.length
+        ]);
         lastChunk().old_lines.push(content);
         lastChunk().new_lines.push(content);
         this.appendPreviewLine('context', content, line);
@@ -481,21 +517,87 @@ export function parseApplyPatchProgress(patch, options = {}) {
   };
 }
 
+function splitRustLines(value) {
+  const text = String(value ?? '');
+  if (!text) return [];
+  return text.split('\n').map((line) => (
+    line.endsWith('\r') ? line.slice(0, -1) : line
+  ));
+}
+
+function checkPatchBoundariesStrict(lines) {
+  const firstLine = lines.length > 0 ? trimRustWhitespace(lines[0]) : null;
+  const lastLine = lines.length > 0 ? trimRustWhitespace(lines[lines.length - 1]) : null;
+  if (firstLine === BEGIN_PATCH_MARKER && lastLine === END_PATCH_MARKER) {
+    return lines;
+  }
+  if (firstLine !== null && firstLine !== BEGIN_PATCH_MARKER) {
+    throw createInvalidPatchError("The first line of the patch must be '*** Begin Patch'");
+  }
+  throw createInvalidPatchError("The last line of the patch must be '*** End Patch'");
+}
+
+function checkPatchBoundariesLenient(lines) {
+  let originalError;
+  try {
+    return checkPatchBoundariesStrict(lines);
+  } catch (error) {
+    originalError = error;
+  }
+
+  if (lines.length >= 4) {
+    const firstLine = lines[0];
+    const lastLine = lines[lines.length - 1];
+    const hasHeredocStart = firstLine === '<<EOF'
+      || firstLine === "<<'EOF'"
+      || firstLine === '<<"EOF"';
+    if (hasHeredocStart && lastLine.endsWith('EOF')) {
+      return checkPatchBoundariesStrict(lines.slice(1, -1));
+    }
+  }
+  throw originalError;
+}
+
 export function parseApplyPatch(patch, options = {}) {
-  if (options?.mode && options.mode !== 'strict') {
+  const mode = options?.mode || APPLY_PATCH_PARSE_MODE_LENIENT;
+  if (![APPLY_PATCH_PARSE_MODE_STRICT, APPLY_PATCH_PARSE_MODE_LENIENT].includes(mode)) {
     throw createInvalidPatchError(`Unsupported apply_patch parser mode: ${options.mode}`);
   }
+  const originalPatch = String(patch ?? '');
+  const lines = splitRustLines(trimRustWhitespace(originalPatch));
+  const patchLines = mode === APPLY_PATCH_PARSE_MODE_STRICT
+    ? checkPatchBoundariesStrict(lines)
+    : checkPatchBoundariesLenient(lines);
+  const normalizedPatch = patchLines.join('\n');
   const parser = new StreamingApplyPatchParser();
-  parser.pushDelta(String(patch || ''));
+  parser.pushDelta(normalizedPatch);
   const hunks = parser.finish();
   return {
-    patch: String(patch || ''),
+    patch: normalizedPatch,
     environment_id: parser.environment_id,
     hunks
   };
 }
 
-export function seekSequence(lines, pattern, start, eof) {
+function normalizeApplyPatchFileUpdateMode(value) {
+  const mode = value || APPLY_PATCH_FILE_UPDATE_MODE_NORMALIZE_TO_LF;
+  if (
+    mode !== APPLY_PATCH_FILE_UPDATE_MODE_NORMALIZE_TO_LF
+    && mode !== APPLY_PATCH_FILE_UPDATE_MODE_PRESERVE_LINE_ENDINGS
+  ) {
+    throw new Error(`Unsupported apply_patch file update mode: ${mode}`);
+  }
+  return mode;
+}
+
+export function seekSequence(
+  lines,
+  pattern,
+  start,
+  eof,
+  updateFileMode = APPLY_PATCH_FILE_UPDATE_MODE_NORMALIZE_TO_LF
+) {
+  const normalizedUpdateFileMode = normalizeApplyPatchFileUpdateMode(updateFileMode);
   if (!Array.isArray(pattern) || pattern.length <= 0) {
     return start;
   }
@@ -503,9 +605,13 @@ export function seekSequence(lines, pattern, start, eof) {
     return null;
   }
 
-  const searchStart = (eof && lines.length >= pattern.length)
-    ? (lines.length - pattern.length)
-    : start;
+  const searchStart = (() => {
+    if (!eof || lines.length < pattern.length) return start;
+    const eofStart = lines.length - pattern.length;
+    return normalizedUpdateFileMode === APPLY_PATCH_FILE_UPDATE_MODE_PRESERVE_LINE_ENDINGS
+      ? Math.max(eofStart, start)
+      : eofStart;
+  })();
   const maxStart = lines.length - pattern.length;
 
   for (let index = searchStart; index <= maxStart; index += 1) {
@@ -522,7 +628,10 @@ export function seekSequence(lines, pattern, start, eof) {
   for (let index = searchStart; index <= maxStart; index += 1) {
     let ok = true;
     for (let offset = 0; offset < pattern.length; offset += 1) {
-      if (String(lines[index + offset]).trimEnd() !== String(pattern[offset]).trimEnd()) {
+      if (
+        trimEndRustWhitespace(lines[index + offset])
+        !== trimEndRustWhitespace(pattern[offset])
+      ) {
         ok = false;
         break;
       }
@@ -533,7 +642,10 @@ export function seekSequence(lines, pattern, start, eof) {
   for (let index = searchStart; index <= maxStart; index += 1) {
     let ok = true;
     for (let offset = 0; offset < pattern.length; offset += 1) {
-      if (String(lines[index + offset]).trim() !== String(pattern[offset]).trim()) {
+      if (
+        trimRustWhitespace(lines[index + offset])
+        !== trimRustWhitespace(pattern[offset])
+      ) {
         ok = false;
         break;
       }
@@ -541,8 +653,7 @@ export function seekSequence(lines, pattern, start, eof) {
     if (ok) return index;
   }
 
-  const normalizeLoose = (value) => String(value || '')
-    .trim()
+  const normalizeLoose = (value) => trimRustWhitespace(value)
     .split('')
     .map((char) => {
       switch (char) {
@@ -598,17 +709,91 @@ export function seekSequence(lines, pattern, start, eof) {
   return null;
 }
 
-function computeReplacements(originalLines, path, chunks) {
+function parseSourceFile(contents) {
+  const text = String(contents ?? '');
+  const lines = [];
+  let preferredEnding = null;
+  let lineStart = 0;
+  let cursor = 0;
+
+  while (cursor < text.length) {
+    let ending = null;
+    let endingLength = 0;
+    if (text[cursor] === '\r' && text[cursor + 1] === '\n') {
+      ending = '\r\n';
+      endingLength = 2;
+    } else if (text[cursor] === '\r') {
+      ending = '\r';
+      endingLength = 1;
+    } else if (text[cursor] === '\n') {
+      ending = '\n';
+      endingLength = 1;
+    } else {
+      cursor += 1;
+      continue;
+    }
+
+    if (preferredEnding === null) preferredEnding = ending;
+    lines.push({
+      text: text.slice(lineStart, cursor),
+      ending
+    });
+    cursor += endingLength;
+    lineStart = cursor;
+  }
+
+  if (lineStart < text.length) {
+    lines.push({
+      text: text.slice(lineStart),
+      ending: null
+    });
+  }
+
+  return {
+    lines,
+    preferredEnding: preferredEnding || '\n'
+  };
+}
+
+function applySourceFileReplacements(sourceFile, replacements) {
+  const sourceLines = sourceFile.lines;
+  const nextLines = [];
+  let sourceIndex = 0;
+
+  for (const [startIndex, oldLength, newSegment] of replacements) {
+    for (let index = sourceIndex; index < startIndex; index += 1) {
+      nextLines.push(sourceLines[index]);
+    }
+    for (const text of newSegment) {
+      nextLines.push({
+        text,
+        ending: sourceFile.preferredEnding
+      });
+    }
+    sourceIndex = startIndex + oldLength;
+  }
+
+  for (let index = sourceIndex; index < sourceLines.length; index += 1) {
+    nextLines.push(sourceLines[index]);
+  }
+  for (const line of nextLines) {
+    if (line.ending === null) line.ending = sourceFile.preferredEnding;
+  }
+  return nextLines.map((line) => `${line.text}${line.ending || ''}`).join('');
+}
+
+function computeReplacements(originalLines, path, chunks, updateFileMode) {
   const replacements = [];
   let lineIndex = 0;
 
   for (const chunk of chunks) {
-    if (chunk.change_context) {
+    if (chunk.change_context !== null && chunk.change_context !== undefined) {
       const matchedIndex = seekSequence(
         originalLines,
         [chunk.change_context],
         lineIndex,
-        false
+        false,
+        updateFileMode
       );
       if (matchedIndex === null) {
         throw new Error(`Failed to find context '${chunk.change_context}' in ${path}`);
@@ -617,30 +802,71 @@ function computeReplacements(originalLines, path, chunks) {
     }
 
     if (chunk.old_lines.length <= 0) {
-      const insertionIndex = originalLines[originalLines.length - 1] === ''
-        ? originalLines.length - 1
-        : originalLines.length;
+      const insertionIndex = updateFileMode === APPLY_PATCH_FILE_UPDATE_MODE_PRESERVE_LINE_ENDINGS
+        ? originalLines.length
+        : (originalLines[originalLines.length - 1] === ''
+          ? originalLines.length - 1
+          : originalLines.length);
       replacements.push([insertionIndex, 0, [...chunk.new_lines]]);
       continue;
     }
 
     let pattern = chunk.old_lines;
     let newSlice = chunk.new_lines;
-    let found = seekSequence(originalLines, pattern, lineIndex, chunk.is_end_of_file);
+    let found = seekSequence(
+      originalLines,
+      pattern,
+      lineIndex,
+      chunk.is_end_of_file,
+      updateFileMode
+    );
 
     if (found === null && pattern[pattern.length - 1] === '') {
       pattern = pattern.slice(0, -1);
       if (newSlice[newSlice.length - 1] === '') {
         newSlice = newSlice.slice(0, -1);
       }
-      found = seekSequence(originalLines, pattern, lineIndex, chunk.is_end_of_file);
+      found = seekSequence(
+        originalLines,
+        pattern,
+        lineIndex,
+        chunk.is_end_of_file,
+        updateFileMode
+      );
     }
 
     if (found === null) {
       throw new Error(`Failed to find expected lines in ${path}:\n${chunk.old_lines.join('\n')}`);
     }
 
-    replacements.push([found, pattern.length, [...newSlice]]);
+    if (updateFileMode === APPLY_PATCH_FILE_UPDATE_MODE_NORMALIZE_TO_LF) {
+      replacements.push([found, pattern.length, [...newSlice]]);
+    } else {
+      let oldStart = 0;
+      let newStart = 0;
+      const contextLineIndices = Array.isArray(chunk.context_line_indices)
+        ? chunk.context_line_indices
+        : [];
+      for (const [oldContext, newContext] of contextLineIndices) {
+        if (oldContext >= pattern.length || newContext >= newSlice.length) break;
+        if (oldStart !== oldContext || newStart !== newContext) {
+          replacements.push([
+            found + oldStart,
+            oldContext - oldStart,
+            newSlice.slice(newStart, newContext)
+          ]);
+        }
+        oldStart = oldContext + 1;
+        newStart = newContext + 1;
+      }
+      if (oldStart !== pattern.length || newStart !== newSlice.length) {
+        replacements.push([
+          found + oldStart,
+          pattern.length - oldStart,
+          newSlice.slice(newStart)
+        ]);
+      }
+    }
     lineIndex = found + pattern.length;
   }
 
@@ -656,12 +882,36 @@ function applyReplacements(lines, replacements) {
   return nextLines;
 }
 
-export function derivePatchedFileContent(originalContent, path, chunks) {
-  const originalLines = String(originalContent || '').split('\n');
+export function derivePatchedFileContent(originalContent, path, chunks, options = {}) {
+  const updateFileMode = normalizeApplyPatchFileUpdateMode(
+    typeof options === 'string'
+      ? options
+      : (options?.update_file_mode || options?.updateFileMode)
+  );
+  const sourceText = String(originalContent ?? '');
+
+  if (updateFileMode === APPLY_PATCH_FILE_UPDATE_MODE_PRESERVE_LINE_ENDINGS) {
+    const sourceFile = parseSourceFile(sourceText);
+    const originalLines = sourceFile.lines.map((line) => line.text);
+    const replacements = computeReplacements(
+      originalLines,
+      path,
+      chunks,
+      updateFileMode
+    );
+    return applySourceFileReplacements(sourceFile, replacements);
+  }
+
+  const originalLines = sourceText.split('\n');
   if (originalLines[originalLines.length - 1] === '') {
     originalLines.pop();
   }
-  const replacements = computeReplacements(originalLines, path, chunks);
+  const replacements = computeReplacements(
+    originalLines,
+    path,
+    chunks,
+    updateFileMode
+  );
   const nextLines = applyReplacements(originalLines, replacements);
   if (nextLines[nextLines.length - 1] !== '') {
     nextLines.push('');

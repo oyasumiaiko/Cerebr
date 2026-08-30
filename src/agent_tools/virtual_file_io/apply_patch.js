@@ -26,7 +26,7 @@ export function normalizeVirtualFileApplyPatchArguments(args, target) {
 
 export function normalizeVirtualFileApplyPatchCustomInput(input) {
   const patch = typeof input === 'string' ? input : '';
-  const parsed = parseApplyPatch(patch, { mode: 'strict' });
+  const parsed = parseApplyPatch(patch);
   const environmentId = normalizeString(parsed.environment_id);
   if (!environmentId) {
     return {

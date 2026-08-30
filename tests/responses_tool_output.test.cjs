@@ -2,12 +2,15 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
+
+let moduleLoadSequence = 0;
 
 async function loadResponsesToolOutputModule() {
   const filePath = path.resolve(__dirname, '../src/agent_tools/shared/responses_tool_output.js');
-  const source = await fs.readFile(filePath, 'utf8');
-  const dataUrl = `data:text/javascript;base64,${Buffer.from(source, 'utf8').toString('base64')}`;
-  return import(dataUrl);
+  await fs.access(filePath);
+  moduleLoadSequence += 1;
+  return import(`${pathToFileURL(filePath).href}?test=${moduleLoadSequence}`);
 }
 
 test('stringifyResponsesToolOutputValue 默认把对象转成 pretty JSON', async () => {

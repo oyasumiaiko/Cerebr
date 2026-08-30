@@ -547,7 +547,7 @@ function findDocumentIndex(documents, path) {
 function applyConversationDocumentPatch(documents, patch) {
   let hunks;
   try {
-    ({ hunks } = parseApplyPatch(patch, { mode: 'strict' }));
+    ({ hunks } = parseApplyPatch(patch));
     if (hunks.length <= 0) {
       throw new Error('No files were modified.');
     }
@@ -556,14 +556,11 @@ function applyConversationDocumentPatch(documents, patch) {
     throw normalizeApplyPatchVerificationError(error, { stage: error?.stage || 'verify' });
   }
 
-  const nextDocuments = normalizeDocumentRecords(documents);
-  const affectedFiles = {
-    added: [],
-    modified: [],
-    deleted: []
-  };
+  const currentDocuments = normalizeDocumentRecords(documents);
+  const preparedOperations = [];
   const patchTime = new Date().toISOString();
 
+  // 验证阶段始终读取调用开始时的不可变快照，禁止后一个 hunk 依赖前一个 hunk 的未提交结果。
   for (let hunkIndex = 0; hunkIndex < hunks.length; hunkIndex += 1) {
     const hunk = hunks[hunkIndex];
     let sourcePath = null;
@@ -571,65 +568,48 @@ function applyConversationDocumentPatch(documents, patch) {
       if (hunk.type === 'add_file') {
         const targetPath = normalizeConversationDocumentPath(hunk.path);
         sourcePath = targetPath;
-        const existingIndex = findDocumentIndex(nextDocuments, targetPath);
-        const nextRecord = normalizeDocumentRecord({
-          path: targetPath,
+        preparedOperations.push({
+          type: 'add_file',
+          source_path: targetPath,
+          target_path: targetPath,
           content: hunk.contents,
-          updated_at: patchTime
-        }, patchTime);
-        if (existingIndex >= 0) {
-          nextDocuments[existingIndex] = nextRecord;
-          affectedFiles.modified.push(targetPath);
-        } else {
-          nextDocuments.push(nextRecord);
-          affectedFiles.added.push(targetPath);
-        }
-        nextDocuments.sort((left, right) => left.path.localeCompare(right.path));
+          destination_existed: findDocumentIndex(currentDocuments, targetPath) >= 0
+        });
         continue;
       }
 
       if (hunk.type === 'delete_file') {
         const targetPath = normalizeConversationDocumentPath(hunk.path);
         sourcePath = targetPath;
-        const existingIndex = findDocumentIndex(nextDocuments, targetPath);
+        const existingIndex = findDocumentIndex(currentDocuments, targetPath);
         if (existingIndex < 0) {
           throw new Error(`Failed to delete file ${targetPath}`);
         }
-        nextDocuments.splice(existingIndex, 1);
-        affectedFiles.deleted.push(targetPath);
+        preparedOperations.push({
+          type: 'delete_file',
+          source_path: targetPath,
+          target_path: targetPath
+        });
         continue;
       }
 
       if (hunk.type === 'update_file') {
         sourcePath = normalizeConversationDocumentPath(hunk.path);
-        const sourceIndex = findDocumentIndex(nextDocuments, sourcePath);
+        const sourceIndex = findDocumentIndex(currentDocuments, sourcePath);
         if (sourceIndex < 0) {
           throw new Error(`Failed to read file to update ${sourcePath}`);
         }
-        const sourceDocument = nextDocuments[sourceIndex];
+        const sourceDocument = currentDocuments[sourceIndex];
         const nextContent = derivePatchedFileContent(sourceDocument.content, sourcePath, hunk.chunks);
         const targetPath = hunk.move_path
           ? normalizeConversationDocumentPath(hunk.move_path)
           : sourcePath;
-        const nextRecord = normalizeDocumentRecord({
-          path: targetPath,
-          content: nextContent,
-          updated_at: patchTime
-        }, patchTime);
-
-        if (targetPath === sourcePath) {
-          nextDocuments[sourceIndex] = nextRecord;
-        } else {
-          const targetIndex = findDocumentIndex(nextDocuments, targetPath);
-          if (targetIndex >= 0) {
-            nextDocuments[targetIndex] = nextRecord;
-            nextDocuments.splice(sourceIndex, 1);
-          } else {
-            nextDocuments[sourceIndex] = nextRecord;
-          }
-        }
-        nextDocuments.sort((left, right) => left.path.localeCompare(right.path));
-        affectedFiles.modified.push(targetPath);
+        preparedOperations.push({
+          type: 'update_file',
+          source_path: sourcePath,
+          target_path: targetPath,
+          content: nextContent
+        });
       }
     } catch (error) {
       throw normalizeApplyPatchVerificationError(error, {
@@ -638,6 +618,70 @@ function applyConversationDocumentPatch(documents, patch) {
         hunk_index: hunkIndex + 1
       });
     }
+  }
+
+  const nextDocuments = normalizeDocumentRecords(currentDocuments);
+  const affectedFiles = {
+    added: [],
+    modified: [],
+    deleted: []
+  };
+
+  // 只有全部 hunk 验证成功后，才在内存中生成一次 replaceDocuments 所需的完整集合。
+  for (const operation of preparedOperations) {
+    if (operation.type === 'add_file') {
+      const existingIndex = findDocumentIndex(nextDocuments, operation.target_path);
+      const nextRecord = normalizeDocumentRecord({
+        path: operation.target_path,
+        content: operation.content,
+        updated_at: patchTime
+      }, patchTime);
+      if (existingIndex >= 0) {
+        nextDocuments[existingIndex] = nextRecord;
+      } else {
+        nextDocuments.push(nextRecord);
+      }
+      if (operation.destination_existed) {
+        affectedFiles.modified.push(operation.target_path);
+      } else {
+        affectedFiles.added.push(operation.target_path);
+      }
+      nextDocuments.sort((left, right) => left.path.localeCompare(right.path));
+      continue;
+    }
+
+    if (operation.type === 'delete_file') {
+      const sourceIndex = findDocumentIndex(nextDocuments, operation.source_path);
+      if (sourceIndex < 0) {
+        throw new Error(`Prepared apply_patch source disappeared before commit: ${operation.source_path}`);
+      }
+      nextDocuments.splice(sourceIndex, 1);
+      affectedFiles.deleted.push(operation.source_path);
+      continue;
+    }
+
+    const sourceIndex = findDocumentIndex(nextDocuments, operation.source_path);
+    if (sourceIndex < 0) {
+      throw new Error(`Prepared apply_patch source disappeared before commit: ${operation.source_path}`);
+    }
+    const nextRecord = normalizeDocumentRecord({
+      path: operation.target_path,
+      content: operation.content,
+      updated_at: patchTime
+    }, patchTime);
+    if (operation.target_path === operation.source_path) {
+      nextDocuments[sourceIndex] = nextRecord;
+    } else {
+      const targetIndex = findDocumentIndex(nextDocuments, operation.target_path);
+      if (targetIndex >= 0) {
+        nextDocuments[targetIndex] = nextRecord;
+        nextDocuments.splice(sourceIndex, 1);
+      } else {
+        nextDocuments[sourceIndex] = nextRecord;
+      }
+    }
+    nextDocuments.sort((left, right) => left.path.localeCompare(right.path));
+    affectedFiles.modified.push(operation.target_path);
   }
 
   return {
