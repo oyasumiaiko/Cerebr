@@ -254,6 +254,10 @@ test('统一输出控制参数会解析默认值、从业务参数剥离并严�
     toolArgs: { query: 'x' },
     maxOutputChars: 20000
   });
+  assert.deepEqual(splitResponsesToolOutputControl({ path: 'x', max_output_chars: null }, { toolName: 'read_file' }), {
+    toolArgs: { path: 'x' },
+    maxOutputChars: 20000
+  });
   assert.deepEqual(splitResponsesToolOutputControl({ max_output_chars: null }, { toolName: 'pdf_content_read' }), {
     toolArgs: {},
     maxOutputChars: 5000

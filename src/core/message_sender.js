@@ -95,6 +95,7 @@ import {
 import {
   filterResponsesExtensionFunctionTools,
   filterUnavailableResponsesExtensionFunctionTools,
+  isResponsesExtensionToolEnabled,
   reconcileResponsesAllowedToolChoice,
   resolveAuthorizedResponsesExtensionToolSpec
 } from '../api/responses_extension_tools.js';
@@ -11660,7 +11661,11 @@ export function createMessageSender(appContext) {
             skillContextPayload,
             environmentContextPayload: buildEnvironmentContextPayload({
               uploadedFiles: uploadedFileEnvironmentEntries,
-              localMounts: localMountEnvironmentEntries
+              localMounts: localMountEnvironmentEntries,
+              includeVirtualFileEditingPolicy: isResponsesExtensionToolEnabled(
+                config?.responsesApiSettings,
+                'apply_patch'
+              )
             })
           });
           try {

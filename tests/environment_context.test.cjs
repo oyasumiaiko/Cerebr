@@ -161,3 +161,24 @@ test('buildEnvironmentContextInputItems 会声明 local mount 是只读实时映
   assert.match(text, /copy_file 把 local\/\.\.\. 复制成普通会话文件/);
   assert.match(text, /list_files 或 search_files/);
 });
+
+test('虚拟文件编辑上下文会明确 current read 与同文件 chunk 源码顺序', async () => {
+  const {
+    buildEnvironmentContextPayload,
+    buildEnvironmentContextInputItems
+  } = await loadEnvironmentContextModule();
+
+  const payload = buildEnvironmentContextPayload({
+    timezone: 'Asia/Shanghai',
+    currentDate: '2026-08-30',
+    includeVirtualFileEditingPolicy: true
+  });
+
+  assert.equal(payload.virtual_file_editing, true);
+  const text = buildEnvironmentContextInputItems(payload)[0].content[0].text;
+  assert.match(text, /<virtual_file_editing_policy>/);
+  assert.match(text, /出现 next_cursor 时该读取不完整/);
+  assert.match(text, /多个 chunk 必须按源文件从上到下排列/);
+  assert.match(text, /不要根据旧消息、旧 preview/);
+  assert.match(text, /失败后不要原样重放旧 patch/);
+});

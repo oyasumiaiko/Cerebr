@@ -23,6 +23,14 @@ const LOCAL_FILE_MOUNT_POLICY_RULES = [
   '读取文件夹时优先用 list_files 或 search_files 缩小范围，不要假设整个文件夹内容已经在上下文中。'
 ];
 
+const VIRTUAL_FILE_EDITING_POLICY_RULES = [
+  '修改已有文件前，必须用 read_file 读取当前内容；出现 next_cursor 时该读取不完整，需要续读或改用 line_range 读取实际修改区间。',
+  '同一个 *** Update File: 中的多个 chunk 必须按源文件从上到下排列；后一个 chunk 的 change_context 和旧行必须位于前一个 chunk 之后。',
+  'Update File 只使用刚读取到的短且唯一的当前 context；不要根据旧消息、旧 preview、记忆中的 scaffold 或概念顺序拼接整文件 patch。',
+  'apply_patch 失败后不要原样重放旧 patch；先读取报错文件的当前区间，再生成新的 patch。',
+  '修改 skill 时，Environment ID 必须紧跟 Begin Patch，格式为 skill:<stable-key>；流式 preview 不代表已经提交。'
+];
+
 /**
  * 规范化 IANA 时区名；若不可用则回退到 Etc/UTC。
  *
@@ -164,7 +172,8 @@ function normalizeLocalMounts(entries) {
  *   currentDate?: string|null,
  *   now?: number|Date|null,
  *   uploadedFiles?: Array<Object>|null,
- *   localMounts?: Array<Object>|null
+ *   localMounts?: Array<Object>|null,
+ *   includeVirtualFileEditingPolicy?: boolean
  * }} [options]
  * @returns {{type:'environment_context', current_date:string, timezone:string, uploaded_files?:Array<Object>, local_mounts?:Array<Object>}}
  */
@@ -186,6 +195,9 @@ export function buildEnvironmentContextPayload(options = {}) {
   }
   if (localMounts.length > 0) {
     payload.local_mounts = localMounts;
+  }
+  if (options?.includeVirtualFileEditingPolicy === true) {
+    payload.virtual_file_editing = true;
   }
   return payload;
 }
@@ -218,6 +230,7 @@ export function buildEnvironmentContextInputItems(payload) {
   if (!currentDate || !timezone) return [];
   const uploadedFiles = normalizeUploadedFiles(payload.uploaded_files);
   const localMounts = normalizeLocalMounts(payload.local_mounts);
+  const includeVirtualFileEditingPolicy = payload.virtual_file_editing === true;
 
   const lines = [
     '<environment_context>',
@@ -260,6 +273,13 @@ export function buildEnvironmentContextInputItems(payload) {
       lines.push(`    <rule>${escapeXmlText(rule)}</rule>`);
     });
     lines.push('  </local_file_mount_policy>');
+  }
+  if (includeVirtualFileEditingPolicy) {
+    lines.push('  <virtual_file_editing_policy>');
+    VIRTUAL_FILE_EDITING_POLICY_RULES.forEach((rule) => {
+      lines.push(`    <rule>${escapeXmlText(rule)}</rule>`);
+    });
+    lines.push('  </virtual_file_editing_policy>');
   }
   lines.push('</environment_context>');
   const text = lines.join('\n');
