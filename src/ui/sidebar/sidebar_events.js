@@ -1325,6 +1325,14 @@ function setupHostBridgeMessageHandlers(appContext) {
     }
 
     switch (data.type) {
+      case 'RESTORE_SIDEBAR_CONVERSATION':
+        void restoreSidebarConversationAfterIframeReload(appContext, data).catch((error) => {
+          console.error('处理 iframe 原对话恢复消息失败:', error);
+        });
+        break;
+      case 'SIDEBAR_IFRAME_HEALTH_PROBE':
+        appContext.services.sidebarIframeHealthReporter?.respondToHealthProbe?.(data.probeToken);
+        break;
       case 'ADD_TEXT_TO_CONTEXT':
         if (appContext.state.isStandalone) {
           break;
@@ -1463,6 +1471,50 @@ function setupHostBridgeMessageHandlers(appContext) {
       default:
         break;
     }
+  });
+}
+
+/**
+ * iframe 重建后只恢复崩溃前正在打开的持久化对话。
+ *
+ * 明确不做：自动发送“继续”、恢复请求、恢复发送队列、弹确认框或新增恢复 UI。
+ * 若原任务需要继续，由用户在恢复后的对话中自行输入。
+ *
+ * @param {ReturnType<import('./sidebar_app_context.js').createSidebarAppContext>} appContext
+ * @param {{conversationId?:string, restoreToken?:string}} data
+ */
+async function restoreSidebarConversationAfterIframeReload(appContext, data = {}) {
+  const conversationId = (typeof data?.conversationId === 'string' && data.conversationId.trim())
+    ? data.conversationId.trim()
+    : '';
+  const restoreToken = (typeof data?.restoreToken === 'string' && data.restoreToken.trim())
+    ? data.restoreToken.trim()
+    : '';
+  if (!conversationId) return;
+
+  let success = false;
+  let errorMessage = '';
+  try {
+    const conversation = await appContext.services.chatHistoryUI?.getConversationSnapshotById?.(
+      conversationId,
+      true
+    );
+    if (!conversation) {
+      throw new Error(`找不到会话 ${conversationId} 的持久化记录`);
+    }
+    await appContext.services.chatHistoryUI.loadConversationIntoChat(conversation);
+    success = true;
+  } catch (error) {
+    errorMessage = error?.message || String(error);
+    console.error('iframe 重载后恢复原对话失败:', error);
+  }
+
+  appContext.utils.postHostMessage?.({
+    type: 'SIDEBAR_CONVERSATION_RESTORE_RESULT',
+    restoreToken,
+    conversationId,
+    success,
+    error: errorMessage
   });
 }
 

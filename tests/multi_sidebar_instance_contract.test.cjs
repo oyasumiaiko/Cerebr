@@ -105,9 +105,9 @@ test('extension action menu can reload the active embedded sidebar iframe from t
   const contentSource = await readRepoFile('src/extension/content.js');
   const backgroundSource = await readRepoFile('src/extension/background.js');
 
-  assert.match(contentSource, /reloadIframe\(\) \{[\s\S]*const frameLocation = iframe\.contentWindow\?\.location;[\s\S]*frameLocation\.reload\(\);[\s\S]*iframe\.src = frameUrl;/);
-  assert.match(contentSource, /reloadActiveSidebarIframe\(\) \{[\s\S]*const target = this\.getActiveSidebar\(\);[\s\S]*return target\.reloadIframe\(\);/);
-  assert.match(contentSource, /case 'RELOAD_SIDEBAR_IFRAME_FROM_BACKGROUND':[\s\S]*reloadActiveSidebarIframe\?\.\(\)/);
+  assert.match(contentSource, /reloadIframe\(options = \{\}\) \{[\s\S]*const frameLocation = iframe\.contentWindow\?\.location;[\s\S]*frameLocation\.reload\(\);[\s\S]*iframe\.src = frameUrl;/);
+  assert.match(contentSource, /reloadActiveSidebarIframe\(options = \{\}\) \{[\s\S]*const target = this\.getActiveSidebar\(\);[\s\S]*return target\.reloadIframe\(options\);/);
+  assert.match(contentSource, /case 'RELOAD_SIDEBAR_IFRAME_FROM_BACKGROUND':[\s\S]*reloadActiveSidebarIframe\?\.\(reloadOptions\)/);
   assert.match(backgroundSource, /const CONTEXT_MENU_RELOAD_SIDEBAR_IFRAME_ID = 'reload-sidebar-iframe';/);
   assert.match(backgroundSource, /id: CONTEXT_MENU_RELOAD_SIDEBAR_IFRAME_ID,[\s\S]*title: '重新加载侧栏 iframe',[\s\S]*contexts: \['action'\]/);
   assert.match(

@@ -17,6 +17,7 @@
     "userScripts",
     "tabs",
     "webNavigation",
+    "alarms",
     "webRequest",
     "declarativeNetRequestWithHostAccess",
     "contextMenus",

@@ -11,6 +11,10 @@ const JS_RUNTIME_RUNNER_MESSAGE_FLAG = '__cerebrJsRuntimeRunner';
 const JS_RUNTIME_RUNNER_READY_TIMEOUT_MS = 10000;
 const JS_RUNTIME_RUNNER_WATCHDOG_GRACE_MS = 1500;
 const JS_RUNTIME_RUNNER_DEFAULT_TIMEOUT_MS = 5000;
+const SIDEBAR_IFRAME_HEARTBEAT_STALE_MS = 15000;
+const SIDEBAR_IFRAME_INITIAL_HEARTBEAT_GRACE_MS = 30000;
+const SIDEBAR_IFRAME_HEALTH_PROBE_TIMEOUT_MS = 2000;
+const SIDEBAR_IFRAME_AUTO_RELOAD_WINDOW_MS = 10 * 60 * 1000;
 const JS_RUNTIME_RUNNER_ALLOWED_MESSAGE_TYPES = new Set([
     'GET_JS_RUNTIME_STATUS',
     'GET_JS_RUNTIME_FRAMES',
@@ -37,6 +41,25 @@ function buildSidebarFrameUrl(instanceId, isPrimary, bridgeChannelId) {
     return chrome.runtime.getURL(
         `src/ui/sidebar/sidebar.html?instanceId=${encodeURIComponent(safeInstanceId)}&isPrimary=${isPrimary ? '1' : '0'}&bridgeChannelId=${encodeURIComponent(safeBridgeChannelId)}`
     );
+}
+
+function normalizeSidebarConversationId(value) {
+    return (typeof value === 'string' && value.trim()) ? value.trim() : '';
+}
+
+/**
+ * 只判断 iframe 心跳是否失联，不把“后台标签页”“未聚焦侧栏”本身当成故障。
+ * 是否应该对某个失联 iframe 执行重载，由 manager 按任务状态与焦点状态单独决定。
+ */
+function isSidebarIframeHeartbeatStale({ now = Date.now(), lastHeartbeatAt = 0, lastLoadAt = 0 } = {}) {
+    const safeNow = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+    const safeHeartbeatAt = Number.isFinite(Number(lastHeartbeatAt)) ? Number(lastHeartbeatAt) : 0;
+    const safeLoadAt = Number.isFinite(Number(lastLoadAt)) ? Number(lastLoadAt) : 0;
+    if (safeHeartbeatAt > 0) {
+        return (safeNow - safeHeartbeatAt) >= SIDEBAR_IFRAME_HEARTBEAT_STALE_MS;
+    }
+    if (safeLoadAt <= 0) return false;
+    return (safeNow - safeLoadAt) >= SIDEBAR_IFRAME_INITIAL_HEARTBEAT_GRACE_MS;
 }
 
 function buildJsRuntimeRunnerFrameUrl(generation, channelId) {
@@ -549,6 +572,19 @@ class CerebrSidebar {
     this.container = null;
     this.sidebarBridgePort = null;
     this.pendingBridgeMessages = [];
+    // iframe 灰屏恢复状态只保存在宿主页 content script 内存中。
+    // 这样 iframe 自身执行上下文崩溃后，父页面仍知道它最后打开的对话和是否有任务。
+    this.lastIframeHeartbeatAt = 0;
+    this.lastIframeLoadAt = Date.now();
+    this.iframeRuntimeReady = false;
+    this.lastConversationId = '';
+    this.hasActiveTask = false;
+    this.pendingConversationRestoreId = '';
+    this.pendingConversationRestoreToken = '';
+    this.lastConversationRestoreResult = null;
+    this.automaticReloadTimestamps = [];
+    this.lastIframeReloadReason = '';
+    this.pendingIframeHealthProbe = null;
     this.restoreObserver = null;
     this.restoreTimeoutId = null;
     // 临时模式状态由父页面内存维护，用于 iframe 右键重载恢复，F5 刷新时自动重置。
@@ -600,7 +636,123 @@ class CerebrSidebar {
     return true;
   }
 
-  reloadIframe() {
+  recordIframeLoaded() {
+    this.lastIframeLoadAt = Date.now();
+    this.lastIframeHeartbeatAt = 0;
+    this.iframeRuntimeReady = false;
+  }
+
+  recordIframeHeartbeat(data = {}) {
+    const previousTaskState = this.hasActiveTask;
+    this.lastIframeHeartbeatAt = Date.now();
+    this.iframeRuntimeReady = data?.ready === true;
+    this.hasActiveTask = data?.hasActiveTask === true;
+
+    const conversationId = normalizeSidebarConversationId(data?.conversationId);
+    // 新 iframe 在服务初始化和对话恢复完成前会先上报空 conversationId。
+    // pending restore 存在时不能让这帧空心跳覆盖父页面保留的崩溃前对话。
+    if (conversationId || (this.iframeRuntimeReady && !this.pendingConversationRestoreId)) {
+      this.lastConversationId = conversationId;
+    }
+
+    if (previousTaskState !== this.hasActiveTask || this.manager?.lastReportedAnyTaskState === null) {
+      this.manager?.reportAnySidebarTaskActivity?.();
+    }
+  }
+
+  recordConversationRestoreResult(data = {}) {
+    const restoreToken = (typeof data?.restoreToken === 'string') ? data.restoreToken : '';
+    if (!this.pendingConversationRestoreToken || restoreToken !== this.pendingConversationRestoreToken) return;
+    this.lastConversationRestoreResult = {
+      success: data?.success === true,
+      conversationId: normalizeSidebarConversationId(data?.conversationId),
+      error: typeof data?.error === 'string' ? data.error : '',
+      completedAt: Date.now()
+    };
+    if (data?.success === true && this.lastConversationRestoreResult.conversationId) {
+      this.lastConversationId = this.lastConversationRestoreResult.conversationId;
+    } else if (data?.success !== true) {
+      console.error('侧栏 iframe 重载后未能恢复原对话:', this.lastConversationRestoreResult);
+    }
+    this.pendingConversationRestoreId = '';
+    this.pendingConversationRestoreToken = '';
+  }
+
+  settlePendingIframeHealthProbe(isResponsive) {
+    const pending = this.pendingIframeHealthProbe;
+    if (!pending) return false;
+    this.pendingIframeHealthProbe = null;
+    clearTimeout(pending.timeoutId);
+    pending.resolve(isResponsive === true);
+    return true;
+  }
+
+  recordIframeHealthProbeResult(data = {}) {
+    const probeToken = (typeof data?.probeToken === 'string') ? data.probeToken : '';
+    const pending = this.pendingIframeHealthProbe;
+    if (!pending || !probeToken || probeToken !== pending.probeToken) return false;
+    this.recordIframeHeartbeat(data);
+    return this.settlePendingIframeHealthProbe(true);
+  }
+
+  probeIframeHealth() {
+    if (this.pendingIframeHealthProbe?.promise) {
+      return this.pendingIframeHealthProbe.promise;
+    }
+
+    const probeToken = createOpaqueChannelId(`sidebar_health_probe_${this.instanceId}`);
+    let resolveProbe;
+    const promise = new Promise((resolve) => {
+      resolveProbe = resolve;
+    });
+    const timeoutId = setTimeout(() => {
+      if (this.pendingIframeHealthProbe?.probeToken !== probeToken) return;
+      this.settlePendingIframeHealthProbe(false);
+    }, SIDEBAR_IFRAME_HEALTH_PROBE_TIMEOUT_MS);
+    this.pendingIframeHealthProbe = {
+      probeToken,
+      promise,
+      resolve: resolveProbe,
+      timeoutId
+    };
+
+    try {
+      this.postToIframe({
+        type: 'SIDEBAR_IFRAME_HEALTH_PROBE',
+        probeToken
+      });
+    } catch (error) {
+      console.warn('发送侧栏 iframe 存活探测失败:', error);
+      this.settlePendingIframeHealthProbe(false);
+    }
+    return promise;
+  }
+
+  sendPendingConversationRestore() {
+    const conversationId = normalizeSidebarConversationId(this.pendingConversationRestoreId);
+    if (!conversationId) return false;
+    return this.postToIframe({
+      type: 'RESTORE_SIDEBAR_CONVERSATION',
+      conversationId,
+      restoreToken: this.pendingConversationRestoreToken
+    });
+  }
+
+  isIframeHeartbeatStale(now = Date.now()) {
+    return isSidebarIframeHeartbeatStale({
+      now,
+      lastHeartbeatAt: this.lastIframeHeartbeatAt,
+      lastLoadAt: this.lastIframeLoadAt
+    });
+  }
+
+  pruneAutomaticReloadHistory(now = Date.now()) {
+    const cutoff = now - SIDEBAR_IFRAME_AUTO_RELOAD_WINDOW_MS;
+    this.automaticReloadTimestamps = this.automaticReloadTimestamps
+      .filter((timestamp) => Number.isFinite(Number(timestamp)) && Number(timestamp) >= cutoff);
+  }
+
+  reloadIframe(options = {}) {
     const iframe = this.getIframe();
     if (!iframe) {
       return {
@@ -610,7 +762,28 @@ class CerebrSidebar {
       };
     }
 
-    const frameUrl = iframe.src || buildSidebarFrameUrl(this.instanceId, this.isPrimary, this.bridgeChannelId);
+    const normalizedOptions = (options && typeof options === 'object') ? options : {};
+    const isAutomatic = normalizedOptions.automatic === true;
+    const reason = (typeof normalizedOptions.reason === 'string' && normalizedOptions.reason.trim())
+      ? normalizedOptions.reason.trim()
+      : (isAutomatic ? 'automatic_recovery' : 'manual_reload');
+    const now = Date.now();
+    if (isAutomatic) {
+      this.pruneAutomaticReloadHistory(now);
+      this.automaticReloadTimestamps.push(now);
+    }
+
+    const frameUrl = buildSidebarFrameUrl(this.instanceId, this.isPrimary, this.bridgeChannelId);
+    this.pendingConversationRestoreId = normalizeSidebarConversationId(this.lastConversationId);
+    this.pendingConversationRestoreToken = this.pendingConversationRestoreId
+      ? `sidebar_restore_${this.instanceId}_${now}`
+      : '';
+    this.lastIframeReloadReason = reason;
+    this.settlePendingIframeHealthProbe(false);
+    this.recordIframeLoaded();
+    try { this.sidebarBridgePort?.close?.(); } catch (_) {}
+    this.sidebarBridgePort = null;
+    this.pendingBridgeMessages.length = 0;
 
     try {
       // 从宿主页侧直接重载 iframe，不依赖 iframe 内部 JS；即使侧栏页面脚本崩溃，
@@ -629,8 +802,32 @@ class CerebrSidebar {
     return {
       success: true,
       instanceId: this.instanceId,
-      src: frameUrl
+      src: frameUrl,
+      reason,
+      restoreConversationId: this.pendingConversationRestoreId || null
     };
+  }
+
+  async reloadIframeIfStale(reason) {
+    if (!this.isIframeHeartbeatStale()) {
+      return { success: false, skipped: true, instanceId: this.instanceId, reason: 'heartbeat_healthy' };
+    }
+    // 后台标签页的 JavaScript 定时器可能被 Chrome 降频。真正重载前由父页面主动探测一次，
+    // 避免仅因定时心跳延迟就误杀仍在执行长任务的健康 iframe。
+    if (await this.probeIframeHealth()) {
+      return { success: false, skipped: true, instanceId: this.instanceId, reason: 'health_probe_responsive' };
+    }
+    if (!this.isIframeHeartbeatStale()) {
+      return { success: false, skipped: true, instanceId: this.instanceId, reason: 'heartbeat_recovered' };
+    }
+    console.warn('检测到侧栏 iframe 心跳失联，开始选择性重载:', {
+      instanceId: this.instanceId,
+      reason,
+      hasActiveTask: this.hasActiveTask,
+      lastConversationId: this.lastConversationId || null,
+      lastHeartbeatAt: this.lastIframeHeartbeatAt || null
+    });
+    return this.reloadIframe({ automatic: true, reason });
   }
 
   setStackOffsetPx(offsetPx) {
@@ -850,6 +1047,16 @@ class CerebrSidebar {
       hasLegacyResizer: !!this.sidebar.querySelector('.cerebr-sidebar__resizer'),
       hasVisibleClass,
       hasIframe,
+      iframeRuntimeReady: !!this.iframeRuntimeReady,
+      iframeHeartbeatStale: this.isIframeHeartbeatStale(),
+      lastIframeHeartbeatAt: this.lastIframeHeartbeatAt || null,
+      lastIframeLoadAt: this.lastIframeLoadAt || null,
+      hasActiveTask: !!this.hasActiveTask,
+      lastConversationId: this.lastConversationId || null,
+      pendingConversationRestore: !!this.pendingConversationRestoreId,
+      lastIframeReloadReason: this.lastIframeReloadReason || null,
+      automaticReloadCount: this.automaticReloadTimestamps.length,
+      lastConversationRestoreResult: this.lastConversationRestoreResult,
       inlineDisplay,
       inlineTransform,
       computedDisplay: computedStyle.display,
@@ -1148,6 +1355,7 @@ class CerebrSidebar {
       // 但父页面仍持有全屏/临时模式状态，因此需要在 iframe 每次 load 完成后同步一次，
       // 以便右键重载时保留状态，同时在 F5 刷新页面时由父页面自动回到默认值。
       iframe.addEventListener('load', () => {
+        this.recordIframeLoaded();
         try {
           this.connectSidebarBridge();
         } catch (e) {
@@ -1178,6 +1386,21 @@ class CerebrSidebar {
         } catch (e) {
           console.warn('同步 iframe 嵌入缩放失败（忽略）:', e);
         }
+        try {
+          this.sendPendingConversationRestore();
+        } catch (e) {
+          console.warn('同步 iframe 崩溃前对话失败（忽略）:', e);
+        }
+      });
+
+      // 健康 iframe 会从内部主动上报 focus；灰屏 iframe 已无法执行 JS，
+      // 因此还要监听 HTMLIFrameElement 自身获得焦点，作为“用户现在确实要用它”的恢复触发点。
+      iframe.addEventListener('focus', () => {
+        void Promise.resolve(
+          this.manager?.markSidebarFocused?.(this, { source: 'iframe_element_focus' })
+        ).catch((error) => {
+          console.error('聚焦侧栏 iframe 后执行恢复检查失败:', error);
+        });
       });
 
       content.appendChild(iframe);
@@ -1274,6 +1497,11 @@ class CerebrSidebar {
 
   setupEventListeners(header, fullscreenDivider) {
     header?.addEventListener('mousedown', (event) => {
+      void Promise.resolve(
+        this.manager?.markSidebarFocused?.(this, { source: 'sidebar_header' })
+      ).catch((error) => {
+        console.error('点击侧栏标题区后执行 iframe 恢复检查失败:', error);
+      });
       if (this.isFullscreen || this.isDocked) return;
       event.preventDefault();
       event.stopPropagation();
@@ -1281,6 +1509,11 @@ class CerebrSidebar {
     });
 
     fullscreenDivider?.addEventListener('mousedown', (event) => {
+      void Promise.resolve(
+        this.manager?.markSidebarFocused?.(this, { source: 'fullscreen_divider' })
+      ).catch((error) => {
+        console.error('拖动全屏分隔条前执行 iframe 恢复检查失败:', error);
+      });
       if (!this.isFullscreen) return;
       event.preventDefault();
       event.stopPropagation();
@@ -1342,6 +1575,11 @@ class CerebrSidebar {
 
         // 如果之前是隐藏状态，则聚焦输入框
         if (!wasVisible) {
+          void Promise.resolve(
+            this.manager?.checkFocusedSidebarIframeRecovery?.({ source: 'sidebar_shown' })
+          ).catch((error) => {
+            console.error('显示侧栏后执行 iframe 恢复检查失败:', error);
+          });
           this.focusInput();
         }
       } else {
@@ -1562,6 +1800,8 @@ class CerebrSidebar {
 
   dispose() {
     this.isDisposed = true;
+    this.hasActiveTask = false;
+    this.manager?.reportAnySidebarTaskActivity?.();
     try {
       this.restoreObserver?.disconnect?.();
     } catch (_) {}
@@ -1603,6 +1843,8 @@ class CerebrSidebarManager {
     this.sidebars = [];
     this.sidebarById = new Map();
     this.activeSidebarId = null;
+    this.focusedSidebarId = null;
+    this.lastReportedAnyTaskState = null;
     this.lastUrl = window.location.href;
     this.lastImageData = null;
     this.isAltKeyPressed = false;
@@ -1691,6 +1933,83 @@ class CerebrSidebarManager {
     return this.sidebarById.get(instanceId.trim()) || null;
   }
 
+  reportAnySidebarTaskActivity() {
+    const nextState = this.sidebars.some((sidebarInstance) => (
+      sidebarInstance && !sidebarInstance.isDisposed && sidebarInstance.hasActiveTask === true
+    ));
+    if (this.lastReportedAnyTaskState === nextState) {
+      return false;
+    }
+    this.lastReportedAnyTaskState = nextState;
+    try {
+      const pending = chrome.runtime.sendMessage({
+        type: 'UPDATE_SIDEBAR_IFRAME_TASK_STATE',
+        hasActiveTask: nextState
+      });
+      if (pending && typeof pending.catch === 'function') {
+        pending.catch((error) => {
+          this.lastReportedAnyTaskState = null;
+          console.warn('上报侧栏 iframe 任务状态失败:', error);
+        });
+      }
+      return true;
+    } catch (error) {
+      this.lastReportedAnyTaskState = null;
+      console.warn('上报侧栏 iframe 任务状态失败:', error);
+      return false;
+    }
+  }
+
+  getFocusedSidebar() {
+    const explicitlyFocused = this.sidebarById.get(this.focusedSidebarId);
+    if (explicitlyFocused && !explicitlyFocused.isDisposed) return explicitlyFocused;
+
+    // 单侧栏标签页不存在“侧栏之间的焦点歧义”，当前可见的唯一实例就是该标签页要恢复的实例。
+    // 多侧栏标签页则必须等到用户明确聚焦其中一个，避免初始化消息把 activeSidebarId 当成真实焦点。
+    const visibleSidebars = this.sidebars.filter((sidebarInstance) => (
+      sidebarInstance && !sidebarInstance.isDisposed && sidebarInstance.isVisible
+    ));
+    return visibleSidebars.length === 1 ? visibleSidebars[0] : null;
+  }
+
+  markSidebarFocused(sidebarInstance, options = {}) {
+    if (!sidebarInstance || sidebarInstance.isDisposed) return null;
+    this.focusedSidebarId = sidebarInstance.instanceId;
+    this.setActiveSidebar(sidebarInstance);
+    const source = (typeof options?.source === 'string' && options.source.trim())
+      ? options.source.trim()
+      : 'sidebar_focus';
+    return sidebarInstance.reloadIframeIfStale(`focused:${source}`);
+  }
+
+  async checkFocusedSidebarIframeRecovery(options = {}) {
+    if (document.visibilityState !== 'visible') {
+      return { success: false, skipped: true, reason: 'host_tab_hidden' };
+    }
+    const target = this.getFocusedSidebar();
+    if (!target || !target.isVisible) {
+      return { success: false, skipped: true, reason: 'focused_sidebar_not_visible' };
+    }
+    const source = (typeof options?.source === 'string' && options.source.trim())
+      ? options.source.trim()
+      : 'host_tab_focused';
+    return await target.reloadIframeIfStale(`focused:${source}`);
+  }
+
+  async checkTaskSidebarIframes(options = {}) {
+    const taskSidebars = this.sidebars.filter((sidebarInstance) => (
+      sidebarInstance && !sidebarInstance.isDisposed && sidebarInstance.hasActiveTask === true
+    ));
+    const source = (typeof options?.source === 'string' && options.source.trim())
+      ? options.source.trim()
+      : 'task_check';
+    return await Promise.all(
+      taskSidebars.map((sidebarInstance) => (
+        sidebarInstance.reloadIframeIfStale(`active_task_watchdog:${source}`)
+      ))
+    );
+  }
+
   handleJsRuntimeBridgeMessage(sidebar, data = {}) {
     if (!sidebar || data?.[JS_RUNTIME_RUNNER_MESSAGE_FLAG] !== true) return;
     if (data.type !== 'request') return;
@@ -1704,6 +2023,29 @@ class CerebrSidebarManager {
       return;
     }
     if (!data.type) return;
+
+    // 心跳不能改变 active sidebar，否则多个 iframe 每三秒轮流上报时会互相抢占焦点状态。
+    if (data.type === 'SIDEBAR_IFRAME_HEARTBEAT') {
+      sourceSidebar.recordIframeHeartbeat(data);
+      return;
+    }
+    if (data.type === 'SIDEBAR_IFRAME_HEALTH_PROBE_RESULT') {
+      sourceSidebar.recordIframeHealthProbeResult(data);
+      return;
+    }
+    if (data.type === 'SIDEBAR_IFRAME_FOCUSED') {
+      void Promise.resolve(
+        this.markSidebarFocused(sourceSidebar, { source: 'iframe_runtime_focus' })
+      ).catch((error) => {
+        console.error('iframe 内部聚焦后执行恢复检查失败:', error);
+      });
+      return;
+    }
+    if (data.type === 'SIDEBAR_CONVERSATION_RESTORE_RESULT') {
+      sourceSidebar.recordConversationRestoreResult(data);
+      return;
+    }
+
     this.setActiveSidebar(sourceSidebar);
 
     switch (data.type) {
@@ -1796,6 +2138,9 @@ class CerebrSidebarManager {
       const nextActive = this.sidebars[Math.min(index, this.sidebars.length - 1)] || this.getPrimarySidebar();
       if (nextActive) this.setActiveSidebar(nextActive);
     }
+    if (this.focusedSidebarId === sidebarInstance.instanceId) {
+      this.focusedSidebarId = null;
+    }
 
     if (this.sidebars.length <= 1) {
       this.multiFullscreenRestoreStateById = null;
@@ -1849,6 +2194,13 @@ class CerebrSidebarManager {
     const nextVisible = !!isVisible;
     this.sidebars.forEach((item) => item.toggle(nextVisible));
     this.layoutSidebars();
+    if (nextVisible) {
+      setTimeout(() => {
+        void this.checkFocusedSidebarIframeRecovery({ source: 'sidebars_opened' }).catch((error) => {
+          console.error('打开侧栏后执行 iframe 恢复检查失败:', error);
+        });
+      }, 0);
+    }
   }
 
   toggleAllSidebars() {
@@ -1856,7 +2208,7 @@ class CerebrSidebarManager {
     this.setAllSidebarsVisible(!shouldHideAll);
   }
 
-  reloadActiveSidebarIframe() {
+  reloadActiveSidebarIframe(options = {}) {
     const target = this.getActiveSidebar();
     if (!target) {
       return {
@@ -1865,7 +2217,7 @@ class CerebrSidebarManager {
       };
     }
     this.setActiveSidebar(target);
-    return target.reloadIframe();
+    return target.reloadIframe(options);
   }
 
   isMultiSidebarFullscreenActive() {
@@ -2435,11 +2787,37 @@ class CerebrSidebarManager {
     window.addEventListener('blur', () => {
       this.syncHostAltKeyState(false);
     });
+    window.addEventListener('focus', () => {
+      void this.checkTaskSidebarIframes({ source: 'host_window_focus' }).catch((error) => {
+        console.error('宿主窗口聚焦后检查任务侧栏 iframe 失败:', error);
+      });
+      void this.checkFocusedSidebarIframeRecovery({ source: 'host_window_focus' }).catch((error) => {
+        console.error('宿主窗口聚焦后检查当前侧栏 iframe 失败:', error);
+      });
+    });
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState !== 'visible') {
         this.syncHostAltKeyState(false);
+        return;
       }
+      void this.checkTaskSidebarIframes({ source: 'host_tab_visible' }).catch((error) => {
+        console.error('标签页恢复可见后检查任务侧栏 iframe 失败:', error);
+      });
+      void this.checkFocusedSidebarIframeRecovery({ source: 'host_tab_visible' }).catch((error) => {
+        console.error('标签页恢复可见后检查当前侧栏 iframe 失败:', error);
+      });
     });
+
+    // 可见标签页不受后台定时器降频影响，可以更快发现灰屏；后台任务标签页由 service worker alarm 定向唤醒。
+    setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      void this.checkTaskSidebarIframes({ source: 'visible_tab_watchdog' }).catch((error) => {
+        console.error('可见标签页定时检查任务侧栏 iframe 失败:', error);
+      });
+      void this.checkFocusedSidebarIframeRecovery({ source: 'visible_tab_watchdog' }).catch((error) => {
+        console.error('可见标签页定时检查当前侧栏 iframe 失败:', error);
+      });
+    }, 5000);
 
   }
 
@@ -2669,9 +3047,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       case 'CLOSE_SIDEBAR':
         sidebarManager?.setAllSidebarsVisible?.(false);
         break;
+      case 'CHECK_TASK_SIDEBAR_IFRAMES_FROM_BACKGROUND':
+        {
+          Promise.resolve(
+            sidebarManager?.checkTaskSidebarIframes?.({ source: 'background_alarm' }) || []
+          )
+            .then((results) => sendResponse({ success: true, results }))
+            .catch((error) => {
+              console.error('响应后台任务侧栏 iframe 检查失败:', error);
+              sendResponse({ success: false, error: error?.message || String(error) });
+            });
+        }
+        return true;
+      case 'CHECK_FOCUSED_SIDEBAR_IFRAME_FROM_BACKGROUND':
+        {
+          Promise.resolve(
+            sidebarManager?.checkFocusedSidebarIframeRecovery?.({ source: 'background_tab_focus' })
+          )
+            .then((result) => sendResponse({ success: true, result }))
+            .catch((error) => {
+              console.error('响应后台焦点侧栏 iframe 检查失败:', error);
+              sendResponse({ success: false, error: error?.message || String(error) });
+            });
+        }
+        return true;
       case 'RELOAD_SIDEBAR_IFRAME_FROM_BACKGROUND':
         {
-          const reloadResult = sidebarManager?.reloadActiveSidebarIframe?.() || targetSidebar.reloadIframe();
+          const reloadOptions = { reason: 'action_menu', automatic: false };
+          const reloadResult = sidebarManager?.reloadActiveSidebarIframe?.(reloadOptions)
+            || targetSidebar.reloadIframe(reloadOptions);
           sendResponse({
             success: reloadResult?.success === true,
             status: targetSidebar.isVisible,
@@ -2693,6 +3097,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           debugState: {
             ...activeDebugState,
             activeSidebarId: targetSidebar.instanceId,
+            focusedSidebarId: sidebarManager?.focusedSidebarId || null,
             sidebarCount: sidebarManager?.sidebars?.length || 1,
             active: activeDebugState,
             instances

@@ -18,7 +18,104 @@ const CONTEXT_MENU_RELOAD_SIDEBAR_IFRAME_ID = 'reload-sidebar-iframe';
 const BACKGROUND_TEXT_MAX_BYTES = 2 * 1024 * 1024;
 const BACKGROUND_REFERER_RULE_ID_START = 100000000;
 const BACKGROUND_REFERER_RULE_ID_END = 100100000;
+const SIDEBAR_IFRAME_TASK_REGISTRY_KEY = 'sidebarIframeTaskTabsV1';
+const SIDEBAR_IFRAME_TASK_CHECK_ALARM_NAME = 'sidebar-iframe-task-health-check';
+const SIDEBAR_IFRAME_TASK_CHECK_PERIOD_MINUTES = 0.5;
 let nextBackgroundRefererRuleId = BACKGROUND_REFERER_RULE_ID_START;
+let sidebarIframeTaskRegistryMutation = Promise.resolve();
+
+async function readSidebarIframeTaskRegistry() {
+  const stored = await chrome.storage.session.get([SIDEBAR_IFRAME_TASK_REGISTRY_KEY]);
+  const registry = stored?.[SIDEBAR_IFRAME_TASK_REGISTRY_KEY];
+  if (!Array.isArray(registry)) return [];
+  return Array.from(new Set(
+    registry
+      .map(Number)
+      .filter((tabId) => Number.isFinite(tabId) && tabId > 0)
+      .map(Math.trunc)
+  ));
+}
+
+function mutateSidebarIframeTaskRegistry(recipe) {
+  const runMutation = async () => {
+    const registry = await readSidebarIframeTaskRegistry();
+    const taskTabIds = new Set(registry);
+    await recipe(taskTabIds);
+    const nextRegistry = Array.from(taskTabIds);
+    await chrome.storage.session.set({ [SIDEBAR_IFRAME_TASK_REGISTRY_KEY]: nextRegistry });
+    return nextRegistry;
+  };
+  sidebarIframeTaskRegistryMutation = sidebarIframeTaskRegistryMutation.then(runMutation, runMutation);
+  return sidebarIframeTaskRegistryMutation;
+}
+
+function updateSidebarIframeTaskRegistry(tabId, hasActiveTask) {
+  const normalizedTabId = Number(tabId);
+  if (!Number.isFinite(normalizedTabId)) {
+    return Promise.resolve(false);
+  }
+  return mutateSidebarIframeTaskRegistry((taskTabIds) => {
+    const normalizedId = Math.trunc(normalizedTabId);
+    if (hasActiveTask === true) {
+      taskTabIds.add(normalizedId);
+    } else {
+      taskTabIds.delete(normalizedId);
+    }
+  }).then(() => true);
+}
+
+function removeSidebarIframeTaskTab(tabId) {
+  const normalizedTabId = Number(tabId);
+  if (!Number.isFinite(normalizedTabId)) return Promise.resolve(false);
+  return mutateSidebarIframeTaskRegistry((taskTabIds) => {
+    taskTabIds.delete(Math.trunc(normalizedTabId));
+  }).then(() => true);
+}
+
+async function ensureSidebarIframeTaskCheckAlarm() {
+  const existing = await chrome.alarms.get(SIDEBAR_IFRAME_TASK_CHECK_ALARM_NAME);
+  if (existing) return false;
+  await chrome.alarms.create(SIDEBAR_IFRAME_TASK_CHECK_ALARM_NAME, {
+    periodInMinutes: SIDEBAR_IFRAME_TASK_CHECK_PERIOD_MINUTES
+  });
+  return true;
+}
+
+async function checkTaskSidebarIframesFromBackground() {
+  const registry = await readSidebarIframeTaskRegistry();
+  const results = await Promise.all(registry.map(async (tabId) => {
+    try {
+      const response = await chrome.tabs.sendMessage(tabId, {
+        type: 'CHECK_TASK_SIDEBAR_IFRAMES_FROM_BACKGROUND'
+      });
+      if (response?.success === false) {
+        console.error('任务侧栏 iframe 检查返回失败:', { tabId, error: response?.error || '' });
+      }
+      return null;
+    } catch (_) {
+      return tabId;
+    }
+  }));
+  const staleTabIds = results.filter(Number.isFinite);
+  if (staleTabIds.length > 0) {
+    await mutateSidebarIframeTaskRegistry((taskTabIds) => {
+      staleTabIds.forEach((tabId) => taskTabIds.delete(tabId));
+    });
+  }
+}
+
+async function checkFocusedSidebarIframeInTab(tabId) {
+  const normalizedTabId = Number(tabId);
+  if (!Number.isFinite(normalizedTabId)) return false;
+  try {
+    await chrome.tabs.sendMessage(normalizedTabId, {
+      type: 'CHECK_FOCUSED_SIDEBAR_IFRAME_FROM_BACKGROUND'
+    });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
 
 /**
  * 只接受背景设置实际支持的资源协议，避免消息入口被扩展为任意协议读取器。
@@ -484,6 +581,26 @@ chrome.runtime.onConnect.addListener((p) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // console.log('收到消息:', message, '来自:', sender.tab?.id);
 
+  if (message?.type === 'UPDATE_SIDEBAR_IFRAME_TASK_STATE') {
+    const tabId = Number(sender?.tab?.id);
+    updateSidebarIframeTaskRegistry(
+      tabId,
+      message?.hasActiveTask === true
+    )
+      .then((updated) => {
+        if (updated !== true) {
+          sendResponse({ success: false, error: '任务状态消息缺少有效标签页 id' });
+          return;
+        }
+        sendResponse({ success: true });
+      })
+      .catch((error) => {
+        console.error('更新侧栏 iframe 任务注册表失败:', error);
+        sendResponse({ success: false, error: error?.message || '更新任务注册表失败' });
+      });
+    return true;
+  }
+
   if (message?.type === 'FETCH_BACKGROUND_TEXT') {
     fetchBackgroundText(message?.url)
       .then((result) => sendResponse({ success: true, ...result }))
@@ -902,6 +1019,36 @@ function registerContextMenus() {
 chrome.runtime.onInstalled.addListener(() => {
     console.log('扩展已安装/更新:', new Date().toISOString());
     void registerContextMenus();
+    void ensureSidebarIframeTaskCheckAlarm().catch((error) => {
+        console.error('扩展更新后创建侧栏 iframe 任务检查 alarm 失败:', error);
+    });
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+    if (alarm?.name !== SIDEBAR_IFRAME_TASK_CHECK_ALARM_NAME) return;
+    void checkTaskSidebarIframesFromBackground().catch((error) => {
+        console.error('后台检查任务侧栏 iframe 失败:', error);
+    });
+});
+
+chrome.tabs.onActivated.addListener((activeInfo) => {
+    void checkFocusedSidebarIframeInTab(activeInfo?.tabId);
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+    void removeSidebarIframeTaskTab(tabId).catch((error) => {
+        console.error('标签页关闭后清理侧栏 iframe 任务注册表失败:', error);
+    });
+});
+
+chrome.windows.onFocusChanged.addListener((windowId) => {
+    if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+    void chrome.tabs.query({ active: true, windowId }).then((tabs) => {
+        const activeTab = Array.isArray(tabs) ? tabs[0] : null;
+        return checkFocusedSidebarIframeInTab(activeTab?.id);
+    }).catch((error) => {
+        console.error('窗口聚焦后查询活动标签页失败:', error);
+    });
 });
 
 // 处理右键菜单点击
@@ -963,6 +1110,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 });
 
 void registerContextMenus();
+void ensureSidebarIframeTaskCheckAlarm().catch((error) => {
+    console.error('创建侧栏 iframe 任务检查 alarm 失败:', error);
+});
 
 // 简化标签页连接检查
 async function isTabConnected(tabId) {
@@ -1230,6 +1380,9 @@ if (chrome?.runtime?.onStartup?.addListener) {
   chrome.runtime.onStartup.addListener(() => {
     void ensureSkillManagerReady({ force: true });
     void registerContextMenus();
+    void ensureSidebarIframeTaskCheckAlarm().catch((error) => {
+      console.error('浏览器启动后创建侧栏 iframe 任务检查 alarm 失败:', error);
+    });
   });
 }
 

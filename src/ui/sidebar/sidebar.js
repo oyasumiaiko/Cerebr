@@ -1,6 +1,7 @@
 import { createSidebarAppContext, registerSidebarUtilities } from './sidebar_app_context.js';
 import { initializeSidebarServices } from './sidebar_bootstrap.js';
 import { registerSidebarEventHandlers } from './sidebar_events.js';
+import { createSidebarIframeHealthReporter } from './sidebar_iframe_health.js';
 import { serializeSelectionTextWithMath } from '../../utils/math_selection_text.js';
 
 installAltKeyBrowserMenuGuard();
@@ -45,11 +46,14 @@ document.addEventListener('DOMContentLoaded', async () => {
 
   const appContext = createSidebarAppContext(isStandalone);
   registerSidebarUtilities(appContext);
+  // 健康心跳先于 API / IndexedDB 服务初始化启动，避免把“初始化较慢”误判为 iframe 崩溃。
+  appContext.services.sidebarIframeHealthReporter = createSidebarIframeHealthReporter(appContext);
   setupLayoutObservers(appContext);
   setupSidebarSelectionBroadcast(appContext);
   exposeGlobals(appContext, isStandalone);
 
   await initializeSidebarServices(appContext);
+  appContext.services.sidebarIframeHealthReporter?.attachServices?.();
   attachDebugShortcuts(appContext);
   registerSidebarEventHandlers(appContext);
 });
@@ -238,6 +242,7 @@ function attachDebugShortcuts(appContext) {
     // - messageProcessor 便于检查消息 DOM 渲染路径。
     chatHistoryUI: appContext.services.chatHistoryUI,
     messageProcessor: appContext.services.messageProcessor,
-    messageSender: appContext.services.messageSender
+    messageSender: appContext.services.messageSender,
+    sidebarIframeHealthReporter: appContext.services.sidebarIframeHealthReporter
   };
 }
