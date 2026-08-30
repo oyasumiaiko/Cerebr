@@ -24,11 +24,10 @@ const LOCAL_FILE_MOUNT_POLICY_RULES = [
 ];
 
 const VIRTUAL_FILE_EDITING_POLICY_RULES = [
-  '修改已有文件前，必须用 read_file 读取当前内容；出现 next_cursor 时该读取不完整，需要续读或改用 line_range 读取实际修改区间。',
+  'read_file 返回不带行号的原始正文；start_line/end_line 是 1-based 闭区间，next_cursor 由 read_tool_output 继续读取。',
   '同一个 *** Update File: 中的多个 chunk 必须按源文件从上到下排列；后一个 chunk 的 change_context 和旧行必须位于前一个 chunk 之后。',
-  'Update File 只使用刚读取到的短且唯一的当前 context；不要根据旧消息、旧 preview、记忆中的 scaffold 或概念顺序拼接整文件 patch。',
-  'apply_patch 失败后不要原样重放旧 patch；先读取报错文件的当前区间，再生成新的 patch。',
-  '修改 skill 时，Environment ID 必须紧跟 Begin Patch，格式为 skill:<stable-key>；流式 preview 不代表已经提交。'
+  'Skill 文件根使用 environment_id=skill:<stable-key>；Skill apply_patch 的同一 Environment ID 必须紧跟 Begin Patch。',
+  '只有 Success 工具结果表示补丁已经提交；流式 patch preview 不是持久化结果。'
 ];
 
 /**

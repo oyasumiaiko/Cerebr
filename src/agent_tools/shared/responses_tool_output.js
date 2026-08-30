@@ -167,6 +167,14 @@ function buildResponsesToolOutputPageEnvelope(sourceChars, rangeStart, returnedC
   return `<tool_output_page total_chars="${sourceChars.length}" range_start="${rangeStart}" range_end="${rangeEnd}" has_more="${hasMore}"${cursorAttribute}>\n<content>\n${content}\n</content>\n</tool_output_page>`;
 }
 
+function buildResponsesPlainToolOutputPage(sourceChars, rangeStart, returnedChars, nextCursor = '') {
+  const rangeEnd = rangeStart + returnedChars;
+  const hasMore = rangeEnd < sourceChars.length;
+  const cursorField = hasMore && nextCursor ? ` next_cursor=${nextCursor}` : '';
+  const header = `tool_output_page total_chars=${sourceChars.length} range_start=${rangeStart} range_end=${rangeEnd} has_more=${hasMore}${cursorField}`;
+  return `${header}\n${sourceChars.slice(rangeStart, rangeEnd).join('')}`;
+}
+
 /**
  * 在唯一出口把完整工具文本切成一个可续读页。
  *
@@ -174,7 +182,7 @@ function buildResponsesToolOutputPageEnvelope(sourceChars, rangeStart, returnedC
  * 第一页会保留图片；后续页只返回尚未读取的文本，避免视觉输入被重复塞入上下文。
  *
  * @param {Array<Object>} contentItems
- * @param {{maxOutputChars:number, rangeStart?:number, nextCursor?:string}} options
+ * @param {{maxOutputChars:number, rangeStart?:number, nextCursor?:string, format?:'xml'|'plain'}} options
  * @returns {{contentItems:Array<Object>, totalChars:number, rangeStart:number, rangeEnd:number, hasMore:boolean, nextCursor:string}}
  */
 export function paginateResponsesToolOutputContentItems(contentItems, options = {}) {
@@ -187,6 +195,9 @@ export function paginateResponsesToolOutputContentItems(contentItems, options = 
     totalChars
   ));
   const nextCursor = typeof options?.nextCursor === 'string' ? options.nextCursor.trim() : '';
+  const buildPage = options?.format === 'plain'
+    ? buildResponsesPlainToolOutputPage
+    : buildResponsesToolOutputPageEnvelope;
 
   if (rangeStart === 0 && totalChars <= maxOutputChars) {
     return {
@@ -200,7 +211,7 @@ export function paginateResponsesToolOutputContentItems(contentItems, options = 
   }
 
   const remainingChars = totalChars - rangeStart;
-  const finalEnvelope = buildResponsesToolOutputPageEnvelope(
+  const finalEnvelope = buildPage(
     sourceChars,
     rangeStart,
     remainingChars
@@ -210,7 +221,7 @@ export function paginateResponsesToolOutputContentItems(contentItems, options = 
   let cursorExposed = false;
 
   if (Array.from(finalEnvelope).length > maxOutputChars) {
-    const buildEnvelope = returned => buildResponsesToolOutputPageEnvelope(
+    const buildEnvelope = returned => buildPage(
       sourceChars,
       rangeStart,
       returned,
@@ -664,7 +675,7 @@ function cloneResponsesToolOutputWithoutRawContent(value) {
   }
   const cloned = {};
   for (const [key, item] of Object.entries(value)) {
-    if (key === 'content' || key === 'numbered_content') continue;
+    if (key === 'content') continue;
     cloned[key] = cloneResponsesToolOutputWithoutRawContent(item);
   }
   return cloned;
@@ -698,6 +709,7 @@ function getResponsesFileSkillName(result, file = null) {
   const candidates = [
     file?.skill_name,
     result?.skill_name,
+    result?.environment?.skill_name,
     result?.skill?.name
   ];
   for (const candidate of candidates) {
@@ -709,7 +721,7 @@ function getResponsesFileSkillName(result, file = null) {
 function buildResponsesFileReadRangeAttribute(contentRead) {
   const normalized = isResponsesToolOutputPlainObject(contentRead) ? contentRead : {};
   const mode = typeof normalized.mode === 'string' ? normalized.mode.trim() : '';
-  if (mode === 'line_range') {
+  if (mode === 'lines') {
     const startLine = readPositiveInteger(normalized.start_line);
     const endLine = readPositiveInteger(normalized.end_line);
     const totalLines = readNonNegativeInteger(normalized.total_lines);
@@ -739,10 +751,15 @@ function buildResponsesFileReadDisplayPath(result, file) {
 
 function buildResponsesFileReadPlainContent(file) {
   const normalized = isResponsesToolOutputPlainObject(file) ? file : {};
-  const preferredText = typeof normalized.numbered_content === 'string' && normalized.numbered_content.trim()
-    ? normalized.numbered_content
-    : (typeof normalized.content === 'string' ? normalized.content : '');
-  return preferredText;
+  return typeof normalized.content === 'string' ? normalized.content : '';
+}
+
+function formatVirtualFileError(error) {
+  if (typeof error === 'string' && error.trim()) return error.trim();
+  if (error && typeof error === 'object' && typeof error.message === 'string' && error.message.trim()) {
+    return error.message.trim();
+  }
+  return 'Unknown virtual file error.';
 }
 
 function buildResponsesFileListLine(file, options = {}) {
@@ -767,78 +784,22 @@ function buildResponsesSearchLinePath(match, options = {}) {
     : filePath;
 }
 
-function buildResponsesFileSearchContextLine(line, separator = '-') {
-  const normalizedLine = isResponsesToolOutputPlainObject(line) ? line : {};
-  const lineNumber = readPositiveInteger(normalizedLine.line_number);
-  const text = typeof normalizedLine.text === 'string' ? normalizedLine.text : '';
-  if (!lineNumber) return text;
-  return `${lineNumber}${separator}${text}`;
-}
-
-function buildResponsesFileSearchMatchLine(match) {
-  const normalized = isResponsesToolOutputPlainObject(match) ? match : {};
-  const lineNumber = readPositiveInteger(normalized.line_number);
-  const column = readPositiveInteger(normalized.column_start);
-  const lineText = typeof normalized.line_text === 'string' ? normalized.line_text : '';
-  if (!lineNumber) return lineText;
-  if (!column) return `${lineNumber}:${lineText}`;
-  return `${lineNumber}:${column}:${lineText}`;
-}
-
-function buildResponsesFileSearchContext(match) {
-  const normalized = isResponsesToolOutputPlainObject(match) ? match : {};
-  const lines = [];
-  const before = Array.isArray(normalized.before) ? normalized.before : [];
-  const after = Array.isArray(normalized.after) ? normalized.after : [];
-  for (const line of before) {
-    const text = buildResponsesFileSearchContextLine(line, '-');
-    if (text) lines.push(text);
-  }
-  if (typeof normalized.line_text === 'string' && normalized.line_text.trim()) {
-    lines.push(buildResponsesFileSearchMatchLine(normalized));
-  }
-  for (const line of after) {
-    const text = buildResponsesFileSearchContextLine(line, '-');
-    if (text) lines.push(text);
-  }
-  return lines.join('\n');
-}
-
-function groupResponsesFileSearchMatchesByPath(matches, options = {}) {
-  const groups = [];
-  const groupsByPath = new Map();
-  for (const match of Array.isArray(matches) ? matches : []) {
-    const displayPath = buildResponsesSearchLinePath(match, options);
-    const groupKey = displayPath || '(unknown)';
-    let group = groupsByPath.get(groupKey);
-    if (!group) {
-      group = {
-        path: displayPath,
-        matches: []
-      };
-      groupsByPath.set(groupKey, group);
-      groups.push(group);
-    }
-    group.matches.push(match);
-  }
-  return groups;
-}
-
-function buildResponsesFileSearchGroupedText(matches, options = {}) {
-  const groups = groupResponsesFileSearchMatchesByPath(matches, options);
+function buildResponsesFileSearchGroupedText(groups, options = {}) {
   return groups
     .map((group) => {
-      const contextText = group.matches
-        .map((match) => buildResponsesFileSearchContext(match))
-        .filter(Boolean)
-        .join('\n--\n');
-      if (!group.path) return contextText;
-      // 对齐 `rg --heading --line-number --column -C`：文件路径只出现一次，
-      // 后续上下文行只保留行号/列号/正文，避免同一文件多行命中重复完整路径。
-      return [group.path, contextText].filter(Boolean).join('\n');
+      const displayPath = buildResponsesSearchLinePath(group, options);
+      const lines = (Array.isArray(group?.lines) ? group.lines : [])
+        .map((line) => {
+          const lineNumber = readPositiveInteger(line?.line_number);
+          const text = typeof line?.text === 'string' ? line.text : '';
+          if (!lineNumber) return text;
+          return `${lineNumber}${line?.is_match === true ? ':' : '-'}${text}`;
+        })
+        .filter((line) => line !== '');
+      return [displayPath, lines.join('\n')].filter(Boolean).join('\n');
     })
     .filter(Boolean)
-    .join('\n\n');
+    .join('\n--\n');
 }
 
 function buildResponsesFileReadToolOutputText(rootTag, result, options = {}) {
@@ -853,9 +814,7 @@ function buildResponsesFileReadToolOutputText(rootTag, result, options = {}) {
   if (path) lines.push(`# ${path}${headerDetail ? ` (${headerDetail})` : ''}`);
   const content = buildResponsesFileReadPlainContent(file);
   if (content) lines.push(content);
-  if (normalized.error) {
-    lines.push(`Error: ${formatResponsesJsRuntimeErrorText(normalized.error)}`);
-  }
+  if (normalized.error) lines.push(`Error: ${formatVirtualFileError(normalized.error)}`);
   return lines.join('\n') || 'No content.';
 }
 
@@ -863,7 +822,7 @@ function buildResponsesFileListToolOutputText(rootTag, result, options = {}) {
   const normalized = isResponsesToolOutputPlainObject(result) ? result : {};
   void rootTag;
   const files = Array.isArray(options?.files) ? options.files : [];
-  const errorText = normalized.error ? formatResponsesJsRuntimeErrorText(normalized.error) : '';
+  const errorText = normalized.error ? formatVirtualFileError(normalized.error) : '';
   const lines = [];
   if (files.length > 0) {
     const listText = files
@@ -890,14 +849,11 @@ function buildResponsesFileListToolOutputText(rootTag, result, options = {}) {
 function buildResponsesFileSearchToolOutputText(rootTag, result, options = {}) {
   const normalized = isResponsesToolOutputPlainObject(result) ? result : {};
   void rootTag;
-  const matches = Array.isArray(options?.matches) ? options.matches : [];
-  const errorText = normalized.error ? formatResponsesJsRuntimeErrorText(normalized.error) : '';
+  const groups = Array.isArray(options?.groups) ? options.groups : [];
+  const errorText = normalized.error ? formatVirtualFileError(normalized.error) : '';
   const lines = [];
-  if (matches.length > 0) {
-    // 这里刻意采用接近 `rg --heading --line-number --column` 的纯文本形状：
-    // `path` heading 加 `line:column:text` 是模型后续 read_file / apply_patch 最常用的定位信息，
-    // 省掉每条命中的 JSON metadata，避免搜索工具输出比真正的匹配内容更吵。
-    const matchesText = buildResponsesFileSearchGroupedText(matches, options);
+  if (groups.length > 0) {
+    const matchesText = buildResponsesFileSearchGroupedText(groups, options);
     if (matchesText) {
       lines.push(matchesText);
     }
@@ -907,12 +863,9 @@ function buildResponsesFileSearchToolOutputText(rootTag, result, options = {}) {
       : '';
     lines.push(`No matches found${pattern}.`);
   }
-  const total = readNonNegativeInteger(normalized.total_matches);
-  const returned = readNonNegativeInteger(normalized.returned_match_count ?? matches.length);
-  if (total != null && returned != null && total > returned) {
-    lines.push(`... returned ${returned} of ${total} matches`);
-  } else if (normalized.truncated === true && returned != null) {
-    lines.push(`... returned ${returned} matches; output truncated`);
+  const total = readNonNegativeInteger(normalized.total_matching_lines);
+  if (total != null && total === 0 && groups.length > 0) {
+    lines.push('... matching line count unavailable');
   }
   if (errorText) {
     lines.push(`Error: ${errorText}`);
@@ -926,85 +879,12 @@ function buildResponsesFileOperationToolOutputText(rootTag, result, options = {}
   const action = typeof normalized.action === 'string' && normalized.action.trim()
     ? normalized.action.trim()
     : String(options?.toolName || '').trim();
-  const sourcePath = typeof normalized.source_path === 'string'
-    ? normalized.source_path.trim()
-    : (typeof normalized.source_file_path === 'string' ? normalized.source_file_path.trim() : '');
-  const destinationPath = typeof normalized.destination_path === 'string'
-    ? normalized.destination_path.trim()
-    : (typeof normalized.destination_file_path === 'string' ? normalized.destination_file_path.trim() : '');
-  const deletedPath = typeof normalized.deleted_path === 'string'
-    ? normalized.deleted_path.trim()
-    : (typeof normalized.deleted_file_path === 'string' ? normalized.deleted_file_path.trim() : '');
-  const errorText = normalized.error ? formatResponsesJsRuntimeErrorText(normalized.error) : '';
+  const errorText = normalized.error ? formatVirtualFileError(normalized.error) : '';
   if (errorText) return `Error: ${errorText}`;
-  const resultLine = (() => {
-    if (action === 'copy_file') return 'Success.';
-    if (action === 'move_file') return sourcePath && destinationPath ? `move ${sourcePath} -> ${destinationPath}` : 'move complete';
-    if (action === 'delete_file') return deletedPath ? `delete ${deletedPath}` : 'delete complete';
-    return 'file operation complete';
-  })();
-  return resultLine;
-}
-
-function buildResponsesSkillReadDetailToolOutputText(result) {
-  const normalized = isResponsesToolOutputPlainObject(result) ? result : {};
-  const readContext = { ...normalized };
-  delete readContext.error;
-  const instruction = isResponsesToolOutputPlainObject(normalized?.skill?.instruction)
-    ? normalized.skill.instruction
-    : {};
-  const lines = [];
-  const instructionText = buildResponsesFileReadToolOutputText('skill_registry_result', readContext, {
-    file: instruction,
-    defaultTargetKind: 'skill'
-  });
-  if (instructionText && instructionText !== 'No content.') {
-    lines.push(instructionText);
+  if (action !== 'copy_file') {
+    return `Error: unsupported virtual file operation ${action || '(empty)'}.`;
   }
-  const files = Array.isArray(normalized?.skill?.files?.files) ? normalized.skill.files.files : [];
-  if (files.length > 0) {
-    const filesText = files
-      .map((file) => buildResponsesFileListLine(file))
-      .filter(Boolean)
-      .join('\n');
-    if (filesText) {
-      lines.push(`Files:\n${filesText}`);
-    }
-  }
-  if (normalized.error) {
-    lines.push(`Error: ${formatResponsesJsRuntimeErrorText(normalized.error)}`);
-  }
-  return lines.filter(Boolean).join('\n\n') || 'No content.';
-}
-
-function buildResponsesSkillReadPackageToolOutputText(result) {
-  const normalized = isResponsesToolOutputPlainObject(result) ? result : {};
-  const readContext = { ...normalized };
-  delete readContext.error;
-  const files = Array.isArray(normalized?.skill?.files?.files) ? normalized.skill.files.files : [];
-  const lines = [];
-  if (files.length > 0) {
-    lines.push(...files
-      .map((file) => buildResponsesFileReadToolOutputText('skill_registry_result', readContext, {
-        file,
-        defaultTargetKind: 'skill'
-      }))
-      .filter((text) => text && text !== 'No content.'));
-  } else {
-    lines.push('No files found.');
-  }
-  const fileSummary = isResponsesToolOutputPlainObject(normalized?.skill?.files)
-    ? normalized.skill.files
-    : {};
-  const total = readNonNegativeInteger(fileSummary.total_count ?? normalized.total_count);
-  const returned = readNonNegativeInteger(fileSummary.returned_file_count ?? files.length);
-  if (total != null && returned != null && total > returned) {
-    lines.push(`... returned ${returned} of ${total} files`);
-  }
-  if (normalized.error) {
-    lines.push(`Error: ${formatResponsesJsRuntimeErrorText(normalized.error)}`);
-  }
-  return lines.filter(Boolean).join('\n\n');
+  return 'Success.';
 }
 
 function buildResponsesSkillListToolOutputText(result) {
@@ -1463,30 +1343,6 @@ export function buildResponsesRequestUserInputToolOutputContentItems(result, opt
   return buildResponsesToolOutputContentItems(payload, options);
 }
 
-function extractSkillActiveSkillNames(refreshResult) {
-  if (Array.isArray(refreshResult?.active_skills)) {
-    return refreshResult.active_skills
-      .map((item) => (typeof item === 'string' ? item.trim() : ''))
-      .filter(Boolean);
-  }
-  const names = new Set();
-  const activeSkills = Array.isArray(refreshResult?.active_skills)
-    ? refreshResult.active_skills
-    : (Array.isArray(refreshResult?.value?.active_skills) ? refreshResult.value.active_skills : []);
-  for (const item of activeSkills) {
-    const name = typeof item === 'string' ? item.trim() : '';
-    if (name) names.add(name);
-  }
-  return Array.from(names);
-}
-
-function extractSkillRefreshErrorMessage(refreshResult) {
-  const message = typeof refreshResult?.error?.message === 'string'
-    ? refreshResult.error.message.trim()
-    : '';
-  return message || '技能当前文档 refresh 失败。';
-}
-
 export function buildResponsesApplyPatchToolOutputText(result) {
   const normalized = (result && typeof result === 'object' && !Array.isArray(result))
     ? result
@@ -1496,7 +1352,19 @@ export function buildResponsesApplyPatchToolOutputText(result) {
     if (typeof error?.tool_output === 'string' && error.tool_output.length > 0) {
       return error.tool_output;
     }
-    return formatApplyPatchVerificationError(error);
+    const stage = typeof error?.stage === 'string' ? error.stage.trim() : '';
+    const code = typeof error?.code === 'string' ? error.code.trim() : '';
+    const name = typeof error?.name === 'string' ? error.name.trim() : '';
+    const isVerificationFailure = stage === 'parse'
+      || stage === 'verify'
+      || code === 'APPLY_PATCH_INVALID_PATCH'
+      || code === 'APPLY_PATCH_INVALID_HUNK'
+      || code === 'APPLY_PATCH_VERIFICATION_FAILED'
+      || name === 'InvalidHunkError'
+      || name === 'ApplyPatchParseError'
+      || name === 'ApplyPatchVerificationError';
+    if (isVerificationFailure) return formatApplyPatchVerificationError(error);
+    return formatVirtualFileError(error);
   }
 
   const affected = (result?.affected_files && typeof result.affected_files === 'object') ? result.affected_files : {};
@@ -1513,10 +1381,6 @@ export function buildResponsesApplyPatchToolOutputText(result) {
   return `Success. Updated the following files:\n${lines.join('\n')}`;
 }
 
-function buildSkillApplyPatchSummaryText(result) {
-  return buildResponsesApplyPatchToolOutputText(result);
-}
-
 function buildSkillCreateTemplateSummaryText(result) {
   const skillName = typeof result?.normalized_name === 'string' && result.normalized_name.trim()
     ? result.normalized_name.trim()
@@ -1525,13 +1389,6 @@ function buildSkillCreateTemplateSummaryText(result) {
   const createdFiles = Array.isArray(result?.created_files)
     ? result.created_files.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean)
     : [];
-  const selectedResources = Array.isArray(result?.selected_resources)
-    ? result.selected_resources.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean)
-    : [];
-  const nextSteps = Array.isArray(result?.next_steps)
-    ? result.next_steps.map((item) => (typeof item === 'string' ? item.trim() : '')).filter(Boolean)
-    : [];
-
   const lines = [
     `Created skill scaffold ${skillName}${revision ? ` (revision ${revision})` : ''}.`
   ];
@@ -1540,16 +1397,6 @@ function buildSkillCreateTemplateSummaryText(result) {
     for (const filePath of createdFiles) {
       lines.push(`- ${filePath}`);
     }
-  }
-  if (selectedResources.length > 0) {
-    lines.push('', `Selected resources: ${selectedResources.join(', ')}`);
-  }
-  lines.push('', `Examples created: ${result?.examples_created === true ? 'yes' : 'no'}`);
-  if (nextSteps.length > 0) {
-    lines.push('', 'Next steps:');
-    nextSteps.forEach((step, index) => {
-      lines.push(`${index + 1}. ${step}`);
-    });
   }
   return lines.join('\n');
 }
@@ -1561,61 +1408,27 @@ function buildSkillMutationSummaryText(result) {
     ? normalized.skill.name.trim()
     : (typeof normalized.skill_name === 'string' ? normalized.skill_name.trim() : '');
   const revision = Number.isFinite(Number(normalized?.skill?.revision)) ? Number(normalized.skill.revision) : null;
-  const filePath = typeof normalized?.file?.path === 'string'
-    ? normalized.file.path.trim()
-    : (typeof normalized.deleted_file_path === 'string' ? normalized.deleted_file_path.trim() : '');
-  const totalFiles = Number.isFinite(Number(normalized?.files?.total_count)) ? Number(normalized.files.total_count) : null;
-  const activeSkillNames = extractSkillActiveSkillNames(normalized.refresh_result);
-
   let summary = '';
   switch (action) {
-    case 'apply_patch':
-      summary = buildSkillApplyPatchSummaryText(normalized);
-      break;
-    case 'delete_file':
-      summary = filePath
-        ? `Deleted file ${filePath}${skillName ? ` from skill ${skillName}` : ''}${revision ? ` (revision ${revision})` : ''}.`
-        : `Deleted file from skill ${skillName || '(unknown)'}.`;
-      break;
-    case 'create':
     case 'create_skill':
-      summary = normalized.create_mode === 'template'
-        ? buildSkillCreateTemplateSummaryText(normalized)
-        : `Created skill ${skillName || '(unknown)'}${revision ? ` (revision ${revision})` : ''}${totalFiles ? ` with ${totalFiles} files` : ''}.`;
+      summary = buildSkillCreateTemplateSummaryText(normalized);
       break;
-    case 'update':
-      summary = `Updated skill ${skillName || '(unknown)'}${revision ? ` to revision ${revision}` : ''}.`;
-      break;
-    case 'enable':
     case 'enable_skill':
       summary = `Enabled skill ${skillName || '(unknown)'}${revision ? ` (revision ${revision})` : ''}.`;
       break;
-    case 'disable':
     case 'disable_skill':
       summary = `Disabled skill ${skillName || '(unknown)'}${revision ? ` (revision ${revision})` : ''}.`;
       break;
-    case 'delete':
     case 'delete_skill':
       summary = `Deleted skill ${skillName || '(unknown)'}.`;
       break;
     case 'mount_on_current_page':
       summary = `Mounted skill ${skillName || '(unknown)'} on current page.`;
       break;
-    case 'refresh_current_document':
-      summary = activeSkillNames.length > 0
-        ? `Refreshed current document. Active skills: ${activeSkillNames.join(', ')}.`
-        : 'Refreshed current document. No active skills are mounted.';
-      break;
     default:
       return null;
   }
 
-  if (normalized.refreshed_current_document === true && normalized.refresh_result?.ok !== true) {
-    return `${summary}\n\nCurrent document refresh failed: ${extractSkillRefreshErrorMessage(normalized.refresh_result)}`;
-  }
-  if (action !== 'refresh_current_document' && normalized.refreshed_current_document === true && activeSkillNames.length > 0) {
-    return `${summary}\n\nMounted on current document: ${activeSkillNames.join(', ')}`;
-  }
   return summary;
 }
 
@@ -1632,57 +1445,6 @@ export function buildResponsesSkillRegistryToolOutputContentItems(result, option
     if (summaryText) {
       return buildResponsesXmlToolOutputContentItems(summaryText, options);
     }
-  }
-  if (String(normalized.action || '').trim() === 'read_file') {
-    return buildResponsesXmlToolOutputContentItems(
-      buildResponsesFileReadToolOutputText('skill_registry_result', normalized, {
-        file: normalized?.skill?.file,
-        defaultTargetKind: 'skill',
-        omitMetadataPaths: []
-      }),
-      options
-    );
-  }
-  if (String(normalized.action || '').trim() === 'list_files') {
-    return buildResponsesXmlToolOutputContentItems(
-      buildResponsesFileListToolOutputText('skill_registry_result', normalized, {
-        files: normalized.files,
-        defaultTargetKind: 'skill',
-        includeSkillScope: !normalized.requested_skill_name
-      }),
-      options
-    );
-  }
-  if (String(normalized.action || '').trim() === 'search_files') {
-    return buildResponsesXmlToolOutputContentItems(
-      buildResponsesFileSearchToolOutputText('skill_registry_result', normalized, {
-        matches: normalized.matches,
-        defaultTargetKind: 'skill',
-        includeSkillScope: !normalized.requested_skill_name
-      }),
-      options
-    );
-  }
-  if (['copy_file', 'move_file', 'delete_file'].includes(String(normalized.action || '').trim())) {
-    return buildResponsesXmlToolOutputContentItems(
-      buildResponsesFileOperationToolOutputText('skill_registry_result', normalized, {
-        defaultTargetKind: 'skill',
-        toolName: String(normalized.action || '').trim()
-      }),
-      options
-    );
-  }
-  if (String(normalized.action || '').trim() === 'read_detail') {
-    return buildResponsesXmlToolOutputContentItems(
-      buildResponsesSkillReadDetailToolOutputText(normalized),
-      options
-    );
-  }
-  if (String(normalized.action || '').trim() === 'read_package') {
-    return buildResponsesXmlToolOutputContentItems(
-      buildResponsesSkillReadPackageToolOutputText(normalized),
-      options
-    );
   }
   return buildResponsesGenericXmlToolOutputContentItems('skill_registry_result', normalized, options);
 }
@@ -1703,7 +1465,7 @@ export function buildResponsesConversationDocumentToolOutputContentItems(toolNam
     return buildResponsesXmlToolOutputContentItems(
       buildResponsesFileListToolOutputText(rootTag, normalized, {
         files: normalized.files,
-        includeSkillScope: normalized?.target?.kind === 'skill' && !normalized?.target?.name
+        includeSkillScope: false
       }),
       options
     );
@@ -1711,8 +1473,8 @@ export function buildResponsesConversationDocumentToolOutputContentItems(toolNam
   if (normalizedToolName === 'search_files') {
     return buildResponsesXmlToolOutputContentItems(
       buildResponsesFileSearchToolOutputText(rootTag, normalized, {
-        matches: normalized.matches,
-        includeSkillScope: normalized?.target?.kind === 'skill' && !normalized?.target?.name
+        groups: normalized.groups,
+        includeSkillScope: false
       }),
       options
     );
@@ -1729,7 +1491,7 @@ export function buildResponsesConversationDocumentToolOutputContentItems(toolNam
   }
   if (normalizedToolName === 'apply_patch' && normalized.ok !== true) {
     const errorText = normalized.error
-      ? `Error: ${formatResponsesJsRuntimeErrorText(normalized.error)}`
+      ? `Error: ${formatVirtualFileError(normalized.error)}`
       : 'Patch failed.';
     return buildResponsesXmlToolOutputContentItems(errorText, options);
   }

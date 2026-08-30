@@ -191,6 +191,21 @@ export function createChatHistoryUI(appContext) {
       refreshButton: null
     }
   };
+  const SKILL_SOURCE_HIGHLIGHT_MAX_CHARS = 20_000;
+  const SKILL_SOURCE_LANGUAGE_BY_EXTENSION = Object.freeze({
+    cjs: 'javascript',
+    css: 'css',
+    html: 'xml',
+    js: 'javascript',
+    json: 'json',
+    jsx: 'javascript',
+    md: 'markdown',
+    mjs: 'javascript',
+    py: 'python',
+    ts: 'typescript',
+    tsx: 'typescript',
+    xml: 'xml'
+  });
 
   const galleryCache = {
     items: [],
@@ -9238,10 +9253,7 @@ export function createChatHistoryUI(appContext) {
       instruction: {
         path: instructionPath,
         content: typeof instruction.content === 'string' ? instruction.content : '',
-        content_read: instruction.content_read || null,
-        ...(typeof instruction.numbered_content === 'string'
-          ? { numbered_content: instruction.numbered_content }
-          : {})
+        content_read: instruction.content_read || null
       },
       files: {
         total_count: Number.isFinite(Number(fileIndex?.total_files)) ? Number(fileIndex.total_files) : files.length,
@@ -9391,15 +9403,34 @@ export function createChatHistoryUI(appContext) {
   }
 
   /**
+   * 文件查看器只对明确识别且体积适中的源码做高亮，避免 Highlight.js 对大段纯文本
+   * 执行同步自动语言探测而阻塞侧栏主线程。
+   */
+  function highlightSkillSourceCode(codeElement, filePath, content) {
+    if (!codeElement || typeof window.hljs?.highlightElement !== 'function') return;
+    const source = typeof content === 'string' ? content : '';
+    if (source.length > SKILL_SOURCE_HIGHLIGHT_MAX_CHARS) return;
+
+    const normalizedPath = String(filePath || '').trim().toLowerCase();
+    const extension = normalizedPath.includes('.') ? normalizedPath.split('.').pop() : '';
+    const language = SKILL_SOURCE_LANGUAGE_BY_EXTENSION[extension] || '';
+    if (!language || (typeof window.hljs.getLanguage === 'function' && !window.hljs.getLanguage(language))) return;
+
+    codeElement.classList.add(`language-${language}`);
+    window.hljs.highlightElement(codeElement);
+  }
+
+  /**
    * Skill 内部读取不再预截断，ZIP 导出可直接复用同一份完整文件结果。
    */
   async function readSkillViewerFileFully(skillName, filePath) {
-    const result = await executeSkillViewerAction({
-      action: 'read_file',
-      skill_name: skillName,
-      file_path: filePath
+    const result = await executeSkillViewerFileAction('read_file', {
+      environment_id: `skill:${skillName}`,
+      path: filePath,
+      start_line: null,
+      end_line: null
     });
-    const file = result?.skill?.file;
+    const file = result?.file;
     if (!file || typeof file.content !== 'string') {
       throw new Error(`读取 skill 文件失败：${filePath}`);
     }
@@ -9411,13 +9442,16 @@ export function createChatHistoryUI(appContext) {
     if (sourcePayload) return sourcePayload;
 
     const fileIndex = await executeSkillViewerFileAction('list_files', {
-      target: { kind: 'skill', name: skillName }
+      environment_id: `skill:${skillName}`,
+      path_glob: null
     });
     const indexFiles = Array.isArray(fileIndex?.files) ? fileIndex.files : [];
     const files = await Promise.all(indexFiles.map(async (file) => {
       const fileResult = await executeSkillViewerFileAction('read_file', {
-        target: { kind: 'skill', name: skillName },
-        path: file.path
+        environment_id: `skill:${skillName}`,
+        path: file.path,
+        start_line: null,
+        end_line: null
       });
       return {
         ...file,
@@ -9425,7 +9459,7 @@ export function createChatHistoryUI(appContext) {
       };
     }));
     sourcePayload = {
-      target: { kind: 'skill', name: skillName },
+      environment_id: `skill:${skillName}`,
       total_files: fileIndex?.total_files || files.length,
       returned_file_count: fileIndex?.returned_file_count || files.length,
       files
@@ -9436,7 +9470,8 @@ export function createChatHistoryUI(appContext) {
 
   async function loadSkillArchivePackage(skillName) {
     const fileIndex = await executeSkillViewerFileAction('list_files', {
-      target: { kind: 'skill', name: skillName }
+      environment_id: `skill:${skillName}`,
+      path_glob: null
     });
     const indexFiles = Array.isArray(fileIndex?.files) ? fileIndex.files : [];
     return await Promise.all(indexFiles.map(async (file) => ({
@@ -9525,10 +9560,10 @@ export function createChatHistoryUI(appContext) {
           fileSection.appendChild(sourceBlock);
           sourceSection.appendChild(fileSection);
 
-          if (window.hljs?.highlightElement) {
-            try {
-              window.hljs.highlightElement(code);
-            } catch (_) {}
+          try {
+            highlightSkillSourceCode(code, file.path, file.content);
+          } catch (error) {
+            console.warn(`Skill 文件语法高亮失败：${file.path || '(unknown)'}`, error);
           }
         });
       }
@@ -9749,11 +9784,14 @@ export function createChatHistoryUI(appContext) {
           throw new Error(`skill ${skillName} 不存在。`);
         }
         const fileIndex = await executeSkillViewerFileAction('list_files', {
-          target: { kind: 'skill', name: skillName }
+          environment_id: `skill:${skillName}`,
+          path_glob: null
         });
         const instructionFile = await executeSkillViewerFileAction('read_file', {
-          target: { kind: 'skill', name: skillName },
-          path: summary?.instruction?.path || 'SKILL.md'
+          environment_id: `skill:${skillName}`,
+          path: summary?.instruction?.path || 'SKILL.md',
+          start_line: null,
+          end_line: null
         });
         detail = buildSkillDetailFromViewerParts(summary, instructionFile, fileIndex);
         if (detail) {

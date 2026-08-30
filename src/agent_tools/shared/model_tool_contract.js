@@ -14,6 +14,7 @@
 
 export const RESPONSES_TOOL_OUTPUT_MAX_CHARS_PARAMETER = 'max_output_chars';
 export const RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS = 5_000;
+export const RESPONSES_TOOL_OUTPUT_MIN_CHARS = 256;
 export const RESPONSES_FILE_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS = 20_000;
 export const RESPONSES_PAGE_CONTENT_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS = 20_000;
 
@@ -27,11 +28,6 @@ export function resolveResponsesToolOutputDefaultMaxChars(toolName) {
   }
   return RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS;
 }
-
-const RESPONSES_TOOL_OUTPUT_MAX_CHARS_PROPERTY = Object.freeze({
-  type: ['integer', 'null'],
-  description: `本次调用每页最终返回给模型的文本字符上限。传正整数时使用该值；传 null 时默认 ${RESPONSES_TOOL_OUTPUT_DEFAULT_MAX_CHARS}，read_file 与 page_content_read 默认 ${RESPONSES_FILE_READ_TOOL_OUTPUT_DEFAULT_MAX_CHARS}，read_tool_output 沿用上一页大小。超限结果会返回 next_cursor，可用 read_tool_output 无重执行续读；图片不计入。`
-});
 
 const PORTABLE_STRICT_SCHEMA_OMITTED_KEYWORDS = new Set([
   'minimum',
@@ -157,7 +153,7 @@ export function buildStrictObjectSchema(properties = {}, options = {}) {
 /**
  * 构造统一的 Responses API function tool 定义。
  *
- * @param {{name:string, description:string, properties?:Record<string, Object>, includeOutputControl?:boolean}} options
+ * @param {{name:string, description:string, properties?:Record<string, Object>, includeOutputControl?:boolean, outputControlDescription?:string}} options
  * @returns {Object}
  */
 export function buildStrictFunctionToolDefinition(options = {}) {
@@ -173,7 +169,12 @@ export function buildStrictFunctionToolDefinition(options = {}) {
     ...(options?.properties || {})
   };
   if (options?.includeOutputControl !== false) {
-    properties[RESPONSES_TOOL_OUTPUT_MAX_CHARS_PARAMETER] = RESPONSES_TOOL_OUTPUT_MAX_CHARS_PROPERTY;
+    const outputControlDescription = normalizeContractText(options?.outputControlDescription);
+    const defaultMaxChars = resolveResponsesToolOutputDefaultMaxChars(name);
+    properties[RESPONSES_TOOL_OUTPUT_MAX_CHARS_PARAMETER] = {
+      type: ['integer', 'null'],
+      description: outputControlDescription || `本页最多返回多少字符，最小 ${RESPONSES_TOOL_OUTPUT_MIN_CHARS}；传 null 默认 ${defaultMaxChars}。结果过长时返回 next_cursor。`
+    };
   }
   return {
     type: 'function',
@@ -207,8 +208,8 @@ export function splitResponsesToolOutputControl(rawArgs, options = {}) {
   const maxOutputChars = rawMaxOutputChars == null
     ? resolveResponsesToolOutputDefaultMaxChars(toolName)
     : rawMaxOutputChars;
-  if (!Number.isSafeInteger(maxOutputChars) || maxOutputChars <= 0) {
-    throw new Error('工具参数错误：max_output_chars 必须是正安全整数或 null。');
+  if (!Number.isSafeInteger(maxOutputChars) || maxOutputChars < RESPONSES_TOOL_OUTPUT_MIN_CHARS) {
+    throw new Error(`工具参数错误：max_output_chars 必须是至少 ${RESPONSES_TOOL_OUTPUT_MIN_CHARS} 的安全整数或 null。`);
   }
   return { toolArgs, maxOutputChars };
 }

@@ -1,15 +1,17 @@
 import {
   VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
   VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
-  VIRTUAL_FILE_DELETE_FILE_TOOL_NAME,
   VIRTUAL_FILE_LIST_FILES_TOOL_NAME,
-  VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
   VIRTUAL_FILE_READ_FILE_TOOL_NAME,
   VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME,
-  VIRTUAL_FILE_TARGET_KIND_ROOT,
-  VIRTUAL_FILE_TARGET_KIND_SKILL
+  VIRTUAL_FILE_ENVIRONMENT_KIND_ROOT,
+  VIRTUAL_FILE_ENVIRONMENT_KIND_SKILL
 } from '../agent_tools/virtual_file_io/index.js';
 import { buildVirtualFileApplyPatchPreview } from './skill_patch_preview.js';
+
+// 这些名称只用于展示已经落库的历史调用，不会进入当前工具定义或执行路由。
+const HISTORICAL_MOVE_FILE_TOOL_NAME = 'move_file';
+const HISTORICAL_DELETE_FILE_TOOL_NAME = 'delete_file';
 
 function normalizeSummaryText(value) {
   return (typeof value === 'string') ? value.trim() : '';
@@ -101,7 +103,7 @@ function resolvePathArg(args) {
 }
 
 function resolveGlobArg(args) {
-  return normalizeSummaryText(args?.glob);
+  return normalizeSummaryText(args?.path_glob || args?.glob);
 }
 
 function resolveSearchPatternArg(args) {
@@ -128,28 +130,48 @@ function normalizeSummaryPathForTarget(path, target) {
 }
 
 function resolveVirtualFileTarget(args) {
+  const environmentId = normalizeSummaryText(args?.environment_id);
+  if (environmentId.startsWith('skill:')) {
+    return {
+      kind: VIRTUAL_FILE_ENVIRONMENT_KIND_SKILL,
+      name: environmentId.slice('skill:'.length)
+    };
+  }
   const target = (args?.target && typeof args.target === 'object' && !Array.isArray(args.target))
     ? args.target
     : null;
-  const kind = normalizeSummaryText(target?.kind).toLowerCase() || VIRTUAL_FILE_TARGET_KIND_ROOT;
+  const kind = normalizeSummaryText(target?.kind).toLowerCase() || VIRTUAL_FILE_ENVIRONMENT_KIND_ROOT;
   return {
-    kind: kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? VIRTUAL_FILE_TARGET_KIND_SKILL : VIRTUAL_FILE_TARGET_KIND_ROOT,
+    kind: kind === VIRTUAL_FILE_ENVIRONMENT_KIND_SKILL ? VIRTUAL_FILE_ENVIRONMENT_KIND_SKILL : VIRTUAL_FILE_ENVIRONMENT_KIND_ROOT,
     name: normalizeSummaryText(target?.name)
   };
 }
 
 function formatReadLineRangeSuffix(args) {
-  const lineRange = normalizeSummaryText(args?.line_range);
-  if (!lineRange) return '';
-  const compact = lineRange
-    .replace(/^['"]|['"]$/g, '')
-    .replace(/\s+/g, '')
-    .replace(/p$/i, '');
-  const rangeMatch = compact.match(/^L?(\d+)(?:[:-]|,)L?(\d+)$/i);
-  if (rangeMatch) return `L${rangeMatch[1]}-L${rangeMatch[2]}`;
-  const singleMatch = compact.match(/^L?(\d+)$/i);
-  if (singleMatch) return `L${singleMatch[1]}`;
-  return compact ? (compact.startsWith('L') ? compact : `L${compact}`) : '';
+  if (args?.start_line == null || args?.end_line == null) {
+    const lineRange = normalizeSummaryText(args?.line_range);
+    if (!lineRange) return '';
+    const compact = lineRange
+      .replace(/^['"]|['"]$/g, '')
+      .replace(/\s+/g, '')
+      .replace(/p$/i, '');
+    const rangeMatch = compact.match(/^L?(\d+)(?:[:-]|,)L?(\d+)$/i);
+    if (rangeMatch) return `L${rangeMatch[1]}-L${rangeMatch[2]}`;
+    const singleMatch = compact.match(/^L?(\d+)$/i);
+    if (singleMatch) return `L${singleMatch[1]}`;
+    return compact ? (compact.startsWith('L') ? compact : `L${compact}`) : '';
+  }
+  const startLine = Number(args?.start_line);
+  const endLine = Number(args?.end_line);
+  if (
+    Number.isSafeInteger(startLine)
+    && Number.isSafeInteger(endLine)
+    && startLine >= 1
+    && endLine >= startLine
+  ) {
+    return `L${startLine}-L${endLine}`;
+  }
+  return '';
 }
 
 export function isVirtualFileToolCall(record) {
@@ -163,8 +185,8 @@ export function isVirtualFileToolCall(record) {
       VIRTUAL_FILE_READ_FILE_TOOL_NAME,
       VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME,
       VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
-      VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
-      VIRTUAL_FILE_DELETE_FILE_TOOL_NAME
+      HISTORICAL_MOVE_FILE_TOOL_NAME,
+      HISTORICAL_DELETE_FILE_TOOL_NAME
     ].includes(name);
 }
 
@@ -186,7 +208,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
     ? { kind: preview.targetKind, name: preview.skillName }
     : resolveVirtualFileTarget(args);
   const isInProgress = options?.isInProgress === true;
-  const targetMeta = target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? target.name : '';
+  const targetMeta = target.kind === VIRTUAL_FILE_ENVIRONMENT_KIND_SKILL ? target.name : '';
   const lineRangeSuffix = formatReadLineRangeSuffix(args);
 
   if (toolName === VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME) {
@@ -199,7 +221,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
       if (preview.totalFiles > 1) metaParts.push(`另 ${preview.totalFiles - 1} 个文件`);
       return {
         action: isInProgress ? '正在修改' : '修改',
-        value: normalizeSummaryPathForTarget(firstFile?.path, target) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '根目录'),
+        value: normalizeSummaryPathForTarget(firstFile?.path, target) || (target.kind === VIRTUAL_FILE_ENVIRONMENT_KIND_SKILL ? '技能文件' : '根目录'),
         valueUrl: '',
         meta: joinSummaryMeta(metaParts),
         locationAction: '',
@@ -209,7 +231,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
     }
     return {
       action: isInProgress ? '正在修改' : '修改',
-      value: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? (targetMeta || '技能文件') : '根目录',
+      value: target.kind === VIRTUAL_FILE_ENVIRONMENT_KIND_SKILL ? (targetMeta || '技能文件') : '根目录',
       valueUrl: '',
       meta: '',
       locationAction: '',
@@ -222,9 +244,9 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
     const glob = resolveGlobArg(args);
     return {
       action: isInProgress ? '正在查看列表' : '查看列表',
-      value: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? (targetMeta || '全部技能') : (normalizeSummaryPathForTarget(glob, target) || '根目录'),
+      value: target.kind === VIRTUAL_FILE_ENVIRONMENT_KIND_SKILL ? (targetMeta || '全部技能') : (normalizeSummaryPathForTarget(glob, target) || '根目录'),
       valueUrl: '',
-      meta: target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? glob : '',
+      meta: target.kind === VIRTUAL_FILE_ENVIRONMENT_KIND_SKILL ? glob : '',
       locationAction: '',
       locationValue: '',
       locationUrl: ''
@@ -235,7 +257,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
     return {
       action: isInProgress ? '正在读取' : '读取',
       value: [
-        normalizeSummaryPathForTarget(resolvePathArg(args), target) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '根目录'),
+        normalizeSummaryPathForTarget(resolvePathArg(args), target) || (target.kind === VIRTUAL_FILE_ENVIRONMENT_KIND_SKILL ? '技能文件' : '根目录'),
         lineRangeSuffix
       ]
         .filter(Boolean)
@@ -252,7 +274,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
     const pattern = resolveSearchPatternArg(args);
     return {
       action: isInProgress ? '正在搜索' : '搜索',
-      value: pattern || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '根目录'),
+      value: pattern || (target.kind === VIRTUAL_FILE_ENVIRONMENT_KIND_SKILL ? '技能文件' : '根目录'),
       valueUrl: '',
       meta: joinSummaryMeta([targetMeta, normalizeSummaryPathForTarget(resolveGlobArg(args), target)]),
       locationAction: '',
@@ -280,7 +302,7 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
   }
 
   // 旧历史里的独立 move_file 仍可回放；新请求不再注册该工具。
-  if (toolName === VIRTUAL_FILE_MOVE_FILE_TOOL_NAME) {
+  if (toolName === HISTORICAL_MOVE_FILE_TOOL_NAME) {
     const from = resolveFromArg(args);
     const to = resolveToArg(args);
     return {
@@ -296,10 +318,10 @@ export function buildVirtualFileSummaryParts(record, options = {}) {
     };
   }
 
-  if (toolName === VIRTUAL_FILE_DELETE_FILE_TOOL_NAME) {
+  if (toolName === HISTORICAL_DELETE_FILE_TOOL_NAME) {
     return {
       action: isInProgress ? '正在删除' : '删除',
-      value: normalizeSummaryPathForTarget(resolvePathArg(args), target) || (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL ? '技能文件' : '根目录'),
+      value: normalizeSummaryPathForTarget(resolvePathArg(args), target) || (target.kind === VIRTUAL_FILE_ENVIRONMENT_KIND_SKILL ? '技能文件' : '根目录'),
       valueUrl: '',
       meta: targetMeta,
       locationAction: '',
@@ -336,7 +358,7 @@ export function buildConversationDocumentApplyPatchPreviewDescriptors(record, op
   const target = preview
     ? { kind: preview.targetKind, name: preview.skillName }
     : resolveVirtualFileTarget(args);
-  if (target.kind === VIRTUAL_FILE_TARGET_KIND_SKILL) return [];
+  if (target.kind === VIRTUAL_FILE_ENVIRONMENT_KIND_SKILL) return [];
 
   const files = Array.isArray(preview?.files) ? preview.files : [];
   if (files.length <= 0) return [];

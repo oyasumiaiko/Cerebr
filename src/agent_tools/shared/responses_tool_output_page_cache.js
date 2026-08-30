@@ -38,26 +38,28 @@ export function createResponsesToolOutputPageCache(options = {}) {
     return cursor;
   }
 
-  function paginateSource(contentItems, maxOutputChars, rangeStart = 0) {
+  function paginateSource(contentItems, maxOutputChars, rangeStart = 0, format = 'xml') {
     const nextCursor = createUniqueCursor();
     const page = paginateResponsesToolOutputContentItems(contentItems, {
       maxOutputChars,
       rangeStart,
-      nextCursor
+      nextCursor,
+      format
     });
     if (page.nextCursor) {
       entries.set(page.nextCursor, {
         contentItems,
         rangeStart: page.rangeEnd,
-        maxOutputChars
+        maxOutputChars,
+        format
       });
     }
     return page;
   }
 
   return Object.freeze({
-    paginate(contentItems, maxOutputChars) {
-      return paginateSource(contentItems, maxOutputChars, 0);
+    paginate(contentItems, maxOutputChars, options = {}) {
+      return paginateSource(contentItems, maxOutputChars, 0, options?.format || 'xml');
     },
 
     read(cursor, maxOutputChars = null) {
@@ -67,7 +69,8 @@ export function createResponsesToolOutputPageCache(options = {}) {
       return paginateSource(
         entry.contentItems,
         maxOutputChars == null ? entry.maxOutputChars : maxOutputChars,
-        entry.rangeStart
+        entry.rangeStart,
+        entry.format
       );
     },
 

@@ -279,6 +279,18 @@ export function createIndexedDbSkillStore() {
       await transactionDone(transaction);
 
       if (!manifest) return null;
+      const expectedPaths = Array.isArray(manifest.files_meta)
+        ? manifest.files_meta.map((file) => String(file?.path || '')).sort()
+        : [];
+      const actualPaths = Array.isArray(files)
+        ? files.map((file) => String(file?.path || '')).sort()
+        : [];
+      if (
+        expectedPaths.length !== actualPaths.length
+        || expectedPaths.some((path, index) => path !== actualPaths[index])
+      ) {
+        throw new Error(`skill store 损坏：${skillName} 的 manifest 与文件记录不一致。`);
+      }
       return {
         ...cloneStructured(manifest),
         files: Array.isArray(files) ? files.map((file) => ({
@@ -289,17 +301,45 @@ export function createIndexedDbSkillStore() {
       };
     },
 
-    async savePackage(skillPackage) {
+    async savePackage(skillPackage, options = {}) {
       const pkg = cloneStructured(skillPackage);
       const db = await openSkillDb();
       const transaction = db.transaction([SKILL_MANIFEST_STORE, SKILL_FILE_STORE], 'readwrite');
       const manifestStore = transaction.objectStore(SKILL_MANIFEST_STORE);
       const fileStore = transaction.objectStore(SKILL_FILE_STORE);
+      const donePromise = transactionDone(transaction);
 
       const {
         files = [],
         ...manifest
       } = pkg || {};
+      const currentManifest = await requestToPromise(manifestStore.get(String(manifest?.name || '')));
+      const hasExpectedRevision = Object.prototype.hasOwnProperty.call(options, 'expectedRevision');
+      if (hasExpectedRevision) {
+        const expectedRevision = options.expectedRevision;
+        const currentRevision = currentManifest && Number.isSafeInteger(currentManifest.revision)
+          ? currentManifest.revision
+          : null;
+        const matches = expectedRevision === null
+          ? currentManifest == null
+          : Number.isSafeInteger(expectedRevision) && currentRevision === expectedRevision;
+        if (!matches) {
+          transaction.abort();
+          try {
+            await donePromise;
+          } catch (_) {}
+          const error = new Error(
+            expectedRevision === null
+              ? `Skill ${manifest?.name || '(unknown)'} already exists.`
+              : `Skill ${manifest?.name || '(unknown)'} revision changed from ${expectedRevision} to ${currentRevision ?? 'missing'}.`
+          );
+          error.code = 'SKILL_REVISION_CONFLICT';
+          error.state_changed = false;
+          error.expected_revision = expectedRevision;
+          error.actual_revision = currentRevision;
+          throw error;
+        }
+      }
       const filesMeta = (Array.isArray(files) ? files : []).map((file) => ({
         path: file.path,
         kind: file.kind
@@ -319,20 +359,40 @@ export function createIndexedDbSkillStore() {
           content: file.content
         });
       });
-      await transactionDone(transaction);
+      await donePromise;
       return cloneStructured(pkg);
     },
 
-    async deletePackage(skillName) {
+    async deletePackage(skillName, options = {}) {
       const normalizedName = String(skillName || '');
       const db = await openSkillDb();
       const transaction = db.transaction([SKILL_MANIFEST_STORE, SKILL_FILE_STORE], 'readwrite');
       const manifestStore = transaction.objectStore(SKILL_MANIFEST_STORE);
       const fileStore = transaction.objectStore(SKILL_FILE_STORE);
+      const donePromise = transactionDone(transaction);
+
+      if (Object.prototype.hasOwnProperty.call(options, 'expectedRevision')) {
+        const currentManifest = await requestToPromise(manifestStore.get(normalizedName));
+        const currentRevision = currentManifest && Number.isSafeInteger(currentManifest.revision)
+          ? currentManifest.revision
+          : null;
+        if (currentRevision !== options.expectedRevision) {
+          transaction.abort();
+          try {
+            await donePromise;
+          } catch (_) {}
+          const error = new Error(
+            `Skill ${normalizedName} revision changed from ${options.expectedRevision} to ${currentRevision ?? 'missing'}.`
+          );
+          error.code = 'SKILL_REVISION_CONFLICT';
+          error.state_changed = false;
+          throw error;
+        }
+      }
 
       manifestStore.delete(normalizedName);
       await deleteFilesBySkillName(fileStore, normalizedName);
-      await transactionDone(transaction);
+      await donePromise;
       return {
         ok: true,
         name: normalizedName

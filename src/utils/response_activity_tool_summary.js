@@ -58,12 +58,16 @@ function resolveSkillSummaryFilePath(args) {
 }
 
 function formatReadLineRangeSuffix(args) {
+  if (args?.start_line == null || args?.end_line == null) return '';
   const startLine = Number(args?.start_line);
   const endLine = Number(args?.end_line);
-  if (!Number.isFinite(startLine) || !Number.isFinite(endLine)) return '';
-  const normalizedStart = Math.max(1, Math.trunc(startLine));
-  const normalizedEnd = Math.max(normalizedStart, Math.trunc(endLine));
-  return `L${normalizedStart}-L${normalizedEnd}`;
+  if (
+    !Number.isSafeInteger(startLine)
+    || !Number.isSafeInteger(endLine)
+    || startLine < 1
+    || endLine < startLine
+  ) return '';
+  return `L${startLine}-L${endLine}`;
 }
 
 function buildApplyPatchSummaryParts(args, options = {}) {

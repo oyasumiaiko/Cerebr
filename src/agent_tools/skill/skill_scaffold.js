@@ -1,10 +1,9 @@
 /**
  * 统一管理浏览器 skill 脚手架模板。
  *
- * 这里承载三类“必须长期保持一致”的内容：
+ * 这里承载两类“必须长期保持一致”的内容：
  * 1. `create_skill` 真正生成的新 skill 模板文件；
  * 2. 内置 `skill-creator` 展示给模型查看的模板示例；
- * 3. 创建完成后返回给模型的 `next_steps`。
  *
  * 当前目标不是继续强化 Cerebr 专用 page runtime 模板，
  * 而是尽量贴近官方 Codex `init_skill.py` 的通用 skill 骨架：
@@ -71,7 +70,6 @@ export function buildDefaultSkillMountContract() {
     '`$invoke(skillName, methodName, ...args)` calls a top-level method; if an enabled matching page runtime skill is not mounted yet, Cerebr mounts it automatically and continues the same call.',
     'Typical call shape inside `js_runtime_execute`: `return await $invoke("skill-name", "methodName", args);`',
     '`mount_on_current_page` is not a prerequisite for `$invoke`; reserve it for explicit remounting or diagnostics.',
-    'Compatibility runtime registry: `globalThis.__cerebrSkills`.',
     'Runtime source files run as async CommonJS-like bodies with `ctx`, `module`, `exports`, `require` available.',
     '`require()` is async in this runtime, so helper imports should use `await require("./helper.js")`.',
     'Entry file can `return { methods... }`, or assign `module.exports = { ... }`; advanced style: call `ctx.mount(exports)` manually.',
@@ -304,25 +302,4 @@ export function buildSkillScaffoldInput(options = {}) {
       examples
     })
   };
-}
-
-export function buildSkillScaffoldNextSteps(options = {}) {
-  const resources = Array.isArray(options.resources) ? options.resources : [];
-  const enabled = options.enabled === true;
-  const examples = options.examples === true;
-  const resourceText = resources.length > 0 ? resources.map((value) => `${value}/`).join(', ') : 'scripts/, references/, assets/';
-
-  return [
-    'Edit SKILL.md: keep the stable name, put all trigger conditions in description, and replace every TODO with concise workflow or decision guidance.',
-    examples
-      ? `Replace or delete the placeholder files created under ${resourceText}.`
-      : `Add concrete files under ${resourceText} only when the skill actually needs them.`,
-    'Keep SKILL.md frontmatter description aligned with manifest.json.description, and keep Cerebr UI metadata in manifest.json.interface.',
-    'Read the changed files back, remove unused placeholders and extra documentation, and verify every referenced path exists.',
-    'Forward-test complex skills with realistic requests and raw artifacts when an independent review surface is available; do not leak the expected answer.',
-    'If this skill later needs browser runtime code, patch manifest.json to add match and runtime.entry_path, then add the corresponding JS files with apply_patch.',
-    enabled
-      ? 'If you intentionally enabled the skill already, verify the summary and files first; call runtime methods directly through $invoke, which mounts matching page runtime skills automatically.'
-      : 'When the skill is ready, call enable_skill; runtime calls through $invoke mount matching page runtime skills automatically, so no separate mount step is required.'
-  ];
 }

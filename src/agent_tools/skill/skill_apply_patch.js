@@ -18,12 +18,10 @@
 import {
   buildStoredSkillRecord,
   SKILL_VIRTUAL_MANIFEST_PATH,
+  assertCanonicalSkillName,
   normalizeSkillFilePath,
-  normalizeSkillName,
   parseSkillVirtualManifestContent,
   normalizeStoredSkillRecord,
-  pickDefaultSkillInstructionPath,
-  pickDefaultSkillRuntimeEntryPath,
   serializeSkillVirtualManifest
 } from './registry_tool.js';
 import {
@@ -82,7 +80,15 @@ export function resolveSkillApplyPatchTarget(patchOrParsed) {
       error.stage = 'select_environment';
       throw error;
     }
-    const skillName = normalizeSkillName(environmentId.slice('skill:'.length));
+    const skillName = assertCanonicalSkillName(environmentId.slice('skill:'.length), {
+      label: 'apply_patch Environment ID'
+    });
+    if (environmentId !== `skill:${skillName}`) {
+      const error = new Error(`Invalid apply_patch environment \`${environmentId}\`; expected \`skill:${skillName}\`.`);
+      error.code = 'APPLY_PATCH_ENVIRONMENT_ID_INVALID';
+      error.stage = 'select_environment';
+      throw error;
+    }
     return {
       parsed,
       environment_id: environmentId,
@@ -216,8 +222,6 @@ export function prepareSkillPackagePatch(record, patch) {
     }
 
     const nextFiles = cloneFiles(skill.files);
-    let instructionPath = skill.instruction.path;
-    let runtimeEntryPath = skill.runtime.entry_path;
     let manifestInput = null;
     const affectedFiles = {
       added: [],
@@ -248,20 +252,12 @@ export function prepareSkillPackagePatch(record, patch) {
           throw new Error(`Prepared apply_patch source disappeared before commit: ${operation.source_path}`);
         }
         nextFiles.splice(sourceIndex, 1);
-        if (instructionPath === operation.source_path) instructionPath = null;
-        if (runtimeEntryPath === operation.source_path) runtimeEntryPath = null;
         affectedFiles.deleted.push(operation.source_path);
         continue;
       }
 
       if (operation.type === 'update_manifest') {
         manifestInput = operation.manifest_input;
-        if (manifestInput?.instruction?.path) {
-          instructionPath = manifestInput.instruction.path;
-        }
-        if (Object.prototype.hasOwnProperty.call(manifestInput?.runtime || {}, 'entry_path')) {
-          runtimeEntryPath = manifestInput.runtime.entry_path;
-        }
         affectedFiles.modified.push(operation.source_path);
         continue;
       }
@@ -285,30 +281,15 @@ export function prepareSkillPackagePatch(record, patch) {
         } else {
           nextFiles[sourceIndex] = nextFile;
         }
-        if (instructionPath === operation.source_path) instructionPath = operation.target_path;
-        if (runtimeEntryPath === operation.source_path) runtimeEntryPath = operation.target_path;
       }
       affectedFiles.modified.push(operation.target_path);
-    }
-
-    if (instructionPath && findFileIndex(nextFiles, instructionPath) < 0) {
-      instructionPath = pickDefaultSkillInstructionPath(nextFiles);
-    }
-    if (runtimeEntryPath && findFileIndex(nextFiles, runtimeEntryPath) < 0) {
-      runtimeEntryPath = pickDefaultSkillRuntimeEntryPath(nextFiles);
     }
 
     const nextRecord = buildStoredSkillRecord({
       ...skill,
       ...(manifestInput || {}),
-      instruction: {
-        path: manifestInput?.instruction?.path ?? instructionPath
-      },
-      runtime: {
-        entry_path: Object.prototype.hasOwnProperty.call(manifestInput?.runtime || {}, 'entry_path')
-          ? manifestInput.runtime.entry_path
-          : runtimeEntryPath
-      },
+      instruction: manifestInput?.instruction || skill.instruction,
+      runtime: manifestInput?.runtime || skill.runtime,
       files: nextFiles
     }, skill);
 
@@ -333,6 +314,3 @@ export function prepareSkillPackagePatch(record, patch) {
     });
   }
 }
-
-// 兼容现有内部导入；语义已经是“只 prepare，不持久化”。
-export const applySkillPackagePatch = prepareSkillPackagePatch;

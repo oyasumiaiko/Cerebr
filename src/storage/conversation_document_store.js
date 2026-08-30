@@ -31,33 +31,67 @@ function cloneStructured(value) {
 }
 
 function normalizeStoredConversationDocument(rawRecord) {
-  if (!rawRecord || typeof rawRecord !== 'object') return null;
+  if (rawRecord == null) return null;
+  if (typeof rawRecord !== 'object' || Array.isArray(rawRecord)) {
+    throw new Error('conversation document store 包含非 object 记录。');
+  }
   const conversationId = typeof rawRecord.conversation_id === 'string'
     ? rawRecord.conversation_id.trim()
     : '';
   const path = typeof rawRecord.path === 'string'
     ? rawRecord.path.trim()
     : '';
-  if (!conversationId || !path) return null;
+  if (!conversationId || !path) {
+    throw new Error('conversation document store 记录缺少 conversation_id 或 path。');
+  }
+  if (typeof rawRecord.content !== 'string') {
+    throw new Error(`conversation document store 中的 ${path} 缺少字符串 content。`);
+  }
   return {
     conversation_id: conversationId,
     path,
-    content: typeof rawRecord.content === 'string' ? rawRecord.content : '',
+    content: rawRecord.content,
     updated_at: typeof rawRecord.updated_at === 'string' ? rawRecord.updated_at : new Date().toISOString(),
     size_chars: Number.isFinite(Number(rawRecord.size_chars))
       ? Math.max(0, Math.trunc(Number(rawRecord.size_chars)))
-      : Array.from(typeof rawRecord.content === 'string' ? rawRecord.content : '').length
+      : Array.from(rawRecord.content).length
   };
+}
+
+function normalizeConversationDocumentSet(conversationId, documents) {
+  if (!Array.isArray(documents)) {
+    throw new Error('conversation document store 写入值必须是数组。');
+  }
+  const seenPaths = new Set();
+  const normalized = documents.map((doc) => normalizeStoredConversationDocument({
+    conversation_id: conversationId,
+    ...cloneStructured(doc)
+  }));
+  for (const documentRecord of normalized) {
+    if (seenPaths.has(documentRecord.path)) {
+      throw new Error(`conversation document store 写入包含重复路径 ${documentRecord.path}。`);
+    }
+    seenPaths.add(documentRecord.path);
+  }
+  return normalized.sort((left, right) => left.path.localeCompare(right.path));
 }
 
 async function collectDocumentsByConversationId(store, conversationId) {
   const index = store.index('conversation_id');
   const range = IDBKeyRange.only(String(conversationId || ''));
   const rows = await requestToPromise(index.getAll(range));
-  return (Array.isArray(rows) ? rows : [])
-    .map(normalizeStoredConversationDocument)
-    .filter(Boolean)
-    .sort((left, right) => left.path.localeCompare(right.path));
+  if (!Array.isArray(rows)) {
+    throw new Error('conversation document store 读取结果不是数组。');
+  }
+  const normalized = rows.map(normalizeStoredConversationDocument);
+  const seenPaths = new Set();
+  for (const documentRecord of normalized) {
+    if (seenPaths.has(documentRecord.path)) {
+      throw new Error(`conversation document store 包含重复路径 ${documentRecord.path}。`);
+    }
+    seenPaths.add(documentRecord.path);
+  }
+  return normalized.sort((left, right) => left.path.localeCompare(right.path));
 }
 
 async function deleteDocumentsByConversationIdInTransaction(store, conversationId) {
@@ -121,13 +155,7 @@ export async function replaceConversationDocuments(conversationId, documents) {
   if (!normalizedConversationId) {
     throw new Error('replaceConversationDocuments 缺少 conversationId。');
   }
-  const normalizedDocs = (Array.isArray(documents) ? documents : [])
-    .map((doc) => normalizeStoredConversationDocument({
-      conversation_id: normalizedConversationId,
-      ...cloneStructured(doc)
-    }))
-    .filter(Boolean)
-    .sort((left, right) => left.path.localeCompare(right.path));
+  const normalizedDocs = normalizeConversationDocumentSet(normalizedConversationId, documents);
 
   const db = await openChatHistoryDB();
   const transaction = db.transaction(CONVERSATION_DOCUMENT_STORE, 'readwrite');
@@ -137,6 +165,54 @@ export async function replaceConversationDocuments(conversationId, documents) {
   normalizedDocs.forEach((doc) => store.put(doc));
   await donePromise;
   return normalizedDocs.map(cloneStructured);
+}
+
+/**
+ * 在同一个 readwrite 事务中读取、验证并替换一个对话的完整文件集合。
+ * mutator 必须是同步纯函数，返回 `{ documents, value }`；任何异常都会在写入前中止。
+ */
+export async function mutateConversationDocuments(conversationId, mutator) {
+  const normalizedConversationId = String(conversationId || '').trim();
+  if (!normalizedConversationId) {
+    throw new Error('mutateConversationDocuments 缺少 conversationId。');
+  }
+  if (typeof mutator !== 'function') {
+    throw new Error('mutateConversationDocuments 缺少同步 mutator。');
+  }
+  const db = await openChatHistoryDB();
+  const transaction = db.transaction(CONVERSATION_DOCUMENT_STORE, 'readwrite');
+  const store = transaction.objectStore(CONVERSATION_DOCUMENT_STORE);
+  const donePromise = transactionDone(transaction);
+  try {
+    const currentDocuments = await collectDocumentsByConversationId(store, normalizedConversationId);
+    const prepared = mutator(currentDocuments.map(cloneStructured));
+    if (prepared && typeof prepared.then === 'function') {
+      throw new Error('mutateConversationDocuments mutator 必须同步返回。');
+    }
+    if (!prepared || typeof prepared !== 'object' || Array.isArray(prepared)) {
+      throw new Error('mutateConversationDocuments mutator 必须返回 { documents, value }。');
+    }
+    const nextDocuments = normalizeConversationDocumentSet(
+      normalizedConversationId,
+      prepared.documents
+    );
+    await deleteDocumentsByConversationIdInTransaction(store, normalizedConversationId);
+    nextDocuments.forEach((documentRecord) => store.put(documentRecord));
+    await donePromise;
+    return {
+      documents: nextDocuments.map(cloneStructured),
+      value: cloneStructured(prepared.value)
+    };
+  } catch (error) {
+    try {
+      transaction.abort();
+    } catch (_) {}
+    try {
+      await donePromise;
+    } catch (_) {}
+    if (error && typeof error === 'object') error.state_changed = false;
+    throw error;
+  }
 }
 
 export async function deleteConversationDocument(conversationId, path) {

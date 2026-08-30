@@ -776,10 +776,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message?.type === 'SKILL_REGISTRY_ACTION') {
+  if (message?.type === 'VIRTUAL_FILE_ACTION') {
     (async () => {
       try {
-        const isolateFromHostPage = message?.isolateFromHostPage === true;
         const rawPayload = (message?.payload && typeof message.payload === 'object')
           ? message.payload
           : {};
@@ -791,16 +790,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             });
           }
         }
-        const refreshCurrentDocument = rawPayload.refresh_current_document !== false;
-        if (refreshCurrentDocument) {
-          await ensureSkillManagerReady();
-        }
         const {
-          refresh_current_document: _refreshCurrentDocument,
           runtime_contract: _runtimeContract,
-          ...registryPayload
+          ...virtualFilePayload
         } = rawPayload;
-        const targetTabId = isolateFromHostPage || !refreshCurrentDocument
+        const result = await skillManager.executeVirtualFileAction(virtualFilePayload);
+        sendResponse({ success: true, ...result });
+      } catch (error) {
+        sendResponse(buildBackgroundErrorResponse(error, '虚拟文件操作失败。'));
+      }
+    })();
+    return true;
+  }
+
+  if (message?.type === 'SKILL_REGISTRY_ACTION') {
+    (async () => {
+      try {
+        const isolateFromHostPage = message?.isolateFromHostPage === true;
+        const registryPayload = (message?.payload && typeof message.payload === 'object')
+          ? message.payload
+          : {};
+        const targetTabId = isolateFromHostPage
           ? null
           : resolveSidebarRequestTargetTabId({
               explicitTabId: message?.tabId,
@@ -821,7 +831,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'GET_MATCHING_SKILL_SUMMARIES') {
     (async () => {
       try {
-        await ensureSkillManagerReady();
         const standaloneSidebar = typeof sender?.url === 'string' && sender.url.includes('#standalone');
         const isolateFromHostPage = standaloneSidebar || message?.isolateFromHostPage === true;
         const targetTabId = standaloneSidebar
@@ -1401,7 +1410,6 @@ if (chrome?.runtime?.onUserScriptMessage?.addListener) {
           throw new Error('自动挂载 skill 失败：消息没有有效的宿主 tab。');
         }
 
-        await ensureSkillManagerReady();
         const mountResult = await skillManager.mountSkillOnCurrentPage(skillName, {
           tabId,
           explicitUrl: typeof sender?.url === 'string' ? sender.url : null,
@@ -1443,8 +1451,7 @@ if (chrome?.webNavigation?.onHistoryStateUpdated?.addListener) {
   chrome.webNavigation.onHistoryStateUpdated.addListener((details) => {
     if (Number(details?.frameId) !== 0) return;
     if (!Number.isFinite(Number(details?.tabId))) return;
-    void ensureSkillManagerReady()
-      .then(() => skillManager.syncCurrentDocumentSkills(Number(details.tabId), details.url || ''))
+    void skillManager.syncCurrentDocumentSkills(Number(details.tabId), details.url || '')
       .catch((error) => {
         console.warn('同页导航后同步skill 失败:', error);
       });

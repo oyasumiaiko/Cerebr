@@ -15,11 +15,10 @@ import {
   shouldAutoCompleteRequestUserInput
 } from '../../utils/request_user_input_interaction.js';
 import {
-  VIRTUAL_FILE_TARGET_KIND_ROOT,
   buildConversationDocumentActionPayloadFromVirtualFileAction,
-  buildSkillRegistryFileActionPayloadFromVirtualFileAction,
+  buildSkillVirtualFileActionPayload,
   executeConversationDocumentAction,
-  normalizeVirtualFileResultFromSkillRegistryAction,
+  normalizeVirtualFileResultFromSkillAction,
   normalizeVirtualFileToolArguments
 } from '../../agent_tools/virtual_file_io/index.js';
 import {
@@ -42,12 +41,7 @@ const JS_RUNTIME_EXECUTION_TIMEOUT_MS = 30000;
 const JS_RUNTIME_EXECUTION_RESPONSE_GRACE_MS = 1000;
 const SKILL_REGISTRY_READ_TIMEOUT_MS = 10000;
 const SKILL_REGISTRY_READ_ACTIONS = new Set([
-  'list',
-  'list_files',
-  'search_files',
-  'read_detail',
-  'read_package',
-  'read_file'
+  'list'
 ]);
 const JS_RUNTIME_RUNNER_MESSAGE_FLAG = '__cerebrJsRuntimeRunner';
 
@@ -1637,7 +1631,7 @@ export function registerSidebarUtilities(appContext) {
    *
    * 说明：
    * - 所有真正会改 registry / skill 生命周期的动作都交给 background；
-   * - sidebar 只负责把当前绑定 tabId 一并传过去，供 refresh 当前文档使用。
+   * - sidebar 只负责把当前绑定 tabId 一并传过去，供当前页筛选和显式挂载使用。
    */
   appContext.utils.executeSkillRegistryAction = async (payload = {}) => {
     if (!chrome?.runtime?.sendMessage) {
@@ -1671,13 +1665,35 @@ export function registerSidebarUtilities(appContext) {
     }
   };
 
+  appContext.utils.executeSkillVirtualFileAction = async (payload = {}) => {
+    if (!chrome?.runtime?.sendMessage) {
+      return {
+        success: false,
+        error: '当前环境不支持 chrome.runtime.sendMessage'
+      };
+    }
+    try {
+      return await raceWithTimeout(
+        chrome.runtime.sendMessage({
+          type: 'VIRTUAL_FILE_ACTION',
+          payload: (payload && typeof payload === 'object' && !Array.isArray(payload)) ? payload : {}
+        }),
+        SKILL_REGISTRY_READ_TIMEOUT_MS,
+        '执行 Skill 虚拟文件操作超时'
+      );
+    } catch (error) {
+      return {
+        success: false,
+        error: error?.message || '执行 Skill 虚拟文件操作失败'
+      };
+    }
+  };
+
   appContext.utils.executeVirtualFileAction = async (action, payload = {}) => {
     try {
-      const normalizedArgs = normalizeVirtualFileToolArguments(action, payload, {
-        defaultTargetKind: VIRTUAL_FILE_TARGET_KIND_ROOT
-      });
+      const normalizedArgs = normalizeVirtualFileToolArguments(action, payload);
 
-      if (normalizedArgs.target.kind === VIRTUAL_FILE_TARGET_KIND_ROOT) {
+      if (normalizedArgs.environment.kind === 'root') {
         const conversationId = appContext.services.chatHistoryUI?.getCurrentConversationId?.();
         if (!conversationId) {
           return {
@@ -1696,17 +1712,17 @@ export function registerSidebarUtilities(appContext) {
         );
       }
 
-      const skillResult = await appContext.utils.executeSkillRegistryAction(
-        buildSkillRegistryFileActionPayloadFromVirtualFileAction(action, normalizedArgs)
+      const skillResult = await appContext.utils.executeSkillVirtualFileAction(
+        buildSkillVirtualFileActionPayload(action, normalizedArgs)
       );
       if (skillResult?.success === true) {
         const output = { ...skillResult };
         delete output.success;
-        return normalizeVirtualFileResultFromSkillRegistryAction(action, output, normalizedArgs);
+        return normalizeVirtualFileResultFromSkillAction(action, output, normalizedArgs);
       }
       return {
         ok: false,
-        target: normalizedArgs.target,
+        environment: normalizedArgs.environment,
         error: {
           message: (typeof skillResult?.error === 'string' && skillResult.error.trim())
             ? skillResult.error.trim()

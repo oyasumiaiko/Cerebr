@@ -3,7 +3,7 @@
  *
  * 说明：
  * - 顶层公开给模型的文件工具统一为 `apply_patch` / `list_files` / `read_file` / `search_files` / `copy_file`；
- * - 默认根就是当前对话文件根；只有访问 skill 时才通过结构化 `target` 选择其他根；
+ * - 默认根就是当前对话文件根；Skill 通过 `environment_id=skill:<stable-key>` 选择；
  * - 默认根中的本机只读映射通过显式 `local/...` 路径进入；
  * - 会话文件仍在侧栏本地 IndexedDB 执行；local 文件实时读取用户授权 handle；skill 文件复用现有 skill package / background 执行链路；
  * - UI 为了编辑对话文档与完整查看，会额外复用 `write_file` / `read_file_full` 两个内部 action。
@@ -29,46 +29,45 @@ import {
 import {
   getConversationDocument,
   listConversationDocuments,
-  putConversationDocument,
-  replaceConversationDocuments
+  mutateConversationDocuments,
+  putConversationDocument
 } from '../../storage/conversation_document_store.js';
 import { listLocalFileMounts } from '../../storage/local_file_mount_store.js';
 import {
   CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
   CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME,
   CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
-  CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_INTERNAL_READ_FILE_FULL_ACTION,
   CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION,
   CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
-  CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
   VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
   VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
-  VIRTUAL_FILE_DELETE_FILE_TOOL_NAME,
   VIRTUAL_FILE_INTERNAL_ACTIONS,
   VIRTUAL_FILE_LIST_FILES_TOOL_NAME,
-  VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
   VIRTUAL_FILE_PUBLIC_ACTIONS,
   VIRTUAL_FILE_READ_FILE_TOOL_NAME,
   VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME,
-  VIRTUAL_FILE_TARGET_KIND_ROOT,
-  VIRTUAL_FILE_TARGET_KIND_LOCAL,
-  VIRTUAL_FILE_TARGET_KIND_SKILL,
+  VIRTUAL_FILE_ENVIRONMENT_KIND_ROOT,
+  VIRTUAL_FILE_ENVIRONMENT_KIND_LOCAL,
+  VIRTUAL_FILE_ENVIRONMENT_KIND_SKILL,
+  assertOnlyObjectKeys,
+  assertPlainObject,
   buildDocumentSizeChars,
-  clampNonNegativeInt,
-  clampPositiveInt,
-  ensurePlainObject,
-  formatPercent,
-  normalizeOptionalString,
   normalizeString,
   toIsoTimestamp
 } from './shared.js';
 import {
-  buildVirtualFileTargetSummary,
-  normalizeVirtualFileTarget
-} from './target.js';
+  normalizeVirtualFileEnvironmentId,
+  summarizeVirtualFileEnvironment
+} from './environment.js';
+import {
+  buildVirtualTextReadResult,
+  normalizeVirtualFileLineRange,
+  readNullableSafeInteger,
+  searchVirtualTextDocuments
+} from './text_query.js';
 import {
   buildConversationDocumentCollisionPath,
   normalizeConversationDocumentHrefPath,
@@ -112,27 +111,23 @@ export {
   CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
   CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME,
   CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
-  CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_INTERNAL_READ_FILE_FULL_ACTION,
   CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION,
   CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
-  CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
   CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
   VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
   VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
-  VIRTUAL_FILE_DELETE_FILE_TOOL_NAME,
   VIRTUAL_FILE_LIST_FILES_TOOL_NAME,
-  VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
   VIRTUAL_FILE_READ_FILE_TOOL_NAME,
   VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME,
-  VIRTUAL_FILE_TARGET_KIND_ROOT,
-  VIRTUAL_FILE_TARGET_KIND_LOCAL,
-  VIRTUAL_FILE_TARGET_KIND_SKILL
+  VIRTUAL_FILE_ENVIRONMENT_KIND_ROOT,
+  VIRTUAL_FILE_ENVIRONMENT_KIND_LOCAL,
+  VIRTUAL_FILE_ENVIRONMENT_KIND_SKILL
 };
 
 export {
-  normalizeVirtualFileTarget,
+  normalizeVirtualFileEnvironmentId,
   normalizeConversationDocumentPath,
   normalizeConversationDocumentHrefPath,
   buildConversationDocumentCollisionPath,
@@ -157,268 +152,9 @@ function normalizeConversationId(value) {
   return text;
 }
 
-function normalizeReadTextLineEndings(text) {
-  return String(text ?? '').replace(/\r\n?/g, '\n');
-}
-
-function splitLogicalLines(text) {
-  const normalized = normalizeReadTextLineEndings(text);
-  const lines = normalized.split('\n');
-  if (lines.length > 0 && lines[lines.length - 1] === '') {
-    lines.pop();
-  }
-  return { text: normalized, lines };
-}
-
-function countLogicalLines(text) {
-  return splitLogicalLines(text).lines.length;
-}
-
-function countLogicalLinesBeforeChar(text, offset) {
-  const normalized = normalizeReadTextLineEndings(String(text ?? '').slice(0, Math.max(0, Math.trunc(Number(offset) || 0))));
-  if (!normalized) return 1;
-  return normalized.split('\n').length;
-}
-
-function normalizeConversationDocumentReadRangeArgs(rawArgs, options = {}) {
-  const args = ensurePlainObject(rawArgs);
-  const allowLineRange = options?.allowLineRange === true;
-  const explicitMode = normalizeString(args.mode).toLowerCase();
-  const hasSkipChars = args.skip_chars != null;
-  const hasStartLine = args.start_line != null;
-  const hasEndLine = args.end_line != null;
-
-  if ((hasStartLine || hasEndLine) && hasSkipChars) {
-    throw new Error('virtual_file 参数错误：不能同时使用字符区间和行区间读取参数。');
-  }
-  if (!allowLineRange && (hasStartLine || hasEndLine)) {
-    throw new Error('virtual_file 参数错误：当前 action 不支持 start_line / end_line。');
-  }
-  if (allowLineRange && (hasStartLine || hasEndLine) && !(hasStartLine && hasEndLine)) {
-    throw new Error('virtual_file 参数错误：使用行区间读取时，start_line 与 end_line 需要同时提供。');
-  }
-
-  const skipChars = hasSkipChars ? clampNonNegativeInt(args.skip_chars, 0) : null;
-  if (explicitMode === 'preview' || explicitMode === 'full') {
-    return {
-      mode: 'full',
-      skip_chars: 0,
-      start_line: null,
-      end_line: null
-    };
-  }
-
-  if (hasStartLine || hasEndLine) {
-    const startLine = clampPositiveInt(args.start_line, 1);
-    const endLine = clampPositiveInt(args.end_line, startLine);
-    if (endLine < startLine) {
-      throw new Error('virtual_file 参数错误：end_line 不能小于 start_line。');
-    }
-    return {
-      mode: 'line_range',
-      skip_chars: null,
-      start_line: startLine,
-      end_line: endLine
-    };
-  }
-
-  if (hasSkipChars) {
-    return {
-      mode: 'char_range',
-      skip_chars: skipChars ?? 0,
-      start_line: null,
-      end_line: null
-    };
-  }
-
-  return {
-    mode: 'full',
-    skip_chars: 0,
-    start_line: null,
-    end_line: null
-  };
-}
-
-function buildConversationDocumentReadResult(text, rawArgs, options = {}) {
-  const sourceText = String(text ?? '');
-  const range = normalizeConversationDocumentReadRangeArgs(rawArgs, {
-    allowLineRange: options?.allowLineRange === true
-  });
-  const totalChars = sourceText.length;
-  const totalLines = countLogicalLines(sourceText);
-
-  if (range.mode === 'line_range') {
-    const { text: normalizedText, lines } = splitLogicalLines(sourceText);
-    const totalLogicalLines = lines.length;
-    const requestedStartLine = Math.min(range.start_line, Math.max(1, totalLogicalLines || 1));
-    const requestedEndLine = Math.min(
-      Math.max(requestedStartLine, range.end_line),
-      Math.max(requestedStartLine, totalLogicalLines || requestedStartLine)
-    );
-
-    const lineStartOffsets = [];
-    let cursor = 0;
-    for (let index = 0; index < lines.length; index += 1) {
-      lineStartOffsets.push(cursor);
-      cursor += lines[index].length + 1;
-    }
-    const startOffset = totalLogicalLines > 0 ? lineStartOffsets[requestedStartLine - 1] : 0;
-    const endOffset = totalLogicalLines > 0
-      ? (requestedEndLine < totalLogicalLines ? lineStartOffsets[requestedEndLine] : normalizedText.length)
-      : 0;
-    const content = normalizedText.slice(startOffset, endOffset);
-    const returnedLineCount = requestedEndLine >= requestedStartLine ? (requestedEndLine - requestedStartLine + 1) : 0;
-    const omittedChars = Math.max(0, totalChars - content.length);
-
-    return {
-      mode: 'line_range',
-      total_chars: totalChars,
-      total_lines: totalLines,
-      start_line: requestedStartLine,
-      end_line: requestedEndLine,
-      returned_line_count: returnedLineCount,
-      returned_chars: content.length,
-      omitted_chars: omittedChars,
-      omitted_pct: formatPercent(omittedChars, totalChars),
-      truncated: omittedChars > 0,
-      has_more_after_range: requestedEndLine < totalLogicalLines,
-      content
-    };
-  }
-
-  const start = Math.min(range.skip_chars, totalChars);
-  const content = sourceText.slice(start);
-
-  return {
-    mode: range.mode,
-    total_chars: totalChars,
-    total_lines: totalLines,
-    skip_chars: start,
-    returned_chars: content.length,
-    omitted_chars: start,
-    omitted_pct: formatPercent(start, totalChars),
-    truncated: false,
-    has_more_after_range: false,
-    content
-  };
-}
-
-function buildConversationDocumentNumberedContent(text, readResult) {
-  const sourceText = String(text ?? '');
-  const returnedText = normalizeReadTextLineEndings(readResult?.content || '');
-  if (!returnedText) return '';
-
-  const lines = returnedText.split('\n');
-  if (lines.length > 0 && lines[lines.length - 1] === '') {
-    lines.pop();
-  }
-  if (lines.length <= 0) return '';
-
-  let firstLineNumber = 1;
-  if (readResult?.mode === 'line_range' && Number.isFinite(Number(readResult?.start_line))) {
-    firstLineNumber = Math.max(1, Math.trunc(Number(readResult.start_line)));
-  } else if (Number.isFinite(Number(readResult?.skip_chars))) {
-    firstLineNumber = countLogicalLinesBeforeChar(sourceText, readResult.skip_chars);
-  }
-
-  const width = String(firstLineNumber + lines.length - 1).length;
-  return lines
-    .map((line, index) => `${String(firstLineNumber + index).padStart(width, ' ')} | ${line}`)
-    .join('\n');
-}
-
-function normalizeSearchCaseMode(value) {
-  const text = normalizeString(value).toLowerCase();
-  if (!text || text === 'smart') return 'smart';
-  if (text === 'sensitive' || text === 'insensitive') return text;
-  throw new Error(`virtual_file 参数错误：不支持的 case_mode \`${value}\`。`);
-}
-
-function normalizeContextLineCount(value) {
-  if (value == null) return 0;
-  return Math.max(0, Math.min(10, clampNonNegativeInt(value, 0)));
-}
-
-function normalizeSearchPathGlob(value) {
-  return normalizeVirtualPathFilter(value, { label: 'path_glob' });
-}
-
-function resolveSearchFlags(pattern, options = {}) {
-  const regex = options?.regex === true;
-  const caseMode = normalizeSearchCaseMode(options?.case_mode);
-  const hasUppercase = /[A-Z]/.test(pattern);
-  const caseSensitive = caseMode === 'sensitive' || (caseMode === 'smart' && hasUppercase);
-  return {
-    regex,
-    case_mode: caseMode,
-    case_sensitive: caseSensitive
-  };
-}
-
-function buildSearchContextSlice(lines, startIndex, endExclusive) {
-  const slice = [];
-  for (let index = startIndex; index < endExclusive; index += 1) {
-    if (index < 0 || index >= lines.length) continue;
-    slice.push({
-      line_number: index + 1,
-      text: lines[index]
-    });
-  }
-  return slice;
-}
-
-function findFixedStringMatches(lineText, needle, caseSensitive) {
-  const matches = [];
-  if (!needle) return matches;
-  const source = String(lineText ?? '');
-  const haystack = caseSensitive ? source : source.toLocaleLowerCase();
-  const searchNeedle = caseSensitive ? needle : needle.toLocaleLowerCase();
-  let startIndex = 0;
-  while (startIndex <= haystack.length) {
-    const foundIndex = haystack.indexOf(searchNeedle, startIndex);
-    if (foundIndex < 0) break;
-    matches.push({
-      start: foundIndex,
-      end: foundIndex + searchNeedle.length,
-      text: source.slice(foundIndex, foundIndex + searchNeedle.length)
-    });
-    startIndex = foundIndex + Math.max(1, searchNeedle.length);
-  }
-  return matches;
-}
-
-function findRegexMatches(lineText, pattern, caseSensitive) {
-  const source = String(lineText ?? '');
-  const flags = caseSensitive ? 'g' : 'gi';
-  const regex = new RegExp(pattern, flags);
-  const matches = [];
-  let match = regex.exec(source);
-  while (match) {
-    const fullMatch = String(match[0] ?? '');
-    const start = Number(match.index) || 0;
-    matches.push({
-      start,
-      end: start + fullMatch.length,
-      text: fullMatch
-    });
-    if (fullMatch.length <= 0) {
-      regex.lastIndex = start + 1;
-    }
-    match = regex.exec(source);
-  }
-  return matches;
-}
-
-function collectMatchesForLine(lineText, pattern, options = {}) {
-  if (options?.regex === true) {
-    return findRegexMatches(lineText, pattern, options.case_sensitive === true);
-  }
-  return findFixedStringMatches(lineText, pattern, options.case_sensitive === true);
-}
-
 function buildDocumentManifest(documents, options = {}) {
-  const pathGlob = normalizeSearchPathGlob(options?.path_glob);
-  const files = normalizeDocumentRecords(documents)
+  const pathGlob = normalizeVirtualPathFilter(options?.path_glob, { label: 'path_glob' });
+  const files = normalizeDocumentRecords(documents, { requireContent: false })
     .filter((doc) => matchesVirtualPathFilter(doc.path, pathGlob))
     .sort((left, right) => left.path.localeCompare(right.path))
     .map((doc) => {
@@ -439,70 +175,14 @@ function buildDocumentManifest(documents, options = {}) {
   };
 }
 
-function searchConversationDocuments(documents, rawOptions = {}) {
-  const pattern = normalizeString(rawOptions.pattern);
-  if (!pattern) {
-    throw new Error('virtual_file 参数错误：search_files 时 pattern 不能为空。');
+function normalizeDocumentRecord(rawDocument, fallbackUpdatedAt = null, options = {}) {
+  if (!rawDocument || typeof rawDocument !== 'object' || Array.isArray(rawDocument)) {
+    throw new Error('conversation file store 包含非 object 记录。');
   }
-
-  const searchFlags = resolveSearchFlags(pattern, rawOptions);
-  if (searchFlags.regex === true) {
-    try {
-      new RegExp(pattern, searchFlags.case_sensitive ? 'g' : 'gi');
-    } catch (error) {
-      throw new Error(`virtual_file 参数错误：无效的正则 pattern：${error?.message || error}`);
-    }
-  }
-  const contextBefore = normalizeContextLineCount(rawOptions.context_before);
-  const contextAfter = normalizeContextLineCount(rawOptions.context_after);
-  const pathGlob = normalizeSearchPathGlob(rawOptions.path_glob);
-
-  const matches = [];
-  let totalMatches = 0;
-
-  for (const documentRecord of normalizeDocumentRecords(documents)) {
-    if (!matchesVirtualPathFilter(documentRecord.path, pathGlob)) {
-      continue;
-    }
-    const { lines } = splitLogicalLines(documentRecord.content || '');
-    for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
-      const lineText = lines[lineIndex];
-      const lineMatches = collectMatchesForLine(lineText, pattern, searchFlags);
-      for (const lineMatch of lineMatches) {
-        totalMatches += 1;
-        matches.push({
-          match_id: `m${matches.length + 1}`,
-          file_path: documentRecord.path,
-          line_number: lineIndex + 1,
-          column_start: lineMatch.start + 1,
-          column_end: Math.max(lineMatch.start + 1, lineMatch.end),
-          match_text: lineMatch.text,
-          line_text: lineText,
-          before: buildSearchContextSlice(lines, lineIndex - contextBefore, lineIndex),
-          after: buildSearchContextSlice(lines, lineIndex + 1, lineIndex + 1 + contextAfter)
-        });
-      }
-    }
-  }
-
-  return {
-    pattern,
-    regex: searchFlags.regex,
-    case_mode: searchFlags.case_mode,
-    case_sensitive: searchFlags.case_sensitive,
-    path_glob: pathGlob,
-    context_before: contextBefore,
-    context_after: contextAfter,
-    max_results: null,
-    total_matches: totalMatches,
-    returned_match_count: matches.length,
-    truncated: totalMatches > matches.length,
-    matches
-  };
-}
-
-function normalizeDocumentRecord(rawDocument, fallbackUpdatedAt = null) {
   const path = normalizeConversationDocumentPath(rawDocument.path);
+  if (options?.requireContent !== false && typeof rawDocument.content !== 'string') {
+    throw new Error(`conversation file store 中的 ${path} 缺少字符串 content。`);
+  }
   const content = typeof rawDocument.content === 'string' ? rawDocument.content : '';
   return {
     path,
@@ -512,28 +192,21 @@ function normalizeDocumentRecord(rawDocument, fallbackUpdatedAt = null) {
   };
 }
 
-function normalizeDocumentRecordSafe(rawDocument, fallbackUpdatedAt = null) {
-  try {
-    return normalizeDocumentRecord(rawDocument, fallbackUpdatedAt);
-  } catch (_) {
-    return null;
+function normalizeDocumentRecords(documents, options = {}) {
+  if (!Array.isArray(documents)) {
+    throw new Error('conversation file store 必须返回数组。');
   }
-}
-
-function normalizeDocumentRecords(documents) {
-  const recordsByPath = new Map();
+  const seenPaths = new Set();
+  const records = [];
   for (const rawDocument of cloneDocuments(documents)) {
-    const record = normalizeDocumentRecordSafe(rawDocument);
-    if (!record) continue;
-    const existing = recordsByPath.get(record.path);
-    const existingTime = existing ? Date.parse(existing.updated_at) : Number.NEGATIVE_INFINITY;
-    const recordTime = Date.parse(record.updated_at);
-    if (!existing || (Number.isFinite(recordTime) && recordTime >= existingTime)) {
-      recordsByPath.set(record.path, record);
+    const record = normalizeDocumentRecord(rawDocument, null, options);
+    if (seenPaths.has(record.path)) {
+      throw new Error(`conversation file store 包含重复路径 ${record.path}。`);
     }
+    seenPaths.add(record.path);
+    records.push(record);
   }
-  return Array.from(recordsByPath.values())
-    .sort((left, right) => left.path.localeCompare(right.path));
+  return records.sort((left, right) => left.path.localeCompare(right.path));
 }
 
 function cloneDocuments(documents) {
@@ -627,7 +300,7 @@ function applyConversationDocumentPatch(documents, patch) {
     deleted: []
   };
 
-  // 只有全部 hunk 验证成功后，才在内存中生成一次 replaceDocuments 所需的完整集合。
+  // 只有全部 hunk 验证成功后，才在内存中生成一次事务提交所需的完整集合。
   for (const operation of preparedOperations) {
     if (operation.type === 'add_file') {
       const existingIndex = findDocumentIndex(nextDocuments, operation.target_path);
@@ -725,14 +398,14 @@ function createDefaultConversationDocumentStore() {
   return {
     listDocuments: listConversationDocuments,
     getDocument: getConversationDocument,
-    putDocument: putConversationDocument,
-    replaceDocuments: replaceConversationDocuments
+    mutateDocuments: mutateConversationDocuments,
+    putDocument: putConversationDocument
   };
 }
 
 function ensureStore(store = null) {
   const resolved = store || createDefaultConversationDocumentStore();
-  const requiredMethods = ['listDocuments', 'getDocument', 'putDocument', 'replaceDocuments'];
+  const requiredMethods = ['listDocuments', 'getDocument', 'mutateDocuments', 'putDocument'];
   const missing = requiredMethods.filter((name) => typeof resolved?.[name] !== 'function');
   if (missing.length > 0) {
     throw new Error(`当前环境没有可用的 conversation file store，缺少方法：${missing.join(', ')}`);
@@ -756,19 +429,14 @@ function ensureLocalMountStore(store = null) {
   return resolved;
 }
 
-function buildReadFilePayload(documentRecord, readOptions, includeLineNumbers) {
-  const contentRead = buildConversationDocumentReadResult(documentRecord.content, readOptions, {
-    allowLineRange: true
-  });
+function buildReadFilePayload(documentRecord, readOptions) {
+  const contentRead = buildVirtualTextReadResult(documentRecord.content, readOptions);
   return {
     path: documentRecord.path,
     updated_at: toIsoTimestamp(documentRecord.updated_at),
     size_chars: buildDocumentSizeChars(documentRecord.content),
     content: contentRead.content,
-    content_read: contentRead,
-    ...(includeLineNumbers === true
-      ? { numbered_content: buildConversationDocumentNumberedContent(documentRecord.content, contentRead) }
-      : {})
+    content_read: contentRead
   };
 }
 
@@ -823,7 +491,7 @@ export function isConversationDocumentMutationAction(action) {
 
 /**
  * 生成 cp 语义下的新文档集合：目标不存在时新增，目标存在时原位覆盖。
- * 这里保持纯函数，调用方只在完整源文件读取成功后执行一次 replaceDocuments。
+ * 这里保持纯函数，调用方只在完整源文件读取成功后提交一次事务。
  */
 function buildCopiedConversationDocumentSet(documents, copiedDocument) {
   const normalizedDocuments = normalizeDocumentRecords(documents);
@@ -838,44 +506,57 @@ function buildCopiedConversationDocumentSet(documents, copiedDocument) {
   };
 }
 
-export function normalizeVirtualFileToolArguments(action, rawArgs, options = {}) {
-  const args = ensurePlainObject(rawArgs);
+export function normalizeVirtualFileToolArguments(action, rawArgs) {
   const normalizedAction = normalizeString(action).toLowerCase();
   if (!VIRTUAL_FILE_PUBLIC_ACTIONS.has(normalizedAction)) {
     throw new Error(`virtual_file 参数错误：不支持的 action \`${action}\`。`);
   }
 
-  const requireSkillName = normalizedAction === VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME
-    || normalizedAction === VIRTUAL_FILE_COPY_FILE_TOOL_NAME
-    || normalizedAction === VIRTUAL_FILE_READ_FILE_TOOL_NAME;
-  const target = normalizeVirtualFileTarget(args.target, {
-    defaultKind: options?.defaultTargetKind || VIRTUAL_FILE_TARGET_KIND_ROOT,
-    requireSkillName
-  });
+  const allowedKeysByAction = {
+    [VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME]: ['environment_id', 'patch'],
+    [VIRTUAL_FILE_LIST_FILES_TOOL_NAME]: ['environment_id', 'path_glob'],
+    [VIRTUAL_FILE_READ_FILE_TOOL_NAME]: ['environment_id', 'path', 'start_line', 'end_line'],
+    [VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME]: [
+      'environment_id',
+      'pattern',
+      'regex',
+      'path_glob',
+      'ignore_case',
+      'context_lines'
+    ],
+    [VIRTUAL_FILE_COPY_FILE_TOOL_NAME]: ['environment_id', 'from', 'to']
+  };
+  const args = assertOnlyObjectKeys(
+    rawArgs,
+    allowedKeysByAction[normalizedAction],
+    normalizedAction
+  );
+
+  const environment = normalizeVirtualFileEnvironmentId(args.environment_id);
 
   switch (normalizedAction) {
     case VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME: {
-      const normalized = normalizeVirtualFileApplyPatchArguments(args, target);
-      if (target.kind === VIRTUAL_FILE_TARGET_KIND_ROOT) {
+      const normalized = normalizeVirtualFileApplyPatchArguments(args, environment);
+      if (environment.kind === VIRTUAL_FILE_ENVIRONMENT_KIND_ROOT) {
         assertPatchDoesNotTouchLocalPaths(normalized.patch);
       }
       return normalized;
     }
     case VIRTUAL_FILE_LIST_FILES_TOOL_NAME:
-      return normalizeVirtualFileListFilesArguments(args, target);
+      return normalizeVirtualFileListFilesArguments(args, environment);
     case VIRTUAL_FILE_READ_FILE_TOOL_NAME:
-      return normalizeVirtualFileReadFileArguments(args, target);
+      return normalizeVirtualFileReadFileArguments(args, environment);
     case VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME:
-      return normalizeVirtualFileSearchFilesArguments(args, target);
+      return normalizeVirtualFileSearchFilesArguments(args, environment);
     case VIRTUAL_FILE_COPY_FILE_TOOL_NAME:
-      return normalizeVirtualFileCopyFileArguments(args, target);
+      return normalizeVirtualFileCopyFileArguments(args, environment);
     default:
       throw new Error(`virtual_file 参数错误：未处理的 action \`${action}\`。`);
   }
 }
 
 export function buildConversationDocumentActionPayloadFromVirtualFileAction(action, normalizedArgs) {
-  const input = ensurePlainObject(normalizedArgs);
+  const input = assertPlainObject(normalizedArgs, 'normalized virtual_file arguments');
   switch (normalizeString(action).toLowerCase()) {
     case VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME:
       return { patch: input.patch || '' };
@@ -884,18 +565,15 @@ export function buildConversationDocumentActionPayloadFromVirtualFileAction(acti
     case VIRTUAL_FILE_READ_FILE_TOOL_NAME:
       return {
         file_path: input.file_path,
-        include_line_numbers: input.include_line_numbers === true,
-        ...(ensurePlainObject(input.read_options))
+        ...(assertPlainObject(input.read_options, 'read_file read_options'))
       };
     case VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME:
       return {
         pattern: input.pattern,
         regex: input.regex === true,
-        case_mode: input.case_mode || null,
+        ignore_case: input.ignore_case === true,
         path_glob: input.path_glob || null,
-        context_before: input.context_before,
-        context_after: input.context_after,
-        max_results: input.max_results
+        context_lines: input.context_lines
       };
     case VIRTUAL_FILE_COPY_FILE_TOOL_NAME:
       return {
@@ -907,26 +585,19 @@ export function buildConversationDocumentActionPayloadFromVirtualFileAction(acti
   }
 }
 
-export function buildSkillRegistryFileActionPayloadFromVirtualFileAction(action, normalizedArgs) {
-  const input = ensurePlainObject(normalizedArgs);
-  const target = ensurePlainObject(input.target);
-  const payload = {
-    skill_name: normalizeOptionalString(target.name),
-    // 这是 sidebar -> background 的内部控制位，不属于模型工具协议。
-    // 文件系统事务只修改 Skill 存储；页面 runtime 刷新必须由显式生命周期动作触发。
-    refresh_current_document: false
-  };
+export function buildSkillVirtualFileActionPayload(action, normalizedArgs) {
+  const input = assertPlainObject(normalizedArgs, 'normalized virtual_file arguments');
+  const environment = assertPlainObject(input.environment, 'virtual_file environment');
+  if (environment.kind !== VIRTUAL_FILE_ENVIRONMENT_KIND_SKILL || !environment.environment_id) {
+    throw new Error('virtual_file 参数错误：Skill 文件动作缺少 skill environment_id。');
+  }
+  const payload = { environment_id: environment.environment_id };
   switch (normalizeString(action).toLowerCase()) {
     case VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME:
       return {
         action: 'apply_patch',
-        // apply_patch 的目标由 raw patch Environment ID 唯一决定；同时把精确契约
-        // 带到 background，使旧 sidebar 无法对新 background 发起写入。
-        refresh_current_document: payload.refresh_current_document,
+        ...payload,
         patch: input.patch || '',
-        expected_environment_id: normalizeOptionalString(target.name)
-          ? `skill:${normalizeOptionalString(target.name)}`
-          : null,
         runtime_contract: buildApplyPatchRuntimeContractPayload()
       };
     case VIRTUAL_FILE_LIST_FILES_TOOL_NAME:
@@ -940,8 +611,7 @@ export function buildSkillRegistryFileActionPayloadFromVirtualFileAction(action,
         action: 'read_file',
         ...payload,
         file_path: input.file_path,
-        include_line_numbers: input.include_line_numbers === true,
-        ...(ensurePlainObject(input.read_options))
+        ...(assertPlainObject(input.read_options, 'read_file read_options'))
       };
     case VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME:
       return {
@@ -949,18 +619,16 @@ export function buildSkillRegistryFileActionPayloadFromVirtualFileAction(action,
         ...payload,
         pattern: input.pattern,
         regex: input.regex === true,
-        case_mode: input.case_mode || null,
+        ignore_case: input.ignore_case === true,
         path_glob: input.path_glob || null,
-        context_before: input.context_before,
-        context_after: input.context_after,
-        max_results: input.max_results
+        context_lines: input.context_lines
       };
     case VIRTUAL_FILE_COPY_FILE_TOOL_NAME:
       return {
         action: 'copy_file',
         ...payload,
-        source_file_path: input.source_path,
-        destination_file_path: input.destination_path
+        source_path: input.source_path,
+        destination_path: input.destination_path
       };
     default:
       throw new Error(`virtual_file 参数错误：未处理的 skill action \`${action}\`。`);
@@ -969,19 +637,31 @@ export function buildSkillRegistryFileActionPayloadFromVirtualFileAction(action,
 
 function normalizeActionArgs(action, rawArgs, options = {}) {
   const allowInternalActions = options?.allowInternalActions === true;
-  const args = ensurePlainObject(rawArgs);
   const normalizedAction = normalizeString(action).toLowerCase();
   if (!VIRTUAL_FILE_PUBLIC_ACTIONS.has(normalizedAction) && !(allowInternalActions && VIRTUAL_FILE_INTERNAL_ACTIONS.has(normalizedAction))) {
     throw new Error(`virtual_file 参数错误：不支持的 action \`${action}\`。`);
   }
 
-  const includeLineNumbers = args.include_line_numbers === true;
-  const readOptions = {
-    mode: args.mode,
-    skip_chars: args.skip_chars,
-    start_line: args.start_line,
-    end_line: args.end_line
+  const allowedKeysByAction = {
+    [CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME]: ['patch'],
+    [CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME]: ['path_glob'],
+    [CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME]: ['file_path', 'start_line', 'end_line'],
+    [CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME]: [
+      'pattern',
+      'regex',
+      'ignore_case',
+      'path_glob',
+      'context_lines'
+    ],
+    [CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME]: ['source_path', 'destination_path'],
+    [CONVERSATION_DOCUMENT_INTERNAL_READ_FILE_FULL_ACTION]: ['file_path'],
+    [CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION]: ['file_path', 'content']
   };
+  const args = assertOnlyObjectKeys(
+    rawArgs,
+    allowedKeysByAction[normalizedAction],
+    normalizedAction
+  );
 
   switch (normalizedAction) {
     case CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME:
@@ -990,119 +670,60 @@ function normalizeActionArgs(action, rawArgs, options = {}) {
       }
       return {
         action: normalizedAction,
-        patch: String(args.patch || ''),
-        file_path: null,
-        pattern: null,
-        read_options: null,
-        include_line_numbers: false,
-        path_glob: null,
-        regex: false,
-        case_mode: 'smart',
-        context_before: 0,
-        context_after: 0,
-        max_results: null,
-        content: null
+        patch: String(args.patch || '')
       };
     case CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME:
       return {
         action: normalizedAction,
-        patch: null,
-        file_path: null,
-        pattern: null,
-        read_options: null,
-        include_line_numbers: false,
-        path_glob: normalizeSearchPathGlob(args.path_glob),
-        regex: false,
-        case_mode: 'smart',
-        context_before: 0,
-        context_after: 0,
-        max_results: null,
-        content: null
+        path_glob: normalizeVirtualPathFilter(args.path_glob, { label: 'path_glob' })
       };
     case CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME:
       return {
         action: normalizedAction,
-        patch: null,
         file_path: normalizeConversationDocumentPath(args.file_path),
-        pattern: null,
-        read_options: readOptions,
-        include_line_numbers: includeLineNumbers,
-        path_glob: null,
-        regex: false,
-        case_mode: 'smart',
-        context_before: 0,
-        context_after: 0,
-        max_results: null,
-        content: null
+        read_options: normalizeVirtualFileLineRange(args)
       };
     case CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME:
       if (!normalizeString(args.pattern)) {
         throw new Error('virtual_file 参数错误：search_files 需要 pattern。');
       }
+      if (args.regex != null && typeof args.regex !== 'boolean') {
+        throw new Error('virtual_file 参数错误：regex 必须是 boolean 或 null。');
+      }
+      if (args.ignore_case != null && typeof args.ignore_case !== 'boolean') {
+        throw new Error('virtual_file 参数错误：ignore_case 必须是 boolean 或 null。');
+      }
       return {
         action: normalizedAction,
-        patch: null,
-        file_path: null,
         pattern: normalizeString(args.pattern),
-        read_options: null,
-        include_line_numbers: false,
-        path_glob: normalizeSearchPathGlob(args.path_glob),
         regex: args.regex === true,
-        case_mode: normalizeSearchCaseMode(args.case_mode),
-        context_before: normalizeContextLineCount(args.context_before),
-        context_after: normalizeContextLineCount(args.context_after),
-        max_results: null,
-        content: null
+        ignore_case: args.ignore_case === true,
+        path_glob: normalizeVirtualPathFilter(args.path_glob, { label: 'path_glob' }),
+        context_lines: readNullableSafeInteger(args.context_lines, {
+          label: 'context_lines',
+          minimum: 0,
+          maximum: 20
+        }) ?? 0
       };
     case CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME:
       return {
         action: normalizedAction,
-        patch: null,
-        file_path: null,
         source_path: normalizeConversationDocumentPath(args.source_path),
-        destination_path: normalizeConversationDocumentPath(args.destination_path),
-        pattern: null,
-        read_options: null,
-        include_line_numbers: false,
-        path_glob: null,
-        regex: false,
-        case_mode: 'smart',
-        context_before: 0,
-        context_after: 0,
-        max_results: null,
-        content: null
+        destination_path: normalizeConversationDocumentPath(args.destination_path)
       };
     case CONVERSATION_DOCUMENT_INTERNAL_READ_FILE_FULL_ACTION:
       return {
         action: normalizedAction,
-        patch: null,
-        file_path: normalizeConversationDocumentPath(args.file_path),
-        pattern: null,
-        read_options: null,
-        include_line_numbers: false,
-        path_glob: null,
-        regex: false,
-        case_mode: 'smart',
-        context_before: 0,
-        context_after: 0,
-        max_results: null,
-        content: null
+        file_path: normalizeConversationDocumentPath(args.file_path)
       };
     case CONVERSATION_DOCUMENT_INTERNAL_WRITE_FILE_ACTION:
+      if (typeof args.content !== 'string') {
+        throw new Error('virtual_file 参数错误：write_file.content 必须是字符串。');
+      }
       return {
         action: normalizedAction,
-        patch: null,
         file_path: normalizeConversationDocumentPath(args.file_path),
-        pattern: null,
-        read_options: null,
-        include_line_numbers: false,
-        path_glob: null,
-        regex: false,
-        case_mode: 'smart',
-        context_before: 0,
-        context_after: 0,
-        max_results: null,
-        content: typeof args.content === 'string' ? args.content : ''
+        content: args.content
       };
     default:
       throw new Error(`virtual_file 参数错误：未处理的 action \`${action}\`。`);
@@ -1133,7 +754,7 @@ export async function executeConversationDocumentAction(action, rawArgs, options
           ok: true,
           action: normalizedAction,
           conversation_id: conversationId,
-          target: { kind: VIRTUAL_FILE_TARGET_KIND_LOCAL, name: null },
+          source: VIRTUAL_FILE_ENVIRONMENT_KIND_LOCAL,
           ...manifest,
           path_glob: normalizedArgs.path_glob
         };
@@ -1159,8 +780,8 @@ export async function executeConversationDocumentAction(action, rawArgs, options
           ok: true,
           action: normalizedAction,
           conversation_id: conversationId,
-          target: { kind: VIRTUAL_FILE_TARGET_KIND_LOCAL, name: null },
-          file: buildReadFilePayload(localDocumentRecord, normalizedArgs.read_options, normalizedArgs.include_line_numbers)
+          source: VIRTUAL_FILE_ENVIRONMENT_KIND_LOCAL,
+          file: buildReadFilePayload(localDocumentRecord, normalizedArgs.read_options)
         };
       }
       const documentRecord = await getRequiredConversationDocumentByPath(
@@ -1175,7 +796,7 @@ export async function executeConversationDocumentAction(action, rawArgs, options
         ok: true,
         action: normalizedAction,
         conversation_id: conversationId,
-        file: buildReadFilePayload(documentRecord, normalizedArgs.read_options, normalizedArgs.include_line_numbers)
+        file: buildReadFilePayload(documentRecord, normalizedArgs.read_options)
       };
     }
     case CONVERSATION_DOCUMENT_INTERNAL_READ_FILE_FULL_ACTION: {
@@ -1190,7 +811,7 @@ export async function executeConversationDocumentAction(action, rawArgs, options
             ok: true,
             action: normalizedAction,
             conversation_id: conversationId,
-            target: { kind: VIRTUAL_FILE_TARGET_KIND_LOCAL, name: null },
+            source: VIRTUAL_FILE_ENVIRONMENT_KIND_LOCAL,
             file: {
               path: localDocumentRecord.path,
               updated_at: toIsoTimestamp(localDocumentRecord.updated_at),
@@ -1251,8 +872,8 @@ export async function executeConversationDocumentAction(action, rawArgs, options
           ok: true,
           action: normalizedAction,
           conversation_id: conversationId,
-          target: { kind: VIRTUAL_FILE_TARGET_KIND_LOCAL, name: null },
-          ...searchConversationDocuments(localDocuments, {
+          source: VIRTUAL_FILE_ENVIRONMENT_KIND_LOCAL,
+          ...searchVirtualTextDocuments(localDocuments, {
             ...normalizedArgs,
             path_glob: shouldRefilterWithGlob ? normalizedArgs.path_glob : null
           }),
@@ -1264,35 +885,43 @@ export async function executeConversationDocumentAction(action, rawArgs, options
         ok: true,
         action: normalizedAction,
         conversation_id: conversationId,
-        ...searchConversationDocuments(documents, normalizedArgs)
+        ...searchVirtualTextDocuments(normalizeDocumentRecords(documents), normalizedArgs)
       };
     }
     case CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME: {
       assertDifferentFileOperationPaths(normalizedArgs.source_path, normalizedArgs.destination_path, 'copy_file');
       assertWritableRootPath(normalizedArgs.destination_path, 'copy_file');
-      const existingDocuments = normalizeDocumentRecords(await store.listDocuments(conversationId));
-      const sourceDocument = isLocalVirtualPath(normalizedArgs.source_path)
+      const localSourceDocument = isLocalVirtualPath(normalizedArgs.source_path)
         ? await readLocalVirtualFileDocument(
           conversationId,
           normalizedArgs.source_path,
           localMountStore
         )
-        : findRequiredConversationDocument(
+        : null;
+      const mutation = await store.mutateDocuments(conversationId, (currentDocuments) => {
+        const existingDocuments = normalizeDocumentRecords(currentDocuments);
+        const sourceDocument = localSourceDocument || findRequiredConversationDocument(
           existingDocuments,
           normalizedArgs.source_path,
           'copy_file'
         ).document;
-      const now = new Date().toISOString();
-      const copiedDocument = normalizeDocumentRecord({
-        path: normalizedArgs.destination_path,
-        content: sourceDocument.content,
-        updated_at: now
-      }, now);
-      const { destinationExisted, nextDocuments } = buildCopiedConversationDocumentSet(
-        existingDocuments,
-        copiedDocument
-      );
-      const persistedDocuments = await store.replaceDocuments(conversationId, nextDocuments);
+        const now = new Date().toISOString();
+        const copiedDocument = normalizeDocumentRecord({
+          path: normalizedArgs.destination_path,
+          content: sourceDocument.content,
+          updated_at: now
+        }, now);
+        const { destinationExisted, nextDocuments } = buildCopiedConversationDocumentSet(
+          existingDocuments,
+          copiedDocument
+        );
+        return {
+          documents: nextDocuments,
+          value: { destinationExisted, copiedDocument }
+        };
+      });
+      const persistedDocuments = mutation.documents;
+      const { destinationExisted, copiedDocument } = mutation.value;
       return {
         ok: true,
         action: normalizedAction,
@@ -1336,21 +965,27 @@ export async function executeConversationDocumentAction(action, rawArgs, options
     }
     case CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME: {
       assertPatchDoesNotTouchLocalPaths(normalizedArgs.patch);
-      const existingDocuments = await store.listDocuments(conversationId);
-      const patched = applyConversationDocumentPatch(existingDocuments, normalizedArgs.patch);
-      const persistedDocuments = await store.replaceDocuments(conversationId, patched.documents);
+      const mutation = await store.mutateDocuments(conversationId, (existingDocuments) => {
+        const patched = applyConversationDocumentPatch(existingDocuments, normalizedArgs.patch);
+        return {
+          documents: patched.documents,
+          value: { affected_files: patched.affected_files }
+        };
+      });
+      const persistedDocuments = mutation.documents;
+      const affectedFiles = mutation.value.affected_files;
       return {
         ok: true,
         action: normalizedAction,
         conversation_id: conversationId,
         files: buildDocumentManifest(persistedDocuments),
-        affected_files: patched.affected_files,
+        affected_files: affectedFiles,
         change_event: buildChangeEventPayload(conversationId, normalizedAction, {
           updated_paths: [
-            ...patched.affected_files.added,
-            ...patched.affected_files.modified
+            ...affectedFiles.added,
+            ...affectedFiles.modified
           ],
-          deleted_paths: patched.affected_files.deleted
+          deleted_paths: affectedFiles.deleted
         })
       };
     }
@@ -1359,126 +994,12 @@ export async function executeConversationDocumentAction(action, rawArgs, options
   }
 }
 
-function normalizeSkillRegistryFileRecord(file, fallbackSkillName = null) {
-  const input = ensurePlainObject(file);
-  return {
-    skill_name: normalizeOptionalString(input.skill_name || fallbackSkillName),
-    path: normalizeOptionalString(input.path) || '',
-    kind: normalizeOptionalString(input.kind),
-    size_chars: Number.isFinite(Number(input.size_chars)) ? Math.max(0, Math.trunc(Number(input.size_chars))) : null,
-    is_manifest: input.is_manifest === true,
-    is_instruction: input.is_instruction === true,
-    is_runtime_entry: input.is_runtime_entry === true,
-    ...(typeof input.content === 'string' ? { content: input.content } : {}),
-    ...(input.content_read && typeof input.content_read === 'object' ? { content_read: input.content_read } : {}),
-    ...(typeof input.numbered_content === 'string' ? { numbered_content: input.numbered_content } : {})
-  };
-}
-
-export function normalizeVirtualFileResultFromSkillRegistryAction(action, rawResult, normalizedArgs) {
+export function normalizeVirtualFileResultFromSkillAction(action, rawResult, normalizedArgs) {
   const normalizedAction = normalizeString(action).toLowerCase();
-  const result = ensurePlainObject(rawResult);
-  const target = buildVirtualFileTargetSummary(normalizedArgs?.target);
-  if (result.ok !== true) {
-    return {
-      ...result,
-      action: normalizedAction,
-      target
-    };
-  }
-
-  if (normalizedAction === VIRTUAL_FILE_LIST_FILES_TOOL_NAME) {
-    return {
-      ok: true,
-      action: normalizedAction,
-      target,
-      total_files: Number.isFinite(Number(result.total_files)) ? Math.max(0, Math.trunc(Number(result.total_files))) : 0,
-      returned_file_count: Number.isFinite(Number(result.returned_file_count))
-        ? Math.max(0, Math.trunc(Number(result.returned_file_count)))
-        : 0,
-      files: Array.isArray(result.files)
-        ? result.files.map((file) => normalizeSkillRegistryFileRecord(file))
-        : []
-    };
-  }
-
-  if (normalizedAction === VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME) {
-    return {
-      ok: true,
-      action: normalizedAction,
-      target,
-      pattern: normalizeOptionalString(result.pattern) || normalizeOptionalString(normalizedArgs?.pattern) || '',
-      regex: result.regex === true,
-      case_mode: normalizeOptionalString(result.case_mode) || 'smart',
-      case_sensitive: result.case_sensitive === true,
-      path_glob: normalizeOptionalString(result.path_glob),
-      context_before: Number.isFinite(Number(result.context_before)) ? Math.max(0, Math.trunc(Number(result.context_before))) : 0,
-      context_after: Number.isFinite(Number(result.context_after)) ? Math.max(0, Math.trunc(Number(result.context_after))) : 0,
-      max_results: Number.isFinite(Number(result.max_results)) ? Math.max(1, Math.trunc(Number(result.max_results))) : null,
-      total_matches: Number.isFinite(Number(result.total_matches)) ? Math.max(0, Math.trunc(Number(result.total_matches))) : 0,
-      returned_match_count: Number.isFinite(Number(result.returned_match_count))
-        ? Math.max(0, Math.trunc(Number(result.returned_match_count)))
-        : 0,
-      truncated: result.truncated === true,
-      matches: Array.isArray(result.matches)
-        ? result.matches.map((match) => ({
-            match_id: normalizeOptionalString(match?.match_id),
-            skill_name: normalizeOptionalString(match?.skill_name),
-            file_path: normalizeOptionalString(match?.file_path) || '',
-            line_number: Number.isFinite(Number(match?.line_number)) ? Math.max(1, Math.trunc(Number(match.line_number))) : 1,
-            column_start: Number.isFinite(Number(match?.column_start)) ? Math.max(1, Math.trunc(Number(match.column_start))) : 1,
-            column_end: Number.isFinite(Number(match?.column_end)) ? Math.max(1, Math.trunc(Number(match.column_end))) : 1,
-            match_text: typeof match?.match_text === 'string' ? match.match_text : '',
-            line_text: typeof match?.line_text === 'string' ? match.line_text : '',
-            before: Array.isArray(match?.before) ? match.before : [],
-            after: Array.isArray(match?.after) ? match.after : []
-          }))
-        : []
-    };
-  }
-
-  if (normalizedAction === VIRTUAL_FILE_READ_FILE_TOOL_NAME) {
-    const skill = ensurePlainObject(result.skill);
-    const file = normalizeSkillRegistryFileRecord(skill.file, skill.name || target.name);
-    return {
-      ok: true,
-      action: normalizedAction,
-      target,
-      file
-    };
-  }
-
-  if (normalizedAction === VIRTUAL_FILE_COPY_FILE_TOOL_NAME) {
-    return {
-      ok: true,
-      action: normalizedAction,
-      target,
-      source_path: normalizeOptionalString(result.source_file_path || normalizedArgs?.source_path) || '',
-      destination_path: normalizeOptionalString(result.destination_file_path || normalizedArgs?.destination_path) || '',
-      affected_files: ensurePlainObject(result.affected_files),
-      files: ensurePlainObject(result.files),
-      skill: ensurePlainObject(result.skill),
-      refreshed_current_document: result.refreshed_current_document === true,
-      refresh_result: result.refresh_result || null
-    };
-  }
-
-  if (normalizedAction === VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME) {
-    return {
-      ok: true,
-      action: normalizedAction,
-      target,
-      affected_files: ensurePlainObject(result.affected_files),
-      files: ensurePlainObject(result.files),
-      skill: ensurePlainObject(result.skill),
-      refreshed_current_document: result.refreshed_current_document === true,
-      refresh_result: result.refresh_result || null
-    };
-  }
-
+  const result = assertPlainObject(rawResult, 'Skill virtual_file result');
   return {
     ...result,
     action: normalizedAction,
-    target
+    environment: summarizeVirtualFileEnvironment(normalizedArgs?.environment)
   };
 }

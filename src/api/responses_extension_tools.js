@@ -82,7 +82,7 @@ export const RESPONSES_EXTENSION_TOOL_SPECS = Object.freeze([
     handlerKey: 'virtual_file',
     outputKind: 'virtual_file',
     sideEffect: 'read',
-    deferLoading: true
+    deferLoading: false
   }),
   createExtensionToolSpec({
     id: 'read_file',
@@ -92,7 +92,7 @@ export const RESPONSES_EXTENSION_TOOL_SPECS = Object.freeze([
     handlerKey: 'virtual_file',
     outputKind: 'virtual_file',
     sideEffect: 'read',
-    deferLoading: true
+    deferLoading: false
   }),
   createExtensionToolSpec({
     id: 'search_files',
@@ -102,7 +102,7 @@ export const RESPONSES_EXTENSION_TOOL_SPECS = Object.freeze([
     handlerKey: 'virtual_file',
     outputKind: 'virtual_file',
     sideEffect: 'read',
-    deferLoading: true
+    deferLoading: false
   }),
   createExtensionToolSpec({
     id: 'copy_file',
@@ -117,7 +117,7 @@ export const RESPONSES_EXTENSION_TOOL_SPECS = Object.freeze([
   createExtensionToolSpec({
     id: 'skill_registry',
     title: 'Skill Registry',
-    description: '允许模型读取、创建和维护 Cerebr skill 目录结构。',
+    description: '允许模型列出、创建、启用、停用、删除和挂载 Cerebr Skill。',
     exposure: 'always',
     handlerKey: 'skill_registry',
     outputKind: 'skill_registry',

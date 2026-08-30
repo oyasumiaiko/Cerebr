@@ -1,10 +1,8 @@
 import {
   buildSkillContextSummary,
-  buildSkillDetail,
   buildSkillFileIndexPayload,
   buildSkillFileManifest,
   buildSkillFilePayload,
-  buildSkillPackagePayload,
   buildSkillSummary,
   buildStoredSkillRecord,
   deleteStoredSkillPackage,
@@ -23,6 +21,9 @@ import {
   saveStoredSkillPackage
 } from '../agent_tools/skill/registry_tool.js';
 import {
+  normalizeSkillVirtualFileActionArguments
+} from '../agent_tools/skill/virtual_file_action.js';
+import {
   prepareSkillPackagePatch,
   resolveSkillApplyPatchTarget
 } from '../agent_tools/skill/skill_apply_patch.js';
@@ -33,7 +34,7 @@ import {
   buildSkillUnmountFromCurrentPageSource
 } from './skill_runtime.js';
 import { createIndexedDbSkillStore } from '../storage/skill_store.js';
-import { buildSkillScaffoldInput, buildSkillScaffoldNextSteps } from '../agent_tools/skill/skill_scaffold.js';
+import { buildSkillScaffoldInput } from '../agent_tools/skill/skill_scaffold.js';
 import { normalizeApplyPatchVerificationError } from '../agent_tools/shared/apply_patch_core.js';
 
 function normalizeTabId(value) {
@@ -46,7 +47,6 @@ function normalizeTabId(value) {
 function sortSkillRecords(records) {
   return (Array.isArray(records) ? records : [])
     .map((record) => normalizeStoredSkillRecord(record))
-    .filter(Boolean)
     .sort((left, right) => {
       const leftTs = Date.parse(left.updated_at || '') || 0;
       const rightTs = Date.parse(right.updated_at || '') || 0;
@@ -215,17 +215,6 @@ export function createSkillManager(options = {}) {
     ];
   }
 
-  async function listFullSkillRecords() {
-    const storedManifests = await listStoredRecords();
-    const storedPackages = (await Promise.all(
-      storedManifests.map((record) => getStoredSkillPackage(record.name, store))
-    )).filter(Boolean);
-    return [
-      ...listBuiltinSkillRecords(),
-      ...storedPackages
-    ];
-  }
-
   async function getSkillRecord(skillName) {
     const builtin = getBuiltinSkillRecord(skillName);
     if (builtin) {
@@ -254,7 +243,13 @@ export function createSkillManager(options = {}) {
   }
 
   async function persistMutatedSkillRecord(existingRecord, nextRecord) {
-    return await saveStoredSkillPackage(nextRecord, store);
+    const existing = normalizeStoredSkillRecord(existingRecord);
+    if (!existing) {
+      throw new Error('无法提交缺少当前 revision 的 Skill 修改。');
+    }
+    return await saveStoredSkillPackage(nextRecord, store, {
+      expectedRevision: existing.revision
+    });
   }
 
   async function runReconcileRegisteredSkillsPass() {
@@ -468,37 +463,18 @@ export function createSkillManager(options = {}) {
     };
   }
 
-  async function maybeRefreshCurrentDocument(tabId) {
-    const normalizedTabId = normalizeTabId(tabId);
-    if (normalizedTabId === null) {
-      return {
-        refreshed_current_document: false,
-        refresh_result: null
-      };
-    }
-    return {
-      refreshed_current_document: true,
-      refresh_result: await syncCurrentDocumentSkills(normalizedTabId)
-    };
-  }
-
-  async function createSkill(skillInput, options = {}) {
-    const createMode = options?.createMode === 'template' ? 'template' : 'package_compat';
-    const requestedName = createMode === 'template'
-      ? String(skillInput?.requested_name || '').trim()
-      : '';
-    const scaffoldedInput = createMode === 'template'
-      ? buildSkillScaffoldInput({
-          skillName: skillInput?.name,
-          description: skillInput?.description,
-          displayName: skillInput?.interface?.display_name,
-          shortDescription: skillInput?.interface?.short_description,
-          defaultPrompt: skillInput?.interface?.default_prompt,
-          enabled: skillInput?.enabled === true,
-          resources: skillInput?.resources,
-          examples: skillInput?.examples === true
-        })
-      : skillInput;
+  async function createSkill(skillInput) {
+    const requestedName = String(skillInput?.requested_name || '').trim();
+    const scaffoldedInput = buildSkillScaffoldInput({
+      skillName: skillInput?.name,
+      description: skillInput?.description,
+      displayName: skillInput?.interface?.display_name,
+      shortDescription: skillInput?.interface?.short_description,
+      defaultPrompt: skillInput?.interface?.default_prompt,
+      enabled: skillInput?.enabled === true,
+      resources: skillInput?.resources,
+      examples: skillInput?.examples === true
+    });
     const nextRecord = buildStoredSkillRecord(scaffoldedInput, null);
     if (getBuiltinSkillRecord(nextRecord.name)) {
       throw new Error(`技能 ${nextRecord.name} 是内置保留名称，不能 create。`);
@@ -507,55 +483,21 @@ export function createSkillManager(options = {}) {
     if (existing) {
       throw new Error(`技能 ${nextRecord.name} 已存在，不能重复 create。`);
     }
-    await saveStoredSkillPackage(nextRecord, store);
-    if (createMode === 'template') {
-      const createdFiles = Array.isArray(nextRecord.files)
-        ? nextRecord.files.map((file) => file.path)
-        : [];
-      return {
-        ok: true,
-        action: 'create_skill',
-        create_mode: 'template',
-        requested_name: requestedName || nextRecord.name,
-        normalized_name: nextRecord.name,
-        created_files: createdFiles,
-        selected_resources: Array.isArray(skillInput?.resources) ? [...skillInput.resources] : [],
-        examples_created: skillInput?.examples === true,
-        next_steps: buildSkillScaffoldNextSteps({
-          enabled: nextRecord.enabled === true,
-          resources: skillInput?.resources,
-          examples: skillInput?.examples === true
-        }),
-        skill: buildSkillSummary(nextRecord),
-        refreshed_current_document: false,
-        refresh_result: null
-      };
-    }
+    await saveStoredSkillPackage(nextRecord, store, { expectedRevision: null });
+    const createdFiles = Array.isArray(nextRecord.files)
+      ? nextRecord.files.map((file) => file.path)
+      : [];
     return {
       ok: true,
       action: 'create_skill',
-      skill: buildSkillSummary(nextRecord),
-      ...(await maybeRefreshCurrentDocument(options?.tabId))
+      requested_name: requestedName || nextRecord.name,
+      normalized_name: nextRecord.name,
+      created_files: createdFiles,
+      skill: buildSkillSummary(nextRecord)
     };
   }
 
-  async function updateSkill(skillInput, options = {}) {
-    const existing = await getMutableStoredSkillRecord(skillInput?.name, 'update');
-    if (!existing) {
-      throw new Error(`技能 ${skillInput?.name || '(unknown)'} 不存在，无法 update。`);
-    }
-    const nextRecord = buildStoredSkillRecord(skillInput, existing);
-    const persistedRecord = await persistMutatedSkillRecord(existing, nextRecord);
-
-    return {
-      ok: true,
-      action: 'update',
-      skill: buildSkillSummary(persistedRecord),
-      ...(await maybeRefreshCurrentDocument(options?.tabId))
-    };
-  }
-
-  async function setSkillEnabled(skillName, enabled, options = {}) {
+  async function setSkillEnabled(skillName, enabled) {
     const existing = await getMutableStoredSkillRecord(skillName, enabled === true ? 'enable' : 'disable');
     if (!existing) {
       throw new Error(`技能 ${skillName} 不存在，无法切换启用状态。`);
@@ -568,8 +510,7 @@ export function createSkillManager(options = {}) {
     return {
       ok: true,
       action: enabled === true ? 'enable_skill' : 'disable_skill',
-      skill: buildSkillSummary(persistedRecord),
-      ...(await maybeRefreshCurrentDocument(options?.tabId))
+      skill: buildSkillSummary(persistedRecord)
     };
   }
 
@@ -589,7 +530,7 @@ export function createSkillManager(options = {}) {
     }
   }
 
-  async function copySkillFile(skillName, sourceFilePath, destinationFilePath, options = {}) {
+  async function copySkillFile(skillName, sourceFilePath, destinationFilePath) {
     const existing = await getMutableStoredSkillRecord(skillName, 'copy_file');
     const normalizedExisting = normalizeStoredSkillRecord(existing);
     if (!normalizedExisting) {
@@ -636,16 +577,15 @@ export function createSkillManager(options = {}) {
     return {
       ok: true,
       action: 'copy_file',
-      source_file_path: sourcePath,
-      destination_file_path: destinationPath,
+      source_path: sourcePath,
+      destination_path: destinationPath,
       skill: buildSkillSummary(persistedRecord),
       files: buildSkillFileManifest(persistedRecord, { includeContent: false }),
       affected_files: {
         added: destinationIndex >= 0 ? [] : [destinationPath],
         modified: destinationIndex >= 0 ? [destinationPath] : [],
         deleted: []
-      },
-      ...(await maybeRefreshCurrentDocument(options?.tabId))
+      }
     };
   }
 
@@ -688,26 +628,80 @@ export function createSkillManager(options = {}) {
       environment_id: patched.environment_id,
       skill: buildSkillSummary(persistedRecord),
       files: buildSkillFileManifest(persistedRecord, { includeContent: false }),
-      affected_files: patched.affected_files,
-      ...(await maybeRefreshCurrentDocument(options?.tabId))
+      affected_files: patched.affected_files
     };
   }
 
-  async function deleteSkill(skillName, options = {}) {
+  async function deleteSkill(skillName) {
     const existing = await getMutableStoredSkillRecord(skillName, 'delete');
     if (!existing) {
       throw new Error(`技能 ${skillName} 不存在，无法删除。`);
     }
 
-    await deleteStoredSkillPackage(existing.name, store);
+    await deleteStoredSkillPackage(existing.name, store, {
+      expectedRevision: existing.revision
+    });
 
     return {
       ok: true,
       action: 'delete_skill',
       deleted: true,
-      skill: buildSkillSummary(existing),
-      ...(await maybeRefreshCurrentDocument(options?.tabId))
+      skill: buildSkillSummary(existing)
     };
+  }
+
+  async function executeVirtualFileAction(rawArgs) {
+    const normalizedArgs = normalizeSkillVirtualFileActionArguments(rawArgs);
+    const skillName = normalizedArgs.environment.skill_name;
+
+    if (normalizedArgs.action === 'apply_patch') {
+      return await applySkillPatch(normalizedArgs.patch, {
+        expectedEnvironmentId: normalizedArgs.environment.environment_id
+      });
+    }
+    if (normalizedArgs.action === 'copy_file') {
+      return await copySkillFile(
+        skillName,
+        normalizedArgs.source_path,
+        normalizedArgs.destination_path
+      );
+    }
+
+    const record = await getSkillRecord(skillName);
+    if (!record) {
+      throw new Error(`技能 ${skillName} 不存在。`);
+    }
+    if (normalizedArgs.action === 'list_files') {
+      return {
+        ok: true,
+        action: 'list_files',
+        environment_id: normalizedArgs.environment.environment_id,
+        ...buildSkillFileIndexPayload([record], {
+          requestedSkillName: skillName,
+          path_glob: normalizedArgs.path_glob
+        })
+      };
+    }
+    if (normalizedArgs.action === 'read_file') {
+      const payload = buildSkillFilePayload(record, normalizedArgs.file_path, {
+        contentReadArgs: normalizedArgs.read_options
+      });
+      return {
+        ok: true,
+        action: 'read_file',
+        environment_id: normalizedArgs.environment.environment_id,
+        file: payload.file
+      };
+    }
+    if (normalizedArgs.action === 'search_files') {
+      return {
+        ok: true,
+        action: 'search_files',
+        environment_id: normalizedArgs.environment.environment_id,
+        ...searchSkillFiles([record], normalizedArgs)
+      };
+    }
+    throw new Error(`未处理的 Skill 文件 action：${normalizedArgs.action}`);
   }
 
   async function executeRegistryAction(rawArgs, options = {}) {
@@ -755,132 +749,19 @@ export function createSkillManager(options = {}) {
           skills
         };
       }
-      case 'list_files': {
-        const records = normalizedArgs.skill_name
-          ? [await getSkillRecord(normalizedArgs.skill_name)].filter(Boolean)
-          : await listFullSkillRecords();
-        if (records.length <= 0 && normalizedArgs.skill_name) {
-          throw new Error(`技能 ${normalizedArgs.skill_name} 不存在。`);
-        }
-        return {
-          ok: true,
-          action: 'list_files',
-          ...buildSkillFileIndexPayload(records, {
-            requestedSkillName: normalizedArgs.skill_name,
-            path_glob: normalizedArgs.path_glob
-          })
-        };
-      }
-      case 'search_files': {
-        const records = normalizedArgs.skill_name
-          ? [await getSkillRecord(normalizedArgs.skill_name)].filter(Boolean)
-          : await listFullSkillRecords();
-        if (records.length <= 0 && normalizedArgs.skill_name) {
-          throw new Error(`技能 ${normalizedArgs.skill_name} 不存在。`);
-        }
-        return {
-          ok: true,
-          action: 'search_files',
-          ...searchSkillFiles(records, {
-            requestedSkillName: normalizedArgs.skill_name,
-            pattern: normalizedArgs.pattern,
-            regex: normalizedArgs.regex,
-            case_mode: normalizedArgs.case_mode,
-            path_glob: normalizedArgs.path_glob,
-            context_before: normalizedArgs.context_before,
-            context_after: normalizedArgs.context_after,
-            max_results: normalizedArgs.max_results
-          })
-        };
-      }
-      case 'read_detail': {
-        const record = await getSkillRecord(normalizedArgs.skill_name);
-        if (!record) {
-          throw new Error(`技能 ${normalizedArgs.skill_name} 不存在。`);
-        }
-        return {
-          ok: true,
-          action: 'read_detail',
-          skill: buildSkillDetail(record, {
-            contentReadArgs: normalizedArgs.read_options,
-            includeLineNumbers: normalizedArgs.include_line_numbers
-          })
-        };
-      }
-      case 'read_package': {
-        const record = await getSkillRecord(normalizedArgs.skill_name);
-        if (!record) {
-          throw new Error(`技能 ${normalizedArgs.skill_name} 不存在。`);
-        }
-        return {
-          ok: true,
-          action: 'read_package',
-          skill: buildSkillPackagePayload(record, {
-            contentReadArgs: normalizedArgs.read_options
-          })
-        };
-      }
-      case 'read_file': {
-        const record = await getSkillRecord(normalizedArgs.skill_name);
-        if (!record) {
-          throw new Error(`技能 ${normalizedArgs.skill_name} 不存在。`);
-        }
-        return {
-          ok: true,
-          action: 'read_file',
-          skill: buildSkillFilePayload(record, normalizedArgs.file_path, {
-            contentReadArgs: normalizedArgs.read_options,
-            includeLineNumbers: normalizedArgs.include_line_numbers
-          })
-        };
-      }
       case 'create_skill':
-        return await createSkill(normalizedArgs.skill, {
-          tabId: options?.tabId,
-          createMode: normalizedArgs.create_mode
-        });
-      case 'update':
-        return await updateSkill(normalizedArgs.skill, { tabId: options?.tabId });
-      case 'apply_patch':
-        return await applySkillPatch(normalizedArgs.patch, {
-          tabId: options?.tabId,
-          expectedEnvironmentId: normalizedArgs.expected_environment_id
-        });
-      case 'copy_file':
-        return await copySkillFile(
-          normalizedArgs.skill_name,
-          normalizedArgs.source_file_path,
-          normalizedArgs.destination_file_path,
-          { tabId: options?.tabId }
-        );
+        return await createSkill(normalizedArgs.skill);
       case 'delete_skill':
-        return await deleteSkill(normalizedArgs.skill_name, { tabId: options?.tabId });
+        return await deleteSkill(normalizedArgs.skill_name);
       case 'enable_skill':
-        return await setSkillEnabled(normalizedArgs.skill_name, true, { tabId: options?.tabId });
+        return await setSkillEnabled(normalizedArgs.skill_name, true);
       case 'disable_skill':
-        return await setSkillEnabled(normalizedArgs.skill_name, false, { tabId: options?.tabId });
+        return await setSkillEnabled(normalizedArgs.skill_name, false);
       case 'mount_on_current_page':
         return {
           action: 'mount_on_current_page',
           ...(await mountSkillOnCurrentPage(normalizedArgs.skill_name, { tabId: options?.tabId }))
         };
-      case 'refresh_current_document': {
-        if (normalizedArgs.skill_name) {
-          const record = await getSkillRecord(normalizedArgs.skill_name);
-          if (!record) {
-            throw new Error(`技能 ${normalizedArgs.skill_name} 不存在。`);
-          }
-        }
-        const refreshResult = await syncCurrentDocumentSkills(options?.tabId);
-        return {
-          ok: refreshResult.ok === true,
-          action: 'refresh_current_document',
-          requested_skill_name: normalizedArgs.skill_name,
-          refreshed_current_document: true,
-          refresh_result: refreshResult,
-          error: refreshResult.ok === true ? null : refreshResult.error
-        };
-      }
       default:
         throw new Error(`未处理的 skill_registry action：${normalizedArgs.action}`);
     }
@@ -890,6 +771,7 @@ export function createSkillManager(options = {}) {
     createSkill,
     deleteSkill,
     executeRegistryAction,
+    executeVirtualFileAction,
     getSkillRecord,
     initialize: reconcileRegisteredSkills,
     listMatchingSkillSummariesForTab,
@@ -897,7 +779,6 @@ export function createSkillManager(options = {}) {
     mountSkillOnCurrentPage,
     reconcileRegisteredSkills,
     setSkillEnabled,
-    syncCurrentDocumentSkills,
-    updateSkill
+    syncCurrentDocumentSkills
   };
 }

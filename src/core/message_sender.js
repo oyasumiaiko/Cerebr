@@ -142,13 +142,11 @@ import {
 } from '../agent_tools/request_user_input/tool.js';
 import {
   CONVERSATION_DOCUMENT_CHANGE_EVENT_NAME,
-  VIRTUAL_FILE_TARGET_KIND_ROOT,
-  VIRTUAL_FILE_TARGET_KIND_SKILL,
   buildConversationDocumentActionPayloadFromVirtualFileAction,
-  buildSkillRegistryFileActionPayloadFromVirtualFileAction,
+  buildSkillVirtualFileActionPayload,
   executeConversationDocumentAction,
   normalizeVirtualFileApplyPatchCustomInput,
-  normalizeVirtualFileResultFromSkillRegistryAction,
+  normalizeVirtualFileResultFromSkillAction,
   normalizeVirtualFileToolArguments
 } from '../agent_tools/virtual_file_io/index.js';
 import {
@@ -9744,14 +9742,54 @@ export function createMessageSender(appContext) {
     }
   }
 
+  async function executeResponsesSkillVirtualFileInternalAction(rawArgs) {
+    try {
+      if (typeof utils?.executeSkillVirtualFileAction !== 'function') {
+        throw new Error('当前客户端没有可用的 Skill 虚拟文件执行入口。');
+      }
+      const result = await utils.executeSkillVirtualFileAction(rawArgs);
+      if (result?.success === true) {
+        const payload = { ...result };
+        delete payload.success;
+        return payload;
+      }
+      const error = new Error((typeof result?.error === 'string' && result.error.trim())
+        ? result.error.trim()
+        : 'Skill 虚拟文件操作失败。');
+      for (const key of [
+        'name',
+        'code',
+        'stage',
+        'state_changed',
+        'reload_required',
+        'retryable',
+        'tool_output',
+        'line_number',
+        'hunk_index',
+        'file_path',
+        'environment_id',
+        'skill_name',
+        'revision',
+        'sidebar_contract',
+        'background_contract'
+      ]) {
+        if (result?.[key] !== undefined) error[key] = result[key];
+      }
+      throw error;
+    } catch (error) {
+      return {
+        ok: false,
+        error: normalizeResponsesCustomToolError(error)
+      };
+    }
+  }
+
   async function executeResponsesVirtualFileFunction(toolName, rawArgs, options = {}) {
     try {
       const normalizedArgs = options?.argumentsAreNormalized === true
         ? rawArgs
-        : normalizeVirtualFileToolArguments(toolName, rawArgs, {
-            defaultTargetKind: VIRTUAL_FILE_TARGET_KIND_ROOT
-          });
-      if (normalizedArgs.target.kind === VIRTUAL_FILE_TARGET_KIND_ROOT) {
+        : normalizeVirtualFileToolArguments(toolName, rawArgs);
+      if (normalizedArgs.environment.kind === 'root') {
         const conversationId = await resolveConversationIdForConversationDocumentTool(options);
         const result = await executeConversationDocumentAction(
           toolName,
@@ -9763,15 +9801,14 @@ export function createMessageSender(appContext) {
         }
         return {
           ...result,
-          target: result?.target || normalizedArgs.target
+          environment: normalizedArgs.environment
         };
       }
 
-      const skillResult = await executeResponsesSkillRegistryInternalAction(
-        buildSkillRegistryFileActionPayloadFromVirtualFileAction(toolName, normalizedArgs),
-        options
+      const skillResult = await executeResponsesSkillVirtualFileInternalAction(
+        buildSkillVirtualFileActionPayload(toolName, normalizedArgs)
       );
-      return normalizeVirtualFileResultFromSkillRegistryAction(toolName, skillResult, normalizedArgs);
+      return normalizeVirtualFileResultFromSkillAction(toolName, skillResult, normalizedArgs);
     } catch (error) {
       return {
         ok: false,
@@ -9784,9 +9821,8 @@ export function createMessageSender(appContext) {
    * 执行扩展侧 JS 脚本注册表工具。
    *
    * 设计说明：
-   * - 存储管理完全走扩展侧 skill package 层，当前默认落到 IndexedDB；
-   * - refresh 仅在显式请求时发生，并复用现有 `utils.executeJsRuntime`；
-   * - 默认 runtime 环境跟随当前页面工具模式，除非调用参数显式覆盖。
+   * - 存储管理完全走扩展侧 Skill package 层，当前默认落到 IndexedDB；
+   * - 当前工具只执行公开的 Skill 生命周期动作；页面挂载必须使用显式 action。
    *
    * @param {any} rawArgs
    * @param {{attemptState?:any}} [options]
@@ -10063,7 +10099,10 @@ export function createMessageSender(appContext) {
 
     const paginatedOutput = responsesToolOutputPageCache.paginate(
       serializedOutput,
-      maxOutputChars
+      maxOutputChars,
+      {
+        format: localToolSpec?.outputKind === 'virtual_file' ? 'plain' : 'xml'
+      }
     );
     return {
       type: 'function_call_output',
