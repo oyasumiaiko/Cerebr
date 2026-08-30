@@ -360,7 +360,7 @@ test('buildResponsesGenericXmlToolOutputContentItems 在没有 value 字段时�
   const { buildResponsesGenericXmlToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesGenericXmlToolOutputContentItems('tool_result', {
     ok: true,
-    action: 'read_detail',
+    action: 'custom_action',
     skill: {
       name: 'skill-creator',
       builtin: true
@@ -370,7 +370,7 @@ test('buildResponsesGenericXmlToolOutputContentItems 在没有 value 字段时�
   assert.match(text, /<tool_result schema_version="2" trust="untrusted">/);
   assert.match(text, /<metadata>/);
   assert.match(text, /<result>/);
-  assert.match(text, /"action": "read_detail"/);
+  assert.match(text, /"action": "custom_action"/);
   assert.match(text, /"name": "skill-creator"/);
 });
 
@@ -397,59 +397,9 @@ test('统一出口可以限制任意 serializer 生成的完整文本', async ()
   assert.match(text, /&lt;skill_registry_result/);
 });
 
-test('buildResponsesSkillRegistryToolOutputContentItems 会把 apply_patch 压成简洁变更摘要', async () => {
-  const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
-  const items = buildResponsesSkillRegistryToolOutputContentItems({
-    ok: true,
-    action: 'apply_patch',
-    skill: {
-      name: 'worldquant-brain-sim-state',
-      revision: 8
-    },
-    affected_files: {
-      added: ['references/experiment-loop.md'],
-      modified: ['SKILL.md'],
-      deleted: []
-    },
-    refreshed_current_document: true,
-    refresh_result: {
-      ok: true,
-      value: {
-        active_skills: ['worldquant-brain-sim-state']
-      }
-    }
-  });
-  const text = formatResponsesToolOutputForDisplay(items);
-  assert.match(text, /Success\. Updated the following files:/);
-  assert.match(text, /A references\/experiment-loop\.md/);
-  assert.match(text, /M SKILL\.md/);
-  assert.match(text, /Mounted on current document: worldquant-brain-sim-state/);
-  assert.doesNotMatch(text, /<skill_registry_result>/);
-  assert.doesNotMatch(text, /"affected_files"/);
-  assert.doesNotMatch(text, /"match": \[/);
-});
-
-test('buildResponsesSkillRegistryToolOutputContentItems 会把文件管理操作压成单行摘要', async () => {
-  const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
-  const items = buildResponsesSkillRegistryToolOutputContentItems({
-    ok: true,
-    action: 'copy_file',
-    skill: {
-      name: 'dom-probe'
-    },
-    source_file_path: 'references/a.md',
-    destination_file_path: 'references/b.md'
-  });
-  const text = formatResponsesToolOutputForDisplay(items);
-  assert.doesNotMatch(text, /<skill_registry_result/);
-  assert.equal(text, 'Success.');
-  assert.doesNotMatch(text, /"source_file_path"/);
-});
-
 test('buildResponsesConversationDocumentToolOutputContentItems 不再把 workspace 展示规则重复写进工具结果', async () => {
   const {
     buildResponsesConversationDocumentToolOutputContentItems,
-    buildResponsesSkillRegistryToolOutputContentItems,
     formatResponsesToolOutputForDisplay
   } = await loadResponsesToolOutputModule();
 
@@ -481,290 +431,54 @@ test('buildResponsesConversationDocumentToolOutputContentItems 不再把 workspa
   const deleteOnlyText = formatResponsesToolOutputForDisplay(deleteOnlyItems);
   assert.doesNotMatch(deleteOnlyText, /Reminder:/);
 
-  const skillItems = buildResponsesSkillRegistryToolOutputContentItems({
-    ok: true,
-    action: 'apply_patch',
-    skill: {
-      name: 'worldquant-brain-sim-state',
-      revision: 8
-    },
-    affected_files: {
-      added: ['references/experiment-loop.md'],
-      modified: ['SKILL.md'],
-      deleted: []
-    }
-  });
-  const skillText = formatResponsesToolOutputForDisplay(skillItems);
-  assert.doesNotMatch(skillText, /会话文件/);
-  assert.doesNotMatch(skillText, /Reminder:/);
 });
 
-test('buildResponsesSkillRegistryToolOutputContentItems 会把模板式 create_skill 渲染成脚手架摘要与 next steps', async () => {
+test('buildResponsesSkillRegistryToolOutputContentItems 只返回 create_skill 的事实结果', async () => {
   const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
   const items = buildResponsesSkillRegistryToolOutputContentItems({
     ok: true,
     action: 'create_skill',
-    create_mode: 'template',
     normalized_name: 'worldquant-dom-helper',
     created_files: [
       'SKILL.md',
       'references/api_reference.md'
     ],
-    selected_resources: ['references'],
-    examples_created: true,
-    next_steps: [
-      'Edit SKILL.md and replace the placeholder sections with real trigger rules, workflow, and concrete examples.',
-      'If this skill later needs browser runtime code, patch manifest.json to add match and runtime.entry_path, then add the corresponding JS files with apply_patch.'
-    ],
     skill: {
       name: 'worldquant-dom-helper',
       revision: 1
-    },
-    refreshed_current_document: false,
-    refresh_result: null
+    }
   });
   const text = formatResponsesToolOutputForDisplay(items);
   assert.match(text, /Created skill scaffold worldquant-dom-helper/);
   assert.match(text, /Created files:/);
   assert.match(text, /- SKILL\.md/);
-  assert.match(text, /Selected resources: references/);
-  assert.match(text, /Examples created: yes/);
-  assert.match(text, /Next steps:/);
-  assert.match(text, /1\. Edit SKILL\.md/);
+  assert.doesNotMatch(text, /Selected resources|Examples created|Next steps/);
   assert.doesNotMatch(text, /Mounted on current document:/);
 });
 
-test('buildResponsesSkillRegistryToolOutputContentItems 只把真实 active skills 渲染为 mounted', async () => {
+test('buildResponsesSkillRegistryToolOutputContentItems 只渲染当前生命周期结果', async () => {
   const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
-  const items = buildResponsesSkillRegistryToolOutputContentItems({
+  const enabledItems = buildResponsesSkillRegistryToolOutputContentItems({
     ok: true,
-    action: 'create_skill',
-    skill: {
-      name: 'worldquant-brain-knowledge-cache',
-      revision: 1
-    },
-    refreshed_current_document: true,
-    refresh_result: {
-      ok: true,
-      matched_skills: [
-        { name: 'worldquant-brain-knowledge-cache' },
-        { name: 'worldquant-brain-sim-state' }
-      ],
-      active_skills: ['worldquant-brain-sim-state'],
-      value: {
-        active_skills: ['worldquant-brain-sim-state']
-      }
-    }
-  });
-  const text = formatResponsesToolOutputForDisplay(items);
-  assert.match(text, /Created skill worldquant-brain-knowledge-cache/);
-  assert.match(text, /Mounted on current document: worldquant-brain-sim-state/);
-  assert.doesNotMatch(text, /Mounted on current document: .*worldquant-brain-knowledge-cache/);
-});
-
-test('buildResponsesSkillRegistryToolOutputContentItems 会显式提示 refresh 失败而不是伪造 mounted', async () => {
-  const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
-  const items = buildResponsesSkillRegistryToolOutputContentItems({
-    ok: true,
-    action: 'create_skill',
-    skill: {
-      name: 'worldquant-brain-knowledge-cache',
-      revision: 1
-    },
-    refreshed_current_document: true,
-    refresh_result: {
-      ok: false,
-      matched_skills: [
-        { name: 'worldquant-brain-knowledge-cache' }
-      ],
-      error: {
-        message: 'Skill not mounted: worldquant-brain-knowledge-cache'
-      }
-    }
-  });
-  const text = formatResponsesToolOutputForDisplay(items);
-  assert.match(text, /Current document refresh failed: Skill not mounted: worldquant-brain-knowledge-cache/);
-  assert.doesNotMatch(text, /Mounted on current document:/);
-});
-
-test('buildResponsesSkillRegistryToolOutputContentItems 对 read_file 改为 shell 风格 header + 原文内容', async () => {
-  const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
-  const items = buildResponsesSkillRegistryToolOutputContentItems({
-    ok: true,
-    action: 'read_file',
-    skill: {
-      name: 'skill-creator',
-      file: {
-        path: 'SKILL.md',
-        content: 'Alpha',
-        content_read: {
-          mode: 'preview',
-          total_chars: 5,
-          returned_chars: 5
-        }
-      }
-    }
-  });
-  const text = formatResponsesToolOutputForDisplay(items);
-  assert.match(text, /^# skill-creator\/SKILL\.md \(chars 0-5\/5\)\nAlpha/m);
-  assert.doesNotMatch(text, /<skill_registry_result/);
-  assert.doesNotMatch(text, /<content>/);
-  assert.doesNotMatch(text, /<metadata>/);
-  assert.doesNotMatch(text, /"content": "Alpha"/);
-});
-
-test('buildResponsesSkillRegistryToolOutputContentItems 对带行号 read_file 只输出 numbered_content，且显式字符范围不追加截断提示', async () => {
-  const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
-  const items = buildResponsesSkillRegistryToolOutputContentItems({
-    ok: true,
-    action: 'read_file',
-    skill: {
-      name: 'skill-creator',
-      file: {
-        path: 'SKILL.md',
-        content: 'Alpha',
-        numbered_content: '12 | Alpha',
-        content_read: {
-          mode: 'char_range',
-          total_chars: 100,
-          skip_chars: 11,
-          max_output_chars: 5,
-          returned_chars: 5,
-          omitted_chars: 95,
-          omitted_pct: '95.00',
-          truncated: true,
-          has_more_after_range: true
-        }
-      }
-    }
-  });
-  const text = formatResponsesToolOutputForDisplay(items);
-  assert.match(text, /^# skill-creator\/SKILL\.md \(chars 11-16\/100; more\)\n12 \| Alpha/m);
-  assert.doesNotMatch(text, /<numbered_content>/);
-  assert.doesNotMatch(text, /<content>/);
-  assert.doesNotMatch(text, /output too long; truncated/);
-});
-
-test('buildResponsesSkillRegistryToolOutputContentItems 对 search_files 输出 rg 风格 matches 块', async () => {
-  const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
-  const items = buildResponsesSkillRegistryToolOutputContentItems({
-    ok: true,
-    action: 'search_files',
-    pattern: 'token',
-    total_matches: 1,
-    returned_match_count: 1,
-    matches: [
-      {
-        match_id: 'm1',
-        skill_name: 'dom-probe',
-        file_path: 'src/main.js',
-        line_number: 2,
-        column_start: 7,
-        column_end: 12,
-        match_text: 'token',
-        line_text: 'alpha token beta',
-        before: [{ line_number: 1, text: 'before line' }],
-        after: [{ line_number: 3, text: 'after line' }]
-      }
-    ]
-  });
-  const text = formatResponsesToolOutputForDisplay(items);
-  assert.doesNotMatch(text, /<skill_registry_result/);
-  assert.doesNotMatch(text, /<matches>/);
-  assert.match(text, /^skill:dom-probe\tsrc\/main\.js\n1-before line\n2:7:alpha token beta\n3-after line/m);
-  assert.equal((text.match(/skill:dom-probe\tsrc\/main\.js/g) || []).length, 1);
-  assert.doesNotMatch(text, /<match rank="1">/);
-  assert.doesNotMatch(text, /"line_text": "alpha token beta"/);
-});
-
-test('buildResponsesSkillRegistryToolOutputContentItems 对 read_detail 输出说明正文和文件列表纯文本', async () => {
-  const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
-  const items = buildResponsesSkillRegistryToolOutputContentItems({
-    ok: true,
-    action: 'read_detail',
+    action: 'enable_skill',
     skill: {
       name: 'dom-probe',
-      instruction: {
-        path: 'SKILL.md',
-        content: 'Instruction body',
-        content_read: {
-          mode: 'preview',
-          total_chars: 16,
-          returned_chars: 16
-        }
-      },
-      files: {
-        total_count: 2,
-        returned_file_count: 2,
-        files: [
-          {
-            path: 'SKILL.md',
-            kind: 'instruction',
-            is_instruction: true,
-            size_chars: 16
-          },
-          {
-            path: 'src/main.js',
-            kind: 'runtime_source',
-            size_chars: 18
-          }
-        ]
-      }
+      revision: 4
     }
   });
-  const text = formatResponsesToolOutputForDisplay(items);
-  assert.match(text, /^# dom-probe\/SKILL\.md \(chars 0-16\/16\)\nInstruction body/m);
-  assert.match(text, /Files:\nSKILL\.md\nsrc\/main\.js/);
-  assert.doesNotMatch(text, /<skill_registry_result/);
-  assert.doesNotMatch(text, /<files>/);
-  assert.doesNotMatch(text, /<content>/);
-});
+  const enabledText = formatResponsesToolOutputForDisplay(enabledItems);
+  assert.equal(enabledText, 'Enabled skill dom-probe (revision 4).');
+  assert.doesNotMatch(enabledText, /refresh|Mounted on current document/);
 
-test('buildResponsesSkillRegistryToolOutputContentItems 对 read_package 输出多文件原文块纯文本', async () => {
-  const { buildResponsesSkillRegistryToolOutputContentItems, formatResponsesToolOutputForDisplay } = await loadResponsesToolOutputModule();
-  const items = buildResponsesSkillRegistryToolOutputContentItems({
+  const disabledItems = buildResponsesSkillRegistryToolOutputContentItems({
     ok: true,
-    action: 'read_package',
+    action: 'disable_skill',
     skill: {
       name: 'dom-probe',
-      revision: 3,
-      files: {
-        total_count: 2,
-        returned_file_count: 2,
-        files: [
-          {
-            path: 'SKILL.md',
-            kind: 'instruction',
-            content: 'Instruction body',
-            content_read: {
-              mode: 'preview',
-              total_chars: 16,
-              returned_chars: 16
-            }
-          },
-          {
-            path: 'src/main.js',
-            kind: 'runtime_source',
-            content: 'console.log("hi");',
-            content_read: {
-              mode: 'preview',
-              total_chars: 18,
-              returned_chars: 18
-            }
-          }
-        ]
-      }
+      revision: 5
     }
   });
-  const text = formatResponsesToolOutputForDisplay(items);
-  assert.match(text, /^# dom-probe\/SKILL\.md \(chars 0-16\/16\)\nInstruction body/m);
-  assert.match(text, /^# dom-probe\/src\/main\.js \(chars 0-18\/18\)\nconsole\.log\("hi"\);/m);
-  assert.match(text, /console\.log\("hi"\);/);
-  assert.doesNotMatch(text, /<skill_registry_result/);
-  assert.doesNotMatch(text, /<files>/);
-  assert.doesNotMatch(text, /<file rank=/);
-  assert.doesNotMatch(text, /<content>/);
-  assert.doesNotMatch(text, /"content": "Instruction body"/);
+  assert.equal(formatResponsesToolOutputForDisplay(disabledItems), 'Disabled skill dom-probe (revision 5).');
 });
 
 test('buildResponsesSkillRegistryToolOutputContentItems 会把 mount_on_current_page 压成简洁挂载摘要', async () => {

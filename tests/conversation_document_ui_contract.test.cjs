@@ -28,11 +28,12 @@ test('统一工具注册表已注册对话文档工具，message_sender 保留�
   assert.match(source, /case 'virtual_file':\s*outputPayload = await executeResponsesVirtualFileFunction\(localFunctionName, toolArgs, options\)/s);
   assert.match(source, /case 'virtual_file':\s*serializedOutput = serializeResponsesConversationDocumentFunctionToolOutput\(localFunctionName, outputPayload\)/s);
   assert.match(source, /splitResponsesToolOutputControl\(parsedArgs, \{\s*toolName: localFunctionName\s*\}\)/s);
-  assert.match(source, /responsesToolOutputPageCache\.paginate\(\s*serializedOutput,\s*maxOutputChars\s*\)/s);
+  assert.match(source, /responsesToolOutputPageCache\.paginate\(\s*serializedOutput,\s*maxOutputChars,\s*\{\s*format: localToolSpec\?\.outputKind === 'virtual_file' \? 'plain' : 'xml'\s*\}\s*\)/s);
   assert.match(source, /case 'read_tool_output':\s*outputPayload = executeResponsesReadToolOutputFunction/s);
   assert.match(source, /consumePendingUploadedFileEnvironmentEntries/);
   assert.match(source, /uploadedFiles: uploadedFileEnvironmentEntries/);
   assert.match(sidebarAppContextSource, /executeSkillRegistryAction = async \(payload = \{}\)/);
+  assert.match(sidebarAppContextSource, /executeSkillVirtualFileAction = async \(payload = \{}\)/);
 });
 
 test('message_processor 已把裸相对路径链接替换为文档卡片，并监听文档变更事件', async () => {

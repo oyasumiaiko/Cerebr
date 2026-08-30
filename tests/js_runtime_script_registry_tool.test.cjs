@@ -12,48 +12,46 @@ function clone(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
 }
 
-function createMockStore(initialPackages = []) {
-  const packagesByName = new Map(
-    (Array.isArray(initialPackages) ? initialPackages : [])
-      .map((item) => [item.name, clone(item)])
-  );
-
+function createMockStore() {
+  const rows = new Map();
   return {
     async listManifests() {
-      return Array.from(packagesByName.values()).map((pkg) => {
-        const { files, ...manifest } = clone(pkg);
+      return Array.from(rows.values()).map((record) => {
+        const { files, ...manifest } = clone(record);
         return {
           ...manifest,
-          files_meta: Array.isArray(files)
-            ? files.map((file) => ({ path: file.path, kind: file.kind }))
-            : []
+          files_meta: files.map((file) => ({ path: file.path, kind: file.kind }))
         };
       });
     },
-    async getManifest(skillName) {
-      const pkg = packagesByName.get(String(skillName || ''));
-      if (!pkg) return null;
-      const { files, ...manifest } = clone(pkg);
+    async getManifest(name) {
+      const record = rows.get(name);
+      if (!record) return null;
+      const { files, ...manifest } = clone(record);
       return {
         ...manifest,
-        files_meta: Array.isArray(files)
-          ? files.map((file) => ({ path: file.path, kind: file.kind }))
-          : []
+        files_meta: files.map((file) => ({ path: file.path, kind: file.kind }))
       };
     },
-    async getPackage(skillName) {
-      return clone(packagesByName.get(String(skillName || '')) || null);
+    async getPackage(name) {
+      return clone(rows.get(name) || null);
     },
-    async savePackage(skillPackage) {
-      packagesByName.set(skillPackage.name, clone(skillPackage));
-      return clone(skillPackage);
+    async savePackage(record, options = {}) {
+      const current = rows.get(record.name) || null;
+      const actualRevision = current ? current.revision : null;
+      if (Object.prototype.hasOwnProperty.call(options, 'expectedRevision')) {
+        const expected = options.expectedRevision;
+        if ((expected === null && current) || (expected !== null && expected !== actualRevision)) {
+          const error = new Error('revision conflict');
+          error.code = 'SKILL_REVISION_CONFLICT';
+          error.state_changed = false;
+          throw error;
+        }
+      }
+      rows.set(record.name, clone(record));
     },
-    async deletePackage(skillName) {
-      packagesByName.delete(String(skillName || ''));
-      return { ok: true };
-    },
-    dump() {
-      return Array.from(packagesByName.values()).map(clone);
+    async deletePackage(name) {
+      rows.delete(name);
     }
   };
 }
@@ -65,572 +63,247 @@ function buildSkillInput(name = 'dom-probe') {
     interface: {
       display_name: 'DOM Probe',
       short_description: '读取当前页面标题和 URL',
-      default_prompt: 'Read the current page title and URL.'
+      default_prompt: null
     },
     match: ['https://*.example.com/*'],
-    instruction: {
-      path: 'SKILL.md'
-    },
-    runtime: {
-      entry_path: 'src/main.js'
-    },
+    enabled: true,
+    instruction: { path: 'SKILL.md' },
+    runtime: { entry_path: 'src/main.js' },
     files: [
-      {
-        path: 'SKILL.md',
-        content: '# DOM Probe\n\n在需要读取页面基础信息时使用。'
-      },
+      { path: 'SKILL.md', content: '# DOM Probe\n\nUse this skill.\n' },
       {
         path: 'src/main.js',
-        content: 'const helpers = await require("./helpers/dom.js"); return { read() { return { title: helpers.readTitle(), href: location.href }; } };'
+        content: 'const token = document.title; const again = document.title;\nreturn token;\n'
       },
-      {
-        path: 'src/helpers/dom.js',
-        content: 'module.exports = { readTitle() { return document.title; } };'
-      }
+      { path: 'empty.txt', content: '' }
     ]
   };
 }
 
-function buildCreateTemplateInput(name = 'DOM Probe') {
-  return {
-    name,
-    description: '读取页面标题和链接',
-    interface: {
-      short_description: '读取当前页面标题和 URL',
-      default_prompt: 'Read the current page title and URL.'
-    },
-    resources: ['references'],
-    examples: true
-  };
-}
-
-function buildLongSkillInput(name = 'long-dom-probe') {
-  const instructionLines = Array.from({ length: 40 }, (_, index) => `Line ${index + 1}: ${'A'.repeat(400)}`);
-  const instructionContent = `# Long DOM Probe\n\n${instructionLines.join('\n')}\n`;
-  const runtimeContent = `${'const value = "x";\n'.repeat(800)}return { read() { return value; } };`;
-  return {
-    ...buildSkillInput(name),
-    files: [
-      {
-        path: 'SKILL.md',
-        content: instructionContent
-      },
-      {
-        path: 'src/main.js',
-        content: runtimeContent
-      },
-      {
-        path: 'src/helpers/dom.js',
-        content: 'module.exports = { readTitle() { return document.title; } };'
-      }
-    ]
-  };
-}
-
-test('normalizeSkillMatchPatterns 与 URL 匹配遵循第一阶段 Chrome/TM 风格约束', async () => {
+test('Skill match 规则保持 Chrome/Tampermonkey 风格闭集', async () => {
   const {
     normalizeSkillMatchPatterns,
     skillMatchPatternMatchesUrl
   } = await loadSkillRegistryToolModule();
 
   assert.deepEqual(
-    normalizeSkillMatchPatterns(['https://*.example.com/*', 'file:///*']),
-    ['https://*.example.com/*', 'file:///*']
+    normalizeSkillMatchPatterns(['https://*.example.com/*', 'https://*.example.com/*']),
+    ['https://*.example.com/*']
   );
-
   assert.equal(
     skillMatchPatternMatchesUrl('https://*.example.com/*', 'https://a.example.com/path?q=1'),
-    true
-  );
-  assert.equal(
-    skillMatchPatternMatchesUrl('https://*.example.com/*', 'https://example.com/root'),
-    true
-  );
-  assert.equal(
-    skillMatchPatternMatchesUrl('*://*.example.com/*', 'http://b.example.com/path'),
-    true
-  );
-  assert.equal(
-    skillMatchPatternMatchesUrl('*://*.example.com/*', 'https://b.example.com/path'),
     true
   );
   assert.equal(
     skillMatchPatternMatchesUrl('*://*.example.com/*', 'file:///tmp/a.txt'),
     false
   );
-
   assert.throws(
     () => normalizeSkillMatchPatterns(['https://exa*mple.com/*']),
     /不支持的 match 规则/
   );
 });
 
-test('buildStoredSkillRecord / saveStoredSkillPackage / getStoredSkillPackage 保持 package 结构与渐进式披露边界', async () => {
+test('Skill package 允许空文件并通过单一读取搜索语义访问', async () => {
   const {
-    buildSkillDetail,
     buildSkillFileIndexPayload,
     buildSkillFilePayload,
-    buildSkillPackagePayload,
     buildSkillSummary,
     buildStoredSkillRecord,
     getStoredSkillPackage,
-    searchSkillFiles,
-    saveStoredSkillPackage
+    saveStoredSkillPackage,
+    searchSkillFiles
   } = await loadSkillRegistryToolModule();
 
   const store = createMockStore();
   const created = buildStoredSkillRecord(buildSkillInput());
-
-  assert.equal(created.revision, 1);
-  assert.equal(created.interface.display_name, 'DOM Probe');
-  assert.equal(created.instruction.path, 'SKILL.md');
-  assert.equal(created.runtime.entry_path, 'src/main.js');
-  assert.equal(created.files.length, 3);
-
-  await saveStoredSkillPackage(created, store);
+  await saveStoredSkillPackage(created, store, { expectedRevision: null });
   const loaded = await getStoredSkillPackage('dom-probe', store);
-  assert.equal(loaded.name, 'dom-probe');
 
-  const summary = buildSkillSummary(loaded);
-  assert.equal(summary.interface.short_description, '读取当前页面标题和 URL');
-  assert.equal(summary.files.total_count, 4);
+  assert.equal(loaded.files.find((file) => file.path === 'empty.txt').content, '');
+  assert.equal(buildSkillSummary(loaded).files.total_count, 4);
 
-  const detail = buildSkillDetail(loaded);
-  assert.equal(detail.instruction.path, 'SKILL.md');
-  assert.match(detail.instruction.content, /DOM Probe/);
-  assert.equal(detail.instruction.content_read.mode, 'full');
-  assert.equal(detail.files.virtual_manifest_path, 'manifest.json');
-  assert.equal(detail.files.files[0].path, 'manifest.json');
-  assert.equal(detail.files.files[0].content, undefined);
-
-  const source = buildSkillPackagePayload(loaded);
-  assert.equal(source.manifest_path, 'manifest.json');
-  assert.equal(source.runtime.entry_path, 'src/main.js');
-  assert.equal(source.files.files.length, 4);
-  assert.match(source.files.files[0].content, /"instruction"/);
-  assert.match(source.files.files[3].content, /document\.title/);
-
-  const manifestFile = buildSkillFilePayload(loaded, 'manifest.json');
-  assert.equal(manifestFile.file.path, 'manifest.json');
-  assert.equal(manifestFile.file.is_manifest, true);
-  assert.equal(manifestFile.file.content_read.mode, 'full');
-  assert.doesNotMatch(manifestFile.file.content, /"name":/);
-  assert.doesNotMatch(manifestFile.file.content, /"kind":/);
-  assert.match(manifestFile.file.content, /"description": "读取页面标题和链接"/);
-
-  const fileIndex = buildSkillFileIndexPayload(loaded, {
-    requestedSkillName: 'dom-probe'
-  });
-  assert.equal(fileIndex.total_files, 4);
-  assert.equal(fileIndex.files[0].skill_name, 'dom-probe');
-  assert.equal(fileIndex.files[0].path, 'manifest.json');
-  assert.equal(fileIndex.files[0].is_manifest, true);
-
-  const instructionFile = buildSkillFilePayload(loaded, 'SKILL.md');
-  assert.equal(instructionFile.has_runtime, true);
-  assert.equal(instructionFile.runtime_entry_path, 'src/main.js');
-  assert.equal(instructionFile.runtime_file_count, 2);
-  assert.match(instructionFile.runtime_hint, /Read SKILL\.md first/);
-  assert.match(instructionFile.runtime_hint, /js_runtime_execute/);
-  assert.match(instructionFile.runtime_hint, /mounted automatically/);
-
-  const searchResult = searchSkillFiles(loaded, {
+  const index = buildSkillFileIndexPayload(loaded, {
     requestedSkillName: 'dom-probe',
-    pattern: 'readTitle'
+    path_glob: null
   });
-  assert.equal(searchResult.total_matches, 2);
-  assert.equal(searchResult.matches[0].skill_name, 'dom-probe');
-  assert.equal(searchResult.matches[0].file_path, 'src/main.js');
-  assert.equal(searchResult.matches[0].line_number, 1);
-  assert.equal(searchResult.matches[0].column_start > 0, true);
-  assert.equal(searchResult.matches[0].column_end >= searchResult.matches[0].column_start, true);
-  assert.match(searchResult.matches[0].line_text, /readTitle/);
+  assert.deepEqual(index.files.map((file) => file.path), [
+    'manifest.json',
+    'SKILL.md',
+    'src/main.js',
+    'empty.txt'
+  ]);
 
-  assert.equal(store.dump().length, 1);
+  const ranged = buildSkillFilePayload(loaded, 'SKILL.md', {
+    contentReadArgs: { start_line: 1, end_line: 1 }
+  });
+  assert.equal(ranged.file.content, '# DOM Probe\n');
+  assert.equal(ranged.file.numbered_content, undefined);
+
+  const search = searchSkillFiles(loaded, {
+    pattern: 'document.title',
+    regex: false,
+    ignore_case: false,
+    path_glob: 'src/**/*.js',
+    context_lines: 0
+  });
+  assert.equal(search.total_matching_lines, 1);
+  assert.equal(search.groups.length, 1);
+  assert.equal(search.groups[0].lines.length, 1);
+  assert.equal(search.groups[0].lines[0].is_match, true);
 });
 
-test('normalizeSkillRegistryToolArguments 会收敛为新的 package/file action 集', async () => {
+test('skill_registry 只接受当前生命周期 action 与参数', async () => {
   const {
-    SKILL_REGISTRY_TOOL_NAME,
     buildSkillRegistryFunctionToolDefinition,
     normalizeSkillRegistryToolArguments
   } = await loadSkillRegistryToolModule();
 
-  const definition = buildSkillRegistryFunctionToolDefinition();
-  assert.equal(definition.name, SKILL_REGISTRY_TOOL_NAME);
-  assert.match(definition.parameters.properties.action.description, /create_skill/);
-  assert.match(definition.parameters.properties.action.description, /mount_on_current_page/);
-  assert.doesNotMatch(definition.parameters.properties.action.description, /read_file/);
-  assert.doesNotMatch(definition.parameters.properties.action.description, /apply_patch/);
-  assert.equal(definition.parameters.properties.skill.required.includes('name'), true);
-  assert.equal(definition.parameters.properties.skill.required.includes('match'), false);
-  assert.equal(definition.parameters.properties.skill.properties.resources.items.enum.includes('references'), true);
+  const definition = buildSkillRegistryFunctionToolDefinition({ exposeHostPageTools: true });
+  assert.deepEqual(
+    definition.parameters.properties.action.enum,
+    ['list', 'create_skill', 'delete_skill', 'enable_skill', 'disable_skill', 'mount_on_current_page']
+  );
+  assert.doesNotMatch(definition.description, /read_file|apply_patch|update|refresh_current_document/);
 
-  const normalizedCreate = normalizeSkillRegistryToolArguments({
-    action: 'create',
-    skill: buildCreateTemplateInput()
-  });
-  assert.equal(normalizedCreate.original_action, 'create');
-  assert.equal(normalizedCreate.action, 'create_skill');
-  assert.equal(normalizedCreate.create_mode, 'template');
-  assert.equal(normalizedCreate.deprecated_compat_action, false);
-  assert.equal(normalizedCreate.skill.requested_name, 'DOM Probe');
-  assert.equal(normalizedCreate.skill.name, 'dom-probe');
-  assert.equal(normalizedCreate.skill.interface.display_name, 'Dom Probe');
-  assert.deepEqual(normalizedCreate.skill.match, []);
-  assert.equal(normalizedCreate.skill.enabled, false);
-  assert.deepEqual(normalizedCreate.skill.resources, ['references']);
-  assert.equal(normalizedCreate.skill.examples, true);
-
-  const normalizedCompatCreate = normalizeSkillRegistryToolArguments({
+  const created = normalizeSkillRegistryToolArguments({
     action: 'create_skill',
-    skill: buildSkillInput()
-  });
-  assert.equal(normalizedCompatCreate.create_mode, 'package_compat');
-  assert.equal(normalizedCompatCreate.deprecated_compat_action, true);
-  assert.equal(normalizedCompatCreate.skill.instruction.path, 'SKILL.md');
-  assert.equal(normalizedCompatCreate.skill.files.length, 3);
-
-  const normalizedListFiles = normalizeSkillRegistryToolArguments({
-    action: 'list_files',
-    skill_name: 'dom-probe'
-  });
-  assert.equal(normalizedListFiles.original_action, 'list_files');
-  assert.equal(normalizedListFiles.action, 'list_files');
-  assert.equal(normalizedListFiles.skill_name, 'dom-probe');
-  assert.equal(normalizedListFiles.deprecated_compat_action, true);
-
-  const normalizedSearchFiles = normalizeSkillRegistryToolArguments({
-    action: 'search_files',
-    pattern: 'document.title',
-    context_before: 1,
-    context_after: 2,
-    path_glob: 'src/**/*.js',
-    max_results: 5
-  });
-  assert.deepEqual(normalizedSearchFiles, {
-    original_action: 'search_files',
-    action: 'search_files',
+    include_all_sites: null,
     skill_name: null,
-    skill: null,
-    file_path: null,
-    file: null,
-    patch: null,
-    pattern: 'document.title',
-    regex: false,
-    case_mode: 'smart',
-    path_glob: 'src/**/*.js',
-    context_before: 1,
-    context_after: 2,
-    max_results: null,
-    read_options: null,
-    include_line_numbers: false,
-    deprecated_compat_action: true,
-    next_instruction_path: null,
-    next_runtime_entry_path: null
+    skill: {
+      name: 'DOM Probe',
+      description: '读取页面标题和链接',
+      interface: {
+        display_name: null,
+        short_description: null,
+        default_prompt: null
+      },
+      enabled: null,
+      resources: ['references'],
+      examples: true
+    }
   });
+  assert.equal(created.action, 'create_skill');
+  assert.equal(created.skill.name, 'dom-probe');
+  assert.equal(created.create_mode, undefined);
 
-  const normalizedReadFile = normalizeSkillRegistryToolArguments({
-    action: 'read_file',
-    skill_name: 'dom-probe',
-    file_path: './src/helpers/dom.js',
-    include_line_numbers: true
-  });
-  assert.deepEqual(normalizedReadFile, {
-    original_action: 'read_file',
-    action: 'read_file',
-    skill_name: 'dom-probe',
-    skill: null,
-    file_path: 'src/helpers/dom.js',
-    file: null,
-    patch: null,
-    pattern: null,
-    regex: false,
-    case_mode: 'smart',
-    path_glob: null,
-    context_before: 0,
-    context_after: 0,
-    max_results: null,
-    read_options: {
-      mode: 'full',
-      skip_chars: 0,
-      start_line: null,
-      end_line: null
-    },
-    include_line_numbers: true,
-    deprecated_compat_action: true,
-    next_instruction_path: null,
-    next_runtime_entry_path: null
-  });
-
-  assert.throws(
-    () => normalizeSkillRegistryToolArguments({
-      action: 'write_file',
+  assert.deepEqual(
+    normalizeSkillRegistryToolArguments({
+      action: 'mount_on_current_page',
+      include_all_sites: null,
       skill_name: 'dom-probe',
-      file: {
-        path: 'src/runtime/new-main.js',
-        content: 'module.exports = { read() { return document.title; } };'
-      }
+      skill: null
     }),
-    /不支持的 action `write_file`/
+    {
+      action: 'mount_on_current_page',
+      skill_name: 'dom-probe',
+      skill: null
+    }
   );
 
-  assert.throws(
-    () => normalizeSkillRegistryToolArguments({
-      action: 'read_source_file',
-      skill_name: 'dom-probe',
-      file_path: 'src/helpers/dom.js'
-    }),
-    /不支持的 action `read_source_file`/
-  );
-
+  for (const action of ['create', 'update', 'read_file', 'list_files', 'search_files', 'apply_patch', 'refresh_current_document']) {
+    assert.throws(
+      () => normalizeSkillRegistryToolArguments({
+        action,
+        include_all_sites: null,
+        skill_name: null,
+        skill: null
+      }),
+      /不支持的 action/
+    );
+  }
   assert.throws(
     () => normalizeSkillRegistryToolArguments({
       action: 'create_skill',
+      include_all_sites: null,
+      skill_name: null,
       skill: {
-        ...buildCreateTemplateInput('Need Examples'),
+        name: 'x',
+        description: 'x',
+        interface: null,
+        enabled: null,
         resources: [],
-        examples: true
+        examples: false,
+        files: []
       }
     }),
-    /examples=true 时必须同时提供/
-  );
-
-  const normalizedApplyPatch = normalizeSkillRegistryToolArguments({
-    action: 'apply_patch',
-    skill_name: 'dom-probe',
-    patch: '*** Begin Patch\n*** Update File: src/main.js\n@@\n-old\n+new\n*** End Patch'
-  });
-  assert.deepEqual(normalizedApplyPatch, {
-    original_action: 'apply_patch',
-    action: 'apply_patch',
-    skill_name: null,
-    skill: null,
-    file_path: null,
-    file: null,
-    patch: '*** Begin Patch\n*** Update File: src/main.js\n@@\n-old\n+new\n*** End Patch',
-    expected_environment_id: 'skill:dom-probe',
-    pattern: null,
-    regex: false,
-    case_mode: 'smart',
-    path_glob: null,
-    context_before: 0,
-    context_after: 0,
-    max_results: null,
-    read_options: null,
-    include_line_numbers: false,
-    deprecated_compat_action: true,
-    next_instruction_path: null,
-    next_runtime_entry_path: null
-  });
-
-  const normalizedMount = normalizeSkillRegistryToolArguments({
-    action: 'mount_on_current_page',
-    skill_name: 'dom-probe'
-  });
-  assert.deepEqual(normalizedMount, {
-    original_action: 'mount_on_current_page',
-    action: 'mount_on_current_page',
-    skill_name: 'dom-probe',
-    skill: null,
-    file_path: null,
-    file: null,
-    patch: null,
-    pattern: null,
-    regex: false,
-    case_mode: 'smart',
-    path_glob: null,
-    context_before: 0,
-    context_after: 0,
-    max_results: null,
-    read_options: null,
-    include_line_numbers: false,
-    deprecated_compat_action: false,
-    next_instruction_path: null,
-    next_runtime_entry_path: null
-  });
-});
-
-test('skill_registry 在纯对话模式下的工具说明不再默认指向当前页', async () => {
-  const {
-    buildSkillRegistryFunctionToolDefinition
-  } = await loadSkillRegistryToolModule();
-
-  const definition = buildSkillRegistryFunctionToolDefinition({
-    exposeHostPageTools: false
-  });
-
-  assert.match(definition.description, /纯对话\/隔离模式/);
-  assert.match(definition.description, /不会绑定宿主页/);
-  assert.match(definition.parameters.properties.include_all_sites.description, /不读取当前页面/);
-  assert.doesNotMatch(
-    definition.parameters.properties.action.description,
-    /支持 list、create_skill、delete_skill、enable_skill、disable_skill、mount_on_current_page/
+    /不接受字段 files/
   );
 });
 
-test('skill 读取参数支持字符偏移与按行续读', async () => {
+test('manifest.json 必须完整、精确且不会回填旧值', async () => {
   const {
-    buildSkillDetail,
     buildSkillFilePayload,
     buildStoredSkillRecord,
-    normalizeSkillRegistryToolArguments
+    parseSkillVirtualManifestContent
   } = await loadSkillRegistryToolModule();
+  const record = buildStoredSkillRecord(buildSkillInput('manifest-probe'));
+  const manifest = JSON.parse(buildSkillFilePayload(record, 'manifest.json').file.content);
+  manifest.interface.default_prompt = null;
+  manifest.runtime.entry_path = null;
 
-  const record = buildStoredSkillRecord(buildLongSkillInput());
+  const parsed = parseSkillVirtualManifestContent(JSON.stringify(manifest), record);
+  assert.equal(parsed.interface.default_prompt, null);
+  assert.equal(parsed.runtime.entry_path, null);
 
-  const normalizedReadDetail = normalizeSkillRegistryToolArguments({
-    action: 'read_detail',
-    skill_name: 'long-dom-probe',
-    start_line: 3,
-    end_line: 5
-  });
-  assert.deepEqual(normalizedReadDetail.read_options, {
-    mode: 'line_range',
-    skip_chars: null,
-    start_line: 3,
-    end_line: 5
-  });
-
-  const normalizedReadFile = normalizeSkillRegistryToolArguments({
-    action: 'read_file',
-    skill_name: 'long-dom-probe',
-    file_path: 'src/main.js',
-    skip_chars: 120,
-    max_output_chars: 200
-  });
-  assert.deepEqual(normalizedReadFile.read_options, {
-    mode: 'char_range',
-    skip_chars: 120,
-    start_line: null,
-    end_line: null
-  });
-
-  const detailByLine = buildSkillDetail(record, {
-    contentReadArgs: normalizedReadDetail.read_options
-  });
-  assert.equal(detailByLine.instruction.content_read.mode, 'line_range');
-  assert.equal(detailByLine.instruction.content_read.start_line, 3);
-  assert.equal(detailByLine.instruction.content_read.end_line, 5);
-  assert.match(detailByLine.instruction.content, /^Line 1:/m);
-  assert.doesNotMatch(detailByLine.instruction.content, /^Line 4:/m);
-  assert.equal(detailByLine.instruction.content_read.has_more_after_range, true);
-
-  const fileByChars = buildSkillFilePayload(record, 'src/main.js', {
-    contentReadArgs: normalizedReadFile.read_options
-  });
-  assert.equal(fileByChars.file.content_read.mode, 'char_range');
-  assert.equal(fileByChars.file.content_read.skip_chars, 120);
-  assert.equal(fileByChars.file.content_read.max_output_chars, undefined);
-  assert.equal(
-    fileByChars.file.content.length,
-    record.files.find(file => file.path === 'src/main.js').content.length - 120
+  const missingDescription = { ...manifest };
+  delete missingDescription.description;
+  assert.throws(
+    () => parseSkillVirtualManifestContent(JSON.stringify(missingDescription), record),
+    /缺少字段 description/
   );
-  assert.equal(fileByChars.file.content_read.has_more_after_range, false);
-
-  const numberedDetail = buildSkillDetail(record, {
-    contentReadArgs: normalizedReadDetail.read_options,
-    includeLineNumbers: true
-  });
-  assert.match(numberedDetail.instruction.numbered_content, /^3 \| Line 1:/m);
-
-  const numberedFile = buildSkillFilePayload(record, 'src/main.js', {
-    contentReadArgs: normalizedReadFile.read_options,
-    includeLineNumbers: true
-  });
-  assert.match(numberedFile.file.numbered_content, /^\d+ \| /m);
 
   assert.throws(
-    () => normalizeSkillRegistryToolArguments({
-      action: 'read_file',
-      skill_name: 'long-dom-probe',
-      file_path: 'src/main.js',
-      skip_chars: 10,
-      start_line: 1,
-      end_line: 2
-    }),
-    /不能同时使用字符区间和行区间/
+    () => parseSkillVirtualManifestContent(
+      JSON.stringify({ ...manifest, legacy_field: true }),
+      record
+    ),
+    /未知字段 legacy_field/
   );
 
-  const globalSearch = (await loadSkillRegistryToolModule()).searchSkillFiles([
-    record,
-    buildStoredSkillRecord(buildSkillInput('dom-probe-2'))
-  ], {
-    pattern: 'readTitle',
-    path_glob: 'src/**/*.js',
-    max_results: 10
-  });
-  assert.equal(globalSearch.total_matches >= 3, true);
-  assert.equal(globalSearch.matches.every((item) => item.file_path.startsWith('src/')), true);
+  assert.throws(
+    () => buildStoredSkillRecord({
+      ...buildSkillInput('missing-runtime'),
+      runtime: { entry_path: 'src/missing.js' }
+    }),
+    /不存在于 files/
+  );
 });
 
-test('buildSkillContextSummary 会返回官方风格的最小 skill 摘要', async () => {
-  const {
-    buildDefaultSkillMountContract,
-    buildSkillContextSummary,
-    buildStoredSkillRecord
-  } = await loadSkillRegistryToolModule();
-
-  const record = buildStoredSkillRecord(buildSkillInput());
-  const summary = buildSkillContextSummary(record);
-  const contract = buildDefaultSkillMountContract();
-
-  assert.equal(summary.name, 'dom-probe');
-  assert.equal(summary.short_description, '读取当前页面标题和 URL');
-  assert.equal(summary.instruction_path, 'SKILL.md');
-  assert.equal(Object.prototype.hasOwnProperty.call(summary, 'display_name'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(summary, 'mount_surface'), false);
-  assert.match(contract, /Recommended helpers: `globalThis\.\$skill\(name\)`, `globalThis\.\$invoke\(skillName, methodName, \.\.\.args\)`, `globalThis\.\$methods\(name\)`\./);
-  assert.match(contract, /Compatibility runtime registry: `globalThis\.__cerebrSkills`\./);
-});
-
-test('searchSkillFiles 支持 regex、smart case、路径过滤与上下文行', async () => {
+test('searchSkillFiles 区分大小写并合并重叠上下文', async () => {
   const {
     buildStoredSkillRecord,
     searchSkillFiles
   } = await loadSkillRegistryToolModule();
+  const input = buildSkillInput('search-probe');
+  input.files[1].content = [
+    'before',
+    'Token first',
+    'token second',
+    'after'
+  ].join('\n');
+  const record = buildStoredSkillRecord(input);
 
-  const record = buildStoredSkillRecord({
-    ...buildSkillInput('search-probe'),
-    files: [
-      {
-        path: 'SKILL.md',
-        content: '# Search Probe\n\nuse searchFiles here'
-      },
-      {
-        path: 'src/main.js',
-        content: [
-          'const before = 1;',
-          'const SearchFiles = document.title;',
-          'const after = document.title;',
-          'return { read() { return after; } };'
-        ].join('\n')
-      },
-      {
-        path: 'references/notes.md',
-        content: 'document.title appears here too'
-      }
-    ]
+  const sensitive = searchSkillFiles(record, {
+    pattern: 'token',
+    regex: false,
+    ignore_case: false,
+    path_glob: 'src/main.js',
+    context_lines: 1
   });
+  assert.equal(sensitive.total_matching_lines, 1);
 
-  const smartCaseSearch = searchSkillFiles(record, {
-    pattern: 'SearchFiles',
-    path_glob: 'src/**/*.js',
-    context_before: 1,
-    context_after: 1
+  const insensitive = searchSkillFiles(record, {
+    pattern: 'token',
+    regex: false,
+    ignore_case: true,
+    path_glob: 'src/main.js',
+    context_lines: 1
   });
-  assert.equal(smartCaseSearch.total_matches, 1);
-  assert.equal(smartCaseSearch.case_sensitive, true);
-  assert.equal(smartCaseSearch.matches[0].before.length, 1);
-  assert.equal(smartCaseSearch.matches[0].after.length, 1);
-  assert.equal(smartCaseSearch.matches[0].before[0].line_number, 1);
-  assert.equal(smartCaseSearch.matches[0].after[0].line_number, 3);
-
-  const regexSearch = searchSkillFiles(record, {
-    pattern: 'document\\.title',
-    regex: true,
-    path_glob: 'src/**/*.js'
-  });
-  assert.equal(regexSearch.total_matches, 2);
-  assert.equal(regexSearch.matches.every((item) => item.file_path === 'src/main.js'), true);
+  assert.equal(insensitive.total_matching_lines, 2);
+  assert.equal(insensitive.groups.length, 1);
+  assert.deepEqual(
+    insensitive.groups[0].lines.map((line) => line.line_number),
+    [1, 2, 3, 4]
+  );
 });

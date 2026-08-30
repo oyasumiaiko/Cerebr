@@ -39,7 +39,7 @@ test('read_file 的对话文档工具输出会改成 shell 风格 header + 原�
       size_chars: 11,
       content: 'hello\nworld',
       content_read: {
-        mode: 'preview',
+        mode: 'full',
         total_chars: 11,
         returned_chars: 11
       }
@@ -47,7 +47,7 @@ test('read_file 的对话文档工具输出会改成 shell 风格 header + 原�
   });
 
   const text = items.map(item => item.text).join('\n');
-  assert.match(text, /^# spec\.md \(chars 0-11\/11\)\nhello/m);
+  assert.match(text, /^# spec\.md\nhello/m);
   assert.match(text, /world/);
   assert.doesNotMatch(text, /<read_file_result/);
   assert.doesNotMatch(text, /<content>/);
@@ -55,7 +55,7 @@ test('read_file 的对话文档工具输出会改成 shell 风格 header + 原�
   assert.doesNotMatch(text, /"content": "hello\\nworld"/);
 });
 
-test('read_file 带行号时只输出 numbered_content，且显式行范围读取不追加截断提示', async () => {
+test('read_file 始终输出原文，不采用旧 numbered_content', async () => {
   const { buildResponsesConversationDocumentToolOutputContentItems } = await loadToolOutputModule();
 
   const items = buildResponsesConversationDocumentToolOutputContentItems('read_file', {
@@ -68,7 +68,7 @@ test('read_file 带行号时只输出 numbered_content，且显式行范围读�
       content: 'line2\nline3',
       numbered_content: '2 | line2\n3 | line3',
       content_read: {
-        mode: 'line_range',
+        mode: 'lines',
         total_chars: 17,
         total_lines: 4,
         start_line: 2,
@@ -84,7 +84,8 @@ test('read_file 带行号时只输出 numbered_content，且显式行范围读�
   });
 
   const text = items.map(item => item.text).join('\n');
-  assert.match(text, /^# spec\.md \(lines 2-3\/4; more\)\n2 \| line2/m);
+  assert.match(text, /^# spec\.md \(lines 2-3\/4; more\)\nline2\nline3/m);
+  assert.doesNotMatch(text, /2 \| line2/);
   assert.doesNotMatch(text, /<numbered_content>/);
   assert.doesNotMatch(text, /<content>/);
   assert.doesNotMatch(text, /output too long; truncated/);
@@ -127,19 +128,15 @@ test('search_files 的对话文档工具输出会把命中上下文渲染成 rg 
     ok: true,
     conversation_id: 'conv-3',
     pattern: 'token',
-    total_matches: 1,
-    returned_match_count: 1,
-    matches: [
+    total_matching_lines: 1,
+    groups: [
       {
-        match_id: 'm1',
         file_path: 'spec.md',
-        line_number: 2,
-        column_start: 7,
-        column_end: 12,
-        match_text: 'token',
-        line_text: 'alpha token beta',
-        before: [{ line_number: 1, text: 'before line' }],
-        after: [{ line_number: 3, text: 'after line' }]
+        lines: [
+          { line_number: 1, text: 'before line', is_match: false },
+          { line_number: 2, text: 'alpha token beta', is_match: true },
+          { line_number: 3, text: 'after line', is_match: false }
+        ]
       }
     ]
   });
@@ -147,19 +144,18 @@ test('search_files 的对话文档工具输出会把命中上下文渲染成 rg 
   const text = items.map(item => item.text).join('\n');
   assert.doesNotMatch(text, /<search_files_result/);
   assert.doesNotMatch(text, /<matches>/);
-  assert.match(text, /^spec\.md\n1-before line\n2:7:alpha token beta\n3-after line/m);
+  assert.match(text, /^spec\.md\n1-before line\n2:alpha token beta\n3-after line/m);
   assert.equal((text.match(/spec\.md/g) || []).length, 1);
   assert.doesNotMatch(text, /<match rank="1">/);
   assert.doesNotMatch(text, /"before": \[/);
 });
 
-test('copy_file 返回 cp 风格最小成功状态，旧 move/delete 输出仍可回放', async () => {
+test('copy_file 只返回当前 cp 风格最小成功状态', async () => {
   const { buildResponsesConversationDocumentToolOutputContentItems } = await loadToolOutputModule();
 
   const copyItems = buildResponsesConversationDocumentToolOutputContentItems('copy_file', {
     ok: true,
     action: 'copy_file',
-    target: { kind: 'root' },
     source_path: 'local/project/src/a.js',
     destination_path: 'project/src/a.js'
   });
@@ -169,27 +165,6 @@ test('copy_file 返回 cp 风格最小成功状态，旧 move/delete 输出仍�
   assert.doesNotMatch(copyText, /Reminder:/);
   assert.doesNotMatch(copyText, /"source_path"/);
 
-  const moveItems = buildResponsesConversationDocumentToolOutputContentItems('move_file', {
-    ok: true,
-    action: 'move_file',
-    target: { kind: 'skill', name: 'dom-probe' },
-    source_path: 'references/old.md',
-    destination_path: 'references/new.md',
-    skill: { name: 'dom-probe' }
-  });
-  const moveText = moveItems.map(item => item.text).join('\n');
-  assert.doesNotMatch(moveText, /<move_file_result/);
-  assert.match(moveText, /move references\/old\.md -> references\/new\.md/);
-  assert.doesNotMatch(moveText, /Reminder:/);
-
-  const deleteItems = buildResponsesConversationDocumentToolOutputContentItems('delete_file', {
-    ok: true,
-    action: 'delete_file',
-    deleted_path: 'project/src/a.js'
-  });
-  const deleteText = deleteItems.map(item => item.text).join('\n');
-  assert.doesNotMatch(deleteText, /<delete_file_result/);
-  assert.match(deleteText, /delete project\/src\/a\.js/);
 });
 
 test('对话文档文件工具失败时也保持纯文本错误输出', async () => {

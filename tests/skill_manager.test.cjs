@@ -49,11 +49,32 @@ function createMockStore(initialPackages = []) {
     async getPackage(skillName) {
       return clone(packagesByName.get(String(skillName || '')) || null);
     },
-    async savePackage(skillPackage) {
+    async savePackage(skillPackage, options = {}) {
+      const current = packagesByName.get(skillPackage.name) || null;
+      if (Object.prototype.hasOwnProperty.call(options, 'expectedRevision')) {
+        const expected = options.expectedRevision;
+        const actual = current ? (current.revision ?? 1) : null;
+        if ((expected === null && current) || (expected !== null && expected !== actual)) {
+          const error = new Error('revision conflict');
+          error.code = 'SKILL_REVISION_CONFLICT';
+          error.state_changed = false;
+          throw error;
+        }
+      }
       packagesByName.set(skillPackage.name, clone(skillPackage));
       return clone(skillPackage);
     },
-    async deletePackage(skillName) {
+    async deletePackage(skillName, options = {}) {
+      const current = packagesByName.get(String(skillName || '')) || null;
+      if (
+        Object.prototype.hasOwnProperty.call(options, 'expectedRevision')
+        && (current ? (current.revision ?? 1) : null) !== options.expectedRevision
+      ) {
+        const error = new Error('revision conflict');
+        error.code = 'SKILL_REVISION_CONFLICT';
+        error.state_changed = false;
+        throw error;
+      }
       packagesByName.delete(String(skillName || ''));
       return { ok: true };
     }
@@ -127,22 +148,11 @@ function buildLongSkillInput(name = 'long-dom-probe') {
   };
 }
 
-test('create/update/delete/enable/disable 只持久化并刷新当前文档，不再注册 eager runtime', async () => {
+test('Skill 生命周期与虚拟文件动作使用两条独立执行路径', async () => {
   const { createSkillManager } = await loadSkillManagerModule();
-  const {
-    buildSkillRegistryFileActionPayloadFromVirtualFileAction,
-    normalizeVirtualFileResultFromSkillRegistryAction,
-    normalizeVirtualFileToolArguments
-  } = await loadVirtualFileToolsModule();
-
-  const calls = {
-    register: [],
-    update: [],
-    unregister: [],
-    execute: []
-  };
+  const calls = { register: [], update: [], unregister: [], execute: [] };
   const manager = createSkillManager({
-    store: createMockStore(),
+    store: createMockStore([buildSkillInput('dom-probe')]),
     userScriptsApi: {
       async getScripts() { return []; },
       async register(definitions) { calls.register.push(clone(definitions)); },
@@ -151,11 +161,7 @@ test('create/update/delete/enable/disable 只持久化并刷新当前文档，�
     },
     tabsApi: {
       async get(tabId) {
-        return {
-          id: tabId,
-          url: 'https://app.example.com/path',
-          title: 'Example'
-        };
+        return { id: tabId, url: 'https://app.example.com/path', title: 'Example' };
       }
     },
     jsRuntimeManager: {
@@ -164,7 +170,7 @@ test('create/update/delete/enable/disable 只持久化并刷新当前文档，�
         return {
           ok: true,
           tabId: request.tabId,
-          value: { mounted: true },
+          value: { active_skills: ['dom-probe'] },
           logs: [],
           items: []
         };
@@ -172,62 +178,29 @@ test('create/update/delete/enable/disable 只持久化并刷新当前文档，�
     }
   });
 
-  const created = await manager.executeRegistryAction({
-    action: 'create_skill',
-    skill: buildSkillInput()
-  }, { tabId: 11 });
-  assert.equal(created.ok, true);
-  assert.equal(calls.register.length, 0);
-  assert.equal(calls.execute.length, 1);
-
-  const updated = await manager.executeRegistryAction({
-    action: 'update',
-    skill: {
-      ...buildSkillInput(),
-      files: [
-        {
-          path: 'SKILL.md',
-          kind: 'instruction',
-          content: '# DOM Probe\n\n更新后的说明。'
-        },
-        {
-          path: 'src/main.js',
-          kind: 'runtime_source',
-          content: 'const helpers = await require("./helpers/dom.js"); return { read() { return helpers.readTitle(); } };'
-        },
-        {
-          path: 'src/helpers/dom.js',
-          kind: 'runtime_source',
-          content: 'module.exports = { readTitle() { return document.title; } };'
-        }
-      ]
-    }
-  }, { tabId: 11 });
-  assert.equal(updated.ok, true);
-  assert.equal(calls.update.length, 0);
-  assert.equal(calls.execute.length, 2);
-
-  const readFile = await manager.executeRegistryAction({
+  const readFile = await manager.executeVirtualFileAction({
     action: 'read_file',
-    skill_name: 'dom-probe',
-    file_path: 'src/helpers/dom.js'
-  }, { tabId: 11 });
-  assert.equal(readFile.ok, true);
-  assert.equal(readFile.skill.file.path, 'src/helpers/dom.js');
-  assert.match(readFile.skill.file.content, /document\.title/);
+    environment_id: 'skill:dom-probe',
+    file_path: 'src/helpers/dom.js',
+    start_line: null,
+    end_line: null
+  });
+  assert.equal(readFile.file.path, 'src/helpers/dom.js');
+  assert.match(readFile.file.content, /document\.title/);
 
-  const readManifest = await manager.executeRegistryAction({
+  const readManifest = await manager.executeVirtualFileAction({
     action: 'read_file',
-    skill_name: 'dom-probe',
-    file_path: 'manifest.json'
-  }, { tabId: 11 });
-  assert.equal(readManifest.ok, true);
-  assert.equal(readManifest.skill.file.is_manifest, true);
-  assert.doesNotMatch(readManifest.skill.file.content, /"name":/);
-  assert.doesNotMatch(readManifest.skill.file.content, /"kind":/);
+    environment_id: 'skill:dom-probe',
+    file_path: 'manifest.json',
+    start_line: null,
+    end_line: null
+  });
+  assert.equal(readManifest.file.is_manifest, true);
+  assert.doesNotMatch(readManifest.file.content, /"name":|"kind":/);
 
-  const modelPatchArgs = normalizeVirtualFileToolArguments('apply_patch', {
-    target: { kind: 'skill', name: 'dom-probe' },
+  const added = await manager.executeVirtualFileAction({
+    action: 'apply_patch',
+    environment_id: 'skill:dom-probe',
     patch: [
       '*** Begin Patch',
       '*** Environment ID: skill:dom-probe',
@@ -236,34 +209,12 @@ test('create/update/delete/enable/disable 只持久化并刷新当前文档，�
       '*** End Patch'
     ].join('\n')
   });
-  const modelPatchPayload = buildSkillRegistryFileActionPayloadFromVirtualFileAction(
-    'apply_patch',
-    modelPatchArgs
-  );
-  assert.equal(modelPatchPayload.refresh_current_document, false);
-  const addedFileRaw = await manager.executeRegistryAction(
-    modelPatchPayload,
-    { tabId: 11 }
-  );
-  const addedFile = normalizeVirtualFileResultFromSkillRegistryAction(
-    'apply_patch',
-    addedFileRaw,
-    modelPatchArgs
-  );
-  assert.equal(addedFile.ok, true);
-  assert.deepEqual(addedFile.target, { kind: 'skill', name: 'dom-probe' });
-  assert.equal(addedFile.files.total_count, 5);
-  assert.deepEqual(addedFile.affected_files, {
-    added: ['src/helpers/url.js'],
-    modified: [],
-    deleted: []
-  });
-  assert.equal(calls.update.length, 0);
-  assert.equal(calls.execute.length, 3);
+  assert.deepEqual(added.affected_files.added, ['src/helpers/url.js']);
+  assert.equal(calls.execute.length, 0);
 
-  const patchedManifestDescription = await manager.executeRegistryAction({
+  const patchedManifest = await manager.executeVirtualFileAction({
     action: 'apply_patch',
-    skill_name: 'dom-probe',
+    environment_id: 'skill:dom-probe',
     patch: [
       '*** Begin Patch',
       '*** Environment ID: skill:dom-probe',
@@ -273,112 +224,38 @@ test('create/update/delete/enable/disable 只持久化并刷新当前文档，�
       '+  "description": "读取页面标题、链接与路径信息",',
       '*** End Patch'
     ].join('\n')
-  }, { tabId: 11 });
-  assert.equal(patchedManifestDescription.ok, true);
-  assert.equal(patchedManifestDescription.skill.description, '读取页面标题、链接与路径信息');
-  assert.equal(calls.update.length, 0);
-  assert.equal(calls.execute.length, 4);
-
-  const patchedFile = await manager.executeRegistryAction({
-    action: 'apply_patch',
-    skill_name: 'dom-probe',
-    patch: [
-      '*** Begin Patch',
-      '*** Environment ID: skill:dom-probe',
-      '*** Update File: src/helpers/url.js',
-      '@@',
-      '-module.exports = { readUrl() { return location.href; } };',
-      '+module.exports = { readUrl() { return location.pathname; } };',
-      '*** End Patch'
-    ].join('\n')
-  }, { tabId: 11 });
-  assert.equal(patchedFile.ok, true);
-  assert.deepEqual(patchedFile.affected_files, {
-    added: [],
-    modified: ['src/helpers/url.js'],
-    deleted: []
   });
-  assert.equal(calls.update.length, 0);
-  assert.equal(calls.execute.length, 5);
-
-  const patchedManifest = await manager.executeRegistryAction({
-    action: 'apply_patch',
-    skill_name: 'dom-probe',
-    patch: [
-      '*** Begin Patch',
-      '*** Environment ID: skill:dom-probe',
-      '*** Update File: manifest.json',
-      '@@',
-      '-  "enabled": true,',
-      '+  "enabled": false,',
-      '*** End Patch'
-    ].join('\n')
-  }, { tabId: 11 });
-  assert.equal(patchedManifest.ok, true);
-  assert.deepEqual(patchedManifest.affected_files, {
-    added: [],
-    modified: ['manifest.json'],
-    deleted: []
-  });
-  assert.equal(patchedManifest.skill.enabled, false);
-  assert.equal(calls.unregister.length, 0);
-  assert.equal(calls.execute.length, 6);
-
-  const reenabledViaManifest = await manager.executeRegistryAction({
-    action: 'apply_patch',
-    skill_name: 'dom-probe',
-    patch: [
-      '*** Begin Patch',
-      '*** Environment ID: skill:dom-probe',
-      '*** Update File: manifest.json',
-      '@@',
-      '-  "enabled": false,',
-      '+  "enabled": true,',
-      '*** End Patch'
-    ].join('\n')
-  }, { tabId: 11 });
-  assert.equal(reenabledViaManifest.ok, true);
-  assert.equal(calls.register.length, 0);
-  assert.equal(calls.execute.length, 7);
-
-  const deletedFile = await manager.executeRegistryAction({
-    action: 'apply_patch',
-    skill_name: 'dom-probe',
-    patch: [
-      '*** Begin Patch',
-      '*** Environment ID: skill:dom-probe',
-      '*** Delete File: src/helpers/url.js',
-      '*** End Patch'
-    ].join('\n')
-  }, { tabId: 11 });
-  assert.equal(deletedFile.ok, true);
-  assert.equal(deletedFile.files.total_count, 4);
-  assert.equal(calls.update.length, 0);
-  assert.equal(calls.execute.length, 8);
+  assert.equal(patchedManifest.skill.description, '读取页面标题、链接与路径信息');
+  assert.equal(calls.execute.length, 0);
 
   const disabled = await manager.executeRegistryAction({
     action: 'disable_skill',
-    skill_name: 'dom-probe'
+    include_all_sites: null,
+    skill_name: 'dom-probe',
+    skill: null
   }, { tabId: 11 });
   assert.equal(disabled.ok, true);
-  assert.equal(calls.unregister.length, 0);
-  assert.equal(calls.execute.length, 9);
+  assert.equal(calls.execute.length, 0);
 
   const enabled = await manager.executeRegistryAction({
     action: 'enable_skill',
-    skill_name: 'dom-probe'
+    include_all_sites: null,
+    skill_name: 'dom-probe',
+    skill: null
   }, { tabId: 11 });
   assert.equal(enabled.ok, true);
-  assert.equal(calls.register.length, 0);
-  assert.equal(calls.execute.length, 10);
+  assert.equal(calls.execute.length, 0);
 
   const removed = await manager.executeRegistryAction({
     action: 'delete_skill',
-    skill_name: 'dom-probe'
+    include_all_sites: null,
+    skill_name: 'dom-probe',
+    skill: null
   }, { tabId: 11 });
   assert.equal(removed.ok, true);
-  assert.equal(calls.unregister.length, 0);
-  assert.equal(calls.execute.length, 11);
+  assert.equal(calls.execute.length, 0);
+  assert.equal(calls.register.length, 0);
+  assert.equal(calls.update.length, 0);
 });
 
 test('copy_file 使用 cp 覆盖语义，skill 移动与删除统一由 apply_patch 执行', async () => {
@@ -396,54 +273,56 @@ test('copy_file 使用 cp 覆盖语义，skill 移动与删除统一由 apply_pa
     }
   });
 
-  const copied = await manager.executeRegistryAction({
+  const copied = await manager.executeVirtualFileAction({
     action: 'copy_file',
-    skill_name: 'dom-probe',
-    source_file_path: 'src/helpers/dom.js',
-    destination_file_path: 'src/helpers/dom-copy.js'
+    environment_id: 'skill:dom-probe',
+    source_path: 'src/helpers/dom.js',
+    destination_path: 'src/helpers/dom-copy.js'
   });
   assert.equal(copied.ok, true);
   assert.deepEqual(copied.affected_files.added, ['src/helpers/dom-copy.js']);
   assert.equal(copied.files.total_count, 5);
 
-  const overwritten = await manager.executeRegistryAction({
+  const overwritten = await manager.executeVirtualFileAction({
     action: 'copy_file',
-    skill_name: 'dom-probe',
-    source_file_path: 'src/helpers/dom.js',
-    destination_file_path: 'src/helpers/dom-copy.js'
+    environment_id: 'skill:dom-probe',
+    source_path: 'src/helpers/dom.js',
+    destination_path: 'src/helpers/dom-copy.js'
   });
   assert.equal(overwritten.ok, true);
   assert.deepEqual(overwritten.affected_files.modified, ['src/helpers/dom-copy.js']);
   assert.equal(overwritten.files.total_count, 5);
 
-  const copiedManifest = await manager.executeRegistryAction({
+  const copiedManifest = await manager.executeVirtualFileAction({
     action: 'copy_file',
-    skill_name: 'dom-probe',
-    source_file_path: 'manifest.json',
-    destination_file_path: 'references/manifest-snapshot.json'
+    environment_id: 'skill:dom-probe',
+    source_path: 'manifest.json',
+    destination_path: 'references/manifest-snapshot.json'
   });
   assert.equal(copiedManifest.ok, true);
   assert.deepEqual(copiedManifest.affected_files.added, ['references/manifest-snapshot.json']);
-  const manifestSnapshot = await manager.executeRegistryAction({
+  const manifestSnapshot = await manager.executeVirtualFileAction({
     action: 'read_file',
-    skill_name: 'dom-probe',
-    file_path: 'references/manifest-snapshot.json'
+    environment_id: 'skill:dom-probe',
+    file_path: 'references/manifest-snapshot.json',
+    start_line: null,
+    end_line: null
   });
-  assert.match(manifestSnapshot.skill.file.content, /"description": "读取页面标题和链接"/);
+  assert.match(manifestSnapshot.file.content, /"description": "读取页面标题和链接"/);
 
   await assert.rejects(
-    () => manager.executeRegistryAction({
+    () => manager.executeVirtualFileAction({
       action: 'copy_file',
-      skill_name: 'dom-probe',
-      source_file_path: 'src/helpers/dom.js',
-      destination_file_path: 'manifest.json'
+      environment_id: 'skill:dom-probe',
+      source_path: 'src/helpers/dom.js',
+      destination_path: 'manifest.json'
     }),
     /manifest\.json 是保留虚拟文件，不能作为 copy_file 的目标路径/
   );
 
-  const moved = await manager.executeRegistryAction({
+  const moved = await manager.executeVirtualFileAction({
     action: 'apply_patch',
-    skill_name: 'dom-probe',
+    environment_id: 'skill:dom-probe',
     patch: [
       '*** Begin Patch',
       '*** Environment ID: skill:dom-probe',
@@ -459,9 +338,9 @@ test('copy_file 使用 cp 覆盖语义，skill 移动与删除统一由 apply_pa
   assert.deepEqual(moved.affected_files.modified, ['src/helpers/dom-renamed.js']);
   assert.deepEqual(moved.affected_files.deleted, []);
 
-  const deleted = await manager.executeRegistryAction({
+  const deleted = await manager.executeVirtualFileAction({
     action: 'apply_patch',
-    skill_name: 'dom-probe',
+    environment_id: 'skill:dom-probe',
     patch: [
       '*** Begin Patch',
       '*** Environment ID: skill:dom-probe',
@@ -475,13 +354,13 @@ test('copy_file 使用 cp 覆盖语义，skill 移动与删除统一由 apply_pa
   assert.equal(calls.update.length, 0);
 
   await assert.rejects(
-    () => manager.executeRegistryAction({
+    () => manager.executeVirtualFileAction({
       action: 'move_file',
-      skill_name: 'dom-probe',
-      source_file_path: 'src/helpers/dom.js',
-      destination_file_path: 'src/helpers/other.js'
+      environment_id: 'skill:dom-probe',
+      source_path: 'src/helpers/dom.js',
+      destination_path: 'src/helpers/other.js'
     }),
-    /不支持的 action `move_file`/
+    /不支持的 Skill 文件 action `move_file`/
   );
 });
 
@@ -528,45 +407,47 @@ test('模板式 create_skill 默认禁用且不会自动 refresh 当前文档', 
     skill: buildCreateTemplateInput('DOM Probe Template')
   }, { tabId: 11 });
   assert.equal(created.ok, true);
-  assert.equal(created.create_mode, 'template');
+  assert.equal(created.create_mode, undefined);
   assert.equal(created.requested_name, 'DOM Probe Template');
   assert.equal(created.normalized_name, 'dom-probe-template');
   assert.equal(created.skill.kind, 'guidance');
   assert.equal(created.skill.enabled, false);
-  assert.equal(created.refreshed_current_document, false);
-  assert.equal(created.refresh_result, null);
-  assert.deepEqual(created.selected_resources, ['references']);
-  assert.equal(created.examples_created, true);
+  assert.equal(created.refreshed_current_document, undefined);
+  assert.equal(created.refresh_result, undefined);
+  assert.equal(created.selected_resources, undefined);
+  assert.equal(created.examples_created, undefined);
   assert.equal(Array.isArray(created.created_files), true);
   assert.equal(created.created_files.includes('SKILL.md'), true);
   assert.equal(created.created_files.includes('src/main.js'), false);
   assert.equal(created.created_files.includes('src/helpers/dom.js'), false);
   assert.equal(created.created_files.includes('references/api_reference.md'), true);
-  assert.equal(Array.isArray(created.next_steps), true);
-  assert.equal(created.next_steps.some((line) => /enable_skill/.test(line)), true);
+  assert.equal(created.next_steps, undefined);
   assert.equal(calls.register.length, 0);
   assert.equal(calls.execute.length, 0);
 
-  const instruction = await manager.executeRegistryAction({
+  const instruction = await manager.executeVirtualFileAction({
     action: 'read_file',
-    skill_name: 'dom-probe-template',
-    file_path: 'SKILL.md'
-  }, { tabId: 11 });
+    environment_id: 'skill:dom-probe-template',
+    file_path: 'SKILL.md',
+    start_line: null,
+    end_line: null
+  });
   assert.equal(instruction.ok, true);
-  assert.match(instruction.skill.file.content, /## Overview/);
-  assert.match(instruction.skill.file.content, /## Structuring This Skill/);
-  assert.match(instruction.skill.file.content, /## Resources \(optional\)/);
-  assert.equal(Object.prototype.hasOwnProperty.call(instruction.skill, 'has_runtime'), false);
+  assert.match(instruction.file.content, /## Overview/);
+  assert.match(instruction.file.content, /## Structuring This Skill/);
+  assert.match(instruction.file.content, /## Resources \(optional\)/);
 
-  const manifest = await manager.executeRegistryAction({
+  const manifest = await manager.executeVirtualFileAction({
     action: 'read_file',
-    skill_name: 'dom-probe-template',
-    file_path: 'manifest.json'
-  }, { tabId: 11 });
+    environment_id: 'skill:dom-probe-template',
+    file_path: 'manifest.json',
+    start_line: null,
+    end_line: null
+  });
   assert.equal(manifest.ok, true);
-  assert.match(manifest.skill.file.content, /"enabled": false/);
-  assert.match(manifest.skill.file.content, /"match": \[\]/);
-  assert.match(manifest.skill.file.content, /"entry_path": null/);
+  assert.match(manifest.file.content, /"enabled": false/);
+  assert.match(manifest.file.content, /"match": \[\]/);
+  assert.match(manifest.file.content, /"entry_path": null/);
 });
 
 test('listMatchingSkillSummariesForTab 只返回当前页面命中的 page runtime skill 摘要', async () => {
@@ -690,16 +571,18 @@ test('skill 可以在后续 patch 后从 guidance 演进成 page runtime，再�
   }, { tabId: 11 });
   assert.equal(created.skill.kind, 'guidance');
 
-  const genericInstruction = await manager.executeRegistryAction({
+  const genericInstruction = await manager.executeVirtualFileAction({
     action: 'read_file',
-    skill_name: 'runtime-probe',
-    file_path: 'SKILL.md'
-  }, { tabId: 11 });
-  assert.equal(Object.prototype.hasOwnProperty.call(genericInstruction.skill, 'has_runtime'), false);
+    environment_id: 'skill:runtime-probe',
+    file_path: 'SKILL.md',
+    start_line: null,
+    end_line: null
+  });
+  assert.match(genericInstruction.file.content, /Runtime Probe/);
 
-  await manager.executeRegistryAction({
+  await manager.executeVirtualFileAction({
     action: 'apply_patch',
-    skill_name: 'runtime-probe',
+    environment_id: 'skill:runtime-probe',
     patch: [
       '*** Begin Patch',
       '*** Environment ID: skill:runtime-probe',
@@ -711,11 +594,11 @@ test('skill 可以在后续 patch 后从 guidance 演进成 page runtime，再�
       '+};',
       '*** End Patch'
     ].join('\n')
-  }, { tabId: 11 });
+  });
 
-  const runtimeManifest = await manager.executeRegistryAction({
+  const runtimeManifest = await manager.executeVirtualFileAction({
     action: 'apply_patch',
-    skill_name: 'runtime-probe',
+    environment_id: 'skill:runtime-probe',
     patch: [
       '*** Begin Patch',
       '*** Environment ID: skill:runtime-probe',
@@ -730,16 +613,17 @@ test('skill 可以在后续 patch 后从 guidance 演进成 page runtime，再�
       '+    "entry_path": "src/main.js"',
       '*** End Patch'
     ].join('\n')
-  }, { tabId: 11 });
+  });
   assert.equal(runtimeManifest.skill.kind, 'page_runtime');
 
-  const runtimeInstruction = await manager.executeRegistryAction({
+  const runtimeInstruction = await manager.executeVirtualFileAction({
     action: 'read_file',
-    skill_name: 'runtime-probe',
-    file_path: 'SKILL.md'
-  }, { tabId: 11 });
-  assert.equal(runtimeInstruction.skill.has_runtime, true);
-  assert.equal(runtimeInstruction.skill.runtime_entry_path, 'src/main.js');
+    environment_id: 'skill:runtime-probe',
+    file_path: 'SKILL.md',
+    start_line: null,
+    end_line: null
+  });
+  assert.match(runtimeInstruction.file.content, /Runtime Probe/);
 
   const enabled = await manager.executeRegistryAction({
     action: 'enable_skill',
@@ -755,9 +639,9 @@ test('skill 可以在后续 patch 后从 guidance 演进成 page runtime，再�
   assert.equal(mounted.ok, true);
   assert.equal(mounted.requested_skill_status, 'mounted');
 
-  const reverted = await manager.executeRegistryAction({
+  const reverted = await manager.executeVirtualFileAction({
     action: 'apply_patch',
-    skill_name: 'runtime-probe',
+    environment_id: 'skill:runtime-probe',
     patch: [
       '*** Begin Patch',
       '*** Environment ID: skill:runtime-probe',
@@ -772,17 +656,18 @@ test('skill 可以在后续 patch 后从 guidance 演进成 page runtime，再�
       '+    "entry_path": null',
       '*** End Patch'
     ].join('\n')
-  }, { tabId: 11 });
+  });
   assert.equal(reverted.skill.kind, 'guidance');
   assert.equal(calls.unregister.length, 0);
 
-  const revertedInstruction = await manager.executeRegistryAction({
+  const revertedInstruction = await manager.executeVirtualFileAction({
     action: 'read_file',
-    skill_name: 'runtime-probe',
-    file_path: 'SKILL.md'
-  }, { tabId: 11 });
-  assert.equal(revertedInstruction.skill.has_runtime, true);
-  assert.match(revertedInstruction.skill.runtime_hint, /JS runtime files/i);
+    environment_id: 'skill:runtime-probe',
+    file_path: 'SKILL.md',
+    start_line: null,
+    end_line: null
+  });
+  assert.match(revertedInstruction.file.content, /Runtime Probe/);
 });
 
 test('mount_on_current_page 只挂载指定技能并返回当前页 active skills', async () => {
@@ -1040,196 +925,135 @@ test('内置 skill-creator 会自动出现在列表中且保持只读', async ()
   assert.equal(listed.skills[0].name, 'skill-creator');
   assert.equal(listed.skills[0].builtin, true);
 
-  const detail = await manager.executeRegistryAction({
-    action: 'read_detail',
-    skill_name: 'skill-creator'
+  const detail = await manager.executeVirtualFileAction({
+    action: 'read_file',
+    environment_id: 'skill:skill-creator',
+    file_path: 'SKILL.md',
+    start_line: null,
+    end_line: null
   });
   assert.equal(detail.ok, true);
-  assert.equal(detail.skill.builtin, true);
-  assert.match(detail.skill.instruction.content, /Skill Creator/);
+  assert.match(detail.file.content, /Skill Creator/);
 
   await assert.rejects(
     () => manager.executeRegistryAction({
-      action: 'delete',
+      action: 'delete_skill',
       skill_name: 'skill-creator'
     }),
     /内置只读指导 skill/
   );
 
-  const builtinSearch = await manager.executeRegistryAction({
+  const builtinSearch = await manager.executeVirtualFileAction({
     action: 'search_files',
-    skill_name: 'skill-creator',
-    pattern: 'search_files'
+    environment_id: 'skill:skill-creator',
+    pattern: 'search_files',
+    regex: false,
+    ignore_case: false,
+    path_glob: null,
+    context_lines: 0
   });
   assert.equal(builtinSearch.ok, true);
-  assert.equal(builtinSearch.total_matches > 0, true);
-  assert.equal(builtinSearch.matches[0].skill_name, 'skill-creator');
+  assert.equal(builtinSearch.total_matching_lines > 0, true);
+  assert.equal(builtinSearch.groups[0].skill_name, 'skill-creator');
 });
 
-test('read_detail/read_file 使用统一输出预算支持字符偏移与按行续读', async () => {
+test('Skill read_file 返回原文行范围且不生成行号', async () => {
   const { createSkillManager } = await loadSkillManagerModule();
-
   const manager = createSkillManager({
-    store: createMockStore([
-      {
-        ...buildLongSkillInput(),
-        created_at: '2026-01-01T00:00:00.000Z',
-        updated_at: '2026-01-02T00:00:00.000Z',
-        revision: 1
-      }
-    ]),
-    userScriptsApi: {
-      async getScripts() { return []; },
-      async register() {},
-      async update() {},
-      async unregister() {}
-    },
-    tabsApi: {
-      async get() {
-        return { url: 'https://app.example.com/path', title: 'Example' };
-      }
-    },
-    jsRuntimeManager: {
-      async execute() {
-        return { ok: true, tabId: 1, value: null, logs: [], items: [] };
-      }
-    }
+    store: createMockStore([{
+      ...buildLongSkillInput(),
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-02T00:00:00.000Z',
+      revision: 1
+    }])
   });
 
-  const detailPreview = await manager.executeRegistryAction({
-    action: 'read_detail',
-    skill_name: 'long-dom-probe'
-  });
-  assert.equal(detailPreview.ok, true);
-  assert.equal(detailPreview.skill.instruction.content_read.mode, 'full');
-  assert.equal(detailPreview.skill.instruction.content_read.max_output_chars, undefined);
-  assert.equal(detailPreview.skill.instruction.content_read.truncated, false);
-  assert.equal(detailPreview.skill.instruction.content.length > 10000, true);
-
-  const detailByLine = await manager.executeRegistryAction({
-    action: 'read_detail',
-    skill_name: 'long-dom-probe',
-    start_line: 3,
-    end_line: 4,
-    include_line_numbers: true
-  });
-  assert.equal(detailByLine.ok, true);
-  assert.equal(detailByLine.skill.instruction.content_read.mode, 'line_range');
-  assert.equal(detailByLine.skill.instruction.content_read.start_line, 3);
-  assert.equal(detailByLine.skill.instruction.content_read.end_line, 4);
-  assert.match(detailByLine.skill.instruction.content, /^Line 1:/m);
-  assert.doesNotMatch(detailByLine.skill.instruction.content, /^Line 3:/m);
-  assert.match(detailByLine.skill.instruction.numbered_content, /^3 \| Line 1:/m);
-
-  const fileByChars = await manager.executeRegistryAction({
+  const full = await manager.executeVirtualFileAction({
     action: 'read_file',
-    skill_name: 'long-dom-probe',
-    file_path: 'src/main.js',
-    skip_chars: 200,
-    max_output_chars: 150,
-    include_line_numbers: true
+    environment_id: 'skill:long-dom-probe',
+    file_path: 'SKILL.md',
+    start_line: null,
+    end_line: null
   });
-  assert.equal(fileByChars.ok, true);
-  assert.equal(fileByChars.skill.file.content_read.mode, 'char_range');
-  assert.equal(fileByChars.skill.file.content_read.skip_chars, 200);
-  assert.equal(fileByChars.skill.file.content_read.max_output_chars, undefined);
-  assert.equal(fileByChars.skill.file.content.length > 150, true);
-  assert.equal(fileByChars.skill.file.content_read.has_more_after_range, false);
-  assert.match(fileByChars.skill.file.numbered_content, /^\d+ \| /m);
+  assert.equal(full.file.content_read.mode, 'full');
+  assert.equal(full.file.content.length > 10000, true);
+  assert.equal(full.file.numbered_content, undefined);
+
+  const ranged = await manager.executeVirtualFileAction({
+    action: 'read_file',
+    environment_id: 'skill:long-dom-probe',
+    file_path: 'SKILL.md',
+    start_line: 3,
+    end_line: 4
+  });
+  assert.equal(ranged.file.content_read.mode, 'lines');
+  assert.equal(ranged.file.content_read.start_line, 3);
+  assert.equal(ranged.file.content_read.end_line, 4);
+  assert.match(ranged.file.content, /^Line 1:/m);
+  assert.doesNotMatch(ranged.file.content, /\d+ \| /);
+
+  await assert.rejects(
+    () => manager.executeVirtualFileAction({
+      action: 'read_file',
+      environment_id: 'skill:long-dom-probe',
+      file_path: 'SKILL.md',
+      start_line: 999,
+      end_line: 1000
+    }),
+    /超过文件总行数/
+  );
 });
 
-test('list_files/search_files 支持单 skill 与全局搜索闭环', async () => {
+test('Skill list_files/search_files 使用单一 environment_id 并按匹配行返回', async () => {
   const { createSkillManager } = await loadSkillManagerModule();
-
   const manager = createSkillManager({
-    store: createMockStore([
-      {
-        ...buildSkillInput('dom-probe'),
-        created_at: '2026-01-01T00:00:00.000Z',
-        updated_at: '2026-01-02T00:00:00.000Z',
-        revision: 1
-      },
-      {
-        ...buildSkillInput('dom-probe-2'),
-        created_at: '2026-01-03T00:00:00.000Z',
-        updated_at: '2026-01-04T00:00:00.000Z',
-        revision: 1
-      },
-      {
-        ...buildLongSkillInput('long-dom-probe'),
-        created_at: '2026-01-05T00:00:00.000Z',
-        updated_at: '2026-01-06T00:00:00.000Z',
-        revision: 1
-      }
-    ]),
-    userScriptsApi: {
-      async getScripts() { return []; },
-      async register() {},
-      async update() {},
-      async unregister() {}
-    },
-    tabsApi: {
-      async get() {
-        return { url: 'https://app.example.com/path', title: 'Example' };
-      }
-    },
-    jsRuntimeManager: {
-      async execute() {
-        return { ok: true, tabId: 1, value: null, logs: [], items: [] };
-      }
-    }
+    store: createMockStore([{
+      ...buildSkillInput('dom-probe'),
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-02T00:00:00.000Z',
+      revision: 1
+    }])
   });
 
-  const listFiles = await manager.executeRegistryAction({
+  const listFiles = await manager.executeVirtualFileAction({
     action: 'list_files',
-    skill_name: 'dom-probe'
+    environment_id: 'skill:dom-probe',
+    path_glob: null
   });
-  assert.equal(listFiles.ok, true);
   assert.equal(listFiles.total_files, 4);
   assert.equal(listFiles.files[0].path, 'manifest.json');
-  assert.equal(listFiles.files[0].skill_name, 'dom-probe');
 
-  const filteredFiles = await manager.executeRegistryAction({
+  const filteredFiles = await manager.executeVirtualFileAction({
     action: 'list_files',
-    skill_name: 'dom-probe',
+    environment_id: 'skill:dom-probe',
     path_glob: 'src'
   });
-  assert.equal(filteredFiles.files.length > 0, true);
   assert.equal(filteredFiles.files.every((file) => file.path.startsWith('src/')), true);
 
-  const globalSearch = await manager.executeRegistryAction({
+  const search = await manager.executeVirtualFileAction({
     action: 'search_files',
+    environment_id: 'skill:dom-probe',
     pattern: 'readTitle',
+    regex: false,
+    ignore_case: false,
     path_glob: 'src/**/*.js',
-    context_before: 1,
-    context_after: 1,
-    max_results: 10
+    context_lines: 1
   });
-  assert.equal(globalSearch.ok, true);
-  assert.equal(globalSearch.total_matches >= 4, true);
-  assert.equal(globalSearch.matches.every((item) => item.file_path.startsWith('src/')), true);
-  assert.equal(globalSearch.matches.every((item) => item.before.length <= 1 && item.after.length <= 1), true);
+  assert.equal(search.total_matching_lines >= 2, true);
+  assert.equal(search.groups.every((group) => group.file_path.startsWith('src/')), true);
 
-  const uncappedSearch = await manager.executeRegistryAction({
-    action: 'search_files',
-    skill_name: 'long-dom-probe',
-    pattern: 'const title',
-    max_results: 10
-  });
-  assert.equal(uncappedSearch.total_matches, 900);
-  assert.equal(uncappedSearch.returned_match_count, 900);
-  assert.equal(uncappedSearch.truncated, false);
-
-  const targetedRead = await manager.executeRegistryAction({
+  const matchingLine = search.groups
+    .flatMap((group) => group.lines.map((line) => ({ ...line, file_path: group.file_path })))
+    .find((line) => line.is_match === true);
+  const targetedRead = await manager.executeVirtualFileAction({
     action: 'read_file',
-    skill_name: globalSearch.matches[0].skill_name,
-    file_path: globalSearch.matches[0].file_path,
-    start_line: globalSearch.matches[0].line_number,
-    end_line: globalSearch.matches[0].line_number,
-    include_line_numbers: true
+    environment_id: 'skill:dom-probe',
+    file_path: matchingLine.file_path,
+    start_line: matchingLine.line_number,
+    end_line: matchingLine.line_number
   });
-  assert.equal(targetedRead.ok, true);
-  assert.match(targetedRead.skill.file.numbered_content, new RegExp(`^${globalSearch.matches[0].line_number} \\| `, 'm'));
+  assert.match(targetedRead.file.content, /readTitle/);
+  assert.doesNotMatch(targetedRead.file.content, /\d+ \| /);
 });
 
 test('reconcileRegisteredSkills 会清理旧版 document_start skill 注册且不再新增', async () => {
@@ -1412,9 +1236,9 @@ test('Skill 文件动作收到 tabId=null 时只持久化，不把 null 误转�
   });
   await manager.createSkill(buildSkillInput('null-tab-file-action'));
 
-  const result = await manager.executeRegistryAction({
+  const result = await manager.executeVirtualFileAction({
     action: 'apply_patch',
-    skill_name: 'null-tab-file-action',
+    environment_id: 'skill:null-tab-file-action',
     patch: [
       '*** Begin Patch',
       '*** Environment ID: skill:null-tab-file-action',
@@ -1422,11 +1246,11 @@ test('Skill 文件动作收到 tabId=null 时只持久化，不把 null 误转�
       '+普通 Skill 文件。',
       '*** End Patch'
     ].join('\n')
-  }, { tabId: null });
+  });
 
   assert.equal(result.ok, true);
-  assert.equal(result.refreshed_current_document, false);
-  assert.equal(result.refresh_result, null);
+  assert.equal(result.refreshed_current_document, undefined);
+  assert.equal(result.refresh_result, undefined);
   assert.equal(runtimeExecuteCount, 0);
   const stored = await store.getPackage('null-tab-file-action');
   assert.equal(stored.files.find((file) => file.path === 'local/说明.md')?.content, '普通 Skill 文件。\n');
@@ -1440,9 +1264,9 @@ test('Skill apply_patch 在完整验证失败时不写入、不增 revision，�
   const before = await store.getPackage('atomic-skill');
 
   await assert.rejects(
-    () => manager.executeRegistryAction({
+    () => manager.executeVirtualFileAction({
       action: 'apply_patch',
-      expected_environment_id: 'skill:atomic-skill',
+      environment_id: 'skill:atomic-skill',
       patch: [
         '*** Begin Patch',
         '*** Environment ID: skill:atomic-skill',
@@ -1466,9 +1290,9 @@ test('Skill apply_patch 在完整验证失败时不写入、不增 revision，�
   assert.deepEqual(afterFailure, before);
 
   await assert.rejects(
-    () => manager.executeRegistryAction({
+    () => manager.executeVirtualFileAction({
       action: 'apply_patch',
-      skill_name: 'other-skill',
+      environment_id: 'skill:other-skill',
       patch: [
         '*** Begin Patch',
         '*** Environment ID: skill:atomic-skill',
@@ -1482,9 +1306,9 @@ test('Skill apply_patch 在完整验证失败时不写入、不增 revision，�
   );
   assert.deepEqual(await store.getPackage('atomic-skill'), before);
 
-  const success = await manager.executeRegistryAction({
+  const success = await manager.executeVirtualFileAction({
     action: 'apply_patch',
-    expected_environment_id: 'skill:atomic-skill',
+    environment_id: 'skill:atomic-skill',
     patch: [
       '*** Begin Patch',
       '*** Environment ID: skill:atomic-skill',

@@ -19,11 +19,11 @@ test('顶层 read_file 在 skill target 下会显示文件前缀与简短摘要'
     type: 'function_call',
     name: 'read_file',
     arguments: JSON.stringify({
-      target: {
-        kind: 'skill',
-        name: 'dom-probe'
-      },
-      path: 'src/helpers/dom.js'
+      environment_id: 'skill:dom-probe',
+      path: 'src/helpers/dom.js',
+      start_line: null,
+      end_line: null,
+      max_output_chars: null
     })
   };
 
@@ -51,13 +51,11 @@ test('顶层 read_file 在按行范围读取时会把 Lx-Ly 追加到文件路�
     type: 'function_call',
     name: 'read_file',
     arguments: JSON.stringify({
-      target: {
-        kind: 'skill',
-        name: 'worldquant-brain-knowledge-cache'
-      },
+      environment_id: 'skill:worldquant-brain-knowledge-cache',
       path: 'src/cache.js',
-      line_range: '1:260',
-      numbered: true
+      start_line: 1,
+      end_line: 260,
+      max_output_chars: null
     })
   };
 
@@ -77,7 +75,7 @@ test('顶层 read_file 在按行范围读取时会把 Lx-Ly 追加到文件路�
   );
 });
 
-test('顶层 read_file/search_files 摘要支持 bash 风格参数', async () => {
+test('历史顶层 read_file/search_files 摘要仍可回放旧参数', async () => {
   const {
     buildVirtualFileSummaryParts,
     buildVirtualFilePrimaryText

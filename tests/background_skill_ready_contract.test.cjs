@@ -25,8 +25,18 @@ test('ensureSkillManagerReady 在 pending 时复用同一 promise，并在失败
     backgroundSource,
     /\.catch\(\(error\) => \{\s*skillManagerReadyPending = false;\s*skillManagerReadyPromise = null;/s
   );
-  assert.match(backgroundSource, /rawPayload\.refresh_current_document !== false/);
-  assert.match(backgroundSource, /if \(refreshCurrentDocument\) \{\s*await ensureSkillManagerReady\(\);\s*\}/s);
-  assert.match(backgroundSource, /isolateFromHostPage \|\| !refreshCurrentDocument/);
+  assert.match(
+    backgroundSource,
+    /if \(message\?\.type === 'VIRTUAL_FILE_ACTION'\)[\s\S]*?executeVirtualFileAction\(virtualFilePayload\)/s
+  );
+  assert.doesNotMatch(
+    backgroundSource,
+    /if \(message\?\.type === 'VIRTUAL_FILE_ACTION'\)[\s\S]*?await ensureSkillManagerReady\(\);[\s\S]*?executeVirtualFileAction\(virtualFilePayload\)/s
+  );
+  assert.doesNotMatch(
+    backgroundSource,
+    /if \(message\?\.type === 'SKILL_REGISTRY_ACTION'\)[\s\S]*?await ensureSkillManagerReady\(\);[\s\S]*?executeRegistryAction\(registryPayload/s
+  );
+  assert.doesNotMatch(backgroundSource, /refresh_current_document|refreshCurrentDocument/);
   assert.match(backgroundSource, /executeRegistryAction\(registryPayload/);
 });

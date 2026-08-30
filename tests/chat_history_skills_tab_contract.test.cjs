@@ -52,17 +52,17 @@ test('Skill 查看器与 ZIP 导出复用不预截断的完整文件读取', asy
   const source = await readWorkspaceFile('src/ui/chat_history_ui.js');
 
   assert.match(source, /async function readSkillViewerFileFully\(skillName, filePath\) \{/);
-  assert.match(source, /action: 'read_file',[\s\S]*?skill_name: skillName,[\s\S]*?file_path: filePath/s);
+  assert.match(source, /executeSkillViewerFileAction\('read_file', \{\s*environment_id: `skill:\$\{skillName\}`,[\s\S]*?path: filePath,[\s\S]*?start_line: null,[\s\S]*?end_line: null/s);
   assert.doesNotMatch(source, /skipChars \+= returnedChars|content: chunks\.join\(''\)/);
   assert.match(source, /async function loadSkillArchivePackage\(skillName\) \{/);
   assert.match(source, /const files = await loadSkillArchivePackage\(skillName\);/);
   assert.match(
     source,
-    /executeSkillViewerFileAction\('read_file', \{\s*target: \{ kind: 'skill', name: skillName \},\s*path: file\.path\s*\}\)/s
+    /executeSkillViewerFileAction\('read_file', \{\s*environment_id: `skill:\$\{skillName\}`,\s*path: file\.path,\s*start_line: null,\s*end_line: null\s*\}\)/s
   );
   assert.match(
     source,
-    /executeSkillViewerFileAction\('read_file', \{\s*target: \{ kind: 'skill', name: skillName \},\s*path: summary\?\.instruction\?\.path \|\| 'SKILL\.md'\s*\}\)/s
+    /executeSkillViewerFileAction\('read_file', \{\s*environment_id: `skill:\$\{skillName\}`,\s*path: summary\?\.instruction\?\.path \|\| 'SKILL\.md',\s*start_line: null,\s*end_line: null\s*\}\)/s
   );
 });
 

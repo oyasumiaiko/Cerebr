@@ -59,6 +59,7 @@ test('纯对话模式的 skill 请求显式关闭 background sender.tab.id 回�
   assert.match(backgroundSource, /allowSenderTabFallback: !isolateFromHostPage/);
   assert.match(
     backgroundSource,
-    /const targetTabId = isolateFromHostPage \|\| !refreshCurrentDocument\s*\?\s*null/
+    /const targetTabId = isolateFromHostPage\s*\?\s*null\s*:\s*resolveSidebarRequestTargetTabId/
   );
+  assert.doesNotMatch(backgroundSource, /refresh_current_document|refreshCurrentDocument/);
 });

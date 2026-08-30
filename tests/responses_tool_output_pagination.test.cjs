@@ -20,6 +20,12 @@ function readPageContent(items) {
   return match ? match[1] : text;
 }
 
+function readPlainPageContent(items) {
+  const text = formatTextItems(items);
+  const separatorIndex = text.indexOf('\n');
+  return separatorIndex >= 0 ? text.slice(separatorIndex + 1) : text;
+}
+
 test('统一分页出口在超限时返回可续读 cursor 且严格遵守字符预算', async () => {
   const { paginateResponsesToolOutputContentItems } = await importSourceModule(
     'src/agent_tools/shared/responses_tool_output.js'
@@ -71,6 +77,34 @@ test('分页缓存按游标无重复地续读完整结果，并只在第一页�
   assert.equal(pageCount > 1, true);
   assert.equal(reconstructed, source);
   assert.equal(cache.read('missing-cursor', 500), null);
+});
+
+test('虚拟文件纯文本分页不转义正文并可按 cursor 无损拼回', async () => {
+  const { createResponsesToolOutputPageCache } = await importSourceModule(
+    'src/agent_tools/shared/responses_tool_output_page_cache.js'
+  );
+  let cursorIndex = 0;
+  const cache = createResponsesToolOutputPageCache({
+    createCursor: () => `plain-cursor-${cursorIndex += 1}`
+  });
+  const source = '<tag>&value</tag>\r\n'.repeat(80);
+  let page = cache.paginate([
+    { type: 'input_text', text: source }
+  ], 300, { format: 'plain' });
+  let reconstructed = '';
+  let pageCount = 0;
+  while (page) {
+    pageCount += 1;
+    const pageText = formatTextItems(page.contentItems);
+    assert.match(pageText, /^tool_output_page total_chars=/);
+    assert.doesNotMatch(pageText, /&lt;tag&gt;|&amp;value/);
+    reconstructed += readPlainPageContent(page.contentItems);
+    if (!page.nextCursor) break;
+    page = cache.read(page.nextCursor, null);
+  }
+
+  assert.equal(pageCount > 1, true);
+  assert.equal(reconstructed, source);
 });
 
 test('read_tool_output 契约只接受上页 cursor，并继承统一输出预算', async () => {

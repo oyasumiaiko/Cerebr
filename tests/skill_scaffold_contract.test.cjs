@@ -16,8 +16,7 @@ async function loadBuiltinSkillCreatorModule() {
 test('通用 skill scaffold 的 scripts 示例已适配为 js_runtime_execute 代码片段', async () => {
   const {
     buildDefaultSkillMountContract,
-    buildSkillScaffoldFiles,
-    buildSkillScaffoldNextSteps
+    buildSkillScaffoldFiles
   } = await loadSkillScaffoldModule();
 
   const files = buildSkillScaffoldFiles({
@@ -64,11 +63,7 @@ test('通用 skill scaffold 的 scripts 示例已适配为 js_runtime_execute �
   assert.match(mountContract, /return await \$invoke\("skill-name", "methodName", args\)/);
   assert.match(mountContract, /mounts it automatically/);
   assert.match(mountContract, /not a prerequisite for `\$invoke`/);
-
-  const nextSteps = buildSkillScaffoldNextSteps({ resources: ['scripts'], examples: true });
-  assert.equal(nextSteps.some((step) => /manifest\.json\.description/.test(step)), true);
-  assert.equal(nextSteps.some((step) => /Forward-test complex skills/.test(step)), true);
-  assert.equal(nextSteps.some((step) => /no separate mount step is required/.test(step)), true);
+  assert.doesNotMatch(mountContract, /Compatibility runtime registry/);
 });
 
 test('内置 skill-creator 指导不再把 scripts 描述成 shell 或 python 可直接运行入口', async () => {

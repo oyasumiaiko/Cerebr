@@ -229,13 +229,20 @@ test('全部 17 个模型工具具有唯一稳定名称和可独立判读的描�
       assert.match(definition.description, /不要对 JS 输出调用 read_tool_output/);
       continue;
     }
+    if (definition.name === 'copy_file') {
+      assert.equal(definition.parameters.properties.max_output_chars, undefined);
+      continue;
+    }
     assert.deepEqual(
       definition.parameters.properties.max_output_chars.type,
       ['integer', 'null'],
       `${definition.name} 缺少统一 max_output_chars 参数`
     );
-    assert.match(definition.parameters.properties.max_output_chars.description, /传 null 时默认 5000/);
-    assert.match(definition.parameters.properties.max_output_chars.description, /page_content_read 默认 20000/);
+    const expectedDefault = ['read_file', 'page_content_read'].includes(definition.name) ? 20000 : 5000;
+    assert.match(
+      definition.parameters.properties.max_output_chars.description,
+      new RegExp(`null (?:时)?默认 ${expectedDefault}`)
+    );
   }
 });
 
@@ -264,7 +271,7 @@ test('统一输出控制参数会解析默认值、从业务参数剥离并严�
   });
   assert.throws(
     () => splitResponsesToolOutputControl({ max_output_chars: 0 }),
-    /必须是正安全整数或 null/
+    /必须是至少 256 的安全整数或 null/
   );
 });
 
@@ -293,16 +300,19 @@ test('关键枚举保持闭合，范围与数量通过 description 暴露且不�
     'copy_file'
   ]) {
     assert.deepEqual(
-      propertiesOf(name).target.properties.kind.enum,
-      ['skill'],
-      `${name}.target.kind 的作用域枚举发生漂移`
+      propertiesOf(name).environment_id.type,
+      ['string', 'null'],
+      `${name}.environment_id 的选择器类型发生漂移`
     );
+    assert.match(propertiesOf(name).environment_id.description, /skill:<stable-key>/);
+    assert.equal(propertiesOf(name).target, undefined);
     assert.doesNotMatch(JSON.stringify(definitions[name]), /workspace/i);
   }
   assert.doesNotMatch(JSON.stringify(definitions.apply_patch), /workspace/i);
 
   assert.equal(propertiesOf('read_file').max_chars, undefined);
-  assert.match(propertiesOf('search_files').context.description, /0-10/);
+  assert.match(propertiesOf('search_files').context_lines.description, /0-20/);
+  assert.equal(propertiesOf('search_files').context, undefined);
   assert.equal(propertiesOf('search_files').limit, undefined);
 
   const requestQuestions = propertiesOf('request_user_input').questions;
@@ -370,8 +380,7 @@ test('js_runtime_execute 与 skill_registry 明确区分宿主页和隔离沙箱
   const isolatedSkill = isolatedDefinitions.skill_registry;
   assert.notEqual(hostSkill.description, isolatedSkill.description);
   assert.match(hostSkill.description, /当前页可见/u);
-  assert.match(isolatedSkill.description, /纯对话\/隔离模式/u);
-  assert.match(isolatedSkill.description, /不会绑定宿主页/u);
+  assert.match(isolatedSkill.description, /内置和 guidance Skill/u);
   assert.deepEqual(
     hostSkill.parameters.properties.action.enum,
     ['list', 'create_skill', 'delete_skill', 'enable_skill', 'disable_skill', 'mount_on_current_page']
@@ -524,10 +533,23 @@ test('hosted tool_search 的 searchable names 完整派生自 deferLoading manif
   );
   assert.deepEqual(
     RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES,
-    EXPECTED_MODEL_TOOL_NAMES.filter(name => name !== 'read_tool_output' && name !== 'apply_patch')
+    [
+      'js_runtime_execute',
+      'copy_file',
+      'skill_registry',
+      'request_user_input',
+      'view_image',
+      'list_askable_models',
+      'ask_other_ai',
+      'history_search',
+      'history_read',
+      'webpage_screenshot',
+      'pdf_content_read',
+      'page_content_read'
+    ]
   );
   assert.equal(
     new Set(RESPONSES_HOSTED_TOOL_SEARCH_SEARCHABLE_TOOL_NAMES).size,
-    EXPECTED_MODEL_TOOL_NAMES.length - 2
+    12
   );
 });

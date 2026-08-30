@@ -57,7 +57,7 @@ test('runtime contract 对缺失和任意字段漂移都 fail closed，并返回
 
 test('Skill 写 payload 不再携带独立 skill_name，只携带一致性上下文与精确 runtime contract', async () => {
   const virtualFiles = await importSource('src/agent_tools/virtual_file_io/index.js');
-  const registry = await importSource('src/agent_tools/skill/registry_tool.js');
+  const skillVirtualFiles = await importSource('src/agent_tools/skill/virtual_file_action.js');
   const contract = await importSource('src/agent_tools/shared/apply_patch_contract.js');
   const patch = [
     '*** Begin Patch',
@@ -67,24 +67,24 @@ test('Skill 写 payload 不再携带独立 skill_name，只携带一致性上下
     '*** End Patch'
   ].join('\n');
   const normalized = virtualFiles.normalizeVirtualFileApplyPatchCustomInput(patch);
-  const payload = virtualFiles.buildSkillRegistryFileActionPayloadFromVirtualFileAction(
+  const payload = virtualFiles.buildSkillVirtualFileActionPayload(
     'apply_patch',
     normalized
   );
 
   assert.equal(Object.prototype.hasOwnProperty.call(payload, 'skill_name'), false);
-  assert.equal(payload.expected_environment_id, 'skill:stable-key');
+  assert.equal(payload.environment_id, 'skill:stable-key');
   assert.deepEqual(payload.runtime_contract, contract.buildApplyPatchRuntimeContractPayload());
 
-  const normalizedRegistryArgs = registry.normalizeSkillRegistryToolArguments(payload);
-  assert.equal(normalizedRegistryArgs.skill_name, null);
-  assert.equal(normalizedRegistryArgs.expected_environment_id, 'skill:stable-key');
+  const { runtime_contract: _runtimeContract, ...backgroundPayload } = payload;
+  const normalizedVirtualArgs = skillVirtualFiles.normalizeSkillVirtualFileActionArguments(backgroundPayload);
+  assert.equal(normalizedVirtualArgs.environment.environment_id, 'skill:stable-key');
   assert.throws(
-    () => registry.normalizeSkillRegistryToolArguments({
-      ...payload,
+    () => skillVirtualFiles.normalizeSkillVirtualFileActionArguments({
+      ...backgroundPayload,
       skill_name: 'different-key'
     }),
-    /内部环境上下文冲突/
+    /不接受参数 skill_name/
   );
 });
 
@@ -98,7 +98,7 @@ test('sidebar/background 门禁位于 Responses 网络请求和 Skill 持久化�
 
   assert.match(backgroundSource, /GET_APPLY_PATCH_RUNTIME_CONTRACT|APPLY_PATCH_RUNTIME_CONTRACT_MESSAGE_TYPE/);
   const backgroundCompare = backgroundSource.indexOf('compareApplyPatchRuntimeContract(rawPayload.runtime_contract)');
-  const backgroundWrite = backgroundSource.indexOf('skillManager.executeRegistryAction(registryPayload');
+  const backgroundWrite = backgroundSource.indexOf('skillManager.executeVirtualFileAction(virtualFilePayload');
   assert.ok(backgroundCompare >= 0 && backgroundWrite > backgroundCompare);
 
   assert.match(bootstrapSource, /ensureApplyPatchRuntimeContract\?\.\(\{ force: true \}\)/);

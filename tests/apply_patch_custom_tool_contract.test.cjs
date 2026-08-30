@@ -54,23 +54,31 @@ test('Freeform Environment ID 只允许缺省会话区或 skill:<stable-key>', a
   const root = normalizeVirtualFileApplyPatchCustomInput(
     '*** Begin Patch\n*** Add File: a.txt\n+x\n*** End Patch'
   );
-  assert.deepEqual(root.target, { kind: 'root', name: null });
+  assert.deepEqual(root.environment, {
+    kind: 'root',
+    environment_id: null,
+    skill_name: null
+  });
 
   const skill = normalizeVirtualFileApplyPatchCustomInput(
     '*** Begin Patch\n*** Environment ID: skill:stable-key\n*** Add File: a.txt\n+x\n*** End Patch'
   );
-  assert.deepEqual(skill.target, { kind: 'skill', name: 'stable-key' });
+  assert.deepEqual(skill.environment, {
+    kind: 'skill',
+    environment_id: 'skill:stable-key',
+    skill_name: 'stable-key'
+  });
 
   assert.throws(
     () => normalizeVirtualFileApplyPatchCustomInput(
       '*** Begin Patch\n*** Environment ID: remote\n*** Add File: a.txt\n+x\n*** End Patch'
     ),
-    /仅允许 skill:<stable-key>/
+    /只支持 `skill:<stable-key>`/
   );
   const localPatch = normalizeVirtualFileApplyPatchCustomInput(
     '*** Begin Patch\n*** Environment ID: skill:stable-key\n*** Add File: local/a.txt\n+x\n*** End Patch'
   );
-  assert.equal(localPatch.target.kind, 'skill');
+  assert.equal(localPatch.environment.kind, 'skill');
   assert.equal(localPatch.patch.includes('*** Add File: local/a.txt'), true);
   assert.throws(
     () => normalizeVirtualFileToolArguments('apply_patch', {

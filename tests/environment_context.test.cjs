@@ -177,8 +177,10 @@ test('虚拟文件编辑上下文会明确 current read 与同文件 chunk 源�
   assert.equal(payload.virtual_file_editing, true);
   const text = buildEnvironmentContextInputItems(payload)[0].content[0].text;
   assert.match(text, /<virtual_file_editing_policy>/);
-  assert.match(text, /出现 next_cursor 时该读取不完整/);
+  assert.match(text, /read_file 返回不带行号的原始正文/);
+  assert.match(text, /next_cursor 由 read_tool_output 继续读取/);
   assert.match(text, /多个 chunk 必须按源文件从上到下排列/);
-  assert.match(text, /不要根据旧消息、旧 preview/);
-  assert.match(text, /失败后不要原样重放旧 patch/);
+  assert.match(text, /Skill 文件根使用 environment_id=skill:&lt;stable-key&gt;/);
+  assert.match(text, /只有 Success 工具结果表示补丁已经提交/);
+  assert.doesNotMatch(text, /旧消息|原样重放旧 patch/);
 });

@@ -8,7 +8,7 @@ async function loadModule() {
   return import(pathToFileURL(modulePath).href);
 }
 
-test('skill_registry read_file 摘要会显示技能 action、文件路径和技能名', async () => {
+test('历史 skill_registry read_file 摘要会显示技能 action、文件路径和技能名', async () => {
   const {
     buildSkillRegistrySummaryParts,
     buildSkillRegistryPrimaryText,
@@ -39,7 +39,7 @@ test('skill_registry read_file 摘要会显示技能 action、文件路径和技
   assert.equal(getSkillRegistryToolTypeLabel(record), '技能');
 });
 
-test('skill_registry read_file 在按行范围读取时会把 Lx-Ly 追加到文件路径摘要', async () => {
+test('历史 skill_registry read_file 在按行范围读取时会把 Lx-Ly 追加到文件路径摘要', async () => {
   const {
     buildSkillRegistrySummaryParts,
     buildSkillRegistryPrimaryText

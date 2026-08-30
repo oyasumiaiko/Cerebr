@@ -379,7 +379,10 @@ async function runMockResponsesServer() {
                 name: tool?.name || '',
                 description: tool?.description || '',
                 format: tool?.format || null,
-                targetKindEnum: tool?.parameters?.properties?.target?.properties?.kind?.enum || null,
+                parameterNames: Object.keys(tool?.parameters?.properties || {}),
+                requiredNames: Array.isArray(tool?.parameters?.required) ? tool.parameters.required : [],
+                environmentIdType: tool?.parameters?.properties?.environment_id?.type || null,
+                additionalProperties: tool?.parameters?.additionalProperties,
                 containsWorkspace: /workspace/i.test(JSON.stringify(tool))
               }));
           }
@@ -475,36 +478,33 @@ async function runMockResponsesServer() {
 
           const pendingFunctionCall = !functionToolOutputs.has(LIST_CALL_ID)
             ? createFunctionCallItem(LIST_CALL_ID, 'list_files', {
-                target: null,
+                environment_id: null,
                 path_glob: null,
                 max_output_chars: null
               })
             : (!functionToolOutputs.has(READ_CALL_ID)
                 ? createFunctionCallItem(READ_CALL_ID, 'read_file', {
-                    target: null,
+                    environment_id: null,
                     path: MD_DOC_PATH,
-                    line_range: null,
-                    numbered: null,
+                    start_line: null,
+                    end_line: null,
                     max_output_chars: null
                   })
                 : (!functionToolOutputs.has(SEARCH_CALL_ID)
                     ? createFunctionCallItem(SEARCH_CALL_ID, 'search_files', {
-                        target: null,
+                        environment_id: null,
                         pattern: '第一版内容',
                         regex: null,
-                        glob: null,
+                        path_glob: null,
                         ignore_case: null,
-                        context: null,
-                        before: null,
-                        after: null,
+                        context_lines: null,
                         max_output_chars: null
                       })
                     : (!functionToolOutputs.has(COPY_CALL_ID)
                         ? createFunctionCallItem(COPY_CALL_ID, 'copy_file', {
-                            target: null,
+                            environment_id: null,
                             from: MD_DOC_PATH,
-                            to: COPIED_MD_DOC_PATH,
-                            max_output_chars: null
+                            to: COPIED_MD_DOC_PATH
                           })
                         : null)));
           if (pendingFunctionCall) {
@@ -568,10 +568,10 @@ async function runMockResponsesServer() {
 
           if (!functionToolOutputs.has(SKILL_READ_CALL_ID)) {
             const readCurrentSkillFile = createFunctionCallItem(SKILL_READ_CALL_ID, 'read_file', {
-              target: { kind: 'skill', name: SKILL_KEY },
+              environment_id: `skill:${SKILL_KEY}`,
               path: 'SKILL.md',
-              line_range: null,
-              numbered: true,
+              start_line: null,
+              end_line: null,
               max_output_chars: null
             });
             const responseId = `resp_${requestLog.length}`;
@@ -1062,10 +1062,33 @@ async function main() {
         throw new Error(`removed tool leaked into first request: ${removedToolName}`);
       }
     }
-    for (const toolName of ['list_files', 'read_file', 'search_files', 'copy_file']) {
+    const expectedParameterNames = {
+      list_files: ['environment_id', 'path_glob', 'max_output_chars'],
+      read_file: ['environment_id', 'path', 'start_line', 'end_line', 'max_output_chars'],
+      search_files: [
+        'environment_id',
+        'pattern',
+        'regex',
+        'path_glob',
+        'ignore_case',
+        'context_lines',
+        'max_output_chars'
+      ],
+      copy_file: ['environment_id', 'from', 'to']
+    };
+    for (const toolName of Object.keys(expectedParameterNames)) {
       const definition = result.firstRequestTools.find((tool) => tool.name === toolName);
-      if (JSON.stringify(definition?.targetKindEnum) !== JSON.stringify(['skill'])) {
-        throw new Error(`${toolName} target.kind enum mismatch: ${JSON.stringify(definition)}`);
+      if (JSON.stringify(definition?.environmentIdType) !== JSON.stringify(['string', 'null'])) {
+        throw new Error(`${toolName} environment_id type mismatch: ${JSON.stringify(definition)}`);
+      }
+      if (definition?.additionalProperties !== false) {
+        throw new Error(`${toolName} must reject additional properties: ${JSON.stringify(definition)}`);
+      }
+      if (JSON.stringify(definition?.parameterNames) !== JSON.stringify(expectedParameterNames[toolName])) {
+        throw new Error(`${toolName} parameter names mismatch: ${JSON.stringify(definition)}`);
+      }
+      if (JSON.stringify(definition?.requiredNames) !== JSON.stringify(expectedParameterNames[toolName])) {
+        throw new Error(`${toolName} required names mismatch: ${JSON.stringify(definition)}`);
       }
     }
     for (const requiredPath of [MD_DOC_PATH, TXT_DOC_PATH, CODE_DOC_PATH, HTML_DOC_PATH]) {

@@ -112,12 +112,12 @@ test('parseSkillApplyPatch 只解析与 Codex Freeform grammar 对齐的标准 p
   assert.equal(lenient.hunks[0].contents, 'hi\n');
 });
 
-test('applySkillPackagePatch 可以新增虚拟文件且用途由路径自动推断', async () => {
+test('prepareSkillPackagePatch 可以新增虚拟文件且用途由路径自动推断', async () => {
   const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
-  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
+  const { prepareSkillPackagePatch } = await loadSkillApplyPatchModule();
 
   const record = buildStoredSkillRecord(buildSkillInput());
-  const result = applySkillPackagePatch(record, wrapPatch(
+  const result = prepareSkillPackagePatch(record, wrapPatch(
     [
       '*** Add File: src/runtime/new-main.js',
       '+module.exports = { read() { return location.href; } };'
@@ -136,13 +136,31 @@ test('applySkillPackagePatch 可以新增虚拟文件且用途由路径自动推
   assert.equal(result.record.runtime.entry_path, 'src/main.js');
 });
 
-test('applySkillPackagePatch 可以删除、修改、移动文件并保持指针自洽', async () => {
+test('prepareSkillPackagePatch 移动被引用文件时要求同一补丁显式更新 manifest', async () => {
   const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
-  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
+  const { prepareSkillPackagePatch } = await loadSkillApplyPatchModule();
 
   const record = buildStoredSkillRecord(buildSkillInput());
-  const result = applySkillPackagePatch(record, wrapPatch(
+  assert.throws(
+    () => prepareSkillPackagePatch(record, wrapPatch(
+      [
+        '*** Update File: src/main.js',
+        '*** Move to: src/runtime/main.js',
+        '@@',
+        ' const helpers = await require("./helpers/dom.js");',
+        '-return { read() { return { title: helpers.readTitle(), href: location.href }; } };',
+        '+return { read() { return { title: helpers.readTitle(), href: helpers.readUrl() }; } };'
+      ].join('\n')
+    )),
+    /runtime\.entry_path `src\/main\.js` 不存在于 files/
+  );
+
+  const result = prepareSkillPackagePatch(record, wrapPatch(
     [
+      '*** Update File: manifest.json',
+      '@@',
+      '-    "entry_path": "src/main.js"',
+      '+    "entry_path": "src/runtime/main.js"',
       '*** Update File: src/main.js',
       '*** Move to: src/runtime/main.js',
       '@@',
@@ -167,16 +185,16 @@ test('applySkillPackagePatch 可以删除、修改、移动文件并保持指针
   );
   assert.deepEqual(result.affected_files, {
     added: [],
-    modified: ['src/runtime/main.js', 'src/helpers/dom.js'],
+    modified: ['manifest.json', 'src/runtime/main.js', 'src/helpers/dom.js'],
     deleted: []
   });
 });
 
 test('skill 根中的 local 目录和 Unicode 路径使用普通可写文件语义', async () => {
   const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
-  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
+  const { prepareSkillPackagePatch } = await loadSkillApplyPatchModule();
   const record = buildStoredSkillRecord(buildSkillInput());
-  const result = applySkillPackagePatch(record, wrapPatch([
+  const result = prepareSkillPackagePatch(record, wrapPatch([
     '*** Add File: local/说明 文档.md',
     '+# Skill local directory'
   ].join('\n')));
@@ -190,12 +208,12 @@ test('skill 根中的 local 目录和 Unicode 路径使用普通可写文件语�
 
 test('skill Add 与 Move 对同名目标使用和会话区一致的覆盖语义', async () => {
   const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
-  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
+  const { prepareSkillPackagePatch } = await loadSkillApplyPatchModule();
   const input = buildSkillInput();
   input.files.push({ path: 'references/target.md', content: 'old target\n' });
   const record = buildStoredSkillRecord(input);
 
-  const added = applySkillPackagePatch(record, wrapPatch([
+  const added = prepareSkillPackagePatch(record, wrapPatch([
     '*** Add File: references/target.md',
     '+new add target'
   ].join('\n')));
@@ -205,7 +223,7 @@ test('skill Add 与 Move 对同名目标使用和会话区一致的覆盖语义'
   );
   assert.deepEqual(added.affected_files.modified, ['references/target.md']);
 
-  const moved = applySkillPackagePatch(record, wrapPatch([
+  const moved = prepareSkillPackagePatch(record, wrapPatch([
     '*** Update File: src/helpers/dom.js',
     '*** Move to: references/target.md',
     '@@',
@@ -219,12 +237,12 @@ test('skill Add 与 Move 对同名目标使用和会话区一致的覆盖语义'
   );
 });
 
-test('applySkillPackagePatch 支持直接 patch manifest.json', async () => {
+test('prepareSkillPackagePatch 支持直接 patch manifest.json', async () => {
   const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
-  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
+  const { prepareSkillPackagePatch } = await loadSkillApplyPatchModule();
 
   const record = buildStoredSkillRecord(buildSkillInput());
-  const result = applySkillPackagePatch(record, wrapPatch(
+  const result = prepareSkillPackagePatch(record, wrapPatch(
     [
       '*** Update File: manifest.json',
       '@@',
@@ -249,9 +267,9 @@ test('applySkillPackagePatch 支持直接 patch manifest.json', async () => {
   });
 });
 
-test('applySkillPackagePatch 会复现 Codex 的多 chunk、交错修改与 EOF 追加行为', async () => {
+test('prepareSkillPackagePatch 会复现 Codex 的多 chunk、交错修改与 EOF 追加行为', async () => {
   const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
-  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
+  const { prepareSkillPackagePatch } = await loadSkillApplyPatchModule();
 
   const record = buildStoredSkillRecord({
     ...buildSkillInput('multi-edit'),
@@ -270,7 +288,7 @@ test('applySkillPackagePatch 会复现 Codex 的多 chunk、交错修改与 EOF 
     ]
   });
 
-  const result = applySkillPackagePatch(record, wrapPatch(
+  const result = prepareSkillPackagePatch(record, wrapPatch(
     [
       '*** Update File: src/runtime/demo.js',
       '@@',
@@ -296,9 +314,9 @@ test('applySkillPackagePatch 会复现 Codex 的多 chunk、交错修改与 EOF 
   );
 });
 
-test('applySkillPackagePatch 会保留 Codex 的纯追加 chunk 与 Unicode 宽松匹配', async () => {
+test('prepareSkillPackagePatch 会保留 Codex 的纯追加 chunk 与 Unicode 宽松匹配', async () => {
   const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
-  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
+  const { prepareSkillPackagePatch } = await loadSkillApplyPatchModule();
 
   const additionRecord = buildStoredSkillRecord({
     ...buildSkillInput('pure-add'),
@@ -315,7 +333,7 @@ test('applySkillPackagePatch 会保留 Codex 的纯追加 chunk 与 Unicode 宽�
       }
     ]
   });
-  const additionResult = applySkillPackagePatch(additionRecord, wrapPatch(
+  const additionResult = prepareSkillPackagePatch(additionRecord, wrapPatch(
     [
       '*** Update File: src/main.js',
       '@@',
@@ -349,7 +367,7 @@ test('applySkillPackagePatch 会保留 Codex 的纯追加 chunk 与 Unicode 宽�
       }
     ]
   });
-  const unicodeResult = applySkillPackagePatch(unicodeRecord, wrapPatch(
+  const unicodeResult = prepareSkillPackagePatch(unicodeRecord, wrapPatch(
     [
       '*** Update File: src/main.js',
       '@@',
@@ -364,15 +382,15 @@ test('applySkillPackagePatch 会保留 Codex 的纯追加 chunk 与 Unicode 宽�
   );
 });
 
-test('applySkillPackagePatch 会对虚拟文件特有的错误场景给出明确失败', async () => {
+test('prepareSkillPackagePatch 会对虚拟文件特有的错误场景给出明确失败', async () => {
   const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
-  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
+  const { prepareSkillPackagePatch } = await loadSkillApplyPatchModule();
 
   const record = buildStoredSkillRecord(buildSkillInput());
   const originalRecordSnapshot = JSON.stringify(record);
 
   assert.throws(
-    () => applySkillPackagePatch(record, wrapPatch([
+    () => prepareSkillPackagePatch(record, wrapPatch([
       '*** Update File: src/helpers/dom.js',
       '@@',
       '-module.exports = { readTitle() { return document.title; } };',
@@ -386,7 +404,7 @@ test('applySkillPackagePatch 会对虚拟文件特有的错误场景给出明确
   );
   assert.equal(JSON.stringify(record), originalRecordSnapshot);
 
-  const addedReference = applySkillPackagePatch(record, wrapPatch(
+  const addedReference = prepareSkillPackagePatch(record, wrapPatch(
     [
       '*** Add File: references/notes.md',
       '+# Notes'
@@ -398,7 +416,7 @@ test('applySkillPackagePatch 会对虚拟文件特有的错误场景给出明确
   );
 
   assert.throws(
-    () => applySkillPackagePatch(record, wrapPatch(
+    () => prepareSkillPackagePatch(record, wrapPatch(
       [
         '*** Add File: manifest.json',
         '+{}'
@@ -408,7 +426,7 @@ test('applySkillPackagePatch 会对虚拟文件特有的错误场景给出明确
   );
 
   assert.throws(
-    () => applySkillPackagePatch(record, wrapPatch(
+    () => prepareSkillPackagePatch(record, wrapPatch(
       [
         '*** Delete File: manifest.json'
       ].join('\n')
@@ -417,7 +435,7 @@ test('applySkillPackagePatch 会对虚拟文件特有的错误场景给出明确
   );
 
   assert.throws(
-    () => applySkillPackagePatch(record, wrapPatch(
+    () => prepareSkillPackagePatch(record, wrapPatch(
       [
         '*** Update File: manifest.json',
         '*** Move to: other.json',
@@ -430,7 +448,7 @@ test('applySkillPackagePatch 会对虚拟文件特有的错误场景给出明确
   );
 
   assert.throws(
-    () => applySkillPackagePatch(record, wrapPatch(
+    () => prepareSkillPackagePatch(record, wrapPatch(
       [
         '*** Update File: src/helpers/dom.js',
         '*** Move to: manifest.json',
@@ -443,7 +461,7 @@ test('applySkillPackagePatch 会对虚拟文件特有的错误场景给出明确
   );
 
   assert.throws(
-    () => applySkillPackagePatch(record, wrapPatch(
+    () => prepareSkillPackagePatch(record, wrapPatch(
       [
         '*** Add File: ../escape.js',
         '+oops'
@@ -453,7 +471,7 @@ test('applySkillPackagePatch 会对虚拟文件特有的错误场景给出明确
   );
 
   assert.throws(
-    () => applySkillPackagePatch(record, wrapPatch(
+    () => prepareSkillPackagePatch(record, wrapPatch(
       [
         '*** Delete File: missing.js'
       ].join('\n')
@@ -464,12 +482,12 @@ test('applySkillPackagePatch 会对虚拟文件特有的错误场景给出明确
 
 test('Skill patch 必须由 Environment ID 唯一选目标并拒绝同一源路径的多个操作', async () => {
   const { buildStoredSkillRecord } = await loadSkillRegistryToolModule();
-  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
+  const { prepareSkillPackagePatch } = await loadSkillApplyPatchModule();
   const record = buildStoredSkillRecord(buildSkillInput('environment-target'));
   const snapshot = JSON.stringify(record);
 
   assert.throws(
-    () => applySkillPackagePatch(
+    () => prepareSkillPackagePatch(
       record,
       '*** Begin Patch\n*** Add File: notes.md\n+x\n*** End Patch'
     ),
@@ -477,7 +495,7 @@ test('Skill patch 必须由 Environment ID 唯一选目标并拒绝同一源路�
       && error?.state_changed === false
   );
   assert.throws(
-    () => applySkillPackagePatch(record, wrapPatch(
+    () => prepareSkillPackagePatch(record, wrapPatch(
       '*** Add File: notes.md\n+x',
       'other-skill'
     )),
@@ -485,7 +503,7 @@ test('Skill patch 必须由 Environment ID 唯一选目标并拒绝同一源路�
       && error?.state_changed === false
   );
   assert.throws(
-    () => applySkillPackagePatch(record, wrapPatch([
+    () => prepareSkillPackagePatch(record, wrapPatch([
       '*** Add File: notes.md',
       '+first',
       '*** Add File: notes.md',
@@ -501,9 +519,10 @@ test('Skill patch 必须由 Environment ID 唯一选目标并拒绝同一源路�
 
 test('Skill verifier 只读取 patch 开始时的文件快照，不接受 Move 后再依赖目标内容', async () => {
   const { buildStoredSkillRecord, buildSkillFilePayload } = await loadSkillRegistryToolModule();
-  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
+  const { prepareSkillPackagePatch } = await loadSkillApplyPatchModule();
   const record = buildStoredSkillRecord({
     ...buildSkillInput('snapshot-probe'),
+    runtime: { entry_path: null },
     files: [
       { path: 'SKILL.md', kind: 'instruction', content: '# Snapshot Probe\n' },
       { path: 'a.txt', kind: null, content: 'needle\n' },
@@ -513,7 +532,7 @@ test('Skill verifier 只读取 patch 开始时的文件快照，不接受 Move �
   const before = JSON.stringify(record);
 
   assert.throws(
-    () => applySkillPackagePatch(record, wrapPatch([
+    () => prepareSkillPackagePatch(record, wrapPatch([
       '*** Update File: a.txt',
       '*** Move to: b.txt',
       '@@',

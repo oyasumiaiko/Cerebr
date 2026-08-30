@@ -157,25 +157,23 @@ async function applySkillPatchThroughModelFacingRoute(sidebarFrame, skillNameVal
     const virtualFileTools = await import(
       chrome.runtime.getURL('src/agent_tools/virtual_file_io/index.js')
     );
-    const normalizedArgs = virtualFileTools.normalizeVirtualFileToolArguments('apply_patch', {
-      target: { kind: 'skill', name: skillName },
-      patch
-    });
-    const payload = virtualFileTools.buildSkillRegistryFileActionPayloadFromVirtualFileAction(
+    const normalizedArgs = virtualFileTools.normalizeVirtualFileApplyPatchCustomInput(patch);
+    if (normalizedArgs.environment.environment_id !== `skill:${skillName}`) {
+      throw new Error(`unexpected patch environment: ${normalizedArgs.environment.environment_id}`);
+    }
+    const payload = virtualFileTools.buildSkillVirtualFileActionPayload(
       'apply_patch',
       normalizedArgs
     );
-    const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const rawResult = await chrome.runtime.sendMessage({
-      type: 'SKILL_REGISTRY_ACTION',
-      tabId: typeof tab?.id === 'number' ? tab.id : null,
+      type: 'VIRTUAL_FILE_ACTION',
       payload
     });
     if (rawResult?.success !== true) return rawResult;
     const { success: _success, ...skillResult } = rawResult;
     return {
       success: true,
-      ...virtualFileTools.normalizeVirtualFileResultFromSkillRegistryAction(
+      ...virtualFileTools.normalizeVirtualFileResultFromSkillAction(
         'apply_patch',
         skillResult,
         normalizedArgs
@@ -220,7 +218,10 @@ async function main() {
 
     const extensionWorker = launchMode === 'worktree_unpacked'
       ? await waitForWorktreeExtensionWorker(context, { timeoutMs: 30_000 })
-      : await reloadUnpackedExtension(context, { timeoutMs: 30_000 });
+      : await reloadUnpackedExtension(context, {
+          timeoutMs: 30_000,
+          unpackedPath: repoRoot
+        });
     const extensionId = new URL(extensionWorker.url()).host;
     result.extensionId = extensionId;
     result.steps.push('extension_ready');
@@ -285,20 +286,12 @@ async function main() {
     if (!created?.success || created?.ok !== true) {
       throw new Error(`create_skill failed: ${JSON.stringify(created)}`);
     }
-    if (created?.create_mode !== 'template') {
-      throw new Error(`expected template create_mode, got: ${JSON.stringify(created)}`);
-    }
     if (created?.skill?.enabled !== false) {
       throw new Error(`expected created template to stay disabled by default: ${JSON.stringify(created)}`);
     }
-    if (created?.refreshed_current_document !== false) {
-      throw new Error(`template create should not refresh current document: ${JSON.stringify(created)}`);
-    }
     result.createdSkill = created?.skill?.name || skillName;
     result.createResult = {
-      createMode: created?.create_mode || '',
-      createdFiles: Array.isArray(created?.created_files) ? created.created_files : [],
-      nextSteps: Array.isArray(created?.next_steps) ? created.next_steps : []
+      createdFiles: Array.isArray(created?.created_files) ? created.created_files : []
     };
     result.steps.push('skill_created');
 
@@ -307,6 +300,7 @@ async function main() {
       skillName,
       [
         '*** Begin Patch',
+        `*** Environment ID: skill:${skillName}`,
         '*** Add File: references/long-export.txt',
         `+${longArchiveContent}`,
         '*** End Patch'
@@ -401,6 +395,7 @@ async function main() {
       skillName,
       [
         '*** Begin Patch',
+        `*** Environment ID: skill:${skillName}`,
         '*** Add File: src/main.js',
         '+return {',
         '+  readSummary() {',
@@ -420,6 +415,7 @@ async function main() {
       skillName,
       [
         '*** Begin Patch',
+        `*** Environment ID: skill:${skillName}`,
         '*** Update File: manifest.json',
         '@@',
         '-  "match": [],',
@@ -453,7 +449,7 @@ async function main() {
     }
     result.steps.push('skill_enabled');
 
-    const eagerDefinitions = await sidebarFrame.evaluate(async (skillNameValue) => (
+    const eagerDefinitions = await extensionWorker.evaluate(async (skillNameValue) => (
       await chrome.userScripts.getScripts({
         ids: [`cerebr-skill--${encodeURIComponent(skillNameValue)}`]
       })

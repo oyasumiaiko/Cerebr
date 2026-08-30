@@ -34,6 +34,18 @@ function createInMemoryDocumentStore(seed = {}) {
       rows.set(next.path, next);
       return { ...next };
     },
+    async mutateDocuments(_conversationId, mutator) {
+      const current = Array.from(rows.values()).map((item) => ({ ...item }));
+      const prepared = mutator(current);
+      rows.clear();
+      for (const documentRecord of prepared.documents) {
+        rows.set(documentRecord.path, { ...documentRecord });
+      }
+      return {
+        documents: Array.from(rows.values()).map((item) => ({ ...item })),
+        value: prepared.value
+      };
+    },
     async replaceDocuments(_conversationId, documents) {
       rows.clear();
       for (const documentRecord of documents) {
@@ -137,129 +149,145 @@ test('统一根相对路径支持 Unicode 和普通目录，并拒绝绝对路�
   );
 });
 
-test('normalizeVirtualFileToolArguments 默认使用根目录且 target object 只接受 skill', async () => {
+test('normalizeVirtualFileToolArguments 使用单一 environment_id 与精确参数', async () => {
   const {
     VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
     VIRTUAL_FILE_COPY_FILE_TOOL_NAME,
-    VIRTUAL_FILE_DELETE_FILE_TOOL_NAME,
     VIRTUAL_FILE_LIST_FILES_TOOL_NAME,
-    VIRTUAL_FILE_MOVE_FILE_TOOL_NAME,
     VIRTUAL_FILE_READ_FILE_TOOL_NAME,
     VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME,
     normalizeVirtualFileToolArguments
   } = await loadConversationDocumentToolsModule();
 
-  const defaultDocumentTarget = normalizeVirtualFileToolArguments(VIRTUAL_FILE_LIST_FILES_TOOL_NAME, {});
-  assert.deepEqual(defaultDocumentTarget, {
-    action: 'list_files',
-    target: {
-      kind: 'root',
-      name: null
-    },
-    path_glob: null
-  });
-
-  const skillPatchTarget = normalizeVirtualFileToolArguments(VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME, {
-    target: {
-      kind: 'skill',
-      name: 'dom-probe'
-    },
-    patch: '*** Begin Patch\n*** Add File: notes.md\n+hello\n*** End Patch'
-  });
-  assert.equal(skillPatchTarget.target.kind, 'skill');
-  assert.equal(skillPatchTarget.target.name, 'dom-probe');
-
-  assert.throws(
-    () => normalizeVirtualFileToolArguments(VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME, {
-      target: { kind: 'skill' },
-      patch: '*** Begin Patch\n*** Add File: notes.md\n+hello\n*** End Patch'
+  assert.deepEqual(
+    normalizeVirtualFileToolArguments(VIRTUAL_FILE_LIST_FILES_TOOL_NAME, {
+      environment_id: null,
+      path_glob: null
     }),
-    /target.kind=skill 时 target.name 不能为空/
+    {
+      action: 'list_files',
+      environment: {
+        kind: 'root',
+        environment_id: null,
+        skill_name: null
+      },
+      path_glob: null
+    }
   );
 
-  const bashStyleRead = normalizeVirtualFileToolArguments(VIRTUAL_FILE_READ_FILE_TOOL_NAME, {
-    path: 'spec.md',
-    line_range: '20,40p',
-    numbered: true
-  });
-  assert.deepEqual(bashStyleRead, {
-    action: 'read_file',
-    target: {
-      kind: 'root',
-      name: null
-    },
-    file_path: 'spec.md',
-    include_line_numbers: true,
-    read_options: {
+  assert.deepEqual(
+    normalizeVirtualFileToolArguments(VIRTUAL_FILE_READ_FILE_TOOL_NAME, {
+      environment_id: 'skill:dom-probe',
+      path: 'spec.md',
       start_line: 20,
       end_line: 40
+    }),
+    {
+      action: 'read_file',
+      environment: {
+        kind: 'skill',
+        environment_id: 'skill:dom-probe',
+        skill_name: 'dom-probe'
+      },
+      file_path: 'spec.md',
+      read_options: {
+        start_line: 20,
+        end_line: 40
+      }
     }
-  });
-
-  const bashStyleSearch = normalizeVirtualFileToolArguments(VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME, {
-    pattern: 'token',
-    glob: '**/*.md',
-    context: 2,
-    ignore_case: true
-  });
-  assert.deepEqual(bashStyleSearch, {
-    action: 'search_files',
-    target: {
-      kind: 'root',
-      name: null
-    },
-    pattern: 'token',
-    regex: false,
-    case_mode: 'insensitive',
-    path_glob: '**/*.md',
-    context_before: 2,
-    context_after: 2,
-    max_results: null
-  });
-
-  const copyFile = normalizeVirtualFileToolArguments(VIRTUAL_FILE_COPY_FILE_TOOL_NAME, {
-    from: 'spec.md',
-    to: 'spec.md'
-  });
-  assert.deepEqual(copyFile, {
-    action: 'copy_file',
-    target: {
-      kind: 'root',
-      name: null
-    },
-    source_path: 'spec.md',
-    destination_path: 'spec.md'
-  });
+  );
 
   assert.throws(
-    () => normalizeVirtualFileToolArguments(VIRTUAL_FILE_MOVE_FILE_TOOL_NAME, {
+    () => normalizeVirtualFileToolArguments(VIRTUAL_FILE_READ_FILE_TOOL_NAME, {
+      environment_id: 'skill:DOM-PROBE',
+      path: 'spec.md',
+      start_line: null,
+      end_line: null
+    }),
+    /精确/
+  );
+  assert.throws(
+    () => normalizeVirtualFileToolArguments(VIRTUAL_FILE_READ_FILE_TOOL_NAME, {
+      environment_id: null,
+      path: 'spec.md',
+      start_line: 20,
+      end_line: null
+    }),
+    /必须同时/
+  );
+
+  assert.deepEqual(
+    normalizeVirtualFileToolArguments(VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME, {
+      environment_id: null,
+      pattern: 'token',
+      regex: false,
+      path_glob: '**/*.md',
+      ignore_case: true,
+      context_lines: 2
+    }),
+    {
+      action: 'search_files',
+      environment: {
+        kind: 'root',
+        environment_id: null,
+        skill_name: null
+      },
+      pattern: 'token',
+      regex: false,
+      ignore_case: true,
+      path_glob: '**/*.md',
+      context_lines: 2
+    }
+  );
+
+  assert.deepEqual(
+    normalizeVirtualFileToolArguments(VIRTUAL_FILE_COPY_FILE_TOOL_NAME, {
+      environment_id: null,
+      from: 'spec.md',
+      to: 'copy.md'
+    }),
+    {
+      action: 'copy_file',
+      environment: {
+        kind: 'root',
+        environment_id: null,
+        skill_name: null
+      },
+      source_path: 'spec.md',
+      destination_path: 'copy.md'
+    }
+  );
+
+  const patchArgs = normalizeVirtualFileToolArguments(VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME, {
+    environment_id: null,
+    patch: '*** Begin Patch\n*** Add File: notes.md\n+hello\n*** End Patch'
+  });
+  assert.equal(patchArgs.environment.kind, 'root');
+
+  assert.throws(
+    () => normalizeVirtualFileToolArguments('move_file', {
+      environment_id: null,
       from: 'references/old.md',
       to: 'references/new.md'
     }),
     /不支持的 action `move_file`/
   );
   assert.throws(
-    () => normalizeVirtualFileToolArguments(VIRTUAL_FILE_DELETE_FILE_TOOL_NAME, {
+    () => normalizeVirtualFileToolArguments('delete_file', {
+      environment_id: null,
       path: 'spec.md'
     }),
     /不支持的 action `delete_file`/
   );
-
-  const ordinaryWorkspaceDirectoryRead = normalizeVirtualFileToolArguments(VIRTUAL_FILE_READ_FILE_TOOL_NAME, {
-    path: 'workspace/spec.md'
-  });
-  assert.equal(ordinaryWorkspaceDirectoryRead.file_path, 'workspace/spec.md');
-
-  const ordinaryWorkspaceDirectorySearch = normalizeVirtualFileToolArguments(VIRTUAL_FILE_SEARCH_FILES_TOOL_NAME, {
-    pattern: 'token',
-    glob: 'workspace/**/*.md'
-  });
-  assert.equal(ordinaryWorkspaceDirectorySearch.path_glob, 'workspace/**/*.md');
   assert.throws(
-    () => normalizeVirtualFileToolArguments(VIRTUAL_FILE_LIST_FILES_TOOL_NAME, {
-      target: { kind: 'workspace', name: null }
+    () => normalizeVirtualFileToolArguments(VIRTUAL_FILE_READ_FILE_TOOL_NAME, {
+      environment_id: null,
+      path: 'spec.md',
+      start_line: null,
+      end_line: null,
+      numbered: true
     }),
-    /不支持的 target.kind `workspace`/
+    /不接受参数 numbered/
   );
 });
 
@@ -280,7 +308,7 @@ test('apply_patch 工具定义聚焦虚拟文件补丁契约，不重复最终�
   assert.match(applyPatchDefinition.format.definition, /^start: begin_patch environment_id\? hunk\+ end_patch/m);
 });
 
-test('read_file/search_files 与文件操作工具定义暴露严格且低歧义的参数', async () => {
+test('read_file/search_files/copy_file 只暴露当前精确参数', async () => {
   const {
     buildVirtualFileCopyFileFunctionToolDefinition,
     buildVirtualFileReadFileFunctionToolDefinition,
@@ -289,39 +317,33 @@ test('read_file/search_files 与文件操作工具定义暴露严格且低歧义
 
   const readDefinition = buildVirtualFileReadFileFunctionToolDefinition();
   assert.equal(readDefinition.strict, true);
-  assert.match(readDefinition.description, /全文或指定行范围/);
-  assert.doesNotMatch(readDefinition.description, /字符片段/);
-  assert.match(readDefinition.description, /# path/);
-  assert.ok(readDefinition.parameters.properties.path);
-  assert.ok(readDefinition.parameters.properties.line_range);
-  assert.ok(readDefinition.parameters.properties.numbered);
-  assert.deepEqual(readDefinition.parameters.required, ['target', 'path', 'line_range', 'numbered', 'max_output_chars']);
-  assert.equal(readDefinition.parameters.properties.max_chars, undefined);
-  assert.equal(readDefinition.parameters.properties.file_path, undefined);
-  assert.equal(readDefinition.parameters.properties.start_line, undefined);
-  assert.equal(readDefinition.parameters.properties.include_line_numbers, undefined);
+  assert.match(readDefinition.description, /原始正文或指定行范围/);
+  assert.match(readDefinition.description, /未添加行号/);
+  assert.deepEqual(
+    readDefinition.parameters.required,
+    ['environment_id', 'path', 'start_line', 'end_line', 'max_output_chars']
+  );
+  assert.equal(readDefinition.parameters.properties.numbered, undefined);
+  assert.equal(readDefinition.parameters.properties.line_range, undefined);
+  assert.equal(readDefinition.parameters.properties.target, undefined);
 
   const searchDefinition = buildVirtualFileSearchFilesFunctionToolDefinition();
   assert.equal(searchDefinition.strict, true);
-  assert.match(searchDefinition.description, /rg --heading --line-number --column/);
-  assert.match(searchDefinition.description, /smart-case/);
-  assert.ok(searchDefinition.parameters.properties.glob);
-  assert.ok(searchDefinition.parameters.properties.before);
-  assert.ok(searchDefinition.parameters.properties.after);
-  assert.ok(searchDefinition.parameters.properties.ignore_case);
-  assert.equal(searchDefinition.parameters.properties.path_glob, undefined);
-  assert.equal(searchDefinition.parameters.properties.case_mode, undefined);
-  assert.equal(searchDefinition.parameters.properties.max_results, undefined);
-  assert.equal(searchDefinition.parameters.properties.limit, undefined);
-  assert.deepEqual(searchDefinition.parameters.required, ['target', 'pattern', 'regex', 'glob', 'ignore_case', 'context', 'before', 'after', 'max_output_chars']);
+  assert.match(searchDefinition.description, /同一行只返回一次/);
+  assert.deepEqual(
+    searchDefinition.parameters.required,
+    ['environment_id', 'pattern', 'regex', 'path_glob', 'ignore_case', 'context_lines', 'max_output_chars']
+  );
+  assert.equal(searchDefinition.parameters.properties.glob, undefined);
+  assert.equal(searchDefinition.parameters.properties.context, undefined);
+  assert.equal(searchDefinition.parameters.properties.before, undefined);
+  assert.equal(searchDefinition.parameters.properties.after, undefined);
+  assert.equal(searchDefinition.parameters.properties.target, undefined);
 
   const copyDefinition = buildVirtualFileCopyFileFunctionToolDefinition();
-  assert.match(copyDefinition.description, /cp -- from to/);
-  assert.match(copyDefinition.description, /Move to:/);
-  assert.match(copyDefinition.description, /Delete File:/);
-  assert.ok(copyDefinition.parameters.properties.from);
-  assert.ok(copyDefinition.parameters.properties.to);
-  assert.deepEqual(copyDefinition.parameters.required, ['target', 'from', 'to', 'max_output_chars']);
+  assert.deepEqual(copyDefinition.parameters.required, ['environment_id', 'from', 'to']);
+  assert.equal(copyDefinition.parameters.properties.max_output_chars, undefined);
+  assert.equal(copyDefinition.parameters.properties.target, undefined);
 });
 
 test('apply_patch 遇到同名 Add File 时会覆盖原文件且不产生隐式改名', async () => {
@@ -387,7 +409,7 @@ test('apply_patch Move 会覆盖目标并移除源文件', async () => {
   assert.equal((await store.getDocument('conv-move-overwrite', 'target.md')).content, 'new target\n');
 });
 
-test('多 hunk 中任一上下文失败时不会执行 replaceDocuments', async () => {
+test('多 hunk 中任一上下文失败时不会执行事务提交', async () => {
   const {
     executeConversationDocumentAction,
     CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME
@@ -396,11 +418,11 @@ test('多 hunk 中任一上下文失败时不会执行 replaceDocuments', async 
     'a.md': 'old a\n',
     'b.md': 'old b\n'
   });
-  let replaceCount = 0;
-  const replaceDocuments = store.replaceDocuments.bind(store);
-  store.replaceDocuments = async (...args) => {
-    replaceCount += 1;
-    return replaceDocuments(...args);
+  let mutationCount = 0;
+  const mutateDocuments = store.mutateDocuments.bind(store);
+  store.mutateDocuments = async (...args) => {
+    mutationCount += 1;
+    return mutateDocuments(...args);
   };
 
   await assert.rejects(
@@ -424,7 +446,7 @@ test('多 hunk 中任一上下文失败时不会执行 replaceDocuments', async 
     ),
     /Failed to find expected lines in b\.md/
   );
-  assert.equal(replaceCount, 0);
+  assert.equal(mutationCount, 1);
   assert.equal((await store.getDocument('conv-atomic', 'a.md')).content, 'old a\n');
   assert.equal((await store.getDocument('conv-atomic', 'b.md')).content, 'old b\n');
 });
@@ -435,11 +457,11 @@ test('会话文件 apply_patch 在提交前拒绝同一源路径的多个操作'
     CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME
   } = await loadConversationDocumentToolsModule();
   const store = createInMemoryDocumentStore({ 'same.md': 'before\n' });
-  let replaceCount = 0;
-  const replaceDocuments = store.replaceDocuments.bind(store);
-  store.replaceDocuments = async (...args) => {
-    replaceCount += 1;
-    return replaceDocuments(...args);
+  let mutationCount = 0;
+  const mutateDocuments = store.mutateDocuments.bind(store);
+  store.mutateDocuments = async (...args) => {
+    mutationCount += 1;
+    return mutateDocuments(...args);
   };
 
   await assert.rejects(
@@ -463,7 +485,7 @@ test('会话文件 apply_patch 在提交前拒绝同一源路径的多个操作'
       && error?.state_changed === false
       && /multiple operations target same\.md/.test(error?.message || '')
   );
-  assert.equal(replaceCount, 0);
+  assert.equal(mutationCount, 1);
   assert.equal((await store.getDocument('conv-duplicate-source', 'same.md')).content, 'before\n');
 });
 
@@ -503,7 +525,7 @@ test('会话文件 verifier 不允许 Move 后的目标内容成为同一 patch 
   assert.equal((await store.getDocument('conv-snapshot', 'b.txt')).content, 'other\n');
 });
 
-test('read_file 支持行范围与带行号输出', async () => {
+test('read_file 返回原始行范围并拒绝越界起始行', async () => {
   const {
     executeConversationDocumentAction,
     CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME
@@ -518,8 +540,7 @@ test('read_file 支持行范围与带行号输出', async () => {
     {
       file_path: 'workspace/spec.md',
       start_line: 2,
-      end_line: 3,
-      include_line_numbers: true
+      end_line: 3
     },
     {
       conversationId: 'conv-doc-2',
@@ -530,8 +551,15 @@ test('read_file 支持行范围与带行号输出', async () => {
   assert.equal(result.ok, true);
   assert.equal(result.file.path, 'workspace/spec.md');
   assert.equal(result.file.content, 'line2\nline3\n');
-  assert.match(result.file.numbered_content, /2 \| line2/);
-  assert.match(result.file.numbered_content, /3 \| line3/);
+  assert.equal(result.file.numbered_content, undefined);
+  await assert.rejects(
+    () => executeConversationDocumentAction(
+      CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
+      { file_path: 'workspace/spec.md', start_line: 99, end_line: 120 },
+      { conversationId: 'conv-doc-2', store }
+    ),
+    /超过文件总行数 4/
+  );
 });
 
 test('read_file 在统一分页出口前不按字符预算预截断', async () => {
@@ -547,7 +575,8 @@ test('read_file 在统一分页出口前不按字符预算预截断', async () =
     CONVERSATION_DOCUMENT_READ_FILE_TOOL_NAME,
     {
       file_path: 'large.txt',
-      max_output_chars: 100
+      start_line: null,
+      end_line: null
     },
     {
       conversationId: 'conv-doc-large',
@@ -575,8 +604,7 @@ test('search_files 会在当前对话文档里返回上下文命中', async () =
     CONVERSATION_DOCUMENT_SEARCH_FILES_TOOL_NAME,
     {
       pattern: 'token',
-      context_before: 1,
-      context_after: 1
+      context_lines: 1
     },
     {
       conversationId: 'conv-doc-3',
@@ -585,9 +613,9 @@ test('search_files 会在当前对话文档里返回上下文命中', async () =
   );
 
   assert.equal(result.ok, true);
-  assert.equal(result.total_matches, 2);
-  assert.equal(result.matches[0].file_path, 'spec.md');
-  assert.equal(result.matches[0].before[0].text, 'alpha');
+  assert.equal(result.total_matching_lines, 2);
+  assert.equal(result.groups[0].file_path, 'spec.md');
+  assert.deepEqual(result.groups[0].lines.map((line) => line.text), ['alpha', 'beta token', 'charlie']);
 
   const manyMatchesStore = createInMemoryDocumentStore({
     'many.txt': `${Array.from({ length: 250 }, (_, index) => `token ${index + 1}`).join('\n')}\n`
@@ -597,9 +625,9 @@ test('search_files 会在当前对话文档里返回上下文命中', async () =
     { pattern: 'token' },
     { conversationId: 'conv-doc-many-search-results', store: manyMatchesStore }
   );
-  assert.equal(allMatches.total_matches, 250);
-  assert.equal(allMatches.returned_match_count, 250);
-  assert.equal(allMatches.truncated, false);
+  assert.equal(allMatches.total_matching_lines, 250);
+  assert.equal(allMatches.groups.length, 1);
+  assert.equal(allMatches.groups[0].lines.length, 250);
 });
 
 test('write_file 内部 action 会写回内容并产出 change_event', async () => {
@@ -631,8 +659,6 @@ test('copy_file 按 cp 语义新增或覆盖目标，独立 move/delete action �
   const {
     CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
     CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
-    CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME,
-    CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME,
     executeConversationDocumentAction
   } = await loadConversationDocumentToolsModule();
 
@@ -693,7 +719,7 @@ test('copy_file 按 cp 语义新增或覆盖目标，独立 move/delete action �
 
   await assert.rejects(
     () => executeConversationDocumentAction(
-      CONVERSATION_DOCUMENT_MOVE_FILE_TOOL_NAME,
+      'move_file',
       { source_path: 'source.md', destination_path: 'renamed.md' },
       { conversationId: 'conv-doc-5', store }
     ),
@@ -701,7 +727,7 @@ test('copy_file 按 cp 语义新增或覆盖目标，独立 move/delete action �
   );
   await assert.rejects(
     () => executeConversationDocumentAction(
-      CONVERSATION_DOCUMENT_DELETE_FILE_TOOL_NAME,
+      'delete_file',
       { file_path: 'source.md' },
       { conversationId: 'conv-doc-5', store }
     ),
@@ -739,8 +765,7 @@ test('local mount 路径支持只读 read/list/search，并可复制到会话文
     {
       file_path: 'local/project/src/a.js',
       start_line: 1,
-      end_line: 1,
-      include_line_numbers: true
+      end_line: 1
     },
     {
       conversationId: 'conv-local-1',
@@ -749,8 +774,8 @@ test('local mount 路径支持只读 read/list/search，并可复制到会话文
     }
   );
   assert.equal(readResult.ok, true);
-  assert.equal(readResult.target.kind, 'local');
-  assert.match(readResult.file.numbered_content, /1 \| const token = 1;/);
+  assert.equal(readResult.source, 'local');
+  assert.equal(readResult.file.content, 'const token = 1;\n');
 
   const listResult = await executeConversationDocumentAction(
     CONVERSATION_DOCUMENT_LIST_FILES_TOOL_NAME,
@@ -777,9 +802,9 @@ test('local mount 路径支持只读 read/list/search，并可复制到会话文
       localMountStore
     }
   );
-  assert.equal(searchResult.target.kind, 'local');
-  assert.equal(searchResult.returned_match_count, 1);
-  assert.equal(searchResult.matches[0].file_path, 'local/project/src/a.js');
+  assert.equal(searchResult.source, 'local');
+  assert.equal(searchResult.total_matching_lines, 1);
+  assert.equal(searchResult.groups[0].file_path, 'local/project/src/a.js');
 
   const copyResult = await executeConversationDocumentAction(
     CONVERSATION_DOCUMENT_COPY_FILE_TOOL_NAME,
