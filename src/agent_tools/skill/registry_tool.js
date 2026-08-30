@@ -1790,6 +1790,47 @@ export function normalizeSkillRegistryToolArguments(rawArgs) {
     };
   }
 
+  if (action === 'apply_patch') {
+    const patch = (typeof args.patch === 'string') ? args.patch : '';
+    if (!patch.trim()) {
+      throw new Error('skill_registry 参数错误：apply_patch 时 patch 不能为空。');
+    }
+    const explicitExpectedEnvironmentId = normalizeOptionalString(args.expected_environment_id);
+    const legacyExpectedEnvironmentId = skillName ? `skill:${skillName}` : null;
+    if (
+      explicitExpectedEnvironmentId
+      && legacyExpectedEnvironmentId
+      && explicitExpectedEnvironmentId !== legacyExpectedEnvironmentId
+    ) {
+      throw new Error(
+        `skill_registry 参数错误：apply_patch 内部环境上下文冲突（${explicitExpectedEnvironmentId} != ${legacyExpectedEnvironmentId}）。`
+      );
+    }
+    return {
+      original_action: originalAction || action,
+      action,
+      // Skill 目标由 patch 中的 Environment ID 唯一决定，禁止再携带第二个路由来源。
+      skill_name: null,
+      skill: null,
+      file_path: null,
+      file: null,
+      patch,
+      expected_environment_id: explicitExpectedEnvironmentId || legacyExpectedEnvironmentId,
+      pattern: null,
+      regex: false,
+      case_mode: 'smart',
+      path_glob: null,
+      context_before: 0,
+      context_after: 0,
+      max_results: null,
+      read_options: null,
+      include_line_numbers: false,
+      deprecated_compat_action: true,
+      next_instruction_path: null,
+      next_runtime_entry_path: null
+    };
+  }
+
   if (!skillName) {
     throw new Error(`skill_registry 参数错误：action=${originalAction || action} 时 skill_name 不能为空。`);
   }
@@ -1855,34 +1896,6 @@ export function normalizeSkillRegistryToolArguments(rawArgs) {
       next_runtime_entry_path: normalizeOptionalString(args.next_runtime_entry_path || args.next_entry_path)
         ? normalizeSkillFilePath(args.next_runtime_entry_path || args.next_entry_path)
         : null
-    };
-  }
-
-  if (action === 'apply_patch') {
-    const patch = (typeof args.patch === 'string') ? args.patch : '';
-    if (!patch.trim()) {
-      throw new Error('skill_registry 参数错误：apply_patch 时 patch 不能为空。');
-    }
-    return {
-      original_action: originalAction || action,
-      action,
-      skill_name: skillName,
-      skill: null,
-      file_path: null,
-      file: null,
-      patch,
-      pattern: null,
-      regex: false,
-      case_mode: 'smart',
-      path_glob: null,
-      context_before: 0,
-      context_after: 0,
-      max_results: null,
-      read_options: null,
-      include_line_numbers: false,
-      deprecated_compat_action: true,
-      next_instruction_path: null,
-      next_runtime_entry_path: null
     };
   }
 

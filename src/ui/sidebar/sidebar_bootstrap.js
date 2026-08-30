@@ -77,6 +77,13 @@ export async function initializeSidebarServices(appContext) {
   appContext.services.uiManager.init();
   appContext.services.selectionThreadManager.init();
 
+  try {
+    await appContext.utils.ensureApplyPatchRuntimeContract?.({ force: true });
+  } catch (error) {
+    // 错位状态已经由 appContext 显式渲染并禁用发送；初始化其它只读/UI 能力仍继续。
+    console.error('apply_patch 运行时契约检查失败:', error);
+  }
+
   await appContext.services.settingsManager.init();
   applyStandaloneAdjustments(appContext);
 

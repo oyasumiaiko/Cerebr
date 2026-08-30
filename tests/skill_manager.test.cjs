@@ -230,6 +230,7 @@ test('create/update/delete/enable/disable 只持久化并刷新当前文档，�
     target: { kind: 'skill', name: 'dom-probe' },
     patch: [
       '*** Begin Patch',
+      '*** Environment ID: skill:dom-probe',
       '*** Add File: src/helpers/url.js',
       '+module.exports = { readUrl() { return location.href; } };',
       '*** End Patch'
@@ -265,6 +266,7 @@ test('create/update/delete/enable/disable 只持久化并刷新当前文档，�
     skill_name: 'dom-probe',
     patch: [
       '*** Begin Patch',
+      '*** Environment ID: skill:dom-probe',
       '*** Update File: manifest.json',
       '@@',
       '-  "description": "读取页面标题和链接",',
@@ -282,6 +284,7 @@ test('create/update/delete/enable/disable 只持久化并刷新当前文档，�
     skill_name: 'dom-probe',
     patch: [
       '*** Begin Patch',
+      '*** Environment ID: skill:dom-probe',
       '*** Update File: src/helpers/url.js',
       '@@',
       '-module.exports = { readUrl() { return location.href; } };',
@@ -303,6 +306,7 @@ test('create/update/delete/enable/disable 只持久化并刷新当前文档，�
     skill_name: 'dom-probe',
     patch: [
       '*** Begin Patch',
+      '*** Environment ID: skill:dom-probe',
       '*** Update File: manifest.json',
       '@@',
       '-  "enabled": true,',
@@ -325,6 +329,7 @@ test('create/update/delete/enable/disable 只持久化并刷新当前文档，�
     skill_name: 'dom-probe',
     patch: [
       '*** Begin Patch',
+      '*** Environment ID: skill:dom-probe',
       '*** Update File: manifest.json',
       '@@',
       '-  "enabled": false,',
@@ -341,6 +346,7 @@ test('create/update/delete/enable/disable 只持久化并刷新当前文档，�
     skill_name: 'dom-probe',
     patch: [
       '*** Begin Patch',
+      '*** Environment ID: skill:dom-probe',
       '*** Delete File: src/helpers/url.js',
       '*** End Patch'
     ].join('\n')
@@ -440,6 +446,7 @@ test('copy_file 使用 cp 覆盖语义，skill 移动与删除统一由 apply_pa
     skill_name: 'dom-probe',
     patch: [
       '*** Begin Patch',
+      '*** Environment ID: skill:dom-probe',
       '*** Update File: src/helpers/dom-copy.js',
       '*** Move to: src/helpers/dom-renamed.js',
       '@@',
@@ -457,6 +464,7 @@ test('copy_file 使用 cp 覆盖语义，skill 移动与删除统一由 apply_pa
     skill_name: 'dom-probe',
     patch: [
       '*** Begin Patch',
+      '*** Environment ID: skill:dom-probe',
       '*** Delete File: src/helpers/dom-renamed.js',
       '*** End Patch'
     ].join('\n')
@@ -694,6 +702,7 @@ test('skill 可以在后续 patch 后从 guidance 演进成 page runtime，再�
     skill_name: 'runtime-probe',
     patch: [
       '*** Begin Patch',
+      '*** Environment ID: skill:runtime-probe',
       '*** Add File: src/main.js',
       '+return {',
       '+  readSummary() {',
@@ -709,6 +718,7 @@ test('skill 可以在后续 patch 后从 guidance 演进成 page runtime，再�
     skill_name: 'runtime-probe',
     patch: [
       '*** Begin Patch',
+      '*** Environment ID: skill:runtime-probe',
       '*** Update File: manifest.json',
       '@@',
       '-  "match": [],',
@@ -750,6 +760,7 @@ test('skill 可以在后续 patch 后从 guidance 演进成 page runtime，再�
     skill_name: 'runtime-probe',
     patch: [
       '*** Begin Patch',
+      '*** Environment ID: skill:runtime-probe',
       '*** Update File: manifest.json',
       '@@',
       '-  "match": [',
@@ -1406,6 +1417,7 @@ test('Skill 文件动作收到 tabId=null 时只持久化，不把 null 误转�
     skill_name: 'null-tab-file-action',
     patch: [
       '*** Begin Patch',
+      '*** Environment ID: skill:null-tab-file-action',
       '*** Add File: local/说明.md',
       '+普通 Skill 文件。',
       '*** End Patch'
@@ -1418,4 +1430,72 @@ test('Skill 文件动作收到 tabId=null 时只持久化，不把 null 误转�
   assert.equal(runtimeExecuteCount, 0);
   const stored = await store.getPackage('null-tab-file-action');
   assert.equal(stored.files.find((file) => file.path === 'local/说明.md')?.content, '普通 Skill 文件。\n');
+});
+
+test('Skill apply_patch 在完整验证失败时不写入、不增 revision，并拒绝内部环境上下文冲突', async () => {
+  const { createSkillManager } = await loadSkillManagerModule();
+  const store = createMockStore();
+  const manager = createSkillManager({ store });
+  await manager.createSkill(buildSkillInput('atomic-skill'));
+  const before = await store.getPackage('atomic-skill');
+
+  await assert.rejects(
+    () => manager.executeRegistryAction({
+      action: 'apply_patch',
+      expected_environment_id: 'skill:atomic-skill',
+      patch: [
+        '*** Begin Patch',
+        '*** Environment ID: skill:atomic-skill',
+        '*** Add File: references/new.md',
+        '+new content',
+        '*** Update File: SKILL.md',
+        '@@',
+        '-missing stale scaffold line',
+        '+replacement',
+        '*** End Patch'
+      ].join('\n')
+    }),
+    (error) => error?.state_changed === false
+      && error?.revision === before.revision
+      && error?.file_path === 'SKILL.md'
+      && error?.hunk_index === 2
+      && /apply_patch verification failed: Failed to find expected lines in SKILL\.md/.test(error?.tool_output || '')
+  );
+
+  const afterFailure = await store.getPackage('atomic-skill');
+  assert.deepEqual(afterFailure, before);
+
+  await assert.rejects(
+    () => manager.executeRegistryAction({
+      action: 'apply_patch',
+      skill_name: 'other-skill',
+      patch: [
+        '*** Begin Patch',
+        '*** Environment ID: skill:atomic-skill',
+        '*** Add File: references/never-written.md',
+        '+no',
+        '*** End Patch'
+      ].join('\n')
+    }),
+    (error) => error?.code === 'APPLY_PATCH_ENVIRONMENT_CONTEXT_MISMATCH'
+      && error?.state_changed === false
+  );
+  assert.deepEqual(await store.getPackage('atomic-skill'), before);
+
+  const success = await manager.executeRegistryAction({
+    action: 'apply_patch',
+    expected_environment_id: 'skill:atomic-skill',
+    patch: [
+      '*** Begin Patch',
+      '*** Environment ID: skill:atomic-skill',
+      '*** Add File: references/new.md',
+      '+new content',
+      '*** End Patch'
+    ].join('\n')
+  });
+  assert.equal(success.skill.revision, before.revision + 1);
+  assert.equal(
+    (await store.getPackage('atomic-skill')).files.find((file) => file.path === 'references/new.md')?.content,
+    'new content\n'
+  );
 });

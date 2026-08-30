@@ -22,7 +22,10 @@ import {
   normalizeStoredSkillRecord,
   saveStoredSkillPackage
 } from '../agent_tools/skill/registry_tool.js';
-import { applySkillPackagePatch } from '../agent_tools/skill/skill_apply_patch.js';
+import {
+  prepareSkillPackagePatch,
+  resolveSkillApplyPatchTarget
+} from '../agent_tools/skill/skill_apply_patch.js';
 import {
   CEREBR_SKILL_SCRIPT_ID_PREFIX,
   buildSkillDocumentRefreshSource,
@@ -31,6 +34,7 @@ import {
 } from './skill_runtime.js';
 import { createIndexedDbSkillStore } from '../storage/skill_store.js';
 import { buildSkillScaffoldInput, buildSkillScaffoldNextSteps } from '../agent_tools/skill/skill_scaffold.js';
+import { normalizeApplyPatchVerificationError } from '../agent_tools/shared/apply_patch_core.js';
 
 function normalizeTabId(value) {
   if (value == null) return null;
@@ -645,19 +649,43 @@ export function createSkillManager(options = {}) {
     };
   }
 
-  async function applySkillPatch(skillName, patch, options = {}) {
-    const existing = await getMutableStoredSkillRecord(skillName, 'apply_patch');
+  async function applySkillPatch(patch, options = {}) {
+    // 目标环境只认 patch 内的 Environment ID；这里先选择目标，再读取其当前 revision。
+    const target = resolveSkillApplyPatchTarget(patch);
+    const expectedEnvironmentId = typeof options?.expectedEnvironmentId === 'string'
+      ? options.expectedEnvironmentId.trim()
+      : '';
+    if (expectedEnvironmentId && expectedEnvironmentId !== target.environment_id) {
+      const error = new Error(
+        `Patch environment ${target.environment_id} does not match internal context ${expectedEnvironmentId}.`
+      );
+      error.code = 'APPLY_PATCH_ENVIRONMENT_CONTEXT_MISMATCH';
+      throw normalizeApplyPatchVerificationError(error, {
+        stage: 'select_environment',
+        environment_id: target.environment_id,
+        skill_name: target.skill_name
+      });
+    }
+    const existing = await getMutableStoredSkillRecord(target.skill_name, 'apply_patch');
     const normalizedExisting = normalizeStoredSkillRecord(existing);
     if (!normalizedExisting) {
-      throw new Error(`技能 ${skillName} 不存在，无法应用补丁。`);
+      const error = new Error(`技能 ${target.skill_name} 不存在，无法应用补丁。`);
+      error.code = 'APPLY_PATCH_ENVIRONMENT_NOT_FOUND';
+      error.stage = 'select_environment';
+      error.environment_id = target.environment_id;
+      error.skill_name = target.skill_name;
+      error.state_changed = false;
+      throw error;
     }
 
-    const patched = applySkillPackagePatch(normalizedExisting, patch);
+    // prepare 完整成功前不触碰 IndexedDB；persistMutatedSkillRecord 是唯一 commit 点。
+    const patched = prepareSkillPackagePatch(normalizedExisting, patch);
     const persistedRecord = await persistMutatedSkillRecord(normalizedExisting, patched.record);
 
     return {
       ok: true,
       action: 'apply_patch',
+      environment_id: patched.environment_id,
       skill: buildSkillSummary(persistedRecord),
       files: buildSkillFileManifest(persistedRecord, { includeContent: false }),
       affected_files: patched.affected_files,
@@ -814,8 +842,9 @@ export function createSkillManager(options = {}) {
       case 'update':
         return await updateSkill(normalizedArgs.skill, { tabId: options?.tabId });
       case 'apply_patch':
-        return await applySkillPatch(normalizedArgs.skill_name, normalizedArgs.patch, {
-          tabId: options?.tabId
+        return await applySkillPatch(normalizedArgs.patch, {
+          tabId: options?.tabId,
+          expectedEnvironmentId: normalizedArgs.expected_environment_id
         });
       case 'copy_file':
         return await copySkillFile(

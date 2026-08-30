@@ -404,11 +404,12 @@ test('normalizeSkillRegistryToolArguments 会收敛为新的 package/file action
   assert.deepEqual(normalizedApplyPatch, {
     original_action: 'apply_patch',
     action: 'apply_patch',
-    skill_name: 'dom-probe',
+    skill_name: null,
     skill: null,
     file_path: null,
     file: null,
     patch: '*** Begin Patch\n*** Update File: src/main.js\n@@\n-old\n+new\n*** End Patch',
+    expected_environment_id: 'skill:dom-probe',
     pattern: null,
     regex: false,
     case_mode: 'smart',

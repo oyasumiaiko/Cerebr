@@ -14,7 +14,13 @@
  * - 这样既能保持外部调用稳定，也能让 tool-family 内部不再继续扁平堆叠。
  */
 
-import { derivePatchedFileContent, parseApplyPatch } from '../shared/apply_patch_core.js';
+import {
+  assertUniqueApplyPatchSourcePaths,
+  derivePatchedFileContent,
+  normalizeApplyPatchVerificationError,
+  parseApplyPatch
+} from '../shared/apply_patch_core.js';
+import { buildApplyPatchRuntimeContractPayload } from '../shared/apply_patch_contract.js';
 import {
   hasVirtualPathGlobSyntax,
   matchesVirtualPathFilter,
@@ -539,9 +545,15 @@ function findDocumentIndex(documents, path) {
 }
 
 function applyConversationDocumentPatch(documents, patch) {
-  const { hunks } = parseApplyPatch(patch, { mode: 'strict' });
-  if (hunks.length <= 0) {
-    throw new Error('No files were modified.');
+  let hunks;
+  try {
+    ({ hunks } = parseApplyPatch(patch, { mode: 'strict' }));
+    if (hunks.length <= 0) {
+      throw new Error('No files were modified.');
+    }
+    assertUniqueApplyPatchSourcePaths(hunks, normalizeConversationDocumentPath);
+  } catch (error) {
+    throw normalizeApplyPatchVerificationError(error, { stage: error?.stage || 'verify' });
   }
 
   const nextDocuments = normalizeDocumentRecords(documents);
@@ -552,67 +564,79 @@ function applyConversationDocumentPatch(documents, patch) {
   };
   const patchTime = new Date().toISOString();
 
-  for (const hunk of hunks) {
-    if (hunk.type === 'add_file') {
-      const targetPath = normalizeConversationDocumentPath(hunk.path);
-      const existingIndex = findDocumentIndex(nextDocuments, targetPath);
-      const nextRecord = normalizeDocumentRecord({
-        path: targetPath,
-        content: hunk.contents,
-        updated_at: patchTime
-      }, patchTime);
-      if (existingIndex >= 0) {
-        nextDocuments[existingIndex] = nextRecord;
-        affectedFiles.modified.push(targetPath);
-      } else {
-        nextDocuments.push(nextRecord);
-        affectedFiles.added.push(targetPath);
-      }
-      nextDocuments.sort((left, right) => left.path.localeCompare(right.path));
-      continue;
-    }
-
-    if (hunk.type === 'delete_file') {
-      const targetPath = normalizeConversationDocumentPath(hunk.path);
-      const existingIndex = findDocumentIndex(nextDocuments, targetPath);
-      if (existingIndex < 0) {
-        throw new Error(`Failed to delete file ${targetPath}`);
-      }
-      nextDocuments.splice(existingIndex, 1);
-      affectedFiles.deleted.push(targetPath);
-      continue;
-    }
-
-    if (hunk.type === 'update_file') {
-      const sourcePath = normalizeConversationDocumentPath(hunk.path);
-      const sourceIndex = findDocumentIndex(nextDocuments, sourcePath);
-      if (sourceIndex < 0) {
-        throw new Error(`Failed to read file to update ${sourcePath}`);
-      }
-      const sourceDocument = nextDocuments[sourceIndex];
-      const nextContent = derivePatchedFileContent(sourceDocument.content, sourcePath, hunk.chunks);
-      const targetPath = hunk.move_path
-        ? normalizeConversationDocumentPath(hunk.move_path)
-        : sourcePath;
-      const nextRecord = normalizeDocumentRecord({
-        path: targetPath,
-        content: nextContent,
-        updated_at: patchTime
-      }, patchTime);
-
-      if (targetPath === sourcePath) {
-        nextDocuments[sourceIndex] = nextRecord;
-      } else {
-        const targetIndex = findDocumentIndex(nextDocuments, targetPath);
-        if (targetIndex >= 0) {
-          nextDocuments[targetIndex] = nextRecord;
-          nextDocuments.splice(sourceIndex, 1);
+  for (let hunkIndex = 0; hunkIndex < hunks.length; hunkIndex += 1) {
+    const hunk = hunks[hunkIndex];
+    let sourcePath = null;
+    try {
+      if (hunk.type === 'add_file') {
+        const targetPath = normalizeConversationDocumentPath(hunk.path);
+        sourcePath = targetPath;
+        const existingIndex = findDocumentIndex(nextDocuments, targetPath);
+        const nextRecord = normalizeDocumentRecord({
+          path: targetPath,
+          content: hunk.contents,
+          updated_at: patchTime
+        }, patchTime);
+        if (existingIndex >= 0) {
+          nextDocuments[existingIndex] = nextRecord;
+          affectedFiles.modified.push(targetPath);
         } else {
-          nextDocuments[sourceIndex] = nextRecord;
+          nextDocuments.push(nextRecord);
+          affectedFiles.added.push(targetPath);
         }
+        nextDocuments.sort((left, right) => left.path.localeCompare(right.path));
+        continue;
       }
-      nextDocuments.sort((left, right) => left.path.localeCompare(right.path));
-      affectedFiles.modified.push(targetPath);
+
+      if (hunk.type === 'delete_file') {
+        const targetPath = normalizeConversationDocumentPath(hunk.path);
+        sourcePath = targetPath;
+        const existingIndex = findDocumentIndex(nextDocuments, targetPath);
+        if (existingIndex < 0) {
+          throw new Error(`Failed to delete file ${targetPath}`);
+        }
+        nextDocuments.splice(existingIndex, 1);
+        affectedFiles.deleted.push(targetPath);
+        continue;
+      }
+
+      if (hunk.type === 'update_file') {
+        sourcePath = normalizeConversationDocumentPath(hunk.path);
+        const sourceIndex = findDocumentIndex(nextDocuments, sourcePath);
+        if (sourceIndex < 0) {
+          throw new Error(`Failed to read file to update ${sourcePath}`);
+        }
+        const sourceDocument = nextDocuments[sourceIndex];
+        const nextContent = derivePatchedFileContent(sourceDocument.content, sourcePath, hunk.chunks);
+        const targetPath = hunk.move_path
+          ? normalizeConversationDocumentPath(hunk.move_path)
+          : sourcePath;
+        const nextRecord = normalizeDocumentRecord({
+          path: targetPath,
+          content: nextContent,
+          updated_at: patchTime
+        }, patchTime);
+
+        if (targetPath === sourcePath) {
+          nextDocuments[sourceIndex] = nextRecord;
+        } else {
+          const targetIndex = findDocumentIndex(nextDocuments, targetPath);
+          if (targetIndex >= 0) {
+            nextDocuments[targetIndex] = nextRecord;
+            nextDocuments.splice(sourceIndex, 1);
+          } else {
+            nextDocuments[sourceIndex] = nextRecord;
+          }
+        }
+        nextDocuments.sort((left, right) => left.path.localeCompare(right.path));
+        affectedFiles.modified.push(targetPath);
+      }
+    } catch (error) {
+      throw normalizeApplyPatchVerificationError(error, {
+        stage: 'verify',
+        file_path: sourcePath || hunk?.path || '',
+        hunk_index: hunkIndex + 1
+      });
     }
   }
 
@@ -852,8 +876,14 @@ export function buildSkillRegistryFileActionPayloadFromVirtualFileAction(action,
     case VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME:
       return {
         action: 'apply_patch',
-        ...payload,
-        patch: input.patch || ''
+        // apply_patch 的目标由 raw patch Environment ID 唯一决定；同时把精确契约
+        // 带到 background，使旧 sidebar 无法对新 background 发起写入。
+        refresh_current_document: payload.refresh_current_document,
+        patch: input.patch || '',
+        expected_environment_id: normalizeOptionalString(target.name)
+          ? `skill:${normalizeOptionalString(target.name)}`
+          : null,
+        runtime_contract: buildApplyPatchRuntimeContractPayload()
       };
     case VIRTUAL_FILE_LIST_FILES_TOOL_NAME:
       return {

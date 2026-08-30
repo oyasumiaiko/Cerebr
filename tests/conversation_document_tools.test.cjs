@@ -270,8 +270,11 @@ test('apply_patch 工具定义聚焦虚拟文件补丁契约，不重复最终�
 
   const applyPatchDefinition = buildVirtualFileApplyPatchCustomToolDefinition();
   assert.equal(applyPatchDefinition.type, 'custom');
-  assert.match(applyPatchDefinition.description, /FREEFORM/);
-  assert.match(applyPatchDefinition.description, /Environment ID: skill:<stable-key>/);
+  assert.equal(
+    applyPatchDefinition.description,
+    'The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.'
+  );
+  assert.doesNotMatch(applyPatchDefinition.description, /Environment ID|manifest\.json|local\//);
   assert.equal(applyPatchDefinition.parameters, undefined);
   assert.equal(applyPatchDefinition.format.syntax, 'lark');
   assert.match(applyPatchDefinition.format.definition, /^start: begin_patch environment_id\? hunk\+ end_patch/m);
@@ -424,6 +427,44 @@ test('多 hunk 中任一上下文失败时不会执行 replaceDocuments', async 
   assert.equal(replaceCount, 0);
   assert.equal((await store.getDocument('conv-atomic', 'a.md')).content, 'old a\n');
   assert.equal((await store.getDocument('conv-atomic', 'b.md')).content, 'old b\n');
+});
+
+test('会话文件 apply_patch 在提交前拒绝同一源路径的多个操作', async () => {
+  const {
+    executeConversationDocumentAction,
+    CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME
+  } = await loadConversationDocumentToolsModule();
+  const store = createInMemoryDocumentStore({ 'same.md': 'before\n' });
+  let replaceCount = 0;
+  const replaceDocuments = store.replaceDocuments.bind(store);
+  store.replaceDocuments = async (...args) => {
+    replaceCount += 1;
+    return replaceDocuments(...args);
+  };
+
+  await assert.rejects(
+    () => executeConversationDocumentAction(
+      CONVERSATION_DOCUMENT_APPLY_PATCH_TOOL_NAME,
+      {
+        patch: [
+          '*** Begin Patch',
+          '*** Add File: same.md',
+          '+first',
+          '*** Update File: same.md',
+          '@@',
+          '-before',
+          '+second',
+          '*** End Patch'
+        ].join('\n')
+      },
+      { conversationId: 'conv-duplicate-source', store }
+    ),
+    (error) => error?.code === 'APPLY_PATCH_INVALID_PATCH'
+      && error?.state_changed === false
+      && /multiple operations target same\.md/.test(error?.message || '')
+  );
+  assert.equal(replaceCount, 0);
+  assert.equal((await store.getDocument('conv-duplicate-source', 'same.md')).content, 'before\n');
 });
 
 test('read_file 支持行范围与带行号输出', async () => {

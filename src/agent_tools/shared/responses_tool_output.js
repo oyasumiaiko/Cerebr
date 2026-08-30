@@ -1485,7 +1485,31 @@ function extractSkillRefreshErrorMessage(refreshResult) {
   return message || '技能当前文档 refresh 失败。';
 }
 
-function buildSkillApplyPatchSummaryText(result) {
+export function buildResponsesApplyPatchToolOutputText(result) {
+  const normalized = (result && typeof result === 'object' && !Array.isArray(result))
+    ? result
+    : { ok: false, error: result };
+  if (normalized.ok !== true) {
+    const error = normalized.error || normalized;
+    if (typeof error?.tool_output === 'string' && error.tool_output.trim()) {
+      return error.tool_output.trim();
+    }
+    const message = typeof error?.message === 'string' && error.message.trim()
+      ? error.message.trim()
+      : String(error || 'unknown apply_patch error');
+    if (message.startsWith('apply_patch verification failed:')) return message;
+    if (error?.name === 'InvalidHunkError') {
+      const lineNumber = Number.isFinite(Number(error?.line_number))
+        ? Math.max(1, Math.trunc(Number(error.line_number)))
+        : 1;
+      return `apply_patch verification failed: invalid hunk at line ${lineNumber}, ${message}`;
+    }
+    if (error?.name === 'InvalidPatchError') {
+      return `apply_patch verification failed: invalid patch: ${message}`;
+    }
+    return `apply_patch verification failed: ${message}`;
+  }
+
   const affected = (result?.affected_files && typeof result.affected_files === 'object') ? result.affected_files : {};
   const lines = [];
   const pushFiles = (prefix, values) => {
@@ -1497,10 +1521,11 @@ function buildSkillApplyPatchSummaryText(result) {
   pushFiles('A', affected.added);
   pushFiles('M', affected.modified);
   pushFiles('D', affected.deleted);
-  if (lines.length <= 0) {
-    return 'Patch applied successfully.';
-  }
   return `Success. Updated the following files:\n${lines.join('\n')}`;
+}
+
+function buildSkillApplyPatchSummaryText(result) {
+  return buildResponsesApplyPatchToolOutputText(result);
 }
 
 function buildSkillCreateTemplateSummaryText(result) {

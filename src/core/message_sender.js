@@ -75,6 +75,7 @@ import {
   buildResponsesRequestUserInputToolOutputContentItems,
   buildResponsesConversationDocumentToolOutputContentItems,
   buildResponsesSkillRegistryToolOutputContentItems,
+  buildResponsesApplyPatchToolOutputText,
   buildResponsesGenericXmlToolOutputContentItems
 } from '../agent_tools/shared/responses_tool_output.js';
 import {
@@ -178,6 +179,10 @@ import {
   getResponsesActivityTimelineEntryKey,
   getResponsesToolCallRecordKey
 } from '../utils/responses_activity_keys.js';
+import {
+  createApplyPatchRuntimeMismatchError,
+  requestExposesApplyPatchTool
+} from '../agent_tools/shared/apply_patch_contract.js';
 import {
   buildMergedResponsesSteerInputItem,
   buildSteerWindowMarkdown,
@@ -8740,7 +8745,7 @@ export function createMessageSender(appContext) {
    * @returns {{message:string, name:string, code?:string, retryable?:boolean}}
    */
   function normalizeResponsesCustomToolError(error) {
-    return {
+    const normalized = {
       ...((typeof error?.code === 'string' && error.code.trim()) ? { code: error.code.trim() } : {}),
       message: (typeof error?.message === 'string' && error.message.trim())
         ? error.message.trim()
@@ -8750,6 +8755,23 @@ export function createMessageSender(appContext) {
         : 'Error',
       ...(typeof error?.retryable === 'boolean' ? { retryable: error.retryable } : {})
     };
+    for (const key of [
+      'stage',
+      'state_changed',
+      'reload_required',
+      'tool_output',
+      'line_number',
+      'hunk_index',
+      'file_path',
+      'environment_id',
+      'skill_name',
+      'revision',
+      'sidebar_contract',
+      'background_contract'
+    ]) {
+      if (error?.[key] !== undefined) normalized[key] = cloneDataSafely(error[key]);
+    }
+    return normalized;
   }
 
   /**
@@ -9688,9 +9710,29 @@ export function createMessageSender(appContext) {
         delete payload.success;
         return payload;
       }
-      throw new Error((typeof result?.error === 'string' && result.error.trim())
+      const error = new Error((typeof result?.error === 'string' && result.error.trim())
         ? result.error.trim()
         : 'skill_registry 执行失败。');
+      for (const key of [
+        'name',
+        'code',
+        'stage',
+        'state_changed',
+        'reload_required',
+        'retryable',
+        'tool_output',
+        'line_number',
+        'hunk_index',
+        'file_path',
+        'environment_id',
+        'skill_name',
+        'revision',
+        'sidebar_contract',
+        'background_contract'
+      ]) {
+        if (result?.[key] !== undefined) error[key] = result[key];
+      }
+      throw error;
     } catch (error) {
       return {
         ok: false,
@@ -9821,20 +9863,13 @@ export function createMessageSender(appContext) {
       }
     }
 
-    const serializedOutput = serializeResponsesConversationDocumentFunctionToolOutput(
-      localToolSpec?.id || toolName,
-      outputPayload
-    );
-    // Freeform custom tool 的输入必须保持纯 patch，不能混入 function tool 才有的
-    // max_output_chars 字段；它的结果仍走统一分页出口，并采用普通工具的 5000 字符默认值。
-    const { maxOutputChars } = splitResponsesToolOutputControl({}, {
-      toolName: localToolSpec?.id || toolName
-    });
-    const paginatedOutput = responsesToolOutputPageCache.paginate(serializedOutput, maxOutputChars);
+    // Codex 的 custom_tool_call_output.output 是普通字符串。apply_patch 不走 XML、
+    // input_text 数组或分页游标；旧历史中的数组仍由回放层兼容读取。
+    const outputText = buildResponsesApplyPatchToolOutputText(outputPayload);
     return {
       type: 'custom_tool_call_output',
       call_id: callId,
-      output: paginatedOutput.contentItems
+      output: outputText
     };
   }
 
@@ -10385,6 +10420,14 @@ export function createMessageSender(appContext) {
     const resolveLoadingStatusTarget = () => resolveLiveLoadingStatusElement(loadingMessage, attemptState);
     const canUpdateLoadingStatus = () => normalizeOptionalTimestamp(attemptState?.firstVisibleOutputAtMs) == null;
 
+    if (requestExposesApplyPatchTool(requestBody)) {
+      if (typeof appContext.utils?.ensureApplyPatchRuntimeContract !== 'function') {
+        throw createApplyPatchRuntimeMismatchError(null, { local_role: 'sidebar' });
+      }
+      // 这是网络前置门禁；失败时请求数必须仍为 0，并由外层按不可重试错误显示。
+      await appContext.utils.ensureApplyPatchRuntimeContract({ force: true });
+    }
+
     if (canUpdateLoadingStatus()) {
       syncAttemptPreResponseStatusFromLocalStage(
         resolveLoadingStatusTarget() || loadingMessage,
@@ -10493,6 +10536,7 @@ export function createMessageSender(appContext) {
   }) {
     let currentRequestBody = initialRequestBody;
     let lastHandleResult = null;
+    let awaitingToolFollowUpResult = false;
 
     while (true) {
       // 每个 sampling request 都冻结一份请求体；同一 hop 的所有恢复性重试只克隆并重发这份快照。
@@ -10617,6 +10661,51 @@ export function createMessageSender(appContext) {
       }
 
       if (pendingToolCalls.length <= 0) {
+        const hasAssistantAnswer = typeof lastHandleResult?.answer === 'string'
+          && lastHandleResult.answer.trim().length > 0;
+        const hasAssistantOutputItem = (Array.isArray(lastHandleResult?.responseOutputItems)
+          ? lastHandleResult.responseOutputItems
+          : []).some((item) => {
+            if (String(item?.type || '').trim().toLowerCase() !== 'message') return false;
+            const visibleText = extractResponsesMessageVisibleText(item, { excludeReasoning: true });
+            if (typeof visibleText === 'string' && visibleText.trim()) return true;
+            return Array.isArray(item?.content) && item.content.some((part) => {
+              const partType = String(part?.type || '').trim().toLowerCase();
+              return partType === 'output_image' || partType === 'image' || partType === 'image_url';
+            });
+          });
+        if (
+          awaitingToolFollowUpResult
+          && lastHandleResult?.isResponsesApi === true
+          && lastHandleResult?.incomplete !== true
+          && !hasAssistantAnswer
+          && !hasAssistantOutputItem
+        ) {
+          const error = new Error(
+            'Responses tool follow-up completed without an assistant message or a new tool call.'
+          );
+          error.name = 'EmptyToolFollowUpResponseError';
+          error.code = 'EMPTY_TOOL_FOLLOWUP_RESPONSE';
+          error.stage = 'tool_follow_up';
+          error.retryable = false;
+          error.skipConversationAutoRetry = true;
+
+          const diagnosticEntry = createResponsesStreamErrorEntryForAttempt(attemptState, error, {
+            text: '工具 follow-up 返回空响应',
+            status: 'error'
+          });
+          const timelineWithResponse = mergeResponsesActivityTimeline(
+            attemptState?.responsesToolLoopAccumulatedTimeline || [],
+            lastHandleResult?.responseActivityTimeline || []
+          );
+          const timelineWithDiagnostic = mergeResponsesActivityTimeline(
+            timelineWithResponse,
+            [diagnosticEntry]
+          );
+          applyResponsesActivityTimelineToAttempt(attemptState, timelineWithDiagnostic);
+          await persistAttemptConversationSnapshot(attemptState, { force: true });
+          throw error;
+        }
         return lastHandleResult;
       }
 
@@ -10697,6 +10786,7 @@ export function createMessageSender(appContext) {
         pendingSteersForFollowUp,
         pendingSteerInputItemsForFollowUp
       );
+      awaitingToolFollowUpResult = true;
     }
   }
 

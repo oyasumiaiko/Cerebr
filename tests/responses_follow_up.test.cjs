@@ -176,3 +176,22 @@ test('sanitizeResponsesReplayItem 会剥离 image_generation_call 的 result 大
     result_image_url: 'file:///C:/Users/test/Downloads/Cerebr/Images/ig_1.png'
   });
 });
+
+test('custom_tool_call_output 同时兼容新字符串 output 与旧 input_text 数组历史', async () => {
+  const { cloneResponsesInputItems } = await loadResponsesInputItemsModule();
+  const cloned = cloneResponsesInputItems([
+    {
+      type: 'custom_tool_call_output',
+      call_id: 'call_new',
+      output: 'Success. Updated the following files:\nA a.txt'
+    },
+    {
+      type: 'custom_tool_call_output',
+      call_id: 'call_legacy',
+      output: [{ type: 'input_text', text: 'legacy output' }]
+    }
+  ]);
+
+  assert.equal(cloned[0].output, 'Success. Updated the following files:\nA a.txt');
+  assert.deepEqual(cloned[1].output, [{ type: 'input_text', text: 'legacy output' }]);
+});

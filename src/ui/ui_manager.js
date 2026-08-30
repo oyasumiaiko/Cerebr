@@ -192,9 +192,11 @@ export function createUIManager(appContext) {
     const hasText = messageInput.textContent.trim();
     const hasImage = dom.imageContainer?.querySelector('.image-tag');
     const hasInput = !!hasText || !!hasImage;
-    sendButton.disabled = !hasInput;
+    const runtimeContractBlocked = sendButton?.dataset?.runtimeContractBlocked === 'true';
+    sendButton.disabled = !hasInput || runtimeContractBlocked;
     if (inputContainer) {
       inputContainer.classList.toggle('has-input', hasInput);
+      inputContainer.classList.toggle('runtime-contract-blocked', runtimeContractBlocked);
     }
   }
 

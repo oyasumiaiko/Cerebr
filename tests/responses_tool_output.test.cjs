@@ -1210,3 +1210,38 @@ test('buildResponsesRequestUserInputToolOutputContentItems 不会把错误堆栈
   assert.match(text, /"retryable": true/);
   assert.doesNotMatch(text, /sensitive stack trace/);
 });
+
+test('apply_patch custom tool output 使用 Codex 同款普通字符串，不包 XML 或 input_text', async () => {
+  const { buildResponsesApplyPatchToolOutputText } = await loadResponsesToolOutputModule();
+  assert.equal(
+    buildResponsesApplyPatchToolOutputText({
+      ok: true,
+      affected_files: {
+        added: ['new.md'],
+        modified: ['changed.js'],
+        deleted: ['old.txt']
+      }
+    }),
+    'Success. Updated the following files:\nA new.md\nM changed.js\nD old.txt'
+  );
+  assert.equal(
+    buildResponsesApplyPatchToolOutputText({
+      ok: false,
+      error: {
+        name: 'InvalidHunkError',
+        line_number: 2,
+        message: "'bad' is not a valid hunk header"
+      }
+    }),
+    "apply_patch verification failed: invalid hunk at line 2, 'bad' is not a valid hunk header"
+  );
+  assert.equal(
+    buildResponsesApplyPatchToolOutputText({
+      ok: false,
+      error: {
+        tool_output: 'apply_patch verification failed: Failed to find expected lines in SKILL.md:\n-old'
+      }
+    }),
+    'apply_patch verification failed: Failed to find expected lines in SKILL.md:\n-old'
+  );
+});

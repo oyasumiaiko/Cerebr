@@ -5,28 +5,12 @@ import {
   normalizeString
 } from './shared.js';
 import { parseApplyPatch } from '../shared/apply_patch_core.js';
+import {
+  APPLY_PATCH_CUSTOM_TOOL_DESCRIPTION,
+  APPLY_PATCH_LARK_GRAMMAR
+} from '../shared/apply_patch_contract.js';
 
-export const APPLY_PATCH_LARK_GRAMMAR = `start: begin_patch environment_id? hunk+ end_patch
-environment_id: "*** Environment ID: " filename LF
-begin_patch: "*** Begin Patch" LF
-end_patch: "*** End Patch" LF?
-
-hunk: add_hunk | delete_hunk | update_hunk
-add_hunk: "*** Add File: " filename LF add_line+
-delete_hunk: "*** Delete File: " filename LF
-update_hunk: "*** Update File: " filename LF change_move? change?
-
-filename: /(.+)/
-add_line: "+" /(.*)/ LF -> line
-
-change_move: "*** Move to: " filename LF
-change: (change_context | change_line)+ eof_line?
-change_context: ("@@" | "@@ " /(.+)/) LF
-change_line: ("+" | "-" | " ") /(.*)/ LF
-eof_line: "*** End of File" LF
-
-%import common.LF
-`;
+export { APPLY_PATCH_LARK_GRAMMAR };
 
 export function normalizeVirtualFileApplyPatchArguments(args, target) {
   const patch = typeof args.patch === 'string' ? args.patch : '';
@@ -69,15 +53,7 @@ export function buildVirtualFileApplyPatchCustomToolDefinition() {
   return {
     type: 'custom',
     name: VIRTUAL_FILE_APPLY_PATCH_TOOL_NAME,
-    description: [
-      'The `apply_patch` tool edits writable virtual text files. This is a FREEFORM tool, so emit the patch directly and do not wrap it in JSON.',
-      'Use `*** Add File:` to create or overwrite, `*** Update File:` to modify, `*** Delete File:` to remove, and `*** Update File:` plus `*** Move to:` to move or rename; there are no separate move/delete file tools.',
-      'Omit `*** Environment ID:` to edit the current conversation file root.',
-      'To edit one skill, put `*** Environment ID: skill:<stable-key>` immediately after `*** Begin Patch`.',
-      'Every file name is relative to the selected root. Unicode and spaces are allowed; absolute paths, empty segments, and `..` are rejected.',
-      'In the default root, the read-only `local/...` mount cannot be modified. Inside a skill environment, `local/...` is an ordinary skill-relative path.',
-      'Skill `manifest.json` may be updated, but it cannot be added, deleted, moved from, or moved to.'
-    ].join(' '),
+    description: APPLY_PATCH_CUSTOM_TOOL_DESCRIPTION,
     format: {
       type: 'grammar',
       syntax: 'lark',

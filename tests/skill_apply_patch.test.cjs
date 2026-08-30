@@ -46,8 +46,8 @@ function buildSkillInput(name = 'dom-probe') {
   };
 }
 
-function wrapPatch(body) {
-  return `*** Begin Patch\n${body}\n*** End Patch`;
+function wrapPatch(body, skillName = 'dom-probe') {
+  return `*** Begin Patch\n*** Environment ID: skill:${skillName}\n${body}\n*** End Patch`;
 }
 
 test('seekSequence 与 Codex 一样按 exact/rstrip/trim/宽松 Unicode 逐级匹配', async () => {
@@ -283,7 +283,8 @@ test('applySkillPackagePatch 会复现 Codex 的多 chunk、交错修改与 EOF 
       ' f',
       '+g',
       '*** End of File'
-    ].join('\n')
+    ].join('\n'),
+    'multi-edit'
   ));
 
   assert.equal(
@@ -322,7 +323,8 @@ test('applySkillPackagePatch 会保留 Codex 的纯追加 chunk 与 Unicode 宽�
       '-line2',
       '-line3',
       '+line2-replacement'
-    ].join('\n')
+    ].join('\n'),
+    'pure-add'
   ));
   assert.equal(
     buildSkillFilePayload(additionResult.record, 'src/main.js').file.content,
@@ -350,7 +352,8 @@ test('applySkillPackagePatch 会保留 Codex 的纯追加 chunk 与 Unicode 宽�
       '@@',
       '-import asyncio  # local import - avoids top-level dep',
       '+import asyncio  # HELLO'
-    ].join('\n')
+    ].join('\n'),
+    'unicode-edit'
   ));
   assert.equal(
     buildSkillFilePayload(unicodeResult.record, 'src/main.js').file.content,
@@ -454,4 +457,41 @@ test('applySkillPackagePatch 会对虚拟文件特有的错误场景给出明确
     )),
     /Failed to delete file missing\.js/
   );
+});
+
+test('Skill patch 必须由 Environment ID 唯一选目标并拒绝同一源路径的多个操作', async () => {
+  const { buildStoredSkillRecord } = await loadSkillRegistryToolModule();
+  const { applySkillPackagePatch } = await loadSkillApplyPatchModule();
+  const record = buildStoredSkillRecord(buildSkillInput('environment-target'));
+  const snapshot = JSON.stringify(record);
+
+  assert.throws(
+    () => applySkillPackagePatch(
+      record,
+      '*** Begin Patch\n*** Add File: notes.md\n+x\n*** End Patch'
+    ),
+    (error) => error?.code === 'APPLY_PATCH_ENVIRONMENT_ID_REQUIRED'
+      && error?.state_changed === false
+  );
+  assert.throws(
+    () => applySkillPackagePatch(record, wrapPatch(
+      '*** Add File: notes.md\n+x',
+      'other-skill'
+    )),
+    (error) => error?.code === 'APPLY_PATCH_ENVIRONMENT_TARGET_MISMATCH'
+      && error?.state_changed === false
+  );
+  assert.throws(
+    () => applySkillPackagePatch(record, wrapPatch([
+      '*** Add File: notes.md',
+      '+first',
+      '*** Add File: notes.md',
+      '+second'
+    ].join('\n'), 'environment-target')),
+    (error) => error?.code === 'APPLY_PATCH_INVALID_PATCH'
+      && /multiple operations target notes\.md/.test(error?.message || '')
+      && error?.state_changed === false
+  );
+
+  assert.equal(JSON.stringify(record), snapshot);
 });

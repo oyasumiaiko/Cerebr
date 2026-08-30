@@ -12,6 +12,12 @@ import {
 } from '../agent_tools/webpage_screenshot/tool.js';
 import { normalizeViewImageArguments } from '../agent_tools/view_image/tool.js';
 import { putBackgroundImageBlob } from '../storage/background_image_blob_store.js';
+import {
+  APPLY_PATCH_RUNTIME_CONTRACT_MESSAGE_TYPE,
+  buildApplyPatchRuntimeContractPayload,
+  compareApplyPatchRuntimeContract,
+  createApplyPatchRuntimeMismatchError
+} from '../agent_tools/shared/apply_patch_contract.js';
 
 const CONTEXT_MENU_EXPLAIN_IMAGE_ID = 'explain-image';
 const CONTEXT_MENU_RELOAD_SIDEBAR_IFRAME_ID = 'reload-sidebar-iframe';
@@ -23,6 +29,36 @@ const SIDEBAR_IFRAME_TASK_CHECK_ALARM_NAME = 'sidebar-iframe-task-health-check';
 const SIDEBAR_IFRAME_TASK_CHECK_PERIOD_MINUTES = 0.5;
 let nextBackgroundRefererRuleId = BACKGROUND_REFERER_RULE_ID_START;
 let sidebarIframeTaskRegistryMutation = Promise.resolve();
+
+function buildBackgroundErrorResponse(error, fallbackMessage) {
+  const response = {
+    success: false,
+    error: error?.message || fallbackMessage
+  };
+  for (const key of [
+    'name',
+    'code',
+    'stage',
+    'state_changed',
+    'reload_required',
+    'retryable',
+    'skipConversationAutoRetry',
+    'tool_output',
+    'line_number',
+    'hunk_index',
+    'file_path',
+    'environment_id',
+    'skill_name',
+    'revision',
+    'sidebar_contract',
+    'background_contract',
+    'expected_contract',
+    'received_contract'
+  ]) {
+    if (error?.[key] !== undefined) response[key] = error[key];
+  }
+  return response;
+}
 
 async function readSidebarIframeTaskRegistry() {
   const stored = await chrome.storage.session.get([SIDEBAR_IFRAME_TASK_REGISTRY_KEY]);
@@ -581,6 +617,14 @@ chrome.runtime.onConnect.addListener((p) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // console.log('收到消息:', message, '来自:', sender.tab?.id);
 
+  if (message?.type === APPLY_PATCH_RUNTIME_CONTRACT_MESSAGE_TYPE) {
+    sendResponse({
+      success: true,
+      contract: buildApplyPatchRuntimeContractPayload()
+    });
+    return false;
+  }
+
   if (message?.type === 'UPDATE_SIDEBAR_IFRAME_TASK_STATE') {
     const tabId = Number(sender?.tab?.id);
     updateSidebarIframeTaskRegistry(
@@ -739,11 +783,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         const rawPayload = (message?.payload && typeof message.payload === 'object')
           ? message.payload
           : {};
+        if (rawPayload.action === 'apply_patch') {
+          const comparison = compareApplyPatchRuntimeContract(rawPayload.runtime_contract);
+          if (!comparison.ok) {
+            throw createApplyPatchRuntimeMismatchError(rawPayload.runtime_contract, {
+              local_role: 'background'
+            });
+          }
+        }
         const refreshCurrentDocument = rawPayload.refresh_current_document !== false;
         if (refreshCurrentDocument) {
           await ensureSkillManagerReady();
         }
-        const { refresh_current_document: _refreshCurrentDocument, ...registryPayload } = rawPayload;
+        const {
+          refresh_current_document: _refreshCurrentDocument,
+          runtime_contract: _runtimeContract,
+          ...registryPayload
+        } = rawPayload;
         const targetTabId = isolateFromHostPage || !refreshCurrentDocument
           ? null
           : resolveSidebarRequestTargetTabId({
@@ -756,10 +812,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
         sendResponse({ success: true, ...result });
       } catch (error) {
-        sendResponse({
-          success: false,
-          error: error?.message || 'skill_registry 操作失败。'
-        });
+        sendResponse(buildBackgroundErrorResponse(error, 'skill_registry 操作失败。'));
       }
     })();
     return true;

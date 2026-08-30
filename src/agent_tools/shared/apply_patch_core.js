@@ -2,7 +2,7 @@
  * 通用的文本虚拟文件 patch 核心。
  *
  * 设计目标：
- * - 保留 Codex `apply_patch` 原始语法，不引入 Cerebr 私有扩展；
+ * - 保留 Codex `apply_patch` 原始语法，不引入 Cerebr 私有 hunk；
  * - 让不同“虚拟文件空间”（如 skill、对话文档）复用同一套解析/匹配/替换逻辑；
  * - 只负责纯文本 patch 本身，不关心更上层的 manifest、文件 kind、会话归属等业务语义。
  */
@@ -21,14 +21,108 @@ const ENVIRONMENT_ID_MARKER = '*** Environment ID:';
 function createInvalidPatchError(message) {
   const error = new Error(message);
   error.name = 'InvalidPatchError';
+  error.code = 'APPLY_PATCH_INVALID_PATCH';
+  error.stage = 'parse';
+  error.state_changed = false;
   return error;
 }
 
 function createInvalidHunkError(message, lineNumber) {
   const error = new Error(message);
   error.name = 'InvalidHunkError';
+  error.code = 'APPLY_PATCH_INVALID_HUNK';
+  error.stage = 'parse';
+  error.state_changed = false;
   error.line_number = lineNumber;
   return error;
+}
+
+/**
+ * 生成 Codex `FunctionCallError::RespondToModel` 同款的 model-visible 文本。
+ * 错误对象本身保留结构化诊断字段，wire output 则只使用这段直接文本。
+ */
+export function formatApplyPatchVerificationError(error) {
+  const message = typeof error?.message === 'string' && error.message.trim()
+    ? error.message.trim()
+    : String(error || 'unknown apply_patch error');
+  if (message.startsWith('apply_patch verification failed:')) {
+    return message;
+  }
+  if (error?.name === 'InvalidHunkError') {
+    const lineNumber = Number.isFinite(Number(error?.line_number))
+      ? Math.max(1, Math.trunc(Number(error.line_number)))
+      : 1;
+    return `apply_patch verification failed: invalid hunk at line ${lineNumber}, ${message}`;
+  }
+  if (error?.name === 'InvalidPatchError') {
+    return `apply_patch verification failed: invalid patch: ${message}`;
+  }
+  return `apply_patch verification failed: ${message}`;
+}
+
+/**
+ * 在不丢失原始错误类型的前提下，复制出稳定的 apply_patch 诊断对象。
+ */
+export function normalizeApplyPatchVerificationError(error, metadata = {}) {
+  const source = error instanceof Error ? error : new Error(String(error || 'unknown apply_patch error'));
+  const normalized = new Error(source.message);
+  normalized.name = source.name || 'ApplyPatchVerificationError';
+  normalized.code = typeof source.code === 'string' && source.code.trim()
+    ? source.code.trim()
+    : 'APPLY_PATCH_VERIFICATION_FAILED';
+  normalized.stage = typeof metadata.stage === 'string' && metadata.stage.trim()
+    ? metadata.stage.trim()
+    : (typeof source.stage === 'string' && source.stage.trim() ? source.stage.trim() : 'verify');
+  normalized.state_changed = false;
+  normalized.retryable = false;
+  const lineNumber = metadata.line_number ?? source.line_number;
+  if (Number.isFinite(Number(lineNumber))) {
+    normalized.line_number = Math.max(1, Math.trunc(Number(lineNumber)));
+  }
+  for (const key of ['file_path', 'environment_id', 'skill_name']) {
+    const value = metadata[key] ?? source[key];
+    if (typeof value === 'string' && value.trim()) normalized[key] = value.trim();
+  }
+  const revision = metadata.revision ?? source.revision;
+  if (Number.isFinite(Number(revision))) normalized.revision = Math.max(0, Math.trunc(Number(revision)));
+  const hunkIndex = metadata.hunk_index ?? source.hunk_index;
+  if (Number.isFinite(Number(hunkIndex))) normalized.hunk_index = Math.max(1, Math.trunc(Number(hunkIndex)));
+  normalized.tool_output = formatApplyPatchVerificationError(normalized);
+  normalized.cause = source;
+  return normalized;
+}
+
+/**
+ * Codex 新版 verifier 会拒绝多个操作指向同一源路径。路径先由具体虚拟
+ * 环境规范化，避免不同拼写绕过重复检测。
+ */
+export function assertUniqueApplyPatchSourcePaths(hunks, normalizePath = (value) => String(value || '')) {
+  const seen = new Set();
+  const normalizedHunks = Array.isArray(hunks) ? hunks : [];
+  for (let hunkIndex = 0; hunkIndex < normalizedHunks.length; hunkIndex += 1) {
+    const hunk = normalizedHunks[hunkIndex];
+    let path = '';
+    try {
+      path = normalizePath(hunk?.path);
+    } catch (error) {
+      throw normalizeApplyPatchVerificationError(error, {
+        stage: 'verify',
+        file_path: typeof hunk?.path === 'string' ? hunk.path : '',
+        hunk_index: hunkIndex + 1
+      });
+    }
+    if (seen.has(path)) {
+      const error = createInvalidPatchError(`multiple operations target ${path}`);
+      error.stage = 'verify';
+      error.file_path = path;
+      throw normalizeApplyPatchVerificationError(error, {
+        stage: 'verify',
+        file_path: path,
+        hunk_index: hunkIndex + 1
+      });
+    }
+    seen.add(path);
+  }
 }
 
 function cloneHunks(hunks) {
@@ -56,7 +150,7 @@ function clonePreviewFiles(files) {
 /**
  * Codex `StreamingPatchParser` 的 JavaScript 对齐实现。
  *
- * 同步基准：openai-codex `a16863f8704831d13e041ed7dba2c4a57a2a940b`。
+ * 同步基准：openai-codex `63d213884daea50e4f74efc192cdc44f549b67d5`。
  * 解析器是执行 AST 与流式预览的唯一语法来源：只有被状态机接受的完整行才会
  * 进入 previewFiles，非法完整行会携带精确行号抛错，UI 不再自行猜测 patch。
  */

@@ -172,6 +172,14 @@
             </div>
         </div>
         <div id="image-container"></div>
+        <div id="apply-patch-runtime-banner" class="apply-patch-runtime-banner" role="alert" hidden>
+            <i class="far fa-triangle-exclamation" aria-hidden="true"></i>
+            <span id="apply-patch-runtime-message">扩展运行时版本不一致，需要重新加载扩展。</span>
+            <button id="apply-patch-runtime-reload" type="button">
+                <i class="far fa-rotate" aria-hidden="true"></i>
+                重新加载扩展
+            </button>
+        </div>
         <div id="message-row">
             <div id="message-input" contenteditable="plaintext-only" placeholder="输入消息..." role="textbox"></div>
             <div id="reasoning-effort-control" class="reasoning-effort-control" hidden>

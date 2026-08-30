@@ -28,6 +28,13 @@ import {
 } from '../../utils/coordinate_space.js';
 import { isPureConversationApiConfig } from '../../api/api_request_mode.js';
 import { JS_RUNTIME_MAX_TIMEOUT_MS } from '../../agent_tools/js_runtime_execute/tool.js';
+import {
+  APPLY_PATCH_RUNTIME_CONTRACT_MESSAGE_TYPE,
+  APPLY_PATCH_RUNTIME_MISMATCH_CODE,
+  buildApplyPatchRuntimeContractPayload,
+  compareApplyPatchRuntimeContract,
+  createApplyPatchRuntimeMismatchError
+} from '../../agent_tools/shared/apply_patch_contract.js';
 
 const JS_RUNTIME_STATUS_TIMEOUT_MS = 5000;
 const JS_RUNTIME_FRAME_SNAPSHOT_TIMEOUT_MS = 5000;
@@ -146,6 +153,9 @@ export function createSidebarAppContext(isStandalone) {
     dockModeToggle: document.getElementById('dock-mode-toggle'),
     dockModeSwitch: document.getElementById('dock-mode-switch'),
     sendButton: document.getElementById('send-button'),
+    applyPatchRuntimeBanner: document.getElementById('apply-patch-runtime-banner'),
+    applyPatchRuntimeMessage: document.getElementById('apply-patch-runtime-message'),
+    applyPatchRuntimeReloadButton: document.getElementById('apply-patch-runtime-reload'),
     copyCodeButton: document.getElementById('copy-code'),
     imageContainer: document.getElementById('image-container'),
     promptSettingsToggle: document.getElementById('prompt-settings-toggle'),
@@ -220,6 +230,13 @@ export function createSidebarAppContext(isStandalone) {
       isDocked: false,
       hostEmbedScale: 1,
       isComposing: false,
+      applyPatchRuntimeContract: {
+        status: 'unchecked',
+        sidebar_contract: buildApplyPatchRuntimeContractPayload(),
+        background_contract: null,
+        reload_required: false,
+        error: null
+      },
       pageInfo: isStandalone ? { url: '', title: '独立聊天', standalone: true } : null,
       memoryManagement: {
         IDLE_CLEANUP_INTERVAL: 5 * 60 * 1000,
@@ -252,6 +269,115 @@ export function registerSidebarUtilities(appContext) {
   const pendingHostBridgeMessages = [];
   let hostMessageHandler = null;
   const jsRuntimeRunnerPendingRequests = new Map();
+  let applyPatchRuntimeContractCheckPromise = null;
+
+  function updateApplyPatchRuntimeContractUi() {
+    const runtimeState = appContext.state.applyPatchRuntimeContract;
+    const blocked = runtimeState?.status === 'checking' || runtimeState?.status === 'mismatch';
+    if (appContext.dom.sendButton) {
+      appContext.dom.sendButton.dataset.runtimeContractBlocked = blocked ? 'true' : 'false';
+      if (blocked) {
+        appContext.dom.sendButton.setAttribute('aria-disabled', 'true');
+      } else {
+        appContext.dom.sendButton.removeAttribute('aria-disabled');
+      }
+    }
+    if (appContext.dom.applyPatchRuntimeBanner) {
+      const showMismatch = runtimeState?.status === 'mismatch';
+      appContext.dom.applyPatchRuntimeBanner.hidden = !showMismatch;
+      appContext.dom.applyPatchRuntimeBanner.classList.toggle('is-visible', showMismatch);
+    }
+    if (appContext.dom.applyPatchRuntimeMessage) {
+      appContext.dom.applyPatchRuntimeMessage.textContent = runtimeState?.error?.message
+        || '扩展运行时版本不一致，需要重新加载扩展。';
+    }
+    appContext.services.uiManager?.updateSendButtonState?.();
+  }
+
+  function setApplyPatchRuntimeContractMismatch(error) {
+    const mismatch = error?.code === APPLY_PATCH_RUNTIME_MISMATCH_CODE
+      ? error
+      : createApplyPatchRuntimeMismatchError(null, { local_role: 'sidebar' });
+    mismatch.code = APPLY_PATCH_RUNTIME_MISMATCH_CODE;
+    mismatch.reload_required = true;
+    mismatch.state_changed = false;
+    mismatch.retryable = false;
+    mismatch.skipConversationAutoRetry = true;
+    appContext.state.applyPatchRuntimeContract = {
+      status: 'mismatch',
+      sidebar_contract: mismatch.sidebar_contract || buildApplyPatchRuntimeContractPayload(),
+      background_contract: mismatch.background_contract || null,
+      reload_required: true,
+      error: mismatch
+    };
+    updateApplyPatchRuntimeContractUi();
+    return mismatch;
+  }
+
+  /**
+   * 每次真正暴露 apply_patch 的 Responses 请求前都重新询问 background。这样新
+   * sidebar 不会把长请求发送给仍运行旧 parser 的 MV3 service worker。
+   */
+  appContext.utils.ensureApplyPatchRuntimeContract = async (options = {}) => {
+    const force = options?.force === true;
+    const current = appContext.state.applyPatchRuntimeContract;
+    if (!force && current?.status === 'matched') return current;
+    if (!force && current?.status === 'mismatch') throw current.error;
+    if (applyPatchRuntimeContractCheckPromise) return applyPatchRuntimeContractCheckPromise;
+
+    appContext.state.applyPatchRuntimeContract = {
+      ...current,
+      status: 'checking',
+      error: null,
+      reload_required: false
+    };
+    updateApplyPatchRuntimeContractUi();
+
+    applyPatchRuntimeContractCheckPromise = (async () => {
+      try {
+        if (typeof globalThis.chrome?.runtime?.sendMessage !== 'function') {
+          throw createApplyPatchRuntimeMismatchError(null, { local_role: 'sidebar' });
+        }
+        const response = await raceWithTimeout(
+          globalThis.chrome.runtime.sendMessage({
+            type: APPLY_PATCH_RUNTIME_CONTRACT_MESSAGE_TYPE
+          }),
+          JS_RUNTIME_STATUS_TIMEOUT_MS,
+          '读取 apply_patch background 运行时契约超时'
+        );
+        const backgroundContract = response?.success === true ? response.contract : null;
+        const comparison = compareApplyPatchRuntimeContract(backgroundContract);
+        if (!comparison.ok) {
+          throw createApplyPatchRuntimeMismatchError(backgroundContract, { local_role: 'sidebar' });
+        }
+        appContext.state.applyPatchRuntimeContract = {
+          status: 'matched',
+          sidebar_contract: comparison.expected,
+          background_contract: comparison.received,
+          reload_required: false,
+          error: null
+        };
+        updateApplyPatchRuntimeContractUi();
+        return appContext.state.applyPatchRuntimeContract;
+      } catch (error) {
+        const mismatch = error?.code === APPLY_PATCH_RUNTIME_MISMATCH_CODE
+          ? error
+          : createApplyPatchRuntimeMismatchError(null, { local_role: 'sidebar' });
+        if (error?.message && error.code !== APPLY_PATCH_RUNTIME_MISMATCH_CODE) {
+          mismatch.cause_message = error.message;
+        }
+        throw setApplyPatchRuntimeContractMismatch(mismatch);
+      } finally {
+        applyPatchRuntimeContractCheckPromise = null;
+      }
+    })();
+    return applyPatchRuntimeContractCheckPromise;
+  };
+
+  appContext.dom.applyPatchRuntimeReloadButton?.addEventListener('click', () => {
+    // 只响应用户显式点击；版本错位绝不自动 reload 或重复发送原请求。
+    globalThis.chrome?.runtime?.reload?.();
+  });
 
   function postHostMessage(message) {
     if (appContext.state.isStandalone || window.parent === window) return false;
@@ -1585,8 +1711,22 @@ export function registerSidebarUtilities(appContext) {
           message: (typeof skillResult?.error === 'string' && skillResult.error.trim())
             ? skillResult.error.trim()
             : '执行虚拟文件操作失败。',
-          name: 'VirtualFileActionError',
-          stack: ''
+          name: (typeof skillResult?.name === 'string' && skillResult.name.trim())
+            ? skillResult.name.trim()
+            : 'VirtualFileActionError',
+          stack: '',
+          ...((typeof skillResult?.code === 'string' && skillResult.code.trim()) ? { code: skillResult.code.trim() } : {}),
+          ...(skillResult?.stage !== undefined ? { stage: skillResult.stage } : {}),
+          ...(skillResult?.state_changed !== undefined ? { state_changed: skillResult.state_changed } : {}),
+          ...(skillResult?.reload_required !== undefined ? { reload_required: skillResult.reload_required } : {}),
+          ...(skillResult?.retryable !== undefined ? { retryable: skillResult.retryable } : {}),
+          ...(skillResult?.tool_output !== undefined ? { tool_output: skillResult.tool_output } : {}),
+          ...(skillResult?.line_number !== undefined ? { line_number: skillResult.line_number } : {}),
+          ...(skillResult?.hunk_index !== undefined ? { hunk_index: skillResult.hunk_index } : {}),
+          ...(skillResult?.file_path !== undefined ? { file_path: skillResult.file_path } : {}),
+          ...(skillResult?.environment_id !== undefined ? { environment_id: skillResult.environment_id } : {}),
+          ...(skillResult?.skill_name !== undefined ? { skill_name: skillResult.skill_name } : {}),
+          ...(skillResult?.revision !== undefined ? { revision: skillResult.revision } : {})
         }
       };
     } catch (error) {

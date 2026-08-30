@@ -2253,6 +2253,49 @@ html:not(.fullscreen-mode) body.thread-mode-active #thread-container {
     z-index: 1000; /* 始终浮于设置面板之上 */
 }
 
+.apply-patch-runtime-banner {
+    box-sizing: border-box;
+    width: calc(100% - 24px);
+    margin: 8px 12px 0;
+    padding: 9px 10px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid color-mix(in srgb, #d97706 46%, var(--cerebr-border-color));
+    border-radius: 8px;
+    background: color-mix(in srgb, #d97706 12%, var(--cerebr-input-bg));
+    color: var(--cerebr-text-color);
+    font-size: calc(var(--cerebr-ui-font-size) - 2px);
+    line-height: 1.4;
+}
+
+.apply-patch-runtime-banner[hidden] {
+    display: none;
+}
+
+.apply-patch-runtime-banner > span {
+    min-width: 0;
+    flex: 1;
+}
+
+#apply-patch-runtime-reload {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border: none;
+    border-radius: 6px;
+    background: color-mix(in srgb, #d97706 22%, var(--cerebr-control-bg));
+    color: inherit;
+    cursor: pointer;
+    font: inherit;
+}
+
+#apply-patch-runtime-reload:hover {
+    background: color-mix(in srgb, #d97706 32%, var(--cerebr-control-bg-hover));
+}
+
 #composer-accessory-region {
     display: flex;
     flex-direction: column;

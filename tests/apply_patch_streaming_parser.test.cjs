@@ -117,3 +117,35 @@ test('非法完整行不会进入预览事件并保留精确行号', async () =>
   assert.equal(progress.error.line_number, 5);
   assert.equal(progress.files[0].lines.some(line => line.raw === 'bogus'), false);
 });
+
+test('Environment ID 只能紧跟 Begin Patch，空 update 与非法 hunk 返回 Codex 同款行号文本', async () => {
+  const { parseApplyPatch, formatApplyPatchVerificationError } = await loadModule();
+
+  assert.throws(
+    () => parseApplyPatch([
+      '*** Begin Patch',
+      '*** Add File: a.txt',
+      '+x',
+      '*** Environment ID: skill:late',
+      '*** End Patch'
+    ].join('\n')),
+    (error) => error?.name === 'InvalidHunkError'
+      && error?.line_number === 4
+      && formatApplyPatchVerificationError(error).startsWith(
+        'apply_patch verification failed: invalid hunk at line 4, '
+      )
+  );
+
+  assert.throws(
+    () => parseApplyPatch([
+      '*** Begin Patch',
+      '*** Update File: empty.txt',
+      '*** End Patch'
+    ].join('\n')),
+    (error) => error?.name === 'InvalidHunkError'
+      && error?.line_number === 2
+      && formatApplyPatchVerificationError(error) === (
+        "apply_patch verification failed: invalid hunk at line 2, Update file hunk for path 'empty.txt' is empty"
+      )
+  );
+});

@@ -42,6 +42,10 @@ test('请求 registry 只暴露 custom apply_patch 且 grammar 固定到上游�
 
   assert.equal(applyDefinitions.length, 1);
   assert.equal(applyDefinitions[0].type, 'custom');
+  assert.equal(
+    applyDefinitions[0].description,
+    'The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.'
+  );
   assert.equal(definitions.some(item => item.type === 'function' && item.name === 'apply_patch'), false);
   assert.deepEqual(applyDefinitions[0].format, {
     type: 'grammar',
@@ -103,8 +107,9 @@ test('sender 使用完整 Custom Tool SSE 与 follow-up 生命周期且没有协
   assert.match(source, /type:\s*'custom_tool_call_output'/);
   assert.match(source, /call_id:\s*callId/);
   assert.match(source, /normalizeVirtualFileApplyPatchCustomInput/);
-  assert.match(source, /splitResponsesToolOutputControl\(\{\},\s*\{/);
-  assert.doesNotMatch(source, /paginate\(serializedOutput,\s*null\)/);
+  assert.match(source, /buildResponsesApplyPatchToolOutputText\(outputPayload\)/);
+  assert.match(source, /output:\s*outputText/);
+  assert.doesNotMatch(source, /custom_tool_call_output'[\s\S]{0,260}contentItems/);
   assert.doesNotMatch(source, /apply_patch[\s\S]{0,200}(?:fallback|回退)[\s\S]{0,200}function_call/i);
 });
 

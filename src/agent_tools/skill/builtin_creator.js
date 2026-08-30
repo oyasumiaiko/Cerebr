@@ -49,9 +49,10 @@ function buildSkillCreatorInstruction() {
     '1. 用具体例子理解需求：列出真实用户会怎么问、哪些请求应触发、哪些相近请求不应触发。只有用法已经明确时才跳过。',
     '2. 规划可复用内容：逐个例子推演从零完成任务需要什么，把反复重写的 JS、详细文档和输出模板分别规划到 scripts、references、assets。',
     '3. 初始化或定位：新 skill 调用 `skill_registry(action="create_skill", skill={ name, description, interface, enabled:false, resources, examples })`；更新已有 skill 先 `skill_registry(action="list", include_all_sites=true)` 找到稳定 key。',
-    '4. 实现：先读目标 `SKILL.md`，再按需 `list_files` / `search_files` / `read_file`；修改 skill 时直接调用 Freeform `apply_patch`，并在 `*** Begin Patch` 后写 `*** Environment ID: skill:<stable-key>`；复制用 `copy_file`，移动/改名用 `*** Move to:`，删除用 `*** Delete File:`。',
-    '5. 验证：回读变更文件，检查 frontmatter 与 manifest 同步、TODO 和占位文件已清理、引用路径存在、说明足够短且可执行。',
-    '6. 迭代：至少用 2-3 个有代表性的真实请求执行 skill，记录卡点，只修复可复现的问题；复杂 skill 在条件允许时做独立前向测试。',
+    '4. 实现：修改任何已有文件前，必须在当前 revision 上重新 `read_file`；不能根据更早看过的内容、记忆中的 scaffold 或流式预览构造整文件 `Update File`。Freeform `apply_patch` 必须在 `*** Begin Patch` 后写 `*** Environment ID: skill:<stable-key>`。',
+    '5. 选择正确 hunk：新建 skill 后若要整体替换默认 `SKILL.md`，显式使用 `*** Add File: SKILL.md` 覆盖；其它新文件也使用 Add File。`Update File` 只用于基于刚读取内容的局部改动，context 保持短且足以唯一定位。`manifest.json` 只能做最小、精确的 Update File，禁止 Add/Delete/Move。',
+    '6. 验证：每次 apply_patch 成功后，用 `read_file` 或 `list_files` 回读真正持久化的结果；流式 preview 不是成功证据。检查 frontmatter 与 manifest 同步、TODO 和占位文件已清理、引用路径存在、说明足够短且可执行。',
+    '7. 迭代：至少用 2-3 个有代表性的真实请求执行 skill，记录卡点，只修复可复现的问题；复杂 skill 在条件允许时做独立前向测试。',
     '',
     '## Cerebr 执行与验证边界',
     '- guidance skill 没有单独的执行 action。验证时在新任务中显式 read_file 读取它的 `SKILL.md`，再按指导完成真实请求并检查结果。',
@@ -60,6 +61,7 @@ function buildSkillCreatorInstruction() {
     '- runtime 入口按 async CommonJS-like 函数体运行，可 `return { methods... }` 或赋值 `module.exports`；本地 helper 使用 `await require("./helper.js")`。在 `SKILL.md` 写明导出方法、输入和调用示例。',
     '- runtime 验证使用 `js_runtime_execute`，直接在其 code 中写 `return await $invoke("<skill-name>", "methodName", args);`。若目标 skill 尚未挂载，runtime 会按名称自动挂载并继续调用，不需要预先执行 `mount_on_current_page`。',
     '- 当前没有独立的 skill validator。保存时的结构校验不能代替内容验证；必须通过 read/list/search 回读和真实任务测试完成检查。',
+    '- 不存在“patch 太大就自动拆分”、context 不匹配就整文件覆盖、忽略错误 hunk 或自动改用 Add File 的隐式行为。可以主动拆成多次调用，但每次调用都必须独立正确，并且只在完整验证后提交一次。',
     '- 若当前运行端明确提供独立代理、新会话或其他模型复核能力，可用原始任务和产物做前向测试；不要提供预期答案或拟定修复。会耗时、需要额外授权或可能改动真实系统时先征得用户同意。',
     '- 是否启用放在最后：guidance 的 `enable_skill` 只让它进入显式 skill_registry 可见列表，不会自动执行或进入隐藏上下文；page runtime skill 完成验证后启用即可，正常调用由 `$invoke` 自动处理挂载。`mount_on_current_page` 只用于显式重挂载或诊断。',
     '- 自动隐藏上下文只包含当前 URL 匹配的 page runtime skill 摘要；内置和普通 guidance skill 通过 `skill_registry` 显式发现和读取。',
@@ -72,6 +74,7 @@ function buildSkillCreatorInstruction() {
     '- 把 scripts 当成可直接运行的 Python/Bash，或没有实际执行就声称脚本已经验证。',
     '- 前向测试时把预期答案、已知 bug 或修复方案告诉验证者，得到失真的成功结果。',
     '- 修改已有 skill 时整体重写整包，而不是先 search/read，再用 apply_patch 精确增量修改。',
+    '- 用整份旧 scaffold 作为 `Update File` context，或把 preview 当成已写入；这两种做法都会把版本漂移隐藏到提交阶段。',
     '- 未完成内容验证就 enable，或把 `mount_on_current_page` 误当成调用 runtime 方法前的必需步骤。'
   ].join('\n');
 }
@@ -120,8 +123,8 @@ export function buildBuiltinSkillCreatorRecord() {
       ...buildSkillCreatorTemplateFiles()
     ],
     created_at: '2026-04-12T00:00:00.000Z',
-    updated_at: '2026-07-19T00:00:00.000Z',
-    revision: 3
+    updated_at: '2026-08-30T00:00:00.000Z',
+    revision: 4
   };
 }
 

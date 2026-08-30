@@ -26,7 +26,9 @@ const CODE_DOC_PATH = 'snippets/example.js';
 const HTML_DOC_PATH = 'preview.html';
 const COPIED_MD_DOC_PATH = 'copies/随笔.md';
 const PATCH_CALL_ID = 'call_conversation_document_apply_patch_1';
-const SKILL_PATCH_CALL_ID = 'call_skill_environment_apply_patch_1';
+const SKILL_PATCH_CALL_ID = 'call_skill_environment_apply_patch_stale_1';
+const SKILL_READ_CALL_ID = 'call_skill_environment_read_current_1';
+const SKILL_PATCH_CORRECTED_CALL_ID = 'call_skill_environment_apply_patch_corrected_1';
 const SKILL_KEY = 'virtual-root-regression';
 const SKILL_PATCH_FILE_PATH = 'local/说明 文档.md';
 const SKILL_PATCH_FILE_CONTENT = '# Skill local 目录\n\n该路径在 Skill 根中是普通可写目录。\n';
@@ -101,10 +103,27 @@ function createApplyPatchInput() {
   ].join('\n');
 }
 
+function createStaleSkillApplyPatchInput() {
+  return [
+    '*** Begin Patch',
+    `*** Environment ID: skill:${SKILL_KEY}`,
+    '*** Update File: SKILL.md',
+    '@@',
+    '-missing stale scaffold line',
+    '+incorrect replacement',
+    '*** End Patch'
+  ].join('\n');
+}
+
 function createSkillApplyPatchInput() {
   return [
     '*** Begin Patch',
     `*** Environment ID: skill:${SKILL_KEY}`,
+    '*** Update File: SKILL.md',
+    '@@',
+    ' # Virtual Root Regression',
+    '+',
+    '+已通过 read_file 读取当前 revision 后修正。',
     `*** Add File: ${SKILL_PATCH_FILE_PATH}`,
     ...SKILL_PATCH_FILE_CONTENT.replace(/\n$/, '').split('\n').map((line) => `+${line}`),
     '*** End Patch'
@@ -296,7 +315,9 @@ async function runMockResponsesServer() {
   const requestLog = [];
   let firstRequestTools = [];
   let customToolCallOutputText = '';
+  let skillFailureToolCallOutputText = '';
   let skillCustomToolCallOutputText = '';
+  let skillReadToolCallOutputText = '';
   const functionToolOutputTexts = new Map();
   let customInputStreamStage = 0;
   let customInputDoneSent = false;
@@ -366,6 +387,9 @@ async function runMockResponsesServer() {
           ));
           const skillCustomToolOutput = inputItems.find((item) => (
             item?.type === 'custom_tool_call_output' && item?.call_id === SKILL_PATCH_CALL_ID
+          ));
+          const correctedSkillCustomToolOutput = inputItems.find((item) => (
+            item?.type === 'custom_tool_call_output' && item?.call_id === SKILL_PATCH_CORRECTED_CALL_ID
           ));
           const functionToolOutputs = new Map(
             inputItems
@@ -439,10 +463,12 @@ async function runMockResponsesServer() {
           }
 
           customToolCallOutputText = collectToolOutputText(customToolOutput);
-          skillCustomToolCallOutputText = collectToolOutputText(skillCustomToolOutput);
+          skillFailureToolCallOutputText = collectToolOutputText(skillCustomToolOutput);
+          skillCustomToolCallOutputText = collectToolOutputText(correctedSkillCustomToolOutput);
           for (const [callId, outputItem] of functionToolOutputs.entries()) {
             functionToolOutputTexts.set(callId, collectToolOutputText(outputItem));
           }
+          skillReadToolCallOutputText = functionToolOutputTexts.get(SKILL_READ_CALL_ID) || '';
 
           const pendingFunctionCall = !functionToolOutputs.has(LIST_CALL_ID)
             ? createFunctionCallItem(LIST_CALL_ID, 'list_files', {
@@ -504,9 +530,75 @@ async function runMockResponsesServer() {
           }
 
           if (!skillCustomToolOutput) {
-            const skillInput = createSkillApplyPatchInput();
+            const skillInput = createStaleSkillApplyPatchInput();
             const pendingCall = createCustomToolCallItem('', SKILL_PATCH_CALL_ID);
             const completedCall = createCustomToolCallItem(skillInput, SKILL_PATCH_CALL_ID);
+            const responseId = `resp_${requestLog.length}`;
+            writeSseEvent(res, { type: 'response.created', response: { id: responseId } });
+            writeSseEvent(res, { type: 'response.in_progress', response: { id: responseId } });
+            writeSseEvent(res, { type: 'response.output_item.added', output_index: 0, item: pendingCall });
+            writeSseEvent(res, {
+              type: 'response.custom_tool_call_input.done',
+              item_id: completedCall.id,
+              output_index: 0,
+              input: skillInput
+            });
+            writeSseEvent(res, { type: 'response.output_item.done', output_index: 0, item: completedCall });
+            writeSseEvent(res, {
+              type: 'response.completed',
+              response: {
+                id: responseId,
+                output: [completedCall],
+                usage: {
+                  input_tokens: 100,
+                  output_tokens: 10,
+                  total_tokens: 110,
+                  input_tokens_details: { cached_tokens: 0 },
+                  output_tokens_details: { reasoning_tokens: 0 }
+                }
+              }
+            });
+            res.write('data: [DONE]\n\n');
+            res.end();
+            return;
+          }
+
+          if (!functionToolOutputs.has(SKILL_READ_CALL_ID)) {
+            const readCurrentSkillFile = createFunctionCallItem(SKILL_READ_CALL_ID, 'read_file', {
+              target: { kind: 'skill', name: SKILL_KEY },
+              path: 'SKILL.md',
+              line_range: null,
+              numbered: true,
+              max_output_chars: null
+            });
+            const responseId = `resp_${requestLog.length}`;
+            writeSseEvent(res, { type: 'response.created', response: { id: responseId } });
+            writeSseEvent(res, { type: 'response.in_progress', response: { id: responseId } });
+            writeSseEvent(res, { type: 'response.output_item.added', output_index: 0, item: readCurrentSkillFile });
+            writeSseEvent(res, { type: 'response.output_item.done', output_index: 0, item: readCurrentSkillFile });
+            writeSseEvent(res, {
+              type: 'response.completed',
+              response: {
+                id: responseId,
+                output: [readCurrentSkillFile],
+                usage: {
+                  input_tokens: 100,
+                  output_tokens: 10,
+                  total_tokens: 110,
+                  input_tokens_details: { cached_tokens: 0 },
+                  output_tokens_details: { reasoning_tokens: 0 }
+                }
+              }
+            });
+            res.write('data: [DONE]\n\n');
+            res.end();
+            return;
+          }
+
+          if (!correctedSkillCustomToolOutput) {
+            const skillInput = createSkillApplyPatchInput();
+            const pendingCall = createCustomToolCallItem('', SKILL_PATCH_CORRECTED_CALL_ID);
+            const completedCall = createCustomToolCallItem(skillInput, SKILL_PATCH_CORRECTED_CALL_ID);
             const responseId = `resp_${requestLog.length}`;
             writeSseEvent(res, { type: 'response.created', response: { id: responseId } });
             writeSseEvent(res, { type: 'response.in_progress', response: { id: responseId } });
@@ -610,6 +702,12 @@ async function runMockResponsesServer() {
     },
     getSkillCustomToolCallOutputText() {
       return skillCustomToolCallOutputText;
+    },
+    getSkillFailureToolCallOutputText() {
+      return skillFailureToolCallOutputText;
+    },
+    getSkillReadToolCallOutputText() {
+      return skillReadToolCallOutputText;
     },
     getFunctionToolOutputText(callId) {
       return functionToolOutputTexts.get(callId) || '';
@@ -890,7 +988,7 @@ async function main() {
       throw error;
     }
 
-    await waitFor(async () => mockServer.requestLog.length >= 7 ? true : null, {
+    await waitFor(async () => mockServer.requestLog.length >= 9 ? true : null, {
       timeoutMs: 30_000,
       intervalMs: 200,
       label: 'complete virtual file tool loop'
@@ -900,6 +998,8 @@ async function main() {
     result.firstRequestTools = mockServer.getFirstRequestTools();
     result.firstRequestToolNames = result.firstRequestTools.map((tool) => tool.name || tool.type).filter(Boolean);
     result.customToolCallOutputText = mockServer.getCustomToolCallOutputText();
+    result.skillFailureToolCallOutputText = mockServer.getSkillFailureToolCallOutputText();
+    result.skillReadToolCallOutputText = mockServer.getSkillReadToolCallOutputText();
     result.skillCustomToolCallOutputText = mockServer.getSkillCustomToolCallOutputText();
 
     const applyPatchDefinitions = result.firstRequestTools.filter((tool) => tool.name === 'apply_patch');
@@ -938,6 +1038,14 @@ async function main() {
     if (!result.skillCustomToolCallOutputText.includes(SKILL_PATCH_FILE_PATH)) {
       throw new Error(`skill apply_patch output missing ${SKILL_PATCH_FILE_PATH}: ${result.skillCustomToolCallOutputText}`);
     }
+    if (!result.skillFailureToolCallOutputText.startsWith(
+      'apply_patch verification failed: Failed to find expected lines in SKILL.md:'
+    )) {
+      throw new Error(`skill stale patch output mismatch: ${result.skillFailureToolCallOutputText}`);
+    }
+    if (!result.skillReadToolCallOutputText.includes('# Virtual Root Regression')) {
+      throw new Error(`skill read_file output mismatch: ${result.skillReadToolCallOutputText}`);
+    }
 
     const followUpInput = Array.isArray(mockServer.requestLog[1]?.input) ? mockServer.requestLog[1].input : [];
     const replayedCustomCall = followUpInput.find((item) => (
@@ -950,9 +1058,14 @@ async function main() {
       customCallType: replayedCustomCall?.type || '',
       customOutputType: replayedCustomOutput?.type || '',
       callIdMatches: !!replayedCustomCall && !!replayedCustomOutput,
-      rawInputMatches: replayedCustomCall?.input === createApplyPatchInput()
+      rawInputMatches: replayedCustomCall?.input === createApplyPatchInput(),
+      outputIsString: typeof replayedCustomOutput?.output === 'string'
     };
-    if (!result.followUpProtocol.callIdMatches || !result.followUpProtocol.rawInputMatches) {
+    if (
+      !result.followUpProtocol.callIdMatches
+      || !result.followUpProtocol.rawInputMatches
+      || !result.followUpProtocol.outputIsString
+    ) {
       throw new Error(`custom apply_patch follow-up protocol mismatch: ${JSON.stringify(result.followUpProtocol)}`);
     }
 
@@ -1031,6 +1144,16 @@ async function main() {
       );
       if (skillPatchedFile?.content !== SKILL_PATCH_FILE_CONTENT) {
         throw new Error(`Skill Environment ID patch mismatch: ${JSON.stringify(result.skillPatchedPackage)}`);
+      }
+      if (result.skillPatchedPackage?.revision !== 2) {
+        throw new Error(`failed Skill patch changed revision or corrected patch committed more than once: ${JSON.stringify(result.skillPatchedPackage)}`);
+      }
+      const skillInstruction = result.skillPatchedPackage?.files?.find((file) => file?.path === 'SKILL.md');
+      if (!skillInstruction?.content?.includes('已通过 read_file 读取当前 revision 后修正。')) {
+        throw new Error(`corrected Skill patch did not persist expected SKILL.md update: ${JSON.stringify(skillInstruction)}`);
+      }
+      if (mockServer.requestLog.length !== 9) {
+        throw new Error(`unexpected Responses retry/tool-hop count: ${mockServer.requestLog.length}`);
       }
       result.steps.push('skill_environment_patch_persisted');
       result.finalScreenshot = 'sidebar-body-final.png';
