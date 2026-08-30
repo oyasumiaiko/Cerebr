@@ -37,6 +37,7 @@ const READ_CALL_ID = 'call_conversation_document_read_file_1';
 const SEARCH_CALL_ID = 'call_conversation_document_search_files_1';
 const COPY_CALL_ID = 'call_conversation_document_copy_file_1';
 const EXPECTED_FINAL_MARKER = 'CONVERSATION_DOCUMENT_TOOL_OK_20260413';
+const EXPECTED_APPLY_PATCH_DESCRIPTION = 'The `apply_patch` tool can be used to edit files. This is a FREEFORM tool, so do not wrap the patch in JSON.';
 const INITIAL_MD_DOC_CONTENT = '# 随笔\n\n第一版内容。\n';
 const INITIAL_TXT_DOC_CONTENT = '# 文本标题\n\n这是一段可以切换为 Markdown 渲染的 txt 内容。\n';
 const INITIAL_CODE_DOC_CONTENT = 'const answer = 42;\nconsole.log(answer);\n';
@@ -376,6 +377,8 @@ async function runMockResponsesServer() {
               .map((tool) => ({
                 type: tool?.type || '',
                 name: tool?.name || '',
+                description: tool?.description || '',
+                format: tool?.format || null,
                 targetKindEnum: tool?.parameters?.properties?.target?.properties?.kind?.enum || null,
                 containsWorkspace: /workspace/i.test(JSON.stringify(tool))
               }));
@@ -880,6 +883,29 @@ async function main() {
     let sidebarFrame = await waitForSidebarReady(page, extensionId);
     result.steps.push('sidebar_ready');
 
+    result.applyPatchRuntimeContract = await sidebarFrame.evaluate(async () => {
+      const contractModule = await import(chrome.runtime.getURL('src/agent_tools/shared/apply_patch_contract.js'));
+      const response = await chrome.runtime.sendMessage({
+        type: contractModule.APPLY_PATCH_RUNTIME_CONTRACT_MESSAGE_TYPE
+      });
+      return {
+        sidebar: contractModule.buildApplyPatchRuntimeContractPayload(),
+        background: response?.contract || null,
+        responseSuccess: response?.success === true,
+        sendBlocked: document.getElementById('send-button')?.dataset?.runtimeContractBlocked || '',
+        bannerHidden: document.getElementById('apply-patch-runtime-banner')?.hidden === true
+      };
+    });
+    if (
+      result.applyPatchRuntimeContract.responseSuccess !== true
+      || JSON.stringify(result.applyPatchRuntimeContract.sidebar) !== JSON.stringify(result.applyPatchRuntimeContract.background)
+      || result.applyPatchRuntimeContract.sendBlocked !== 'false'
+      || result.applyPatchRuntimeContract.bannerHidden !== true
+    ) {
+      throw new Error(`apply_patch runtime contract mismatch: ${JSON.stringify(result.applyPatchRuntimeContract)}`);
+    }
+    result.steps.push('apply_patch_runtime_contract_matched');
+
     result.skillSeed = await sidebarFrame.evaluate(async ({ skillKey }) => {
       const registry = await import(chrome.runtime.getURL('src/agent_tools/skill/registry_tool.js'));
       const record = registry.buildStoredSkillRecord({
@@ -1005,6 +1031,18 @@ async function main() {
     const applyPatchDefinitions = result.firstRequestTools.filter((tool) => tool.name === 'apply_patch');
     if (applyPatchDefinitions.length !== 1 || applyPatchDefinitions[0].type !== 'custom') {
       throw new Error(`apply_patch must be exposed exactly once as custom: ${JSON.stringify(applyPatchDefinitions)}`);
+    }
+    if (applyPatchDefinitions[0].description !== EXPECTED_APPLY_PATCH_DESCRIPTION) {
+      throw new Error(`apply_patch description mismatch: ${JSON.stringify(applyPatchDefinitions[0])}`);
+    }
+    if (
+      applyPatchDefinitions[0].format?.type !== 'grammar'
+      || applyPatchDefinitions[0].format?.syntax !== 'lark'
+      || !String(applyPatchDefinitions[0].format?.definition || '').startsWith(
+        'start: begin_patch environment_id? hunk+ end_patch\nenvironment_id: "*** Environment ID: " filename LF\n'
+      )
+    ) {
+      throw new Error(`apply_patch grammar mismatch: ${JSON.stringify(applyPatchDefinitions[0])}`);
     }
     if (result.firstRequestTools.some((tool) => tool.type === 'function' && tool.name === 'apply_patch')) {
       throw new Error(`legacy function apply_patch leaked into request: ${JSON.stringify(result.firstRequestTools)}`);
