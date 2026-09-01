@@ -1023,6 +1023,13 @@ async function main() {
 
     result.firstRequestTools = mockServer.getFirstRequestTools();
     result.firstRequestToolNames = result.firstRequestTools.map((tool) => tool.name || tool.type).filter(Boolean);
+    const firstRequestInputText = JSON.stringify(mockServer.requestLog[0]?.input || []);
+    result.firstRequestHasLiteralPatchContextPolicy = firstRequestInputText.includes(
+      'context 必须逐字符复制最近一次 read_file 返回的当前行'
+    );
+    if (!result.firstRequestHasLiteralPatchContextPolicy) {
+      throw new Error('first request missing literal apply_patch context policy');
+    }
     result.customToolCallOutputText = mockServer.getCustomToolCallOutputText();
     result.skillFailureToolCallOutputText = mockServer.getSkillFailureToolCallOutputText();
     result.skillReadToolCallOutputText = mockServer.getSkillReadToolCallOutputText();

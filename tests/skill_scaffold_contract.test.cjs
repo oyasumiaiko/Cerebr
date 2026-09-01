@@ -93,10 +93,12 @@ test('内置 skill-creator 指导不再把 scripts 描述成 shell 或 python �
   assert.match(instructionFile.content, /正常调用由 `\$invoke` 自动处理挂载/);
   assert.match(instructionFile.content, /不是可直接运行的 Python、Bash 或 shell 入口/);
   assert.match(instructionFile.content, /整体替换默认 `SKILL\.md`，显式使用 `\*\*\* Add File: SKILL\.md`/);
+  assert.match(instructionFile.content, /context 必须逐字符复制当前文件中的真实行/);
+  assert.match(instructionFile.content, /包括函数参数、标点和空白/);
   assert.match(instructionFile.content, /多个 chunk 必须按源文件从上到下排列/);
   assert.match(instructionFile.content, /流式 preview 不是成功证据/);
   assert.match(instructionFile.content, /不存在“patch 太大就自动拆分”/);
   assert.doesNotMatch(instructionFile.content, /可执行辅助脚本/);
   assert.doesNotMatch(instructionFile.content, /init_skill\.py|generate_openai_yaml\.py|quick_validate\.py|\$CODEX_HOME|agents\/openai\.yaml/);
-  assert.equal(record.revision, 4);
+  assert.equal(record.revision, 5);
 });

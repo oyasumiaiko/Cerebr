@@ -179,6 +179,8 @@ test('虚拟文件编辑上下文会明确 current read 与同文件 chunk 源�
   assert.match(text, /<virtual_file_editing_policy>/);
   assert.match(text, /read_file 返回不带行号的原始正文/);
   assert.match(text, /next_cursor 由 read_tool_output 继续读取/);
+  assert.match(text, /context 必须逐字符复制最近一次 read_file 返回的当前行/);
+  assert.match(text, /包括函数参数、标点和空白/);
   assert.match(text, /多个 chunk 必须按源文件从上到下排列/);
   assert.match(text, /Skill 文件根使用 environment_id=skill:&lt;stable-key&gt;/);
   assert.match(text, /只有 Success 工具结果表示补丁已经提交/);

@@ -25,6 +25,7 @@ const LOCAL_FILE_MOUNT_POLICY_RULES = [
 
 const VIRTUAL_FILE_EDITING_POLICY_RULES = [
   'read_file 返回不带行号的原始正文；start_line/end_line 是 1-based 闭区间，next_cursor 由 read_tool_output 继续读取。',
+  '*** Update File: 的 context 必须逐字符复制最近一次 read_file 返回的当前行，包括函数参数、标点和空白；不能根据邻近说明文字、预期签名或记忆改写 context。',
   '同一个 *** Update File: 中的多个 chunk 必须按源文件从上到下排列；后一个 chunk 的 change_context 和旧行必须位于前一个 chunk 之后。',
   'Skill 文件根使用 environment_id=skill:<stable-key>；Skill apply_patch 的同一 Environment ID 必须紧跟 Begin Patch。',
   '只有 Success 工具结果表示补丁已经提交；流式 patch preview 不是持久化结果。'

@@ -50,7 +50,7 @@ function buildSkillCreatorInstruction() {
     '2. 规划可复用内容：逐个例子推演从零完成任务需要什么，把反复重写的 JS、详细文档和输出模板分别规划到 scripts、references、assets。',
     '3. 初始化或定位：新 skill 调用 `skill_registry(action="create_skill", skill={ name, description, interface, enabled:false, resources, examples })`；更新已有 skill 先 `skill_registry(action="list", include_all_sites=true)` 找到稳定 key。',
     '4. 实现：修改任何已有文件前，必须在当前 revision 上重新 `read_file`；不能根据更早看过的内容、记忆中的 scaffold 或流式预览构造整文件 `Update File`。Freeform `apply_patch` 必须在 `*** Begin Patch` 后写 `*** Environment ID: skill:<stable-key>`。',
-    '5. 选择正确 hunk：新建 skill 后若要整体替换默认 `SKILL.md`，显式使用 `*** Add File: SKILL.md` 覆盖；其它新文件也使用 Add File。`Update File` 只用于基于刚读取内容的局部改动，context 保持短且足以唯一定位；同一文件的多个 chunk 必须按源文件从上到下排列。`manifest.json` 只能做最小、精确的 Update File，禁止 Add/Delete/Move。',
+    '5. 选择正确 hunk：新建 skill 后若要整体替换默认 `SKILL.md`，显式使用 `*** Add File: SKILL.md` 覆盖；其它新文件也使用 Add File。`Update File` 只用于基于刚读取内容的局部改动，context 必须逐字符复制当前文件中的真实行，包括函数参数、标点和空白，且保持短而足以唯一定位；同一文件的多个 chunk 必须按源文件从上到下排列。`manifest.json` 只能做最小、精确的 Update File，禁止 Add/Delete/Move。',
     '6. 验证：每次 apply_patch 成功后，用 `read_file` 或 `list_files` 回读真正持久化的结果；流式 preview 不是成功证据。检查 frontmatter 与 manifest 同步、TODO 和占位文件已清理、引用路径存在、说明足够短且可执行。',
     '7. 迭代：至少用 2-3 个有代表性的真实请求执行 skill，记录卡点，只修复可复现的问题；复杂 skill 在条件允许时做独立前向测试。',
     '',
@@ -123,8 +123,8 @@ export function buildBuiltinSkillCreatorRecord() {
       ...buildSkillCreatorTemplateFiles()
     ],
     created_at: '2026-04-12T00:00:00.000Z',
-    updated_at: '2026-08-30T00:00:00.000Z',
-    revision: 4
+    updated_at: '2026-09-01T00:00:00.000Z',
+    revision: 5
   };
 }
 

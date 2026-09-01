@@ -171,3 +171,56 @@ test('同一 Update File 的 chunk 逆序时复现 Codex 原始 missing-lines �
     ].join('\n')
   );
 });
+
+test('Update File context 不会把不同函数签名当成同一行', async () => {
+  const {
+    derivePatchedFileContent,
+    formatApplyPatchVerificationError,
+    parseApplyPatch
+  } = await loadCore();
+  const source = [
+    '- `getConversation(conversationId)`',
+    '- `getConversationMessages(conversationId, options)`',
+    '- `summarizeConversationMetadata(conversationId)`'
+  ].join('\n') + '\n';
+  const wrongPatch = parseApplyPatch([
+    '*** Begin Patch',
+    '*** Update File: SKILL.md',
+    '@@',
+    ' - `getConversation()`',
+    ' - `getConversationMessages(conversationId, options)`',
+    '+- `getConversationTail(conversationId, options)`',
+    ' - `summarizeConversationMetadata(conversationId)`',
+    '*** End Patch'
+  ].join('\n'));
+
+  assert.throws(
+    () => derivePatchedFileContent(source, 'SKILL.md', wrongPatch.hunks[0].chunks),
+    (error) => formatApplyPatchVerificationError(error) === [
+      'apply_patch verification failed: Failed to find expected lines in SKILL.md:',
+      '- `getConversation()`',
+      '- `getConversationMessages(conversationId, options)`',
+      '- `summarizeConversationMetadata(conversationId)`'
+    ].join('\n')
+  );
+
+  const correctPatch = parseApplyPatch([
+    '*** Begin Patch',
+    '*** Update File: SKILL.md',
+    '@@',
+    ' - `getConversation(conversationId)`',
+    ' - `getConversationMessages(conversationId, options)`',
+    '+- `getConversationTail(conversationId, options)`',
+    ' - `summarizeConversationMetadata(conversationId)`',
+    '*** End Patch'
+  ].join('\n'));
+  assert.equal(
+    derivePatchedFileContent(source, 'SKILL.md', correctPatch.hunks[0].chunks),
+    [
+      '- `getConversation(conversationId)`',
+      '- `getConversationMessages(conversationId, options)`',
+      '- `getConversationTail(conversationId, options)`',
+      '- `summarizeConversationMetadata(conversationId)`'
+    ].join('\n') + '\n'
+  );
+});
