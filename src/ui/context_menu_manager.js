@@ -7,6 +7,10 @@ import {
   resolveFixedOverlayPositionFromClientPoint,
   toLayoutPixels
 } from '../utils/coordinate_space.js';
+import {
+  MESSAGE_SCREENSHOT_CANVAS_MAX_DIMENSION_PX,
+  resolveMessageScreenshotRenderPlan
+} from '../utils/message_screenshot_export.js';
 
 /**
  * 上下文菜单管理模块
@@ -454,20 +458,37 @@ export function createContextMenuManager(appContext) {
     }
   }
 
+  function formatMessageScreenshotScale(scale) {
+    const numeric = Number(scale);
+    if (!Number.isFinite(numeric)) return '';
+    return numeric.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+  }
+
   function updateMessageScreenshotExportNotification(toast, state, detail = {}) {
     if (!toast || typeof toast.update !== 'function') return;
     const count = Number(detail?.count) || 0;
     const isLongScreenshot = count > 1;
     if (state === 'success') {
       const copiedToClipboard = detail?.target === 'clipboard';
+      const renderInfo = detail?.renderInfo;
+      const descriptions = [];
+      if (isLongScreenshot) {
+        descriptions.push(`已处理 ${count} 条消息`);
+      }
+      if (renderInfo?.scaleAdjusted) {
+        descriptions.push(
+          `受浏览器单张 PNG 单边 ${renderInfo.maxDimensionPx}px 限制，像素倍率 ` +
+          `${formatMessageScreenshotScale(renderInfo.requestedScale)}× → ${formatMessageScreenshotScale(renderInfo.appliedScale)}×`
+        );
+      }
       toast.update({
         message: copiedToClipboard ? '截图完成，已复制到剪贴板' : '截图完成，已下载图片',
-        description: isLongScreenshot ? `已处理 ${count} 条消息` : '',
+        description: descriptions.join('；'),
         type: 'success',
         showProgress: false,
         progress: null,
         autoClose: true,
-        duration: 1800
+        duration: renderInfo?.scaleAdjusted ? 3200 : 1800
       });
       return;
     }
@@ -479,7 +500,7 @@ export function createContextMenuManager(appContext) {
         showProgress: false,
         progress: null,
         autoClose: true,
-        duration: 2600
+        duration: 3200
       });
     }
   }
@@ -2124,43 +2145,92 @@ export function createContextMenuManager(appContext) {
         if (blob) {
           resolve(blob);
         } else {
-          reject(new Error('Canvas 转换为图片失败'));
+          reject(new Error(
+            `Canvas 转换为 PNG 失败（${canvas.width}×${canvas.height}px；浏览器单边上限 ${MESSAGE_SCREENSHOT_CANVAS_MAX_DIMENSION_PX}px）`
+          ));
         }
       }, 'image/png');
     });
   }
 
   async function renderMessageScreenshotSnapshotToBlob(snapshot, exportOptions, backgroundReferenceElement) {
+    const renderPlan = resolveMessageScreenshotRenderPlan({
+      width: snapshot.width,
+      height: snapshot.height,
+      paddingPx: exportOptions.paddingPx,
+      requestedScale: exportOptions.resolutionScale
+    });
+
+    if (renderPlan.scaleAdjusted) {
+      console.warn('[message-screenshot] 导出尺寸触及 Canvas 编码上限，调整像素倍率', {
+        requestedScale: renderPlan.requestedScale,
+        appliedScale: renderPlan.appliedScale,
+        finalWidth: renderPlan.finalWidth,
+        finalHeight: renderPlan.finalHeight,
+        maxDimensionPx: renderPlan.maxDimensionPx
+      });
+    }
+
     const originalCanvas = await domtoimage.toCanvas(snapshot.node, {
       width: snapshot.width,
       height: snapshot.height,
-      scale: exportOptions.resolutionScale
+      scale: renderPlan.appliedScale
     });
 
-    const padding = Math.max(0, Math.round(exportOptions.paddingPx * exportOptions.resolutionScale));
+    const padding = renderPlan.paddingPixels;
     const newWidth = originalCanvas.width + 2 * padding;
     const newHeight = originalCanvas.height + 2 * padding;
+    if (
+      newWidth > renderPlan.maxDimensionPx
+      || newHeight > renderPlan.maxDimensionPx
+    ) {
+      originalCanvas.width = 1;
+      originalCanvas.height = 1;
+      throw new Error(
+        `截图像素尺寸 ${newWidth}×${newHeight}px 超出浏览器 Canvas 单边上限 ${renderPlan.maxDimensionPx}px`
+      );
+    }
 
     const newCanvas = document.createElement('canvas');
     newCanvas.width = newWidth;
     newCanvas.height = newHeight;
     const ctx = newCanvas.getContext('2d');
     if (!ctx) {
+      originalCanvas.width = 1;
+      originalCanvas.height = 1;
       throw new Error('Canvas 上下文创建失败');
     }
 
+    // 先铺一层不透明底色，再覆盖真实主题背景。这样最终 alpha 天然为 255，
+    // 不需要 getImageData() 再复制整张 RGBA 缓冲；长截图可少占一整份像素内存。
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, newWidth, newHeight);
     ctx.fillStyle = resolveMessageImageCanvasBackgroundColor(backgroundReferenceElement);
     ctx.fillRect(0, 0, newWidth, newHeight);
     ctx.drawImage(originalCanvas, padding, padding);
 
-    const imageData = ctx.getImageData(0, 0, newWidth, newHeight);
-    const data = imageData.data;
-    for (let i = 0; i < data.length; i += 4) {
-      data[i + 3] = 255;
-    }
-    ctx.putImageData(imageData, 0, 0);
+    // drawImage 是同步完成的；此后立即释放 dom-to-image 的大位图，避免 PNG 编码阶段
+    // 同时持有两张完整 Canvas。默认 4x 长截图下这能显著降低峰值内存。
+    originalCanvas.width = 1;
+    originalCanvas.height = 1;
 
-    return canvasToPngBlob(newCanvas);
+    let blob;
+    try {
+      blob = await canvasToPngBlob(newCanvas);
+    } finally {
+      // PNG 已经编码进 Blob 后，Canvas 像素缓冲不再需要；显式缩小可避免它等到 GC 才释放。
+      newCanvas.width = 1;
+      newCanvas.height = 1;
+    }
+    return {
+      blob,
+      requestedScale: renderPlan.requestedScale,
+      appliedScale: renderPlan.appliedScale,
+      scaleAdjusted: renderPlan.scaleAdjusted,
+      maxDimensionPx: renderPlan.maxDimensionPx,
+      width: newWidth,
+      height: newHeight
+    };
   }
 
   async function writeScreenshotBlobToClipboard(blob) {
@@ -2210,11 +2280,12 @@ export function createContextMenuManager(appContext) {
       const backgroundReference = isMultiMessageExport
         ? getActiveScreenshotSelectionContainer(messageElements[0])
         : messageElements[0];
-      const blob = await renderMessageScreenshotSnapshotToBlob(snapshot, exportOptions, backgroundReference);
-      const exportResult = await writeScreenshotBlobToClipboard(blob);
+      const renderInfo = await renderMessageScreenshotSnapshotToBlob(snapshot, exportOptions, backgroundReference);
+      const exportResult = await writeScreenshotBlobToClipboard(renderInfo.blob);
       updateMessageScreenshotExportNotification(progressToast, 'success', {
         target: exportResult,
-        count: messageElements.length
+        count: messageElements.length,
+        renderInfo
       });
     } catch (err) {
       console.error('生成图片过程中出错:', err);
@@ -2257,14 +2328,15 @@ export function createContextMenuManager(appContext) {
       const backgroundReference = isMultiMessageExport
         ? getActiveScreenshotSelectionContainer(messageElements[0])
         : messageElements[0];
-      const blob = await renderMessageScreenshotSnapshotToBlob(snapshot, exportOptions, backgroundReference);
+      const renderInfo = await renderMessageScreenshotSnapshotToBlob(snapshot, exportOptions, backgroundReference);
       const exportResult = downloadScreenshotBlob(
-        blob,
+        renderInfo.blob,
         isMultiMessageExport ? '对话长截图' : '消息截图'
       );
       updateMessageScreenshotExportNotification(progressToast, 'success', {
         target: exportResult,
-        count: messageElements.length
+        count: messageElements.length,
+        renderInfo
       });
     } catch (err) {
       console.error('生成图片过程中出错:', err);

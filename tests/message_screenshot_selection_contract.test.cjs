@@ -75,7 +75,19 @@ test('多消息长截图选择入口与导出管线保持同一套复制为图�
   );
   assert.match(
     contextMenuSource,
-    /const blob = await renderMessageScreenshotSnapshotToBlob\([\s\S]*?writeScreenshotBlobToClipboard\(blob\)/
+    /const renderInfo = await renderMessageScreenshotSnapshotToBlob\([\s\S]*?writeScreenshotBlobToClipboard\(renderInfo\.blob\)/
+  );
+  assert.match(
+    contextMenuSource,
+    /resolveMessageScreenshotRenderPlan\(\{[\s\S]*?requestedScale: exportOptions\.resolutionScale[\s\S]*?renderPlan\.appliedScale/
+  );
+  assert.match(
+    contextMenuSource,
+    /renderInfo\?\.scaleAdjusted[\s\S]*?浏览器单张 PNG 单边[\s\S]*?像素倍率/
+  );
+  assert.doesNotMatch(
+    contextMenuSource,
+    /getImageData\(0, 0, newWidth, newHeight\)/
   );
   assert.match(
     contextMenuSource,
