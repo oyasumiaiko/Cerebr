@@ -38,24 +38,21 @@ These example prompts illustrate workflows supported by Cerebr's tools. Page int
 | **Continue earlier research** | “Find our previous discussion of this topic and turn the relevant findings into an editable Markdown note.” |
 | **Get a second model's view** | “Ask another configured model to critique this explanation, then compare the answers.” |
 
-### From a web page to a working result
+### A closer look at the agent workspace
 
-Read a table, calculate coverage, highlight the rows that need attention, and save a report without leaving the page.
-
-<p align="center">
-  <img src="./statics/readme/readme-browser-demo.png" alt="Cerebr embedded beside a sample documentation table, with the page captured as agent context" width="860" />
-</p>
-
-<details>
-<summary><strong>A closer look at the agent workspace</strong></summary>
+Summarize a long-form video beside its source, preserve the structure of the argument, and continue asking questions without leaving the page.
 
 <p align="center">
-  <img src="./statics/readme/readme-agent-demo.png" alt="The real Cerebr sidebar showing the documentation audit conversation and tool activity" width="860" />
+  <img src="./statics/readme/readme-web-summary.png" alt="Cerebr beside a public science video, showing a structured summary with section timestamps" width="860" />
 </p>
 
-</details>
+Open a focused thread from selected text while keeping the original context and the generated explanation visible together.
 
-*Reproducible demo with sample data and scripted model responses. JavaScript and file tools execute in the real extension. Interface controls currently use Chinese; full English UI localization is not yet available.*
+<p align="center">
+  <img src="./statics/readme/readme-thread-workspace.png" alt="Cerebr fullscreen workspace with a selection thread and a detailed explanation" width="860" />
+</p>
+
+For a reproducible, private-content-free tool trace, the repository also includes a sample documentation table and a real sidebar screenshot: [`readme-browser-demo.png`](./statics/readme/readme-browser-demo.png) and [`readme-agent-demo.png`](./statics/readme/readme-agent-demo.png). Interface controls currently use Chinese; full English UI localization is a separate follow-up.
 
 ## A browser agent you can extend
 
@@ -96,7 +93,7 @@ You need a current version of Chrome and an API endpoint and key for your chosen
 
 2. Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select the repository folder.
 3. For page JavaScript execution, enable **Allow User Scripts** in the extension details if Chrome displays that switch.
-4. Open a normal web page and click the Cerebr extension icon. In **API Settings**, add your provider, API key, and model.
+4. Open a normal web page and click the Cerebr extension icon. In **API Settings**, add OpenAI Responses with **GPT-5.6 Sol** (`gpt-5.6-sol`) as the default model for the examples below.
 5. To use the agent tools, select **OpenAI Responses** and **Enhanced mode**. Start with: “Read this page and explain what you can help me do here.”
 
 There is no build step. If you cloned without submodules, run `git submodule update --init --recursive`. Keyboard shortcuts can be configured at `chrome://extensions/shortcuts`.
@@ -105,7 +102,7 @@ There is no build step. If you cloned without submodules, run `git submodule upd
 
 | Connection | Use it for |
 | --- | --- |
-| **OpenAI Responses** | The local agent workflow, reasoning controls, structured output, and supported hosted tools |
+| **OpenAI Responses · GPT-5.6 Sol** | Recommended OpenAI setup for the local agent workflow, reasoning controls, structured output, and supported hosted tools |
 | **OpenAI-compatible Chat Completions** | Streaming conversations with compatible providers and custom request parameters |
 | **Gemini** | Native Gemini conversations, images, and thinking settings |
 

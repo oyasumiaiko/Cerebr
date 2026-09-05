@@ -38,24 +38,21 @@ Cerebr 把 AI Agent 带到你正在使用的网页里。它能读取页面内容
 | **接着之前的研究做** | “找到我们之前对这个主题的讨论，把相关结论整理成可编辑的 Markdown 笔记。” |
 | **听听另一个模型的意见** | “请另一个已配置的模型审阅这段解释，再比较你们的结论。” |
 
-### 从网页到工作成果
+### 近距离查看 Agent 工作区
 
-读取表格、计算覆盖率、标记需要关注的行，再保存为报告，整个过程都在当前页面完成。
-
-<p align="center">
-  <img src="./statics/readme/readme-browser-demo.png" alt="Cerebr 嵌入示例文档表格页面，并将页面截图作为 Agent 上下文" width="860" />
-</p>
-
-<details>
-<summary><strong>近距离查看 Agent 工作区</strong></summary>
+在视频旁边总结长内容，保留论证结构和章节时间点，不离开页面就能继续追问。
 
 <p align="center">
-  <img src="./statics/readme/readme-agent-demo.png" alt="真实 Cerebr 侧栏中的文档审计对话与工具活动" width="860" />
+  <img src="./statics/readme/readme-web-summary.png" alt="Cerebr 嵌入公开科普视频旁，在侧栏中显示带章节时间点的结构化总结" width="860" />
 </p>
 
-</details>
+从选中的文本打开独立线程，同时保留原始上下文和详细解释。
 
-*演示使用示例数据与预设的模型响应，可重复运行；JavaScript 和文件工具在真实扩展中执行。界面控件目前为中文，完整英文界面本地化尚未提供。*
+<p align="center">
+  <img src="./statics/readme/readme-thread-workspace.png" alt="Cerebr 全屏工作区中的划词线程与详细解释" width="860" />
+</p>
+
+仓库还保留了一组不含私人内容的可重复工具演示图：[`readme-browser-demo.png`](./statics/readme/readme-browser-demo.png) 和 [`readme-agent-demo.png`](./statics/readme/readme-agent-demo.png)。界面控件目前为中文，完整英文界面本地化是后续工作。
 
 ## 可以持续扩展的浏览器 Agent
 
@@ -96,7 +93,7 @@ API 设置和运行时细节见 **[Agent 指南](./docs/agent-guide.zh-CN.md)**�
 
 2. 打开 `chrome://extensions`，启用**开发者模式**，点击**加载已解压的扩展程序**，选择仓库目录。
 3. 如需执行网页 JavaScript，若 Chrome 在扩展详情中提供 **Allow User Scripts / 允许用户脚本** 开关，请将其开启。
-4. 打开普通网页并点击 Cerebr 扩展图标，在 **API 设置**中添加连接源、API Key 和模型。
+4. 打开普通网页并点击 Cerebr 扩展图标，在 **API 设置**中添加 OpenAI Responses，并将下面示例默认使用的模型设为 **GPT-5.6 Sol**（`gpt-5.6-sol`）。
 5. 使用 Agent 工具时，选择 **OpenAI Responses** 和**增强模式**。可以先问：“读取这个页面，告诉我你能帮我做哪些事情。”
 
 无需构建。若此前克隆时遗漏子模块，运行 `git submodule update --init --recursive`。快捷键可在 `chrome://extensions/shortcuts` 配置。
@@ -105,7 +102,7 @@ API 设置和运行时细节见 **[Agent 指南](./docs/agent-guide.zh-CN.md)**�
 
 | 连接方式 | 适用能力 |
 | --- | --- |
-| **OpenAI Responses** | 本地 Agent 工作流、推理控制、结构化输出，以及端点支持的托管工具 |
+| **OpenAI Responses · GPT-5.6 Sol** | 推荐的 OpenAI 配置：本地 Agent 工作流、推理控制、结构化输出，以及端点支持的托管工具 |
 | **OpenAI 兼容 Chat Completions** | 兼容服务的流式对话与自定义请求参数 |
 | **Gemini** | 原生 Gemini 对话、图片和 thinking 设置 |
 
