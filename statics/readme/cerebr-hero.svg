@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="460" viewBox="0 0 1280 460" fill="none" role="img" aria-labelledby="title description">
+  <title id="title">Cerebr — An AI workspace inside your browser</title>
+  <desc id="description">Read the page, run JavaScript, and keep the work as files and reusable Skills. A conceptual overview of Cerebr's browser agent workflow.</desc>
+  <!-- 使用原生矢量图形和系统字体；封面表达工作流，不模拟产品截图或执行记录。 -->
+  <rect width="1280" height="460" rx="24" fill="#16151D"/>
+  <path d="M736 48V352" stroke="#383440"/>
+  <g font-family="Segoe UI, Helvetica, Arial, sans-serif">
+    <text x="64" y="76" fill="#C3B1E6" font-size="15" font-weight="600" letter-spacing="3">THE WEB, WITH AN AGENT.</text>
+    <text x="58" y="191" fill="#F5F1FA" font-size="108" font-weight="700" letter-spacing="-5">Cerebr</text>
+    <text x="64" y="260" fill="#E4DDEA" font-size="38" font-weight="400">An AI workspace</text>
+    <text x="64" y="310" fill="#E4DDEA" font-size="38" font-weight="400">inside your browser.</text>
+    <path d="M798 106V287" stroke="#6D5D84" stroke-width="2"/>
+    <circle cx="798" cy="105" r="17" fill="#292331" stroke="#A48AC7"/>
+    <circle cx="798" cy="199" r="17" fill="#292331" stroke="#A48AC7"/>
+    <circle cx="798" cy="293" r="17" fill="#C3B1E6"/>
+    <g text-anchor="middle" font-size="13" font-weight="600">
+      <text x="798" y="110" fill="#E4DDEA">01</text>
+      <text x="798" y="204" fill="#E4DDEA">02</text>
+      <text x="798" y="298" fill="#211A2D">03</text>
+    </g>
+    <g fill="#F5F1FA" font-size="25" font-weight="600">
+      <text x="838" y="110">Read the page</text>
+      <text x="838" y="204">Run JavaScript</text>
+      <text x="838" y="298">Keep the work</text>
+    </g>
+    <g fill="#AEA5B8" font-size="17">
+      <text x="838" y="138">Web context, PDFs, screenshots</text>
+      <text x="838" y="232">Inspect, compute, interact</text>
+      <text x="838" y="326">Files, history, reusable Skills</text>
+    </g>
+    <path d="M64 377H1216" stroke="#383440"/>
+    <text x="64" y="419" fill="#AEA5B8" font-size="16">Browser runtime</text>
+    <circle cx="222" cy="413" r="2" fill="#756484"/>
+    <text x="244" y="419" fill="#AEA5B8" font-size="16">Your choice of models</text>
+    <circle cx="434" cy="413" r="2" fill="#756484"/>
+    <text x="456" y="419" fill="#AEA5B8" font-size="16">Local workspace</text>
+    <text x="1216" y="419" fill="#C3B1E6" font-size="15" text-anchor="end" letter-spacing="2">OPEN SOURCE</text>
+  </g>
+</svg>
